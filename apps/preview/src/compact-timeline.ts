@@ -182,7 +182,7 @@ function linearScale(width: number): DayScale {
 
 /** Fold each night that does not contain the selected minute into a fixed moon. */
 export function buildDayScale(width: number, bounds: NightBounds | null, selectedMinute: number | null): DayScale {
-  if (!bounds || !(width >= MOON_PX * 2 + 80)) return linearScale(width);
+  if (!bounds) return linearScale(width);
   const sunrise = bounds.sunrise < 1 ? 0 : bounds.sunrise;
   const sunset = bounds.sunset > DAY_MINUTES - 1 ? DAY_MINUTES : bounds.sunset;
   const parts: ScaleSegment[] = [
@@ -317,7 +317,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
   let daySignature = '', selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
-  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null;
+  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false;
   const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
 
   const controlsDisabled = () => disabled || !frames.length;
@@ -560,6 +560,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if ((pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
     if (timer !== null) stopPlayback();
     gestureScale = null;
+    gestureMoved = false;
+    gestureOriginX = pointer.clientX;
     gestureStart = selectedIndex;
     activePointer = pointer.pointerId ?? 1;
     if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
@@ -571,6 +573,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
+    if (!gestureMoved && Math.abs(pointer.clientX - gestureOriginX) < 1) return;
+    gestureMoved = true;
     seek(pointer.clientX);
   };
   const releasePointer = (event: Event) => {
@@ -579,6 +583,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     activePointer = null;
     const held = gestureScale !== null;
     gestureScale = null;
+    gestureMoved = false;
+    gestureOriginX = Number.NaN;
     if (!destroyed && !controlsDisabled() && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
     gestureStart = -1;
     if (held && !destroyed) render();

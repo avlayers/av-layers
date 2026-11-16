@@ -441,6 +441,8 @@ it('folds both nights during daylight and opens only the night that contains the
   expect(evening.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning']);
   expect(evening.segments.find(segment => segment.kind === 'evening')!.x1).toBeGreaterThan(evening.segments.find(segment => segment.kind === 'day')!.x1);
   expect(buildDayScale(400, null, 16 * 60).linear).toBe(true);
+  expect(buildDayScale(120, bounds, 12 * 60).linear).toBe(true);
+  expect(buildDayScale(120, { sunrise: 0.4, sunset: 17 * 60 }, 12 * 60).linear).toBe(false);
   const shortMorning = buildDayScale(400, { sunrise: 0.4, sunset: 17 * 60 }, 12 * 60);
   expect(shortMorning.segments.map(segment => segment.kind)).toEqual(['day', 'evening']);
   expect(shortMorning.segments[0]!.start).toBe(0);
@@ -480,6 +482,8 @@ it('folds both nights during daylight and opens only the night that contains the
   const selected = onSelect.mock.calls.at(-1)?.[0] as number;
   const chosen = new Date(Date.parse(hourly[selected]!.validTime) + offsetMinutes * 60_000);
   expect(chosen.getUTCHours() * 60 + chosen.getUTCMinutes()).toBeLessThan(place!.sunrise);
+  pointer(track, 'pointermove', 10);
+  expect(onSelect.mock.calls.at(-1)?.[0]).toBe(selected);
   pointer(track, 'pointerup', 10);
   timeline.destroy();
 });
