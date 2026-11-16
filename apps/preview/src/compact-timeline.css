@@ -96,15 +96,16 @@
   touch-action: none;
 }
 .ct-track[aria-disabled="true"] { cursor: default; }
-.ct-ribbon, .ct-hatch, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
+.ct-ribbon, .ct-hatches, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
 .ct-ribbon { inset: 0; z-index: 0; }
+.ct-hatches { inset: 0; z-index: 1; }
 .ct-hatch {
+  position: absolute;
   z-index: 1;
   top: 0;
   bottom: 0;
   background: repeating-linear-gradient(-45deg, #d5dde3, #d5dde3 3px, #eef2f5 3px, #eef2f5 6px);
 }
-.ct-hatch[hidden] { display: none; }
 .ct-ticks {
   z-index: 2;
   inset: 0;

@@ -29,6 +29,7 @@ const DAYLIGHT = '#f6e27a';
 const DUSK = '#d4652f';
 const NEUTRAL = '#e7edf2';
 const SHOULDER_PERCENT = 45 / 14.4;
+const FRAME_REACH_MINUTES = 30;
 const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
 
@@ -54,24 +55,43 @@ export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indice
   return best;
 }
 
-export function frameIndexForDayFraction(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, fraction: number): number {
-  if (!Number.isFinite(fraction)) return -1;
-  const minute = Math.round(Math.min(1, Math.max(0, fraction)) * 1440);
-  return nearestFrameIndexForDay(frames, indices, offsetMinutes, Math.floor(minute / 60), minute % 60);
-}
-
-export function dayCoverageFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number } | null {
-  let start = Infinity, end = -Infinity;
+function localMinutes(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): number[] {
+  const minutes: number[] = [];
   for (const index of indices) {
     const frame = frames[index];
     if (!frame) continue;
     const local = localTimeFromMs(Date.parse(frame.validTime), offsetMinutes);
-    if (!local) continue;
-    const minute = local.hour * 60 + local.minute;
-    if (minute < start) start = minute;
-    if (minute > end) end = minute;
+    if (local) minutes.push(local.hour * 60 + local.minute);
   }
-  return Number.isFinite(start) && end >= start ? { start: start / 1440, end: end / 1440 } : null;
+  minutes.sort((left, right) => left - right);
+  return minutes;
+}
+
+export function frameIndexForDayFraction(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, fraction: number): number {
+  if (!Number.isFinite(fraction)) return -1;
+  const minute = Math.round(Math.min(1, Math.max(0, fraction)) * 1440);
+  const index = nearestFrameIndexForDay(frames, indices, offsetMinutes, Math.floor(minute / 60), minute % 60);
+  if (index < 0) return -1;
+  const local = localTimeFromMs(Date.parse(frames[index]!.validTime), offsetMinutes);
+  if (!local) return -1;
+  if (Math.abs(local.hour * 60 + local.minute - minute) <= FRAME_REACH_MINUTES) return index;
+  const minutes = localMinutes(frames, indices, offsetMinutes);
+  const first = minutes[0], last = minutes[minutes.length - 1];
+  return first !== undefined && last !== undefined && (minute <= first || minute >= last) ? index : -1;
+}
+
+export function dayHatchFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number }[] {
+  const minutes = localMinutes(frames, indices, offsetMinutes);
+  if (!minutes.length) return [];
+  const segments: { start: number; end: number }[] = [];
+  const push = (from: number, to: number) => { if (to - from >= 0.004) segments.push({ start: from, end: to }); };
+  push(0, minutes[0]! / 1440);
+  for (let i = 1; i < minutes.length; i++) {
+    const previous = minutes[i - 1]!, next = minutes[i]!;
+    if (next - previous > 60) push((previous + FRAME_REACH_MINUTES) / 1440, (next - FRAME_REACH_MINUTES) / 1440);
+  }
+  push(minutes[minutes.length - 1]! / 1440, 1);
+  return segments;
 }
 
 function monotonicStops(stops: readonly RibbonStop[]): readonly RibbonStop[] {
@@ -184,17 +204,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   track.setAttribute('aria-label', 'Forecast time');
   track.setAttribute('aria-valuemin', '0');
   const ribbon = el('div', 'ct-ribbon');
-  const hatchStart = el('div', 'ct-hatch');
-  const hatchEnd = el('div', 'ct-hatch');
+  const hatches = el('div', 'ct-hatches');
   const playhead = el('div', 'ct-playhead');
   const ticks = el('div', 'ct-ticks');
-  for (const node of [ribbon, hatchStart, hatchEnd, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
+  for (const node of [ribbon, hatches, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
   playhead.setAttribute('hidden', '');
-  hatchStart.setAttribute('hidden', '');
-  hatchEnd.setAttribute('hidden', '');
   track.tabIndex = -1;
   ticks.append(...TICKS.map(label => el('span', 'ct-tick', label)));
-  track.append(ribbon, hatchStart, hatchEnd, ticks, playhead);
+  track.append(ribbon, hatches, ticks, playhead);
   controls.append(play, timeLabel, track);
   root.append(daysRow, controls);
   host.append(root);
@@ -223,15 +240,13 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     return css;
   }
 
-  function placeHatch(hatch: HTMLElement, from: number, to: number): void {
-    const width = Math.max(0, to - from);
-    if (width < 0.004) {
-      hatch.setAttribute('hidden', '');
-      return;
-    }
-    hatch.removeAttribute('hidden');
-    hatch.style.left = percent(from);
-    hatch.style.width = percent(width);
+  function paintHatches(segments: readonly { start: number; end: number }[]): void {
+    hatches.replaceChildren(...segments.map(segment => {
+      const hatch = el('div', 'ct-hatch');
+      hatch.style.left = percent(segment.start);
+      hatch.style.width = percent(segment.end - segment.start);
+      return hatch;
+    }));
   }
 
   function reveal(button: HTMLButtonElement): void {
@@ -299,10 +314,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       } else playhead.setAttribute('hidden', '');
     }
     const group = selectedGroup();
-    const coverage = group ? dayCoverageFractions(frames, group.indices, offsetMinutes) : null;
     ribbon.style.background = group ? ribbonCss(group.day) : NEUTRAL;
-    placeHatch(hatchStart, 0, coverage?.start ?? 0);
-    placeHatch(hatchEnd, coverage?.end ?? 1, 1);
+    paintHatches(group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
     track.setAttribute('aria-valuemax', String(Math.max(0, frames.length - 1)));
