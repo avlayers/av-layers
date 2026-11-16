@@ -8,6 +8,7 @@ import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixtur
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { REGION_A_BOUNDS, REGION_A_POINT, REGION_B_BOUNDS, REGION_B_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
 import { browserTimeZone, formatPlaceTime, formatPointMapTimes, formatViewerTime, longitudeOffsetHours, type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
+import { FOCUS_DWELL_MS } from './raster-overview';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -446,7 +447,11 @@ it('allocates only the latest wind viewport after retired load cancellation sett
   expect(windLoads).toHaveLength(1);
   windCancel!();
   await vi.waitFor(() => expect(windLoads).toHaveLength(2));
-  expect(windLoads[1].bounds).toEqual([-110, 32, -109, 33]);
+  const lonScale = Math.cos(32.5 * Math.PI / 180);
+  expect(windLoads[1].bounds).toEqual([
+    expect.closeTo(-110.5, 5), expect.closeTo(32 - lonScale / 2, 5),
+    expect.closeTo(-108.5, 5), expect.closeTo(33 + lonScale / 2, 5)
+  ]);
   windResolve!('ready');
   await Promise.resolve();
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
@@ -476,7 +481,7 @@ it('retains wind during a pan and while loading uncovered bounds', async () => {
   map().emit('moveend');
   expect(windLoads).toHaveLength(count);
   expect(windFields.at(-1)).toBe(field);
-  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().bounds = { west: -115, east: -114, south: 32, north: 33 };
   map().emit('moveend');
   expect(windLoads).toHaveLength(count + 1);
   expect(windFields.at(-1)).toBe(field);
@@ -505,7 +510,7 @@ it('preserves unavailability after an uncovered pan and restores resident wind o
   windResolve!('ready');
   await Promise.resolve();
   const original = { ...map().bounds };
-  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().bounds = { west: -115, east: -114, south: 32, north: 33 };
   map().emit('moveend');
   expect(windStatuses.at(-1)).toBe('loading');
   map().emit('render');
@@ -1832,6 +1837,41 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
   windResolve!('ready');
   await Promise.resolve();
   expect(windStatuses.at(-1)).toBe('ready');
+});
+
+it('drops the previous wind hour when the selected frame exceeds the numeric budget', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const painted = windFields.at(-1);
+  failOnceBudget = true;
+  await selectFrame(1);
+  await vi.waitFor(() => expect(windLoads.length).toBeGreaterThan(1));
+  expect(windFields.at(-1)).toBeNull();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  expect(windFields.at(-1)).not.toBe(painted);
+  expect(windStatuses.at(-1)).toBe('ready');
+  const recovered = windLoads.length, selected = windLoads.at(-1)!.frame;
+  await vi.advanceTimersByTimeAsync(FOCUS_DWELL_MS);
+  expect(windLoads.length).toBe(recovered + 1);
+  expect(windLoads.at(-1)!.frame).not.toBe(selected);
+});
+
+it('clears the previous wind hour when the selected frame is unavailable', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const painted = windFields.at(-1);
+  await selectFrame(1);
+  expect(windFields.at(-1)).toBe(painted);
+  windResolve!('unavailable');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  expect(windStatuses.at(-1)).toBe('unavailable');
 });
 
 it('draws a coverage parallel that meets the view and removes it when the view leaves', async () => {

@@ -4,7 +4,7 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAX_RASTER_SOURCES, rasterSourceLimit } from './raster-budget';
-import { RasterOverview } from './raster-overview';
+import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }
 interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean }
@@ -20,6 +20,7 @@ export class RasterOverlay {
   private coarse: Selection | null = null;
   private pendingOverview: Selection | null = null;
   private refineTimer: ReturnType<typeof setTimeout> | null = null;
+  private focusTimer: ReturnType<typeof setTimeout> | null = null;
   private slots: Slot[] = [];
   private requested: Selection | null = null;
   private preferred: Selection | null = null;
@@ -97,14 +98,15 @@ export class RasterOverlay {
     this.armExpiry(); this.emit();
   };
   private readonly move = (): void => {
-    this.cancelPaint(); this.cancelRefinement();
+    this.cancelPaint(); this.cancelRefinement(); this.cancelFocus();
     this.moving = true; this.preferred = null; this.warmFailed = []; this.sourceLimits.clear(); this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.armExpiry(); this.emit();
   };
   private readonly viewChanged = (): void => { this.sourceLimits.clear(); this.enforceBudget(); };
   private readonly resized = (): void => {
-    this.cancelPaint(); this.cancelRefinement(); this.clearOverview();
+    this.cancelPaint(); this.cancelRefinement(); this.cancelFocus();
+    if (!(this.overview?.hasExtent() && this.overview.coversView())) this.clearOverview();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.enforceBudget();
@@ -118,8 +120,9 @@ export class RasterOverlay {
     if (!this.moving || this.map.isMoving?.()) return false;
     this.moving = false; this.sourceLimits.clear(); this.enforceBudget();
     const sel = this.requested, pending = this.slots.find(s => s !== this.active && matches(s, sel));
-    const covers = this.overview as { coversView?(): boolean } | null;
-    if (sel && covers?.coversView && !covers.coversView()) this.clearOverview();
+    if (sel && this.overview?.hasExtent() && !this.overview.coversView()) {
+      this.scheduleFocus(sel); this.emit(); return false;
+    }
     if (sel) this.prepareOverview(sel);
     if ((!pending && !this.retryEmpty && matches(this.active, sel)) || !sel || sel.build.expiresAtMs <= Date.now()) {
       this.prepareNext(); this.emit(); return false;
@@ -235,7 +238,12 @@ export class RasterOverlay {
   setWindActive(active: boolean, numericResident = active): void {
     if (this.windActive === active && this.windResident === numericResident) return;
     this.windActive = active; this.windResident = numericResident;
-    this.sourceLimits.clear(); this.enforceBudget(); this.prepareNext();
+    this.sourceLimits.clear(); this.enforceBudget();
+    const sel = this.requested;
+    if (sel && !this.moving && !this.map.isMoving?.() && sel.build.expiresAtMs > Date.now()) {
+      try { this.select(sel.build, sel.layer, sel.frame); } catch { /* reported */ }
+    }
+    this.prepareNext();
   }
 
   clear(dispose = false): void {
@@ -251,7 +259,7 @@ export class RasterOverlay {
   }
 
   destroy(): void {
-    this.disposed = true; this.clear(true);
+    this.disposed = true; this.cancelFocus(); this.clear(true);
     for (const [ev, fn] of this.events) this.map.off(ev as never, fn as never);
   }
 
@@ -303,6 +311,18 @@ export class RasterOverlay {
   }
 
   private cancelRefinement(): void { if (this.refineTimer !== null) { clearTimeout(this.refineTimer); this.refineTimer = null; } }
+
+  private cancelFocus(): void { if (this.focusTimer !== null) { clearTimeout(this.focusTimer); this.focusTimer = null; } }
+
+  private scheduleFocus(sel: Selection): void {
+    this.cancelFocus();
+    this.focusTimer = setTimeout(() => {
+      this.focusTimer = null;
+      const current = this.requested;
+      if (this.disposed || this.moving || this.map.isMoving?.() || !current || !matches(sel, current)) return;
+      this.prepareOverview(current);
+    }, FOCUS_DWELL_MS);
+  }
 
   private armDetail(sel: Selection): void {
     this.cancelRefinement();
