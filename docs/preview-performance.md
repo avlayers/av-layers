@@ -114,3 +114,83 @@ baseline source   76cd925e94b1d25a6e3b2a403cd63cf404734182f9e62e13d39049b9bf3fbe
 changed source    d563826b5ca8e13d0034c985f72ad6bb5988172d1928093c39f879fb37ecb922
 harness           4f28d58096d7342253c68b608488c8f2f23606fc31f57a5c970f884d2c620ff3
 ```
+
+
+## Viewport preparation
+
+The 16 November 2026 change adds a native-pixel crop for small views, prepared
+wind lattices and a shared request-admission policy. It does not change the
+measured 13 November captures above.
+
+- A conservative camera rectangle of at most **800 km²** starts full-timeline
+  preparation; the intent is retained until the rectangle exceeds **1000 km²**.
+  Dateline and full-world rectangles keep their coherent longitude span.
+- Small raster views ask MapLibre `coveringTiles` for the canonical source zoom,
+  then retain `visible × 1.2 + 2 px` per axis. Coverage comes from that integer
+  rectangle, so a pan inside the retained margin keeps the same prepared frames.
+  The native-z10 Armenia fixture is 391 × 221 px and 15.8223 MiB across 48 frames;
+  the fixture's capped source zoom produces 197 × 112 px at z9.
+- Background warming prepares each acquired wind frame's 128×128 RGBA lattice;
+  selection installs the prepared lattice and native fallback field in one
+  overlay operation before renderer synchronization. The following GL prerender
+  uploads the prepared bytes. Point sampling keeps the exact native sampler.
+- Numeric wind retries transient 502/503/504 responses three times inside the
+  request deadline, then records a 30 s per-resource cooldown and advances to the
+  next promised time. Capacity is a typed outcome that records a bounded admitted
+  window, evicts only outside that window and stops expanding under unchanged
+  pressure; a playback toggle is not required.
+- Physical request admission counts headers and live bodies until settlement.
+  An explicit request reserves its validated expected size or its safe maximum.
+  Unknown, malformed and non-identity encodings keep that reservation; an
+  explicitly exposed `Content-Encoding: identity` permits an exact length.
+- Raster, numeric wind and forecast metadata share one app-owned scheduler.
+  Background wind requests carry low priority.
+
+Wind lattice preparation still runs on the main thread during background
+warming. The worker snapshot, prepared barb lattice, combined allocation ledger
+and raster/wind stage-then-commit barrier are not implemented.
+
+The review revision also:
+
+- separates replacement preparation from the displayed raster generation, so
+  render/idle events cannot cancel an unfinished crop;
+- prepares every retained time for a changed height, selected frame first;
+- promotes an active physical raster request when its source becomes
+  interactive;
+- recovers useful wind preparation after a cache release notification;
+- enforces explicit body ceilings and rejects impossible background admission;
+- translates a dateline prepared interval into the displayed world copy;
+- reattaches the wind custom layer when the restored map style is missing it.
+
+Browser evidence for these paths is not yet captured. The required
+`viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and
+constrained-device budget remain unverified; the draft PR records them as
+blocking release gates rather than reporting measured conclusions.
+
+
+### Source-isolated benchmark smoke
+
+The harness resolves every `@av/*` import through each variant's own
+`codeRoot` package exports, archives the full baseline `packages` tree, fails
+when a workspace import escapes that tree, and fingerprints the modules Vite
+actually loaded. The earlier 2,499.7 ms versus 2,440.0 ms comparison is
+retracted: that run's baseline omitted package manifests and resolved candidate
+workspace code. No performance inference is drawn from it.
+
+The corrected 48-frame run on 16 November 2026 used Node 22.23.4, bundled
+Chromium through ANGLE SwiftShader, a 1920 × 1080 viewport at DPR 1, hourly
+fixture frames, a 250 ms response floor and unrestricted bandwidth:
+
+| Run | Baseline first-correct p50 | Candidate first-correct p50 | Loaded workspace files | Loaded hash prefix |
+| --- | --- | --- | --- | --- |
+| 48-frame cold wide view (z7.15, > 800 km²) | 2431.5 ms | 2413.4 ms | 73 / 74 | `299107ef19` / `41196288b0` |
+
+Probes resolved `@av/client`, `@av/client/dom`, `@av/client/wind`,
+`@av/contracts`, `@av/contracts/wind-data`, `@av/forecast/wind` and
+`@av/soaring` inside each variant's own tree. Source hashes were
+`d0c0b8f82ac3…` / `3201e62961c9…`; loaded-module hashes
+`299107ef19…` / `41196288b0…`. The view is outside full-horizon
+eligibility, so this run checks source isolation and foreground cold latency
+(G01/G07), not automatic full-timeline preparation. The `viewport-warm` profile,
+eligible-area calibration, warm sweep, DPR 2, constrained memory, faults and
+real-basemap cases remain unverified.

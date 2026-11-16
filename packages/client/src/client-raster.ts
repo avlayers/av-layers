@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from '@av/contracts/format';
+import type { ForecastRequestHandle, ForecastRequestSpec } from './client-request-scheduler.ts';
 export { createForecastRequestScheduler } from './client-request-scheduler.ts';
 
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
@@ -51,6 +52,7 @@ interface TileTask {
   /** Set once HTTP 200 is known, so a departing caller leaves the body to be cached. */
   retain: boolean;
   timer: ReturnType<typeof setTimeout>;
+  handle?: ForecastRequestHandle;
 }
 const abortError = () => new DOMException('Tile request cancelled', 'AbortError');
 const timeoutError = () => new DOMException('Tile request deadline exceeded', 'TimeoutError');
@@ -59,6 +61,7 @@ const integerWithin = (value: number, min: number, max: number) => Number.isSafe
 interface RasterTileOptions {
   fetchImpl?: typeof fetch; timeoutMs?: number; retryDelayMs?: number; maxActive?: number; maxQueued?: number;
   maxCacheBytes?: number; maxPrefetchActive?: number;
+  request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
 }
 
 export function createRasterTileProtocol(baseUrl: string, options: RasterTileOptions = {}): RasterTileProtocol {
@@ -149,7 +152,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     return false;
   }
   function finish(task: TileTask, value?: RasterTileResponse, error?: unknown): void {
-    clearTimeout(task.timer);
+    clearTimeout(task.timer); task.handle = undefined;
     if (tasks.get(task.url) === task) tasks.delete(task.url);
     for (const consumer of task.consumers) {
       consumer.cleanup(); task.consumers.delete(consumer);
@@ -236,7 +239,15 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     for (let attempt = 0; ; attempt++) {
       signal.throwIfAborted();
       let response: Response | undefined;
-      try { response = await fetchImpl(task.url, { signal, redirect: 'error', headers: { accept: 'image/webp' }, priority: foreground ? 'high' : 'low' } as RequestInit); }
+      try {
+        if (options.request) {
+          const handle = options.request({ url: task.url, priority: foreground ? 'foreground' : 'background', kind: 'raster', maxResponseBytes: MAX_TILE_BYTES });
+          task.handle = handle;
+          const cancel = () => handle.cancel(signal.reason);
+          signal.addEventListener('abort', cancel, { once: true });
+          try { response = await handle.response; } finally { signal.removeEventListener('abort', cancel); if (response === undefined) task.handle = undefined; }
+        } else response = await fetchImpl(task.url, { signal, redirect: 'error', headers: { accept: 'image/webp' }, priority: foreground ? 'high' : 'low' } as RequestInit);
+      }
       catch (error) {
         signal.throwIfAborted();
         if (!(error instanceof TypeError) || attempt === 2) throw error;
@@ -317,6 +328,9 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     promote(source) {
       for (const task of queued) {
         if ([...task.consumers].some(consumer => consumer.priority === source)) { task.requestedAt = Date.now(); task.order = ++order; }
+      }
+      for (const task of active) {
+        if (task.handle && [...task.consumers].some(consumer => consumer.priority === source)) task.handle.promote();
       }
       pump();
     },

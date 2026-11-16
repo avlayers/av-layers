@@ -1,11 +1,26 @@
 import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, encodeWindByte, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
 
 type WindStatus = 'valid' | 'unavailable' | 'outside' | 'no-lift';
+/** Positive, unwrapped longitude interval aligned to the world copy nearest the window center. */
+export function preparedBounds(bounds: GeographicBounds): GeographicBounds {
+  const [west, south, east, north] = bounds;
+  const span = east >= west ? east - west : east + 360 - west;
+  const start = normalizeLon(west + span / 2) - span / 2;
+  return [start, south, start + span, north];
+}
+
+export interface WindPreparedGrid {
+  readonly bounds: GeographicBounds;
+  readonly data: Uint8Array<ArrayBuffer>;
+  readonly size: number;
+  readonly height: 'surface' | number | 'lift';
+  readonly key: string;
+}
 export interface WindSample { status: WindStatus; u: number | null; v: number | null }
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
@@ -19,6 +34,12 @@ const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
+
+/** Typed capacity outcome, separate from validation RangeErrors. */
+export class WindCapacityError extends Error {
+  readonly code = 'capacity';
+  constructor(message = 'Wind cache exceeds byte budget') { super(message); this.name = 'WindCapacityError'; }
+}
 
 interface CachedBytes {
   url: string;
@@ -35,6 +56,9 @@ export class WindDataCache {
   private readonly unavailableBuilds = new Map<string, number>();
   private bytes = 0;
   private spanFailures = 0;
+  private readonly failures = new Map<string, { until: number; attempts: number }>();
+  /** Called when a retain count reaches zero; capacity owners may re-plan. */
+  onRelease: (() => void) | null = null;
 
   constructor(private readonly budgetBytes = WIND_NUMERIC_BYTES, private readonly entryLimit = 256) {
     if (!Number.isSafeInteger(budgetBytes) || budgetBytes < WIND_FRAME_LIMIT || budgetBytes > WIND_WINDOW_BYTES
@@ -73,6 +97,21 @@ export class WindDataCache {
     this.unavailableBuilds.set(buildId, now + UNAVAILABLE_BUILD_TTL_MS);
   }
 
+  failureRemaining(url: string, now = Date.now()): number {
+    const entry = this.failures.get(url);
+    if (!entry) return 0;
+    if (entry.until <= now) { this.failures.delete(url); return 0; }
+    return entry.until - now;
+  }
+
+  recordFailure(url: string, now = Date.now()): void {
+    this.failures.set(url, { until: now + 30_000, attempts: Math.min(3, (this.failures.get(url)?.attempts ?? 0) + 1) });
+  }
+
+  clearFailure(url: string): void { this.failures.delete(url); }
+
+  get failedResources(): number { return this.failures.size; }
+
   hasReady(url: string, limit: number, now = Date.now()): boolean {
     for (const e of this.entries) if (e.url === url && e.used !== null && e.expiresAt > now && e.bytes.length === limit) return true;
     return false;
@@ -89,18 +128,28 @@ export class WindDataCache {
       if (this.bytes + limit <= this.budgetBytes && this.entries.size < this.entryLimit) break;
       if (!e.references) this.remove(e);
     }
-    if (this.bytes + limit > this.budgetBytes || this.entries.size >= this.entryLimit) throw new RangeError('Wind cache exceeds byte budget');
+    if (this.bytes + limit > this.budgetBytes || this.entries.size >= this.entryLimit) throw new WindCapacityError();
     const entry: CachedBytes = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
     this.entries.add(entry); this.bytes += limit;
     return entry;
   }
 
   release(entry: CachedBytes): void {
-    if (!--entry.references && (entry.used === null || entry.expiresAt <= Date.now())) this.remove(entry);
+    if (--entry.references) return;
+    if (entry.used === null || entry.expiresAt <= Date.now()) this.remove(entry);
+    else this.onRelease?.();
+  }
+
+  /** Drop validated entries no owner references and return the freed bytes. */
+  evictUnreferenced(): number {
+    let freed = 0;
+    for (const entry of [...this.entries]) if (!entry.references) { freed += entry.bytes.length; this.remove(entry); }
+    return freed;
   }
 
   clear(): void {
     this.unavailableBuilds.clear();
+    this.failures.clear();
     this.spanFailures = 0;
     for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
   }
@@ -230,6 +279,10 @@ function validateChunk(kind: string, bytes: Uint8Array, tileSize: number, levels
   return view;
 }
 
+class WindTransientError extends Error {
+  constructor(message: string) { super(message); this.name = 'WindTransientError'; }
+}
+
 export class WindDataSource {
   private controller?: AbortController;
   private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; windMask?: TileMask; fineMask?: TileMask; overview?: Overview };
@@ -238,8 +291,9 @@ export class WindDataSource {
   private pending: Promise<unknown> = Promise.resolve();
   private readonly cache: WindDataCache;
   private readonly held = new Set<CachedBytes>();
+  private readonly preparedGrids = new Map<string, WindPreparedGrid>();
   private active?: AbortController;
-  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean } = {}) {
+  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean; retryDelaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void>; random?: () => number } = {}) {
     this.cache = options.cache ?? new WindDataCache();
   }
 
@@ -275,6 +329,40 @@ export class WindDataSource {
         return out;
       }
     };
+  }
+
+  /**
+   * Quantized rendered lattice for the admitted extent. Sampling runs against the scientific
+   * sampler once per retained frame; selection only uploads the returned bytes.
+   */
+  hasPrepared(height: 'surface' | number | 'lift', size = 128): boolean {
+    return this.preparedGrids.has(`${this.generation}:${height}:${size}`);
+  }
+
+  prepare(height: 'surface' | number | 'lift', size = 128): WindPreparedGrid | null {
+    const current = this.current;
+    if (!current || current.build.expiresAtMs <= Date.now()) return null;
+    if (!Number.isSafeInteger(size) || size < 1 || size > 1024) throw new RangeError('Invalid wind preparation size');
+    if (height !== 'surface' && height !== 'lift' && (!Number.isFinite(height) || height < 0)) throw new RangeError('Invalid AGL height');
+    const key = `${this.generation}:${height}:${size}`;
+    const cached = this.preparedGrids.get(key);
+    if (cached) return cached;
+    const data = new Uint8Array(new ArrayBuffer(size * size * 4));
+    const [west, south, east, north] = preparedBounds(current.bounds);
+    const span = east - west;
+    for (let y = 0; y < size; y++) {
+      const lat = south + (north - south) * (y + 0.5) / size;
+      for (let x = 0; x < size; x++) {
+        const sample = this.sample(lat, normalizeLon(west + span * (x + 0.5) / size), height);
+        if (sample.status !== 'valid' || sample.u === null || sample.v === null) continue;
+        const offset = (y * size + x) * 4;
+        data[offset] = encodeWindByte(sample.u); data[offset + 1] = encodeWindByte(sample.v); data[offset + 3] = 255;
+      }
+    }
+    const grid: WindPreparedGrid = { bounds: [west, south, east, north], data, size, height, key };
+    if (this.preparedGrids.size >= 4) this.preparedGrids.delete(this.preparedGrids.keys().next().value!);
+    this.preparedGrids.set(key, grid);
+    return grid;
   }
 
   private release(): void {
@@ -333,6 +421,22 @@ export class WindDataSource {
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
     const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
       attemptSignal.throwIfAborted();
+      if (this.cache.failureRemaining(url) > 0) throw new Error('Numeric resource is cooling down');
+      const delays = this.options.retryDelaysMs ?? [250, 1000];
+      const sleep = this.options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+      for (let attempt = 0; ; attempt++) try {
+        return await readOnce(url, type, targets, attemptSignal);
+      } catch (error) {
+        const transient = error instanceof WindTransientError || (error instanceof TypeError && !attemptSignal.aborted);
+        if (!transient) { if (error instanceof WindTransientError) this.cache.recordFailure(url); throw error; }
+        if (attempt >= delays.length || attemptSignal.aborted) { this.cache.recordFailure(url); throw error; }
+        const jitter = 0.85 + (this.options.random?.() ?? Math.random()) * 0.3;
+        await sleep(delays[attempt]! * jitter);
+        attemptSignal.throwIfAborted();
+      }
+    };
+    const readOnce = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
+      attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
       const reqSig = AbortSignal.any([attemptSignal, reqCtrl.signal]);
@@ -343,6 +447,7 @@ export class WindDataSource {
         if (targets.length > 1 && res.status === 404) { await res.body?.cancel(); return 'retry-single'; }
         if (res.status === 409) { await res.body?.cancel(); return 'product-unavailable'; }
         if (res.status === 404) { await res.body?.cancel(); return null; }
+        if (res.status === 502 || res.status === 503 || res.status === 504) { await res.body?.cancel(); throw new WindTransientError(`Transient numeric response ${res.status}`); }
         if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
         const declared = res.headers.get('content-length');
         if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
@@ -365,6 +470,7 @@ export class WindDataSource {
           }
         } finally { reqSig.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
+        this.cache.clearFailure(url);
         return used;
       } finally { clearTimeout(timer); }
     };
@@ -561,7 +667,7 @@ export class WindDataSource {
   }
 
   dispose(): void {
-    this.disposed = true; this.controller?.abort(); this.current = undefined; this.generation++;
+    this.disposed = true; this.controller?.abort(); this.current = undefined; this.preparedGrids.clear(); this.generation++;
     if (!this.active) this.release();
   }
 }

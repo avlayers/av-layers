@@ -13,6 +13,10 @@ export const WIND_FRAME_LIMIT = 32 * 1024;
 export const WIND_FRAME_MAX_PAGES = 128;
 export const WIND_FINE_CELL_BYTES = 10;
 
+/** Rendered wind lattice encoding shared by the client preparation and the GL uploader. */
+export const encodeWindByte = (v: number): number => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
+export const decodeWindByte = (byte: number): number => byte / 255 * 200 - 100;
+
 const pop8 = (v: number): number => {
   v -= (v >>> 1) & 0x55;
   v = (v & 0x33) + ((v >>> 2) & 0x33);

@@ -44,15 +44,14 @@ export function createPreviewApp(): PreviewApp {
     replace: url => window.history.replaceState(null, '', url)
   }, offlineFixture);
 
-  const api = new ApiClient({ baseUrl: apiBaseUrl });
+  const forecastScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const api = new ApiClient({ baseUrl: apiBaseUrl, fetchImpl: forecastScheduler.fetch });
   const pointSeries = new PointSeriesController(api);
   const lifecycle = new AbortController();
 
   preferences.setUnits(initial.intent.units);
   const lowMemory = ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? Number.POSITIVE_INFINITY) <= 4;
   const windCache = new WindDataCache(lowMemory ? WIND_NUMERIC_BYTES : WIND_WINDOW_BYTES, lowMemory ? 256 : WIND_WINDOW_ENTRIES);
-  const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
-  const windScheduler = createForecastRequestScheduler();
 
   let map: maplibregl.Map | null = null;
   let camera: MapCamera | null = null;
@@ -389,7 +388,7 @@ export function createPreviewApp(): PreviewApp {
       writer.overlay(state);
       windSession?.reconcile();
       updateOverlayStatus();
-    }, rasterScheduler.fetch);
+    }, forecastScheduler.fetch, spec => forecastScheduler.request(spec));
     seam = new CoverageSeam(map);
     windOverlay = new WindOverlay(map);
     windOverlay.setOptions({ style: intent().windStyle, visible: intent().windVisible, paused: intent().windPaused, units: intent().units });
@@ -430,9 +429,9 @@ export function createPreviewApp(): PreviewApp {
       getMapOffset: () => mapOffsetMinutes,
       getDisplayedFrame: displayedPointFrame,
       getWind: () => {
-        const current = windSession?.current;
-        return current && windSession?.displayed
-          ? { build: current.build, frame: current.frame, sample: (lat, lon) => current.source.sample(lat, lon, intent().windHeight) }
+        const installed = windSession?.installed;
+        return installed
+          ? { build: installed.build, frame: installed.frame, sample: (lat, lon) => installed.source.sample(lat, lon, installed.height) }
           : null;
       },
       ensureLive: () => forecastSession.ensureLive(),
@@ -454,9 +453,9 @@ export function createPreviewApp(): PreviewApp {
     });
 
     windSession = createWindSession({
-      apiBaseUrl, map, lowMemory, scheduler: windScheduler, cache: windCache,
+      apiBaseUrl, map, lowMemory, scheduler: forecastScheduler, cache: windCache,
       overlay: { setWindActive: (active, resident) => overlay!.setWindActive(active, resident) },
-      field: { setField: (field, mode) => windOverlay!.setField(field, mode), clear: () => windOverlay!.clear() },
+      field: { install: (field, prepared, mode) => windOverlay!.install(field, prepared, mode), setField: (field, mode) => windOverlay!.setField(field, mode), setPrepared: prepared => windOverlay!.setPrepared(prepared), clear: () => windOverlay!.clear() },
       publish: {
         status: status => { writer.wind({ status }); windControls?.setStatus(status); },
         quality: overview => { writer.wind({ overview }); windControls?.setQuality?.(overview); },
@@ -579,7 +578,7 @@ export function createPreviewApp(): PreviewApp {
     forecastSession.dispose();
     lifecycle.abort();
     timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointFeature?.dispose();
-    windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); rasterScheduler.dispose();
+    windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); forecastScheduler.dispose();
     map?.remove();
     timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = overlay = null; map = null;
   }

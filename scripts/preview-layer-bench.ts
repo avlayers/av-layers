@@ -3,9 +3,9 @@ import { createServer as createHttpsServer } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -24,19 +24,24 @@ const output = resolve(option('--out', 'output/preview-layer-bench.json')), chan
 const variant = option('--variant', 'both'), frameCount = Number(option('--frames', '40'));
 const opacity = Number(option('--opacity', '1')), transparent = args.includes('--transparent');
 if (!Number.isInteger(repeats) || repeats < 1 || repeats > 200 || !Number.isInteger(tileDelayMs) || tileDelayMs < 0 || tileDelayMs > 1000 ||
-  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 40 || !['all', 'cold', 'smoke'].includes(scenario) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
+  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke'].includes(scenario) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
 await mkdir(dirname(output), { recursive: true });
 const scratch = await mkdtemp(join(tmpdir(), 'av-preview-bench-')), baselineRoot = join(scratch, 'baseline');
+const workspacePackages = new Map<string, Record<string, string>>();
 const certificate = join(scratch, 'localhost.pem'), privateKey = join(scratch, 'localhost-key.pem');
 execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', privateKey, '-out', certificate, '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'], { stdio: 'ignore' });
 const tls = { key: await readFile(privateKey), cert: await readFile(certificate) };
-const sourceDirectories = ['packages/client/src', 'apps/preview/src'];
+const sourceDirectories = ['packages', 'apps/preview/src'];
 await mkdir(baselineRoot);
 const baselineRevision = execFileSync('git', ['rev-parse', baseline], { cwd: root, encoding: 'utf8' }).trim();
 const archive = execFileSync('git', ['archive', baselineRevision, ...sourceDirectories, 'apps/preview/index.html'], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
 execFileSync('tar', ['-xf', '-', '-C', baselineRoot], { input: archive });
 await symlink(join(root, 'node_modules'), join(baselineRoot, 'node_modules'));
 await symlink(join(root, 'apps/preview/node_modules'), join(baselineRoot, 'apps/preview/node_modules'));
+for (const entry of await readdir(join(root, 'packages'))) {
+  const modules = join(root, 'packages', entry, 'node_modules');
+  try { await symlink(modules, join(baselineRoot, 'packages', entry, 'node_modules')); } catch { /* package has no local dependencies */ }
+}
 const maplibreDirectory = dirname(createRequire(join(root, 'apps/preview/package.json')).resolve('maplibre-gl/package.json'));
 const build = fixtureProfileBuild({ frameHours: Array.from({ length: frameCount }, (_, index) => index + 1), mapFrameCount: frameCount });
 build.manifest.expiresAt = new Date(Date.now() + 86400000).toISOString();
@@ -73,7 +78,7 @@ function summarize(samples: Sample[]) {
 async function sourceHash(directory: string) {
   const hash = createHash('sha256');
   for (const sourceDirectory of sourceDirectories) for (const path of (await readdir(join(directory, sourceDirectory), { recursive: true })).sort()) {
-    if (!/\.(?:ts|tsx|css)$/.test(path) || /\.test\.tsx?$/.test(path)) continue;
+    if (!/(?:\.(?:ts|tsx|css)|package\.json)$/.test(path) || /\.test\.tsx?$/.test(path)) continue;
     hash.update(`${sourceDirectory}/${path}`).update(await readFile(join(directory, sourceDirectory, path)));
   }
   hash.update(await readFile(join(directory, 'apps/preview/index.html')));
@@ -83,6 +88,7 @@ const browser = await chromium.launch({ headless: true, ...(channel ? { channel 
 const results = [];
 try {
   for (const [name, codeRoot] of [['baseline', baselineRoot], ['changed', root]]) {
+    const codeRootReal = await realpath(codeRoot);
     if (variant !== 'both' && variant !== name) continue;
     const sourceSha256 = await sourceHash(codeRoot);
     let requests = 0, active = 0, peakActive = 0, bytes = 0, lastRequest = 0, base = '', overviewRequests = 0, overviewBytes = 0, maxImageReadyMs = 0;
@@ -139,13 +145,37 @@ try {
       server: { hmr: { server: hmr, protocol: 'wss', host: '127.0.0.1', clientPort: hmrAddress.port }, middlewareMode: true, fs: { allow: [root, scratch] } }, optimizeDeps: { noDiscovery: true },
       define: { 'import.meta.env.AV_API_BASE': JSON.stringify(base), 'import.meta.env.VITE_OFFLINE_FIXTURE': '"true"' },
       esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
-      resolve: { alias: [{ find: '@av/client/dom', replacement: join(codeRoot, 'packages/client/src/dom.ts') },
-        { find: /^@av\/client$/, replacement: join(codeRoot, 'packages/client/src/index.ts') },
-        { find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },
-      plugins: [{ name: 'measure-real-preview', enforce: 'pre', resolveId(id, importer) {
-        if (id === 'maplibre-gl' && importer !== benchEntry) return benchEntry;
-      } }]
+      resolve: { alias: [{ find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },
+      plugins: [
+        { name: 'code-root-workspace', enforce: 'pre', async resolveId(id) {
+          const match = /^@av\/([^/]+)(?:\/(.+))?$/.exec(id);
+          if (!match) return;
+          const directory = join(codeRoot, 'packages', match[1]!);
+          let exportsMap = workspacePackages.get(directory);
+          if (!exportsMap) {
+            const parsed = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as { exports?: Record<string, string> };
+            exportsMap = parsed.exports ?? {}; workspacePackages.set(directory, exportsMap);
+          }
+          const target = exportsMap[match[2] ? `./${match[2]}` : '.'];
+          if (typeof target !== 'string') throw new Error(`Unresolved workspace import ${id} from ${codeRoot}`);
+          const resolved = join(directory, target);
+          if (!resolved.startsWith(codeRoot + sep)) throw new Error(`Workspace import ${id} escaped ${codeRoot}: ${resolved}`);
+          return resolved;
+        } },
+        { name: 'measure-real-preview', enforce: 'pre', resolveId(id, importer) {
+          if (id === 'maplibre-gl' && importer !== benchEntry) return benchEntry;
+        } }
+      ]
     });
+    const probeIds = ['@av/client', '@av/client/dom', '@av/client/wind', '@av/contracts', '@av/contracts/wind-data', '@av/forecast/wind', '@av/soaring'];
+    const probes: { id: string; resolved: string; sha256: string }[] = [];
+    for (const id of probeIds) {
+      const hit = await vite.pluginContainer.resolveId(id);
+      if (!hit) throw new Error(`Benchmark probe ${id} did not resolve`);
+      const file = await realpath(hit.id.split('?')[0]!);
+      if (!file.startsWith(codeRootReal + sep)) throw new Error(`Benchmark probe ${id} resolved outside ${name} source: ${file}`);
+      probes.push({ id, resolved: relative(codeRootReal, file), sha256: createHash('sha256').update(await readFile(file)).digest('hex') });
+    }
     async function openPage() {
       const start = count(), startedAt = Date.now();
       const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
@@ -227,8 +257,17 @@ try {
         } finally { await context.close(); }
       }
       if (sourceSha256 !== await sourceHash(codeRoot)) throw new Error('Benchmark sources changed during the run; repeat with stable sources');
+      const loaded = (await Promise.all([...vite.moduleGraph.idToModuleMap.keys()].map(async id => {
+        const clean = id.split('?')[0]!;
+        try { return await realpath(clean); } catch { return clean; }
+      }))).filter(id => /[\\/]packages[\\/]|[\\/]apps[\\/]preview[\\/]src[\\/]/.test(id));
+      const foreign = loaded.filter(id => !id.startsWith(codeRootReal + sep));
+      if (foreign.length) throw new Error(`Benchmark loaded sources outside ${name}: ${foreign.slice(0, 5).join(', ')}`);
+      const loadedHash = createHash('sha256');
+      for (const file of [...new Set(loaded)].sort()) { loadedHash.update(relative(codeRootReal, file)); loadedHash.update(await readFile(file)); }
+      const sourceIsolation = { codeRoot: codeRootReal, probes, loadedFiles: new Set(loaded).size, loadedSha256: loadedHash.digest('hex') };
       if (errors.length) throw new Error(errors.join('\n'));
-      results.push({ name, revision: name === 'baseline' ? baselineRevision : 'working-tree', sourceSha256, environment, finalEnvironment, summary, samples, memoryPlateau,
+      results.push({ name, revision: name === 'baseline' ? baselineRevision : 'working-tree', sourceSha256, sourceIsolation, environment, finalEnvironment, summary, samples, memoryPlateau,
         totalRequests: requests, uniqueTileURLs: urls.size, totalTileBytes: bytes, overviewRequests, overviewBytes, maxImageReadyMs, httpVersions: [...protocols], peakHTTPRequests: peakActive, initialHeap, finalHeap });
       console.log(JSON.stringify({ name, summary, finalEnvironment, peakHTTPRequests: peakActive }));
     } finally { await vite.close(); hmr.closeAllConnections(); await new Promise<void>(resolve => hmr.close(() => resolve())); for (const session of sessions) session.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); }

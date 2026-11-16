@@ -7,3 +7,5 @@ export * from './client-time.ts';
 export * from './client-view.ts';
 export * from './client-raster.ts';
 export * from './client-seam.ts';
+
+export type { ForecastRequestHandle, ForecastRequestSpec } from './client-request-scheduler.ts';

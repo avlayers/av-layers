@@ -3,6 +3,7 @@ import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type Win
 import type { Map } from 'maplibre-gl';
 import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from '../raster/raster-budget';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
+import type { WindPreparedGrid } from '@av/client/wind';
 import { attachWindGl, type WindGl } from './wind-gl';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
@@ -21,6 +22,7 @@ export class WindOverlay {
   private readonly trailCtx: CanvasRenderingContext2D;
   private readonly barbCtx: CanvasRenderingContext2D;
   private field: WindField | null = null;
+  private prepared: WindPreparedGrid | null = null;
   private blendFrom: WindField | null = null;
   private blendStart = 0;
   private gpu = false;
@@ -113,8 +115,29 @@ export class WindOverlay {
     this.resize();
   }
 
+  install(field: WindField | null, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap' = 'replace'): void {
+    if (this.destroyed) return;
+    if (mode === 'swap' && !prepared && this.field && field && this.field !== field) {
+      this.prepared = null;
+      this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
+      for (const particle of this.particles) particle.wind = undefined;
+      this.barbSamples.clear(); this.syncGl(); this.drawBarbs(); this.schedule(); return;
+    }
+    if (this.field === field && this.prepared === prepared && !this.blendFrom) return;
+    this.blendFrom = null; this.field = field; this.prepared = prepared; this.barbSamples.clear();
+    this.syncGl(); this.resetTrails(); this.drawBarbs(); this.schedule();
+  }
+
+  setPrepared(prepared: WindPreparedGrid | null): void {
+    if (this.destroyed || this.prepared === prepared) return;
+    this.prepared = prepared;
+    if (prepared && this.options.style !== 'barbs') this.resetTrails();
+    this.syncGl(); this.schedule();
+  }
+
   setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace'): void {
     if (this.destroyed) return;
+    this.prepared = null;
     if (mode === 'swap' && this.field && field && this.field !== field) {
       this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
       for (const particle of this.particles) particle.wind = undefined;
@@ -133,7 +156,7 @@ export class WindOverlay {
     this.syncGl(); this.schedule();
   }
 
-  clear(): void { this.setField(null); }
+  clear(): void { this.prepared = null; this.setField(null); }
 
   destroy(): void {
     if (this.destroyed) return;
@@ -143,7 +166,7 @@ export class WindOverlay {
     this.gl?.destroy();
     document.removeEventListener('visibilitychange', this.visibility);
     for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.remove(); }
-    this.field = null; this.particles = []; this.barbSamples.clear();
+    this.field = null; this.prepared = null; this.particles = []; this.barbSamples.clear();
   }
 
   private resetTrails(): void {
@@ -219,7 +242,8 @@ export class WindOverlay {
   }
 
   private syncGl(): void {
-    this.gl?.setFields(this.blendingFrom(), this.field);
+    if (this.prepared) this.gl?.setPrepared(this.prepared);
+    else this.gl?.setFields(this.blendingFrom(), this.field);
     this.gl?.setMotion(this.options.paused || this.options.style === 'barbs', !this.options.visible || this.options.style === 'barbs' || !this.field || this.mapLost);
   }
 

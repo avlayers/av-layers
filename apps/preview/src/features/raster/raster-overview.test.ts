@@ -32,11 +32,12 @@ function build(count = 1) {
   return fixtureBuild({ frames, mapFrameCount: count });
 }
 function fixture(held = false, bytes = 12, abortable = true) {
-  let bounds = { west: -80, east: 80, south: -50, north: 50 }, zoom = 4;
+  let bounds = { west: -80, east: 80, south: -50, north: 50 }, zoom = 4, sourceZoom: number | null = null;
   const sources = new globalThis.Map<string, { coordinates: number[][]; updateImage: ReturnType<typeof vi.fn> }>();
   const layers = new globalThis.Map<string, object>();
   const map = {
     getCanvas: () => ({}), getZoom: () => zoom,
+    coveringTiles: (options?: { minzoom?: number; maxzoom?: number }) => [{ canonical: { z: Math.max(options?.minzoom ?? 0, Math.min(options?.maxzoom ?? 22, Math.round(sourceZoom ?? zoom))) } }],
     getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north }),
     getSource: (id: string) => sources.get(id), getLayer: (id: string) => layers.get(id),
     addSource: vi.fn((id: string, spec: { coordinates: number[][] }) => sources.set(id, { coordinates: spec.coordinates, updateImage: vi.fn() })),
@@ -55,7 +56,8 @@ function fixture(held = false, bytes = 12, abortable = true) {
   const onReady = vi.fn(), overview = new RasterOverview(map as unknown as Map, protocol as unknown as RasterTileSourceProtocol, onReady);
   const finish = (index: number, returnedBytes = bytes) => requests[index].resolve({ data: new ArrayBuffer(returnedBytes) });
   return { overview, map, sources, layers, requests, protocol, transport, onReady, finish,
-    view: (value: typeof bounds, valueZoom = zoom) => { bounds = value; zoom = valueZoom; } };
+    view: (value: typeof bounds, valueZoom = zoom) => { bounds = value; zoom = valueZoom; },
+    setSourceZoom: (value: number | null) => { sourceZoom = value; } };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
@@ -443,4 +445,66 @@ it('leaves unsupported browsers on the existing fine renderer without reserving 
   expect(f.overview.supported).toBe(false); expect(f.protocol.createSource).not.toHaveBeenCalled();
   expect(f.overview.state).toEqual({ ready: 0, total: 0, failed: 0 });
   f.overview.destroy();
+});
+
+
+it('assembles a native crop for a small viewport instead of a low-zoom mosaic', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
+  try {
+    f.view(armenia, 10); f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 1, total: 1, failed: 0 }));
+    expect(canvases[0]).toMatchObject({ width: 197, height: 112 });
+    expect(f.requests.length).toBeGreaterThan(0);
+    for (const request of f.requests) expect(Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1])).toBe(9);
+    const boxes = canvases[0].context.drawImage.mock.calls.map(call => call.slice(1) as number[]);
+    expect(Math.min(...boxes.map(box => box[0]))).toBeLessThanOrEqual(0);
+    expect(Math.min(...boxes.map(box => box[1]))).toBeLessThanOrEqual(0);
+    expect(Math.max(...boxes.map(box => box[0] + box[2]))).toBeGreaterThanOrEqual(canvases[0].width);
+    expect(Math.max(...boxes.map(box => box[1] + box[3]))).toBeGreaterThanOrEqual(canvases[0].height);
+  } finally { f.overview.destroy(); }
+});
+
+it('reevaluates source resolution when a zoom change still fits the previous crop', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
+  try {
+    f.view(armenia, 7); f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+    const zoomed = { west: 44.4, east: 44.6, south: 40.15, north: 40.25 };
+    f.view(zoomed, 9);
+    f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+    const newest = f.requests.slice(-1)[0];
+    expect(Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(newest.url)![1])).toBe(9);
+  } finally { f.overview.destroy(); }
+});
+
+
+it('keeps a contained pan inside the retained crop without closing prepared images', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
+  try {
+    f.view(armenia, 10); f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+    const requests = f.requests.length, closes = bitmaps.reduce((count, bitmap) => count + bitmap.close.mock.calls.length, 0);
+    f.view({ ...armenia, west: armenia.west + 0.01, east: armenia.east + 0.01 }, 10);
+    f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true);
+    expect(f.requests.length).toBe(requests);
+    expect(bitmaps.reduce((count, bitmap) => count + bitmap.close.mock.calls.length, 0)).toBe(closes);
+  } finally { f.overview.destroy(); }
+});
+
+it('switches from a capped wide mosaic to cropping when the viewport becomes eligible', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  const wide = { west: -80, east: 80, south: -50, north: 50 }, armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
+  try {
+    f.view(wide, 12); f.overview.select(b, 'usable-lift-agl', frame);
+    expect(canvases[0]!.width).toBeGreaterThan(197);
+    f.view(armenia, 12); f.overview.select(b, 'usable-lift-agl', frame);
+    expect(canvases.at(-1)).toMatchObject({ width: 197, height: 112 });
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+  } finally { f.overview.destroy(); }
 });

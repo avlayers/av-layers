@@ -21,20 +21,23 @@ combined work across all grids selected by a request.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
-- **Client forecast transport:** preview gives numeric wind and raster fetches
-  separate [schedulers](../packages/client/src/client-request-scheduler.ts).
-  Raster keeps eight requests active. A request reserves 1 MiB until its
-  content-length replaces that reserve, and a new request starts only while that
-  reserve still fits in 4 MiB. The concurrency slot frees when headers arrive.
-  Wind keeps six
-  requests active until each body finishes. Either scheduler queues 64 requests.
-  Selected foreground work takes priority over queued speculation and evicts a
-  queued low-priority prefetch if all 64 queue slots are occupied. Preview and
-  Windy share the [raster scheduler](../packages/client/src/client-raster.ts).
-  It keeps 16 requests active and queues 64. Background work starts while fewer
-  than 2 background reads are active; admitted reads finish after demotion. A
-  tile that has returned HTTP 200 is stored in the compressed cache when its
-  caller leaves. The compressed tile cache is 48 MiB including entry overhead.
+- **Client forecast transport:** preview, numeric wind and forecast metadata
+  share one [scheduler](../packages/client/src/client-request-scheduler.ts).
+  Eight forecast requests stay active. A request owns its count and byte
+  reservation until the body settles or cancellation completes. An explicit
+  request reserves its validated expected size or its safe maximum; the fetch
+  adapter keeps the 1 MiB header reserve. A declared length replaces that
+  reserve only with an exposed `Content-Encoding: identity`. Unknown, malformed
+  and compressed lengths keep the reservation. The queue holds 64 requests.
+  Speculative work starts only below six bodies and the background byte cap;
+  foreground keeps two transfer slots and up to 2 MiB, clamped to the configured
+  total. Selected work takes priority over queued speculation and evicts a
+  queued background prefetch when all 64 slots are occupied. Promotion of a
+  queued task changes queue rank; promotion of an active raster or wind consumer
+  reaches the physical request handle without a second fetch. A validated
+  expected size is exact: delivered bytes beyond it fail the stream. The raster
+  protocol keeps 16 inner requests active. A tile that has returned HTTP 200 is
+  stored in the compressed cache when its caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using
   [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 48
   offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
@@ -55,9 +58,11 @@ combined work across all grids selected by a request.
   large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
   With viewport overviews, one transport handle loads up to two coarse tiles at once.
-  A rested camera keeps one decoded image per map frame for the active layer,
-  padded by half the shorter view and at least one tile, within 768 MiB and a
-  4096 px edge. Devices that report at most 4 GiB keep the selected frame and
+  A rested camera keeps one decoded image per map frame for the active layer.
+  Views of at most 800 km² assemble the native source-zoom rectangle plus a 10%
+  per-edge margin and a one-pixel gutter; the 391×221 Armenia frame costs
+  15.8 MiB across 48 frames. Larger views keep the padded mosaic, within 768 MiB
+  and a 4096 px edge. Devices that report at most 4 GiB keep the selected frame and
   its two neighbors. One image source uploads the selected frame. The 24 MiB
   overview reservation still limits how many fine sources stay mounted.
   Fine-source admission can shrink to one.
@@ -71,9 +76,11 @@ combined work across all grids selected by a request.
   A camera rest outside the padded view waits 400 ms before replacing it.
   Movement during that wait keeps the previous images. Layer, build, and expiry
   changes release decoded overviews. Unsupported browsers retain the raster-only
-  path. Playback blends the previous numeric wind field for 700 ms. Preview
-  draws those trails through the map WebGL context when a float color target is
-  available. Each trail target matches the map drawing buffer. The 2D trail
+  path. Background warming prepares each acquired frame's 128×128 RGBA lattice
+  (64 KiB per height) on the main thread; selection uploads it instead of
+  resampling the native grid. The canvas and CPU paths keep the 700 ms field
+  blend. Preview draws those trails through the map WebGL context when a float
+  color target is available. Each trail target matches the map drawing buffer. The 2D trail
   canvas is 1×1 while those targets are allocated. The 2D canvas draws the
   trails when that float target is absent.
   The timeline reports how many rested frames are decoded.
