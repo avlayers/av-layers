@@ -205,16 +205,21 @@ export class WindOverlay {
   }
 
   private sampleAt(lat: number, lon: number): ReturnType<WindField['sample']> {
-    const next = this.field!.sample(lat, lon), from = this.blendFrom;
+    const next = this.field!.sample(lat, lon), from = this.blendingFrom();
     if (!from) return next;
-    if (performance.now() - this.blendStart >= PLAYBACK_STEP_MS) { this.blendFrom = null; return next; }
     const previous = from.sample(lat, lon), t = (performance.now() - this.blendStart) / PLAYBACK_STEP_MS;
     if (!valid(previous) || !valid(next)) return valid(next) ? next : previous;
     return { status: next.status, u: previous.u + (next.u - previous.u) * t, v: previous.v + (next.v - previous.v) * t };
   }
 
+  /** Previous frame while a playback step is still open. The GPU path never calls `sampleAt`, so this is what keeps a finished blend from being uploaded again. */
+  private blendingFrom(): WindField | null {
+    if (this.blendFrom && performance.now() - this.blendStart >= PLAYBACK_STEP_MS) this.blendFrom = null;
+    return this.blendFrom;
+  }
+
   private syncGl(): void {
-    this.gl?.setFields(this.blendFrom, this.field);
+    this.gl?.setFields(this.blendingFrom(), this.field);
     this.gl?.setMotion(this.options.paused || this.options.style === 'barbs', !this.options.visible || this.options.style === 'barbs' || !this.field || this.mapLost);
   }
 
