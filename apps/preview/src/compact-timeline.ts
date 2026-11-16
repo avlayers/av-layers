@@ -183,10 +183,12 @@ function linearScale(width: number): DayScale {
 /** Fold each night that does not contain the selected minute into a fixed moon. */
 export function buildDayScale(width: number, bounds: NightBounds | null, selectedMinute: number | null): DayScale {
   if (!bounds || !(width >= MOON_PX * 2 + 80)) return linearScale(width);
+  const sunrise = bounds.sunrise < 1 ? 0 : bounds.sunrise;
+  const sunset = bounds.sunset > DAY_MINUTES - 1 ? DAY_MINUTES : bounds.sunset;
   const parts: ScaleSegment[] = [
-    { kind: 'morning', start: 0, end: bounds.sunrise, folded: false, x0: 0, x1: 0 },
-    { kind: 'day', start: bounds.sunrise, end: bounds.sunset, folded: false, x0: 0, x1: 0 },
-    { kind: 'evening', start: bounds.sunset, end: DAY_MINUTES, folded: false, x0: 0, x1: 0 },
+    { kind: 'morning', start: 0, end: sunrise, folded: false, x0: 0, x1: 0 },
+    { kind: 'day', start: sunrise, end: sunset, folded: false, x0: 0, x1: 0 },
+    { kind: 'evening', start: sunset, end: DAY_MINUTES, folded: false, x0: 0, x1: 0 },
   ].filter(part => part.end - part.start >= 1);
   for (const part of parts) {
     const selected = selectedMinute !== null && selectedMinute >= part.start && selectedMinute < part.end;
@@ -210,7 +212,7 @@ export function minuteToX(scale: DayScale, minute: number): number {
   const clamped = Math.min(DAY_MINUTES, Math.max(0, minute));
   const segment = scale.segments.find(part => clamped < part.end) ?? scale.segments.at(-1);
   if (!segment || segment.end <= segment.start) return 0;
-  const fraction = Math.min(1, (clamped - segment.start) / (segment.end - segment.start));
+  const fraction = Math.min(1, Math.max(0, (clamped - segment.start) / (segment.end - segment.start)));
   return segment.x0 + fraction * (segment.x1 - segment.x0);
 }
 
@@ -218,7 +220,7 @@ export function xToMinute(scale: DayScale, x: number): number {
   const clamped = Math.min(scale.width, Math.max(0, x));
   const segment = scale.segments.find(part => clamped < part.x1) ?? scale.segments.at(-1);
   if (!segment || segment.x1 <= segment.x0) return 0;
-  const fraction = Math.min(1, (clamped - segment.x0) / (segment.x1 - segment.x0));
+  const fraction = Math.min(1, Math.max(0, (clamped - segment.x0) / (segment.x1 - segment.x0)));
   return segment.start + fraction * (segment.end - segment.start);
 }
 
@@ -303,7 +305,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
   let daySignature = '', selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
-  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1;
+  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null;
   const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
 
   const controlsDisabled = () => disabled || !frames.length;
@@ -329,12 +331,17 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     return width > 0 ? width : 320;
   }
 
-  function currentScale(width: number): DayScale {
+  function liveScale(width: number): DayScale {
     const group = selectedGroup();
     const frame = selectedIndex >= 0 ? frames[selectedIndex] : undefined;
     const local = frame ? localTimeFromMs(Date.parse(frame.validTime), offsetMinutes) : null;
     const bounds = group ? daySolar(group.day).bounds : null;
     return buildDayScale(width, bounds, local ? local.hour * 60 + local.minute : null);
+  }
+
+  function currentScale(width: number): DayScale {
+    if (gestureScale && Math.abs(gestureScale.width - width) < 0.5) return gestureScale;
+    return liveScale(width);
   }
 
   function placeMinute(scale: DayScale, minute: number): number {
@@ -539,10 +546,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     if ((pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
     if (timer !== null) stopPlayback();
+    gestureScale = null;
     gestureStart = selectedIndex;
     activePointer = pointer.pointerId ?? 1;
     if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
     seek(pointer.clientX);
+    const width = track.getBoundingClientRect().width;
+    if (width > 0) gestureScale = liveScale(width);
+    if (!destroyed) render();
   });
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
@@ -553,8 +564,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
     activePointer = null;
+    const held = gestureScale !== null;
+    gestureScale = null;
     if (!destroyed && !controlsDisabled() && gestureStart >= 0 && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
     gestureStart = -1;
+    if (held && !destroyed) render();
   };
   track.addEventListener('pointermove', movePointer);
   track.addEventListener('pointerup', releasePointer);
@@ -621,6 +635,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       stopPlayback();
       activePointer = null;
       gestureStart = -1;
+      gestureScale = null;
       resizeObserver?.disconnect();
       doc.removeEventListener('visibilitychange', onVisibility);
       doc.defaultView?.removeEventListener('pagehide', stopPlayback);

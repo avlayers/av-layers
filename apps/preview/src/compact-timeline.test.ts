@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import {
   buildDayScale,
   createCompactTimeline,
+  minuteToX,
   coarseSpanFractions,
   dayHatchFractions,
   frameIndexForDayFraction,
@@ -439,6 +440,13 @@ it('folds both nights during daylight and opens only the night that contains the
   expect(evening.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning']);
   expect(evening.segments.find(segment => segment.kind === 'evening')!.x1).toBeGreaterThan(evening.segments.find(segment => segment.kind === 'day')!.x1);
   expect(buildDayScale(400, null, 16 * 60).linear).toBe(true);
+  const shortMorning = buildDayScale(400, { sunrise: 0.4, sunset: 17 * 60 }, 12 * 60);
+  expect(shortMorning.segments.map(segment => segment.kind)).toEqual(['day', 'evening']);
+  expect(shortMorning.segments[0]!.start).toBe(0);
+  expect(minuteToX(shortMorning, 0)).toBe(0);
+  const shortEvening = buildDayScale(400, { sunrise: 7 * 60, sunset: 1440 - 0.4 }, 12 * 60);
+  expect(shortEvening.segments.map(segment => segment.kind)).toEqual(['morning', 'day']);
+  expect(shortEvening.segments.at(-1)!.end).toBe(1440);
 
   const offsetMinutes = -300;
   const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
@@ -469,8 +477,34 @@ it('folds both nights during daylight and opens only the night that contains the
   timeline.update(hourly, 'h16');
   pointer(track, 'pointerdown', 10);
   const selected = onSelect.mock.calls.at(-1)?.[0] as number;
-  expect(selected).toBeGreaterThanOrEqual(0);
-  expect(selected).toBeLessThan(place!.sunrise / 60);
+  const chosen = new Date(Date.parse(hourly[selected]!.validTime) + offsetMinutes * 60_000);
+  expect(chosen.getUTCHours() * 60 + chosen.getUTCMinutes()).toBeLessThan(place!.sunrise);
+  pointer(track, 'pointerup', 10);
+  timeline.destroy();
+});
+
+it('keeps the folded scale steady while a drag crosses into the night', () => {
+  const offsetMinutes = -300;
+  const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
+  const place = solarMinuteBounds(37.54, -77.46, '2026-11-16', offsetMinutes);
+  const hourly: TimelineFrame[] = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`,
+    validTime: new Date(start + hour * 3_600_000).toISOString()
+  }));
+  const { host, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const root = host.children[0]!;
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 480;
+  timeline.update(hourly, 'h16');
+  const scale = buildDayScale(480, place, 16 * 60);
+  const evening = scale.segments.find(segment => segment.kind === 'evening')!;
+  const nightX = (evening.x0 + evening.x1) / 2;
+  pointer(track, 'pointerdown', minuteToX(scale, 16 * 60));
+  expect(named(root, 'ct-moon')).toHaveLength(2);
+  pointer(track, 'pointermove', nightX);
+  expect(named(root, 'ct-moon')).toHaveLength(2);
+  pointer(track, 'pointerup', nightX);
+  expect(named(root, 'ct-moon')).toHaveLength(1);
   timeline.destroy();
 });
 
