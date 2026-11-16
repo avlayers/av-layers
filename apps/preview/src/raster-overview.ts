@@ -115,6 +115,7 @@ export class RasterOverview {
   private shown: string | null = null;
   private readonly images = new globalThis.Map<string, ImageBitmap>();
   private readonly unavailable = new Set<string>();
+  private readonly retried = new Set<string>();
   private job: Job | null = null;
   private expiry: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
@@ -147,7 +148,7 @@ export class RasterOverview {
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
     }
     this.selected = frame;
-    this.window(); this.unavailable.delete(frame);
+    this.window(); this.unavailable.delete(frame); this.retried.delete(frame);
     if (this.job && this.job.frame !== frame && !this.images.has(frame)) this.job.controller.abort();
     this.pump();
   }
@@ -197,7 +198,7 @@ export class RasterOverview {
     if (this.map.getLayer(this.id)) this.map.removeLayer(this.id);
     if (this.map.getSource(this.id)) this.map.removeSource(this.id);
     for (const image of this.images.values()) image.close();
-    this.images.clear(); this.unavailable.clear();
+    this.images.clear(); this.unavailable.clear(); this.retried.clear();
     if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
   }
 
@@ -251,9 +252,12 @@ export class RasterOverview {
       const previous = this.images.get(frame);
       this.images.set(frame, image);
       if (previous && previous !== image) previous.close();
+      this.retried.delete(frame);
       this.onReady();
     }).catch(() => {
-      if (this.current(job)) { this.unavailable.add(frame); this.onReady(); }
+      if (!this.current(job)) return;
+      if (frame === this.selected && !this.retried.has(frame)) { this.retried.add(frame); return; }
+      this.unavailable.add(frame); this.onReady();
     }).finally(() => {
       if (this.job === job) this.job = null;
       this.pump();

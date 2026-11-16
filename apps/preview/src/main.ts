@@ -391,6 +391,7 @@ function startPreview(lifecycle: AbortController): void {
           windHeld.clear();
           dropRetired(); windView.source.dispose(); windView = null; windDisplayed = false; installedWind = null; windOverlay.clear();
           status = await request.source.load({ ...request, signal: request.controller.signal });
+          if (status === 'ready') windPrefetchBlocked = false;
         }
         if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
         if (status === 'ready') {

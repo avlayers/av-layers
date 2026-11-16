@@ -110,16 +110,41 @@ it('reuses one image source and decoded frames for immediate timeline changes', 
   } finally { f.overview.destroy(); }
 });
 
+it('retries the selected overview once after a tile error', async () => {
+  const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+    f.requests[0].reject(new Error('503')); f.requests[1].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.requests.length).toBe(4));
+    const ready = () => f.overview.ready(b, 'usable-lift-agl', frame);
+    let done = 2;
+    while (!ready()) {
+      if (f.requests.length === done) {
+        await vi.waitFor(() => expect(ready() || f.requests.length > done).toBe(true));
+        if (ready()) break;
+      }
+      const batch = f.requests.length;
+      for (let index = done; index < batch; index++) f.finish(index);
+      done = batch;
+    }
+    expect(f.requests).toHaveLength(11);
+    expect(f.overview.state).toEqual({ ready: 1, total: 1, failed: 0 });
+  } finally { f.overview.destroy(); }
+});
+
 it('never promotes a partially failed frame into an empty fallback', async () => {
   const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
   try {
     f.overview.select(b, 'usable-lift-agl', frame);
     f.finish(0); f.requests[1].reject(new Error('503'));
-    await vi.waitFor(() => expect(bitmaps.filter(image => image.kind === 'tile')[0]?.close).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(f.requests.length).toBe(4));
+    expect(f.overview.state.failed).toBe(0);
+    f.requests[2].reject(new Error('503')); f.requests[3].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 0, total: 1, failed: 1 }));
+    expect(bitmaps.filter(image => image.kind === 'tile')[0]?.close).toHaveBeenCalledOnce();
     expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
     expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(false);
     expect(f.map.addSource).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 0, total: 1, failed: 1 }));
     expect(f.onReady).toHaveBeenCalledOnce();
   } finally { f.overview.destroy(); }
 });

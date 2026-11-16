@@ -8,6 +8,7 @@ import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixtur
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { REGION_A_BOUNDS, REGION_A_POINT, REGION_B_BOUNDS, REGION_B_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
 import { browserTimeZone, formatPlaceTime, formatPointMapTimes, formatViewerTime, longitudeOffsetHours, type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
+import { FOCUS_DWELL_MS } from './raster-overview';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -1853,6 +1854,10 @@ it('drops the previous wind hour when the selected frame exceeds the numeric bud
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
   expect(windFields.at(-1)).not.toBe(painted);
   expect(windStatuses.at(-1)).toBe('ready');
+  const recovered = windLoads.length, selected = windLoads.at(-1)!.frame;
+  await vi.advanceTimersByTimeAsync(FOCUS_DWELL_MS);
+  expect(windLoads.length).toBe(recovered + 1);
+  expect(windLoads.at(-1)!.frame).not.toBe(selected);
 });
 
 it('clears the previous wind hour when the selected frame is unavailable', async () => {
