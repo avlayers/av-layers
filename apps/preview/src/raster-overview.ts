@@ -148,7 +148,8 @@ export class RasterOverview {
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
     }
     this.selected = frame;
-    this.window(); this.unavailable.delete(frame); this.retried.delete(frame);
+    this.window();
+    if (this.unavailable.delete(frame) || this.job?.frame !== frame) this.retried.delete(frame);
     if (this.job && this.job.frame !== frame && !this.images.has(frame)) this.job.controller.abort();
     this.pump();
   }

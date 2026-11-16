@@ -132,6 +132,35 @@ it('retries the selected overview once after a tile error', async () => {
   } finally { f.overview.destroy(); }
 });
 
+it('stops after one retry when the selected overview fails twice', async () => {
+  const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+    f.requests[0].reject(new Error('503')); f.requests[1].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.requests.length).toBe(4));
+    f.requests[2].reject(new Error('503')); f.requests[3].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 0, total: 1, failed: 1 }));
+    expect(f.requests).toHaveLength(4);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
+    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(false);
+    expect(f.map.addSource).not.toHaveBeenCalled();
+  } finally { f.overview.destroy(); }
+});
+
+it('keeps the one-retry limit when the same frame is selected again during the retry', async () => {
+  const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+    f.requests[0].reject(new Error('503')); f.requests[1].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.requests.length).toBe(4));
+    f.overview.select(b, 'usable-lift-agl', frame);
+    f.requests[2].reject(new Error('503')); f.requests[3].reject(new Error('503'));
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 0, total: 1, failed: 1 }));
+    expect(f.requests).toHaveLength(4);
+    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(false);
+  } finally { f.overview.destroy(); }
+});
+
 it('never promotes a partially failed frame into an empty fallback', async () => {
   const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
   try {
