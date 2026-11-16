@@ -1,5 +1,5 @@
 import type { ImageSource, Map } from 'maplibre-gl';
-import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
+import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInsertBefore, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
@@ -106,7 +106,7 @@ export class RasterOverview {
     const coordinates = this.context!.geometry.coordinates;
     if (!this.map.getSource(this.id)) {
       this.map.addSource(this.id, { type: 'image', coordinates });
-      this.map.addLayer({ ...previewRasterLayer(0), id: this.id, source: this.id, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } });
+      this.map.addLayer({ ...previewRasterLayer(0), id: this.id, source: this.id, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
     }
     if (this.shown !== frame) {
       (this.map.getSource(this.id) as ImageSource).updateImage({ image: this.images.get(frame)!, coordinates });

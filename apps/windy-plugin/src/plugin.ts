@@ -2,6 +2,7 @@ import { DEFAULT_MODEL } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { ApiClient, AUTO_MODEL_ID, createRasterTileProtocol, formatBuildFreshness, hostTimestampMs, normalizePoint,
   resolveAutoBuild, type AutoForecastSelection, type GeoPoint, type RasterTileProtocol } from '@av/client';
+import { syncPluginSeam, watchPluginSeam } from './coverage-seam';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
 import { forecastStackZIndex, WindyRasterLayer } from './raster-layer';
 import { PluginPanel } from './view';
@@ -95,6 +96,7 @@ function clearAutoForecast(message: string): void {
   previous?.dispose();
   panel?.clearPoint();
   panel?.renderUnavailable(message);
+  syncSeam();
 }
 
 async function loadAuto(): Promise<void> {
@@ -130,8 +132,15 @@ async function loadSelectedModel(): Promise<void> {
   } else await startController(selectedModel);
 }
 
+function syncSeam(): void {
+  const mounted = (candidate: PluginController | null) => candidate?.currentBuild && candidate.state().displayedFrameId ? candidate : null;
+  const shown = mounted(controller) ?? mounted(previousController);
+  syncPluginSeam(map.maplibreMap, shown?.currentBuild ?? null, shown?.state().layerId ?? null);
+}
+
 function bindHostListeners(): void {
   if (listenersBound) return;
+  watchPluginSeam(map.maplibreMap, syncSeam);
   window.addEventListener('focus', refreshTime);
   document.addEventListener('visibilitychange', refreshTime);
   window.addEventListener('pagehide', () => {
@@ -139,6 +148,7 @@ function bindHostListeners(): void {
     pointListener(false); panel?.clearPoint();
     controller?.dispose(); controller = null;
     previousController?.dispose(); previousController = null;
+    syncSeam();
     if (rasterProtocol) { rasterProtocol.dispose(); L.removeProtocol(rasterProtocol.scheme); rasterProtocol = null; }
   });
   window.addEventListener('pageshow', (event: PageTransitionEvent) => { refreshTime(); if (event.persisted) { pointListener(paneOpen); void loadSelectedModel(); } });
@@ -197,6 +207,7 @@ function renderController(ui: PluginPanel, active: PluginController): void {
     const actual = selectedModel === AUTO_MODEL_ID ? `${state.model} · ` : '';
     ui.setStatus(actual + formatBuildFreshness(active.currentBuild.manifest, active.currentBuild.expiresAtMs));
   }
+  syncSeam();
 }
 
 function showCurrent(ui: PluginPanel): boolean {

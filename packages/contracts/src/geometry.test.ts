@@ -3,8 +3,9 @@ import { NORTHERN_LAMBERT, SOUTHERN_LAMBERT } from '../../../tests/lambert-fixtu
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { gridSchema } from './grid-schema.js';
-import { earthVectorToGrid, geographicToGrid, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import { earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
 import { isCovered, type CoverageMask } from './index.js';
+import { getProduct } from './products.js';
 
 const grid = gridSchema.parse(fixture.grid) as LambertConformalGrid;
 
@@ -120,5 +121,28 @@ describe('native spherical grid geometry', () => {
     expect(withinGeographicBounds(0, -179, [170, -10, -170, 10])).toBe(true);
     expect(withinGeographicBounds(0, 0, [170, -10, -170, 10])).toBe(false);
     expect(withinGeographicBounds(0, 180, [-180, -10, -170, 10])).toBe(true);
+  });
+
+  it('traces cell-center corners and bows a Lambert edge past its corners', () => {
+    const icon = getProduct('icon-eu')!.grid;
+    const [ring] = gridOutline(icon);
+    expect(gridOutline(icon)).toHaveLength(1);
+    expect(ring![0]).toEqual({ lat: 70.5, lon: -23.5 });
+    expect(ring!.at(-2)).toEqual(gridToGeographic(icon, 0, icon.height - 1));
+    expect(ring!.at(-1)).toEqual(ring![0]);
+    expect(ring!.some(point => point.lon === 62.5 && point.lat === 29.5)).toBe(true);
+    const rrfs = getProduct('rrfs')!.grid;
+    if (rrfs.kind !== 'lambert-conformal') throw new Error('rrfs grid');
+    const top = rrfs.height - 1, right = rrfs.width - 1;
+    const corners = Math.max(gridToGeographic(rrfs, 0, top)!.lat, gridToGeographic(rrfs, right, top)!.lat);
+    const outline = gridOutline(rrfs);
+    expect(Math.max(...outline.flat().map(point => point.lat))).toBeGreaterThan(corners + 1);
+    const split = gridOutline({ ...rrfs, centralMeridianDeg: 179 });
+    expect(split.length).toBeGreaterThan(1);
+    for (const line of [...outline, ...split]) {
+      for (let index = 1; index < line.length; index += 1) expect(Math.abs(line[index]!.lon - line[index - 1]!.lon)).toBeLessThanOrEqual(180);
+    }
+    expect(gridOutline(getProduct('gfs')!.grid)).toEqual([]);
+    expect(gridOutline({ ...INDEXED_GRID, width: 0 })).toEqual([]);
   });
 });

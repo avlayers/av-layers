@@ -1,4 +1,4 @@
-import { withinGeographicBounds } from '@av/contracts/geometry';
+import { locateSampleCell, withinGeographicBounds } from '@av/contracts/geometry';
 import type { LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type CatalogModelEntry } from '@av/contracts/publication';
@@ -37,12 +37,20 @@ export function selectBestCatalogModel(options: CatalogSelection): string | null
   return rankCatalogModels(options)[0]?.model ?? null;
 }
 
-/** Match a rendered interval without extending the first or last valid time. */
+/** Match a rendered frame inside the run. An interior gap keeps the latest valid time at or before the clock. */
 export function selectAutoFrame<T extends FrameLike>(frames: readonly T[], validTimeMs: number): T | null {
   const valid = frames.map(frame => Date.parse(frame.validTime));
-  if (!(validTimeMs >= Math.min(...valid) && validTimeMs <= Math.max(...valid))) return null;
-  return frames.find((_, index) => valid[index] === validTimeMs) ??
-    frames.find(frame => Date.parse(frame.intervalStart) <= validTimeMs && validTimeMs <= Date.parse(frame.intervalEnd)) ?? null;
+  const earliest = Math.min(...valid), latest = Math.max(...valid);
+  if (!valid.length || !(validTimeMs >= earliest && validTimeMs <= latest)) return null;
+  const exact = frames.find((_, index) => valid[index] === validTimeMs);
+  if (exact) return exact;
+  const covering = frames.find(frame => Date.parse(frame.intervalStart) <= validTimeMs && validTimeMs <= Date.parse(frame.intervalEnd));
+  if (covering) return covering;
+  let chosen: T | null = null;
+  for (let index = 0; index < frames.length; index += 1) {
+    if (valid[index]! <= validTimeMs && (chosen === null || valid[index]! >= Date.parse(chosen.validTime))) chosen = frames[index]!;
+  }
+  return chosen;
 }
 
 export async function resolveAutoBuild(api: Pick<ApiClient, 'catalog' | 'latest' | 'sample'>, options: GeoPoint & {
@@ -69,7 +77,8 @@ export async function resolveAutoBuild(api: Pick<ApiClient, 'catalog' | 'latest'
       const frames = renderedFrames(build.manifest);
       if (validTimeMs === undefined && frames.every(frame => Date.parse(frame.validTime) < Date.now())) continue;
       const frame = validTimeMs === undefined ? selectHostFrame(frames, Date.now()) : selectAutoFrame(frames, validTimeMs);
-      if (!layer || !frame) continue;
+      const surface = layer ? build.manifest.surfaces.find(item => item.layers.includes(layer)) : undefined;
+      if (!layer || !frame || !surface || locateSampleCell(surface.grid, lat, lon) === null) continue;
       const sample = await api.sample(build, { lat, lon, layers: [layer], frames: [frame.id], signal });
       signal.throwIfAborted();
       const status = sample.frames[0]?.layers[layer]?.status;
