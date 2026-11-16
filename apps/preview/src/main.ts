@@ -541,6 +541,7 @@ function startPreview(lifecycle: AbortController): void {
       if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
+          if (selectedFrame !== null && selectedFrame !== next.frame.id) compactTimeline.pause();
           selectedFrame = next.frame.id; followMapFrame(); updateTimeUi(); updateOverlay(); updateFreshness();
           if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
           writeUrl('replace');
@@ -615,8 +616,9 @@ function startPreview(lifecycle: AbortController): void {
       point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), mapOffsetMinutes, unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
+        compactTimeline.pause();
         const index = renderedFrames(context.build.manifest).findIndex(f => f.id === id);
-        if (index >= 0) { compactTimeline.pause(); selectIndex(index, 'push'); } else updatePointSelection();
+        if (index >= 0) selectIndex(index, 'push'); else updatePointSelection();
       }
     });
     pointBody.tabIndex = 0; pointCard.ariaBusy = String(loading);
@@ -677,7 +679,7 @@ function startPreview(lifecycle: AbortController): void {
       if (build) {
         const previousFrame = selectedFrame;
         chooseFrame(build);
-        if (selectedFrame !== previousFrame) followMapFrame();
+        if (selectedFrame !== previousFrame) { compactTimeline.pause(); followMapFrame(); }
         updateTimeUi(); updateOverlay();
       }
     } finally { if (applyingHistory === change) applyingHistory = null; }
