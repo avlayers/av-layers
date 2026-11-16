@@ -1,11 +1,10 @@
 import {
   ApiClient, AUTO_MODEL_ID, createForecastRequestScheduler, formatBuildFreshness, formatPlaceTime,
-  longitudeOffsetHours, mapForecastHorizonNotice, watchBuildExpiry,
+  mapForecastHorizonNotice, watchBuildExpiry,
   normalizePoint, PointSeriesController, type PinnedBuild, type PointHorizon, type UnitSystem
 } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
-import { displayedWindSpeed, windSpeedUnitLabel } from '@av/contracts/units';
 import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindDataCache } from '@av/client/wind';
 import { createHistoryController } from '../features/navigation/history-controller';
 import { apiBaseUrl, createStartup, offlineFixture, safeStorage } from './startup';
@@ -21,8 +20,8 @@ import { createWindSession } from '../features/wind/wind-session';
 type WindControls = import('../features/wind/wind-controls').WindControls;
 import { WindOverlay } from '../features/wind/wind-overlay';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
-type PointSession = ReturnType<typeof import('../features/point/point-session').createPointSession>;
 import { createLocationController } from '../features/location/location-controller';
+import { createPointFeature, type PointFeature } from '../features/point/point-feature';
 import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 
 export interface PreviewApp {
@@ -64,9 +63,7 @@ export function createPreviewApp(): PreviewApp {
   let windControls: WindControls | null = null;
   let startWindControls: () => Promise<void> = async () => {};
   let timeline: CompactTimeline | null = null;
-  let pointSession: PointSession | null = null;
-  let pointSessionPromise: Promise<void> | null = null;
-  let ensurePointSession: () => Promise<void> = async () => {};
+  let pointFeature: PointFeature | null = null;
   let locationController: ReturnType<typeof createLocationController> | null = null;
 
   let mapOffsetMinutes = initialOffset;
@@ -109,11 +106,11 @@ export function createPreviewApp(): PreviewApp {
         const customLayer = validatedCustomLayer(next, intent().customLayer);
         if (customLayer !== intent().customLayer) writer.intent({ customLayer });
         syncWindSupport(); updateTimeUi(); updateOverlay(); updateFreshness();
-        if (resolved && frame) pointSession?.followMapFrame(frame);
+        if (resolved && frame) pointFeature?.followMapFrame(frame);
       },
       onSameBuild(frame) {
         timeline?.pause();
-        pointSession?.followMapFrame(frame);
+        pointFeature?.followMapFrame(frame);
       },
       onCleared(message) {
         urlReady = true;
@@ -222,26 +219,11 @@ export function createPreviewApp(): PreviewApp {
 
   function refreshSeam(): void { seam?.sync(build(), activeLayer(build(), intent().reference, intent().customLayer)); }
 
-  function updatePointWind(): void {
-    const current = windSession?.current, context = pointSession?.current;
-    if (!current || !windSession?.displayed || !context || context.build !== current.build || pointSession?.frameId !== current.frame) { writer.point({ wind: '' }); return; }
-    const validTime = current.build.manifest.frames.find(frame => frame.id === current.frame)?.validTime;
-    if (!validTime) { writer.point({ wind: '' }); return; }
-    const sample = current.source.sample(context.point.lat, context.point.lon, intent().windHeight);
-    const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(Math.hypot(sample.u, sample.v), intent().units) : null;
-    const value = speed !== null ? `${speed} ${windSpeedUnitLabel(intent().units)}`
-      : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
-    writer.point({ wind: `Map wind · ${formatPlaceTime(Date.parse(validTime), longitudeOffsetHours(context.point.lon) * 60, 'stamp')} · ${value}` });
-  }
-
-  function updatePointSelection(): void {
-    updatePointWind();
-    pointSession?.updateSelection();
-  }
+  function updatePointSelection(): void { pointFeature?.syncSelection(); }
 
   function updateWind(): void {
     windSession?.update();
-    updatePointWind();
+    pointFeature?.syncWind();
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
@@ -256,11 +238,7 @@ export function createPreviewApp(): PreviewApp {
     }, mode, true);
   }
 
-  function closePoint(): void {
-    pointSession?.close();
-    if (appRoot) rootQuery<HTMLElement>('#meta', appRoot)?.replaceChildren();
-    for (const id of ['#point-settings', '#point-build-details']) { const node = rootQuery<HTMLDetailsElement>(id); if (node) node.open = false; }
-  }
+  function closePoint(): void { pointFeature?.close(); }
 
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
     const current = build();
@@ -268,7 +246,7 @@ export function createPreviewApp(): PreviewApp {
     if (!frame) return;
     if (intent().model === AUTO_MODEL_ID && intent().requestedTime !== frame.validTime) forecastSession.cancelAuto();
     forecastSession.commitFrame(frame.id, frame.validTime);
-    updateTimeUi(); pointSession?.followMapFrame(frame.id); updateOverlay(); updatePointSelection();
+    updateTimeUi(); pointFeature?.followMapFrame(frame.id); updateOverlay(); updatePointSelection();
     if (history !== 'none') { writeUrl(history); if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto(); }
   }
 
@@ -302,7 +280,7 @@ export function createPreviewApp(): PreviewApp {
       if (build()) {
         const previous = selectedFrame();
         const committed = committedFrame(build()!, state.validTime, Date.now());
-        if (committed.id !== previous) { timeline?.pause(); pointSession?.followMapFrame(committed.id); }
+        if (committed.id !== previous) { timeline?.pause(); pointFeature?.followMapFrame(committed.id); }
         if (committed.id && committed.validTime) forecastSession.commitFrame(committed.id, committed.validTime);
         updateTimeUi(); updateOverlay();
       }
@@ -380,7 +358,7 @@ export function createPreviewApp(): PreviewApp {
     resetOpacityGesture() { opacityCommitted = false; },
     setUnits(units) { commandSetUnits(units); },
     setWind: commandSetWind,
-    setPointHorizon(horizon) { writer.intent({ pointHorizon: horizon as PointHorizon }); void pointSession?.loadRange(); },
+    setPointHorizon(horizon) { writer.intent({ pointHorizon: horizon as PointHorizon }); void pointFeature?.setHorizon(horizon as PointHorizon); },
     selectFrame(index, history) { selectIndex(index, history); },
     setPlaying(playing) {
       writer.forecast({ playing });
@@ -390,10 +368,7 @@ export function createPreviewApp(): PreviewApp {
     },
     locate() { locationController?.locate(); },
     closePoint() { closePoint(); },
-    refreshPointDiagnostics() {
-      const meta = appRoot ? rootQuery<HTMLElement>('#meta', appRoot) : null, current = build();
-      if (meta && current && pointSession?.current && !meta.children.length) pointSession.renderBuildDetails(meta, current);
-    }
+    refreshPointDiagnostics() { pointFeature?.refreshDiagnostics(); }
   };
 
   function start(root: HTMLElement): void {
@@ -445,41 +420,38 @@ export function createPreviewApp(): PreviewApp {
       onPlayback: playing => commands.setPlaying(playing)
     });
 
-    ensurePointSession = async () => {
-      if (pointSession) return;
-      pointSessionPromise ??= (async () => {
-        const { createPointSession } = await import('../features/lazy');
-        if (destroyed) return;
-        pointSession = createPointSession({
-        series: pointSeries,
-        body: () => rootQuery<HTMLElement>('#point-body', root),
-        getBuild: build,
-        getSelectedFrame: selectedFrame,
-        getUnits: () => intent().units,
-        getHorizon: () => intent().pointHorizon,
-        getMapOffset: () => mapOffsetMinutes,
-        getDisplayedFrame: displayedPointFrame,
-        ensureLive: () => forecastSession.ensureLive(),
-        pauseTimeline: () => timeline?.pause(),
-        selectFrameById: id => {
-          const current = build();
-          if (!current) return;
-          const index = renderedFrames(current.manifest).findIndex(frame => frame.id === id);
-          if (index >= 0) selectIndex(index, 'push');
-        },
-        publish: {
-          open: point => { rootQuery<HTMLElement>('#meta', root)?.replaceChildren(); writer.point({ open: true, location: `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°` }); },
-          close: () => { writer.point({ open: false, status: '', wind: '' }); },
-          status: text => writer.point({ status: text }),
-          busy: busy => writer.point({ busy }),
-          horizon: (selectable, label) => writer.point({ horizonSelectable: selectable, horizonLabel: label }),
-          wind: text => writer.point({ wind: text }),
-            changed: () => updatePointWind()
-          }
-        });
-      })();
-      try { await pointSessionPromise; } catch { pointSessionPromise = null; }
-    };
+    pointFeature = createPointFeature({
+      root: () => appRoot,
+      series: pointSeries,
+      getBuild: build,
+      getSelectedFrame: selectedFrame,
+      getUnits: () => intent().units,
+      getHorizon: () => intent().pointHorizon,
+      getMapOffset: () => mapOffsetMinutes,
+      getDisplayedFrame: displayedPointFrame,
+      getWind: () => {
+        const current = windSession?.current;
+        return current && windSession?.displayed
+          ? { build: current.build, frame: current.frame, sample: (lat, lon) => current.source.sample(lat, lon, intent().windHeight) }
+          : null;
+      },
+      ensureLive: () => forecastSession.ensureLive(),
+      pauseTimeline: () => timeline?.pause(),
+      selectFrameById: id => {
+        const current = build();
+        if (!current) return;
+        const index = renderedFrames(current.manifest).findIndex(frame => frame.id === id);
+        if (index >= 0) selectIndex(index, 'push');
+      },
+      publish: {
+        open: point => writer.point({ open: true, location: `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°` }),
+        close: () => writer.point({ open: false, status: '', wind: '' }),
+        status: text => writer.point({ status: text }),
+        busy: busy => writer.point({ busy }),
+        horizon: (selectable, label) => writer.point({ horizonSelectable: selectable, horizonLabel: label }),
+        wind: text => writer.point({ wind: text })
+      }
+    });
 
     windSession = createWindSession({
       apiBaseUrl, map, lowMemory, scheduler: windScheduler, cache: windCache,
@@ -490,7 +462,7 @@ export function createPreviewApp(): PreviewApp {
         quality: overview => { writer.wind({ overview }); windControls?.setQuality?.(overview); },
         displayed: displayed => writer.wind({ displayed }),
         reservation: syncWindReservation,
-        pointWind: updatePointWind
+        pointWind: () => pointFeature?.syncWind()
       },
       state: () => ({
         build: build(), selectedFrame: selectedFrame(), height: intent().windHeight, visible: intent().windVisible,
@@ -521,13 +493,7 @@ export function createPreviewApp(): PreviewApp {
       selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
     }, globalListener);
 
-    document.addEventListener('pointerdown', event => {
-      if (!pointSession?.current) return;
-      const target = event.target;
-      const pointControls = ['#point-card', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
-      if (!(target instanceof Node) || map!.getContainer().contains(target) || pointControls.some(selector => rootQuery(selector, root)?.contains(target))) return;
-      closePoint();
-    }, globalListener);
+    document.addEventListener('pointerdown', event => { if (map) pointFeature?.dismiss(event.target, map.getContainer()); }, globalListener);
 
     const timeInput = rootQuery<HTMLInputElement>('#time', root);
     if (timeInput) {
@@ -538,7 +504,7 @@ export function createPreviewApp(): PreviewApp {
     map.on('click', event => {
       if (mapFailed()) return;
       const point = normalizePoint(event.lngLat.lat, event.lngLat.lng);
-      void (async () => { await ensurePointSession(); await pointSession?.open(point); })();
+      void pointFeature?.open(point);
     });
     map.on('move', syncMapClock);
     map.on('movestart', event => { if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event)) { history.cancelRestore(); forecastSession.cancelAuto(); } });
@@ -575,11 +541,11 @@ export function createPreviewApp(): PreviewApp {
     function pageHide(event: PageTransitionEvent): void {
       windCache.clear(); windSession?.clear(); locationController?.reset();
       resumeModel = event.persisted ? forecastSession.suspend() : null;
-      const pointInterrupted = event.persisted && pointSession?.pending;
+      const pointInterrupted = event.persisted && pointFeature?.pending;
       if (pointInterrupted) {
-        pointSession?.suspend();
+        pointFeature?.suspend();
         writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' });
-      } else if (!event.persisted) pointSession?.close();
+      } else if (!event.persisted) pointFeature?.close();
       overlay?.clear(true);
       if (event.persisted) return;
       disposePermanently();
@@ -612,10 +578,10 @@ export function createPreviewApp(): PreviewApp {
     destroyed = true;
     forecastSession.dispose();
     lifecycle.abort();
-    timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointSession?.dispose();
+    timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointFeature?.dispose();
     windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); rasterScheduler.dispose();
     map?.remove();
-    timeline = windControls = locationController = null; pointSession = null; windSession = null; windOverlay = seam = overlay = null; map = null;
+    timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = overlay = null; map = null;
   }
 
   return { store, commands, start, dispose: disposePermanently };

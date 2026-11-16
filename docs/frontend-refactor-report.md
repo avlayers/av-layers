@@ -28,7 +28,8 @@ wind-control preference record while the rest of the UI is Preact-owned.
 - `features/forecast/forecast-session.ts` owns manual/Auto discovery, request identity, frame/time commitment, expiry, suspension and resumption.
 - `features/map/map-controller.ts` now owns camera-derived clock, regional focus and scale.
 - `platform/browser-lifecycle.ts` owns visibility/focus/BFCache subscriptions.
-- `create-preview-app.ts` is 626 lines and is now construction, connections, commands and teardown; it still owns point presentation, wind commands and map event wiring.
+- `features/point/point-feature.ts` owns lazy point-session creation, Windgram host, map-wind readout, diagnostics and outside-click dismissal.
+- `create-preview-app.ts` is 592 lines and is now construction, connections, commands and teardown; it still owns wind commands and map event wiring.
 - Production minification uses Terser (`terser@5.51.2`) to keep both JavaScript budgets with real headroom. The baseline was built with esbuild, so compressed-size comparisons include this packaging change; worker JavaScript also shrinks for the same reason.
 
 ## Review fixes
@@ -79,7 +80,7 @@ Environment: macOS arm64, pnpm 10.34.9, repository Node 22.23.4, Chromium via Pl
 | `git diff --check` | pass |
 
 Baseline frontend unit suite: 28 files, 639 tests, median 4.65 s (runs 5.80/4.62/4.65).
-Candidate: 36 files, 592 tests, median 4.26 s (runs 4.32/4.26/4.23).
+Candidate: 36 files, 592 tests, median 4.23 s (runs 4.21/4.23/4.25).
 
 ## Compressed assets
 
@@ -87,8 +88,8 @@ Measured with zlib gzip, matching the build checker.
 
 | Asset | Base | Candidate |
 | --- | ---: | ---: |
-| Startup JS | 391,946 B | 391,324 B |
-| Lazy JS (aggregate) | 27,336 B | 30,402 B |
+| Startup JS | 391,946 B | 392,039 B |
+| Lazy JS (aggregate) | 27,336 B | 30,066 B |
 | Worker JS | 150,556 B | 146,638 B |
 | CSS | 14,641 B | 15,212 B |
 | Windy plugin | 97,775 B | 97,775 B |
@@ -97,7 +98,7 @@ The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 
 ## Source size
 
-Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,291 lines (+1,130).
+Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,390 lines (+1,229).
 Authored preview tests: 5,145 → 3,792 lines (−1,353). `main.test.ts` was replaced by
 focused store, URL, timeline-model and scheduler tests plus the real-browser smoke.
 
@@ -108,5 +109,5 @@ focused store, URL, timeline-model and scheduler tests plus the real-browser smo
 - The timeline and wind-controls DOM remain imperative; the plan's full TSX conversion for those two areas is not complete.
 - Only the transparency/smoke benchmark scenario was run after the migration. The paired 3× baseline/candidate 40-frame and 250 ms cold timing comparison was not run, so rendering-performance parity is unverified beyond the smoke result.
 - Physical iOS/Android devices and Firefox/WebKit were not tested. The existing smoke is Chromium-only.
-- The startup and lazy gates pass with comfortable headroom (about 8,676 B and 1,598 B at the measured zlib sizes) after switching production minification to Terser.
-- `create-preview-app.ts` is 626 lines. Forecast discovery, history and expiry now have owners; point presentation, wind commands and map event wiring still live in the root.
+- The startup and lazy gates pass with comfortable headroom (about 7,961 B and 1,934 B at the measured zlib sizes) after switching production minification to Terser.
+- `create-preview-app.ts` is 592 lines. Forecast discovery, history, expiry, startup, camera and point presentation now have owners; wind commands and map event wiring still live in the root.
