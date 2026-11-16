@@ -24,7 +24,7 @@ html, body, #app { margin: 0; height: 100%; }
 #topbar > *, .topbar-row > * { pointer-events: auto; }
 .topbar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; pointer-events: none; }
 
-#models, #model-selected, #layer-picker, #display-units, #locate, #timebar, #point-card, .toast {
+#models, #model-selected, #layer-picker, #display-units, #locate, #location-status:not([hidden]), #timebar, #point-card, .toast {
   background: #fff;
   box-shadow: 0 8px 24px #0b1b2830;
 }
@@ -56,6 +56,32 @@ html, body, #app { margin: 0; height: 100%; }
 @keyframes location-ring { to { transform: scale(1.7); opacity: 0; } }
 @keyframes location-search { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .location-pulse::after, #locate[aria-busy="true"] svg { animation: none; } }
+body:has(#location-status:not([hidden])):not(:has(#model-picker[open])) .toast {
+  max-width: min(420px, calc(100% - 252px)); /* 12px inset + 8px gap + 220px status + 12px inset */
+}
+body:has(#wind-controls-popup:not([hidden])) #location-status:not([hidden]) {
+  opacity: 0;
+}
+@media (max-width: 540px) {
+  body:has(#model-picker[open]) #location-status:not([hidden]) { opacity: 0; }
+}
+#location-status:not([hidden]) {
+  position: absolute;
+  z-index: 4;
+  top: 56px;
+  right: 12px;
+  max-width: min(220px, calc(100% - 24px));
+  height: 24px;
+  margin: 0;
+  padding: 4px 8px;
+  overflow: hidden;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
 #map-controls > #map-dock { position: relative; display: flex; flex: 0 1 auto; align-items: flex-end; gap: 8px; width: max-content; max-width: 100%; pointer-events: none; }
 #map-dock > * { pointer-events: auto; }
 #distance-scale { position: absolute; z-index: 1; left: 0; bottom: calc(100% + 6px); margin: 0; border: 1px solid #555; border-top: 0; padding: 0 3px 1px; background: #ffffffb8; font-size: 9px; text-align: center; }
