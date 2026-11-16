@@ -325,6 +325,12 @@ it('centers the selected day and clamps when the strip cannot reach the middle',
   list.scrollLeft = 80;
   timeline.update(frames, 'c');
   expect(list.scrollLeft).toBe(80);
+  key(list, 'ArrowLeft');
+  list.scrollLeft = 80;
+  timeline.update(frames, 'b');
+  expect(list.scrollLeft).toBe(80);
+  timeline.update([frames[0]!, { ...frames[1]!, validTime: '2026-11-13T22:00:00Z' }, frames[2]!], 'b');
+  expect(list.scrollLeft).not.toBe(80);
   key(list, 'Home');
   expect(list.scrollLeft).toBe(0);
   timeline.destroy();

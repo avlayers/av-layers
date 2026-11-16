@@ -104,7 +104,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   function placeSelection(): void {
     const active = cells[selectedIndex];
     if (!active || hours.clientWidth <= 0) return;
-    const signature = `${selectedIndex}:${offsetMinutes}:${Math.round(hours.clientWidth)}:${frames.length}:${frames[0]?.validTime}:${frames[frames.length - 1]?.validTime}`;
+    const signature = `${selectedIndex}:${frames[selectedIndex]?.validTime}:${offsetMinutes}:${Math.round(hours.clientWidth)}:${frames.length}:${frames[0]?.validTime}:${frames[frames.length - 1]?.validTime}`;
     if (signature === placedFor && Math.abs(hours.scrollLeft - placedScroll) > 1) return;
     const day = placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes);
     const group = day ? cells.filter((_, index) => placeDateKey(Date.parse(frames[index]!.validTime), offsetMinutes) === day) : [active];
