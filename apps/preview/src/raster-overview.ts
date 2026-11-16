@@ -5,13 +5,18 @@ import { renderedFrames } from '@av/contracts/publication';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { PLAYBACK_STEP_MS } from './timeline';
 
-const FRAME_LIMIT = 40;
-const PREFILL_BYTES = 1024 * 1024;
+const DECODE_CAP = 768 * 1024 * 1024;
+const MAX_TILES = 64;
+const MAX_EDGE = 4096;
+const FOCUS_DWELL_MS = 400;
 const LATITUDE_LIMIT = 85.0511287798066;
 interface Window { west: number; east: number; top: number; bottom: number }
 interface Tile { x: number; y: number; z: number }
-interface Geometry extends Window { tiles: Tile[]; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
-interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; frames: string[]; bytes: number }
+interface Box { left: number; right: number; top: number; bottom: number; z: number }
+interface Geometry extends Window { tiles: Tile[]; width: number; height: number; zoom: number; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
+interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; frames: string[] }
+
+export { FOCUS_DWELL_MS };
 interface Job { context: Context; frame: string; controller: AbortController }
 export interface RasterOverviewState { ready: number; total: number; failed: number }
 
@@ -31,28 +36,73 @@ function viewport(map: Map): Window | null {
   return { west, east, top: y(north), bottom: y(south) };
 }
 
-function geometry(map: Map, maxzoom: number): Geometry | null {
-  const window = viewport(map);
-  if (!window || window.bottom <= window.top || !Number.isFinite(map.getZoom())) return null;
-  let fallback: Geometry | null = null;
-  for (let z = Math.max(0, Math.min(maxzoom, Math.floor(map.getZoom()) - 2)); z >= 0; z--) {
-    const count = 2 ** z, left = Math.floor(window.west * count), right = Math.ceil(window.east * count) - 1;
-    const top = Math.floor(window.top * count), bottom = Math.min(count - 1, Math.ceil(window.bottom * count) - 1);
-    if ((right - left + 1) * (bottom - top + 1) > 4) continue;
-    const tiles: Tile[] = [];
-    for (let y = top; y <= bottom; y++) for (let x = left; x <= right; x++) tiles.push({ x, y, z });
-    const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180 / Math.PI;
-    const west = window.west * 360 - 180, east = window.east * 360 - 180;
-    const candidate: Geometry = { ...window, tiles, coordinates: [[west, latitude(window.top)], [east, latitude(window.top)], [east, latitude(window.bottom)], [west, latitude(window.bottom)]] };
-    if (tiles.length <= 2) return candidate;
-    // Spend at most one zoom level to fit a single background request batch.
-    if (fallback) return fallback;
-    fallback = candidate;
-  }
-  return fallback;
+function deviceHoldsTimeline(): boolean {
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  return memory === undefined || memory > 4;
 }
 
-/** Resident 256² viewport images for one build/layer; the owner commits visible paint changes. */
+function tileBox(window: Window, z: number): Box | null {
+  const count = 2 ** z;
+  const left = Math.floor(window.west * count), right = Math.ceil(window.east * count) - 1;
+  const top = Math.floor(window.top * count), bottom = Math.min(count - 1, Math.ceil(window.bottom * count) - 1);
+  if (right < left || bottom < top || left < -count || right >= count * 2) return null;
+  return { left, right, top, bottom, z };
+}
+
+function expand(box: Box, margin: number): Box {
+  const count = 2 ** box.z;
+  return {
+    z: box.z,
+    left: Math.max(-count, box.left - margin),
+    right: Math.min(count * 2 - 1, box.right + margin),
+    top: Math.max(0, box.top - margin),
+    bottom: Math.min(count - 1, box.bottom + margin)
+  };
+}
+
+function fits(box: Box, frames: number): boolean {
+  const cols = box.right - box.left + 1, rows = box.bottom - box.top + 1;
+  if (cols < 1 || rows < 1 || cols * rows > MAX_TILES) return false;
+  if (cols * RASTER_TILE_SIZE > MAX_EDGE || rows * RASTER_TILE_SIZE > MAX_EDGE) return false;
+  return frames * cols * rows * RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 <= DECODE_CAP;
+}
+
+function toGeometry(box: Box): Geometry {
+  const count = 2 ** box.z, tiles: Tile[] = [];
+  for (let y = box.top; y <= box.bottom; y++) for (let x = box.left; x <= box.right; x++) tiles.push({ x, y, z: box.z });
+  const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / count))) * 180 / Math.PI;
+  let west = box.left / count * 360 - 180, east = (box.right + 1) / count * 360 - 180;
+  const shift = Math.floor(((west + east) / 2 + 180) / 360) * 360;
+  west -= shift; east -= shift;
+  return {
+    west: box.left / count, east: (box.right + 1) / count, top: box.top / count, bottom: (box.bottom + 1) / count,
+    tiles, zoom: box.z,
+    width: (box.right - box.left + 1) * RASTER_TILE_SIZE,
+    height: (box.bottom - box.top + 1) * RASTER_TILE_SIZE,
+    coordinates: [[west, latitude(box.top)], [east, latitude(box.top)], [east, latitude(box.bottom + 1)], [west, latitude(box.bottom + 1)]]
+  };
+}
+
+/** Padded tile mosaic for a rested camera. Shrink the margin before dropping zoom. */
+function geometry(map: Map, maxzoom: number, frames: number): Geometry | null {
+  const window = viewport(map);
+  if (!window || window.bottom <= window.top || !Number.isFinite(map.getZoom())) return null;
+  const target = Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
+  const retained = deviceHoldsTimeline() ? frames : Math.min(frames, 5);
+  for (let z = target; z >= 0; z--) {
+    const base = tileBox(window, z);
+    if (!base) continue;
+    const span = Math.min(base.right - base.left + 1, base.bottom - base.top + 1);
+    const padded = expand(base, Math.max(1, Math.ceil(span / 2)));
+    if (fits(padded, retained)) return toGeometry(padded);
+    const ring = expand(base, 1);
+    if (fits(ring, retained)) return toGeometry(ring);
+    if (fits(base, retained)) return toGeometry(base);
+  }
+  return null;
+}
+
+/** Decoded images for every map frame of one rested build and layer. */
 export class RasterOverview {
   readonly id = `av-overview-${crypto.randomUUID()}`;
   private readonly blendId: string;
@@ -65,6 +115,7 @@ export class RasterOverview {
   private shown: string | null = null;
   private readonly images = new globalThis.Map<string, ImageBitmap>();
   private readonly unavailable = new Set<string>();
+  private readonly retried = new Set<string>();
   private job: Job | null = null;
   private expiry: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
@@ -88,15 +139,17 @@ export class RasterOverview {
     if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !renderedFrames(build.manifest).some(value => value.id === frame)) { this.clear(); return; }
     if (this.context?.build !== build || this.context.layer !== layer || !this.covers()) {
       this.clear();
-      const area = geometry(this.map, layerMaxZoom(build.manifest, layer));
+      const frames = renderedFrames(build.manifest);
+      const area = geometry(this.map, layerMaxZoom(build.manifest, layer), frames.length);
       if (!area) return;
-      this.canvas!.width = RASTER_TILE_SIZE; this.canvas!.height = RASTER_TILE_SIZE;
-      this.context = { build, layer, geometry: area, frames: [], bytes: 0 };
+      this.canvas!.width = area.width; this.canvas!.height = area.height;
+      this.context = { build, layer, geometry: area, frames: [] };
       this.protocol.setBuildExpiry(build.manifest.buildId, build.expiresAtMs);
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
     }
     this.selected = frame;
-    this.window(); this.unavailable.delete(frame);
+    this.window();
+    if (this.unavailable.delete(frame) || this.job?.frame !== frame) this.retried.delete(frame);
     if (this.job && this.job.frame !== frame && !this.images.has(frame)) this.job.controller.abort();
     this.pump();
   }
@@ -107,6 +160,8 @@ export class RasterOverview {
   }
 
   coversView(): boolean { return this.covers(); }
+
+  hasExtent(): boolean { return this.context !== null; }
 
   ready(build: PinnedBuild, layer: LayerId, frame: string): boolean {
     return !this.disposed && this.context?.build === build && this.context.layer === layer && build.expiresAtMs > Date.now() && this.images.has(frame) && this.covers();
@@ -144,7 +199,7 @@ export class RasterOverview {
     if (this.map.getLayer(this.id)) this.map.removeLayer(this.id);
     if (this.map.getSource(this.id)) this.map.removeSource(this.id);
     for (const image of this.images.values()) image.close();
-    this.images.clear(); this.unavailable.clear();
+    this.images.clear(); this.unavailable.clear(); this.retried.clear();
     if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
   }
 
@@ -179,13 +234,8 @@ export class RasterOverview {
   private window(): void {
     if (!this.context || !this.selected) return;
     const frames = renderedFrames(this.context.build.manifest).map(frame => frame.id), index = frames.indexOf(this.selected);
-    const first = Math.max(0, Math.min(index - Math.floor(FRAME_LIMIT / 2), frames.length - FRAME_LIMIT));
-    const retained = frames.slice(first, first + FRAME_LIMIT);
-    // Keep ImageSource's current bitmap alive while a distant timeline window warms.
-    if (this.shown && !retained.includes(this.shown)) {
-      const farthest = retained.reduce((previous, frame) => Math.abs(frames.indexOf(frame) - index) > Math.abs(frames.indexOf(previous) - index) ? frame : previous);
-      retained[retained.indexOf(farthest)] = this.shown;
-    }
+    const retained = deviceHoldsTimeline() ? frames.slice() : frames.slice(Math.max(0, index - 2), index + 3);
+    if (this.shown && !retained.includes(this.shown)) retained.push(this.shown);
     this.context.frames = retained;
     for (const [frame, image] of this.images) if (!retained.includes(frame)) { image.close(); this.images.delete(frame); }
   }
@@ -193,23 +243,22 @@ export class RasterOverview {
   private pump(): void {
     const context = this.context;
     if (this.disposed || this.job || !context || context.build.expiresAtMs <= Date.now()) return;
-    let changed = false;
-    if (context.bytes >= PREFILL_BYTES) {
-      for (const frame of context.frames) if (frame !== this.selected && !this.images.has(frame) && !this.unavailable.has(frame)) {
-        this.unavailable.add(frame); changed = true;
-      }
-    }
     const all = renderedFrames(context.build.manifest), idx = new globalThis.Map(all.map((f, i) => [f.id, i])), selected = idx.get(this.selected ?? '') ?? -1;
     const frame = context.frames.filter(f => !this.images.has(f) && !this.unavailable.has(f))
       .sort((a, b) => Math.abs((idx.get(a) ?? 0) - selected) - Math.abs((idx.get(b) ?? 0) - selected))[0];
-    if (changed) this.onReady();
     if (!frame || this.context !== context || this.disposed || this.job) return;
     const job: Job = { context, frame, controller: new AbortController() }; this.job = job;
     void this.load(job).then(image => {
       if (!this.current(job) || !context.frames.includes(frame)) { image.close(); return; }
-      this.images.set(frame, image); this.onReady();
+      const previous = this.images.get(frame);
+      this.images.set(frame, image);
+      if (previous && previous !== image) previous.close();
+      this.retried.delete(frame);
+      this.onReady();
     }).catch(() => {
-      if (this.current(job)) { this.unavailable.add(frame); this.onReady(); }
+      if (!this.current(job)) return;
+      if (frame === this.selected && !this.retried.has(frame)) { this.retried.add(frame); return; }
+      this.unavailable.add(frame); this.onReady();
     }).finally(() => {
       if (this.job === job) this.job = null;
       this.pump();
@@ -222,17 +271,15 @@ export class RasterOverview {
 
   private async load(job: Job): Promise<ImageBitmap> {
     const context = this.canvas!.getContext('2d')!, area = job.context.geometry;
-    context.clearRect(0, 0, RASTER_TILE_SIZE, RASTER_TILE_SIZE);
+    context.clearRect(0, 0, area.width, area.height);
     const template = frameTileUrl(job.context.build.templates[job.context.layer], job.frame);
+    const originX = Math.min(...area.tiles.map(tile => tile.x)), originY = Math.min(...area.tiles.map(tile => tile.y));
     for (let offset = 0; offset < area.tiles.length; offset += 2) {
-      // Explicit selections retain their four-tile bound after speculative prefill reaches its budget.
-      if (job.frame !== this.selected && job.context.bytes >= PREFILL_BYTES) throw new Error('Overview prefill budget reached');
       const results = await Promise.allSettled(area.tiles.slice(offset, offset + 2).map(async tile => {
         const count = 2 ** tile.z, x = ((tile.x % count) + count) % count;
         const url = template.replaceAll('{z}', String(tile.z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(tile.y));
         const response = await this.protocol.load({ url: this.transport!.url(url) }, job.controller);
         if (!this.current(job)) throw new Error('Overview cancelled');
-        job.context.bytes += response.data.byteLength;
         const image = await createImageBitmap(new Blob([response.data], { type: 'image/webp' }));
         if (!this.current(job) || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) { image.close(); throw new Error('Invalid overview tile'); }
         return { tile, image };
@@ -240,9 +287,8 @@ export class RasterOverview {
       try {
         if (!this.current(job) || results.some(result => result.status === 'rejected')) throw new Error('Incomplete overview');
         for (const result of results) if (result.status === 'fulfilled') {
-          const { tile, image } = result.value, count = 2 ** tile.z;
-          const width = RASTER_TILE_SIZE / (area.east - area.west), height = RASTER_TILE_SIZE / (area.bottom - area.top);
-          context.drawImage(image, (tile.x / count - area.west) * width, (tile.y / count - area.top) * height, width / count, height / count);
+          const { tile, image } = result.value;
+          context.drawImage(image, (tile.x - originX) * RASTER_TILE_SIZE, (tile.y - originY) * RASTER_TILE_SIZE, RASTER_TILE_SIZE, RASTER_TILE_SIZE);
         }
       } finally {
         for (const result of results) if (result.status === 'fulfilled') result.value.image.close();

@@ -31,7 +31,9 @@ place labels XC Skies draws above it. Retina displays request the `@2x` tiles.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.
-Prepared viewport overviews respond during scrubbing; fine tiles replace a complete overview.
+After the camera rests, every map frame of the active layer and the wind field
+stay decoded for that view. A short pan and a time change reuse them. Fine tiles
+replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.

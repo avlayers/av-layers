@@ -368,7 +368,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
     }, false);
     if (await page.locator('#point-card').isVisible()) await page.locator('#point-close').click();
 
-    await run('time change clears the resident wind canvases', async () => {
+    await run('time change redraws wind for the selected hour', async () => {
       const canvases = await page.evaluate(() => {
         const state = { clear: 0, stroke: 0, fill: 0 };
         Object.assign(window, { __windSmoke: state });
@@ -388,7 +388,6 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const track = page.locator('.ct-track');
       const selected = await track.getAttribute('aria-valuenow');
       const beforeClear = await page.evaluate(() => (window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0);
-      const beforeNumeric = numericRequests.length;
       const otherDay = page.locator('.ct-day:not(.is-selected):not([disabled])');
       if (await otherDay.count()) await otherDay.first().click();
       else {
@@ -401,7 +400,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.waitForFunction(previous => ((window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0) > previous, beforeClear, { timeout: timeoutMs });
       const afterClear = await page.evaluate(() => (window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0);
       assert(afterClear > beforeClear, 'Wind canvases were not cleared on time change');
-      assert(numericRequests.length > beforeNumeric, 'Time change did not request a new numeric field');
+      await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
     });
 
     await run('320, 390 and 1200 px keep rail, key and timeline clear', async () => {

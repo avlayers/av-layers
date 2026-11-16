@@ -6,9 +6,9 @@ additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
 bundle (MapLibre GL, XC Skies natural basemap, raster overviews, and
-numeric wind overlay) at **400,000 B gzip** (389,189 B measured on 16 November 2026)
+numeric wind overlay) at **400,000 B gzip** (391,946 B measured on 16 November 2026)
 and each lazy chunk (the on-demand `@av/windgram` renderer) at **32,000 B gzip**
-(27,337 B measured the same day). The timeline figures below remain the
+(27,336 B measured the same day). The timeline figures below remain the
 13 November capture.
 
 ```sh
@@ -83,11 +83,9 @@ transparent. Two daytime views added 36,100/41,980 overview bytes to
 this build and viewport and exclude headers/TLS. The final geometry keeps this
 Alpine tile plan unchanged.
 
-[Overview preparation](../apps/preview/src/raster-overview.ts) stops speculative
-work after **1 MiB of returned compressed bytes per viewport context**, including
-cache reuse. An in-flight pair may finish; explicit selections remain eligible.
-The timeline exposes partial readiness when the limit is reached.
-[Serving budgets](serving-budgets.md) own admission and transport limits.
+The figures above record that 40-frame window. A rested camera now keeps every
+map frame of the active layer, padded by half the shorter view, within the
+decode cap in [serving budgets](serving-budgets.md).
 
 After forced GC, retained GPU textures plus tracked native pixels measured
 **42.67 → 42.50 MiB**. Changed storage comprised 32.25 MiB of textures, 10 MiB of
