@@ -10,16 +10,22 @@ const STATE = 64, GRID = 128, LAYER = 'av-wind-particles';
 const FULL = `#version 300 es
 out vec2 v_uv;
 void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vec2 c=p*2.-1.;v_uv=c*.5+.5;gl_Position=vec4(c,0,1);}`;
-const UPDATE = `#version 300 es
+/** Particle advection. `windAt` transcribes `sampleEncodedWindGrid`: texel centers, then skip alpha 0 before `* 200`. */
+export const WIND_PARTICLE_UPDATE = `#version 300 es
 precision highp float;uniform sampler2D u_state,u_a,u_b;uniform vec4 u_bounds;uniform float u_dt,u_zoom,u_mix,u_reset,u_world;out vec4 o;
 vec2 merc(vec2 p){float r=p.y*.01745329251;return vec2((p.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
+vec3 windAt(sampler2D tex,vec2 uv){vec2 p=uv*float(${GRID})-0.5;vec2 f=fract(p);ivec2 o=ivec2(floor(p));vec2 acc=vec2(0.0);float wsum=0.0;
+ for(int dy=0;dy<2;dy++)for(int dx=0;dx<2;dx++){float w=(dx==0?1.0-f.x:f.x)*(dy==0?1.0-f.y:f.y);if(w==0.0)continue;
+  vec4 s=texelFetch(tex,clamp(o+ivec2(dx,dy),ivec2(0),ivec2(${GRID - 1})),0);if(s.a>0.5){acc+=(s.rg*200.0-100.0)*w;wsum+=w;}}
+ return wsum>0.0?vec3(acc/wsum,1.0):vec3(0.0);}
 void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
  if(u_reset>0.||s.z<=0.){float n=fract(sin(dot(vec2(p)+s.w,vec2(12.9898,78.233)))*43758.5453);float m=fract(n*91.7);
   o=vec4(mix(u_bounds.x,u_bounds.z,n),mix(u_bounds.y,u_bounds.w,m),1.5+n*2.5,s.w+1.);return;}
  vec2 uv=vec2((s.x-u_bounds.x)/(u_bounds.z-u_bounds.x),(s.y-u_bounds.y)/(u_bounds.w-u_bounds.y));
- vec4 a=texture(u_a,uv),b=texture(u_b,uv);bool va=a.a>.5,vb=b.a>.5;
- if(!va&&!vb||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.){o=vec4(s.xy,0,s.w);return;}
- vec2 w=va&&vb?mix(a.rg,b.rg,u_mix)*200.-100.:(vb?b.rg:a.rg)*200.-100.;
+ vec3 a=windAt(u_a,uv),b=windAt(u_b,uv);bool va=a.z>0.5,vb=b.z>0.5;
+ bool alive=u_mix>=1.0?vb:(va||vb);
+ if(!alive||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.){o=vec4(s.xy,0,s.w);return;}
+ vec2 w=u_mix>=1.0?b.xy:(va&&vb?mix(a.xy,b.xy,u_mix):(vb?b.xy:a.xy));
  float speed=length(w),boost=speed>0.&&speed<4.?sqrt(4./speed):1.,c=cos(s.y*.01745329251);
  float sec=u_dt*600.*exp2(9.-u_zoom)*c*boost,lat=s.y+w.y*sec/6371000./.01745329251,lon=s.x+w.x*sec/(6371000.*c)/.01745329251;
  if(abs(lat)>85.){o=vec4(s.xy,0,s.w);return;}
@@ -43,7 +49,33 @@ precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform flo
 void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
 
 const valid = (s: { u: number | null; v: number | null; status: number }) => (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null;
-const encode = (v: number) => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
+export const encodeWindByte = (v: number) => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
+const decodeWindByte = (byte: number) => byte / 255 * 200 - 100;
+
+export interface EncodedWind { u: number; v: number }
+
+/** Bilinear sample of an encoded wind grid. Alpha 0 adds neither vector nor weight. */
+export function sampleEncodedWindGrid(data: Uint8Array, uvX: number, uvY: number, grid = GRID): EncodedWind | null {
+  const texelX = uvX * grid - 0.5, texelY = uvY * grid - 0.5, x0 = Math.floor(texelX), y0 = Math.floor(texelY);
+  const fx = texelX - x0, fy = texelY - y0;
+  let u = 0, v = 0, weight = 0;
+  for (let dy = 0; dy <= 1; dy++) for (let dx = 0; dx <= 1; dx++) {
+    const tap = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+    if (tap === 0) continue;
+    const x = Math.max(0, Math.min(grid - 1, x0 + dx)), y = Math.max(0, Math.min(grid - 1, y0 + dy));
+    const offset = (y * grid + x) * 4;
+    if ((data[offset + 3] ?? 0) <= 127) continue;
+    u += decodeWindByte(data[offset] ?? 0) * tap; v += decodeWindByte(data[offset + 1] ?? 0) * tap; weight += tap;
+  }
+  return weight > 0 ? { u: u / weight, v: v / weight } : null;
+}
+
+/** Mix two reconstructed fields. At t >= 1 only `to` remains, so a finished blend cannot carry the previous frame into a hole. */
+export function mixWindVectors(from: EncodedWind | null, to: EncodedWind | null, t: number): EncodedWind | null {
+  if (t >= 1) return to;
+  if (from && to) return { u: from.u * (1 - t) + to.u * t, v: from.v * (1 - t) + to.v * t };
+  return to ?? from;
+}
 
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
   const program = gl.createProgram();
@@ -80,7 +112,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
       for (let x = 0; x < GRID; x++) {
         const sample = field.sample(lat, bounds.west + (bounds.east - bounds.west) * (x + 0.5) / GRID), i = (y * GRID + x) * 4;
         if (!valid(sample)) continue;
-        data[i] = encode(sample.u!); data[i + 1] = encode(sample.v!); data[i + 3] = 255;
+        data[i] = encodeWindByte(sample.u!); data[i + 1] = encodeWindByte(sample.v!); data[i + 3] = 255;
       }
     }
     return data;
@@ -227,7 +259,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
       if (state.destroyed) return;
       try {
         if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Wind float target unavailable');
-        updateProg = compile(gl, FULL, UPDATE); lineProg = compile(gl, LINES, WHITE); blitProg = compile(gl, FULL, BLIT);
+        updateProg = compile(gl, FULL, WIND_PARTICLE_UPDATE); lineProg = compile(gl, LINES, WHITE); blitProg = compile(gl, FULL, BLIT);
         vao = gl.createVertexArray()!;
         const tex = (filter: number) => {
           const texture = gl!.createTexture()!;
@@ -248,7 +280,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
           if (gl!.checkFramebufferStatus(gl!.FRAMEBUFFER) !== gl!.FRAMEBUFFER_COMPLETE) throw new Error('Wind state target incomplete');
           return fbo;
         });
-        winds = [tex(gl.LINEAR), tex(gl.LINEAR)];
+        winds = [tex(gl.NEAREST), tex(gl.NEAREST)];
         for (const texture of winds) { gl.bindTexture(gl.TEXTURE_2D, texture); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, blank); }
         trails = [tex(gl.LINEAR), tex(gl.LINEAR)];
         trailFbo = trails.map(texture => {
