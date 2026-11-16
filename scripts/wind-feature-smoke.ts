@@ -431,8 +431,12 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
           const attribution = attributionRect && attributionRect.width > 0 ? { left: attributionRect.left, right: attributionRect.right, top: attributionRect.top, bottom: attributionRect.bottom, width: attributionRect.width, height: attributionRect.height } : null;
           const unit = document.querySelector('.wind-controls-unit');
           const windBackings: Array<{ width: number; height: number }> = [];
+          let mapBacking: { width: number; height: number } | null = null;
           for (const canvas of Array.from(document.querySelectorAll<HTMLCanvasElement>('#map canvas'))) {
-            if (canvas.classList.contains('maplibregl-canvas')) continue;
+            if (canvas.classList.contains('maplibregl-canvas')) {
+              mapBacking = { width: canvas.width, height: canvas.height };
+              continue;
+            }
             if (canvas.getContext('2d')) windBackings.push({ width: canvas.width, height: canvas.height });
           }
           return {
@@ -447,7 +451,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
             key,
             attribution,
             unit: unit ? { scrollWidth: unit.scrollWidth, clientWidth: unit.clientWidth } : null,
-            windBackings
+            windBackings,
+            mapBacking
           };
         });
         assert(layout.documentWidth <= layout.innerWidth + 1, `${width}px page has horizontal overflow`);
@@ -458,7 +463,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(layout.windBackings.length > 0, `${width}px has no wind canvases`);
         const sized = layout.windBackings.filter(backing => backing.width > 100 && backing.height > 100);
         const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);
-        assert(sized.length > 0 && sized.length + parked.length === layout.windBackings.length, `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
+        const mapDrawsWind = sized.length === 0 && (layout.mapBacking?.width ?? 0) > 100 && (layout.mapBacking?.height ?? 0) > 100;
+        assert((sized.length > 0 || mapDrawsWind) && sized.length + parked.length === layout.windBackings.length, `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
         assert(Math.abs(layout.rail.width - 52) <= 1, `${width}px rail width is ${layout.rail.width}`);
         const expectedHeight = width >= 721 ? 242 : 204;
         assert(Math.abs(layout.rail.height - expectedHeight) <= 1, `${width}px rail height is ${layout.rail.height}, expected ${expectedHeight}`);
