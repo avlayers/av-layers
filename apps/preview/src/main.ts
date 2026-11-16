@@ -9,7 +9,7 @@ import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { displayedWindSpeed, windSpeedUnitLabel } from '@av/contracts/units';
 import {
   ApiClient, createForecastRequestScheduler, AUTO_MODEL_ID, activePalettes, assertNotExpired,
-  pointSeriesSelection, mapForecastHorizonNotice, formatBuildFreshness, longitudeOffsetHours,
+  pointSeriesSelection, mapForecastHorizonNotice, formatBuildFreshness, formatPlaceTime, formatViewerTime, browserTimeZone, longitudeOffsetHours,
   normalizePoint, PointSeriesController, resolveAutoBuild, watchBuildExpiry,
   type AutoForecastSelection, type GeoPoint, type PinnedBuild, type PointSeries, type PointSeriesContext, type PointHorizon, type UnitSystem
 } from '@av/client';
@@ -17,8 +17,8 @@ import { WindDataCache, WindDataSource } from '@av/client/wind';
 import './style.css';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
-import { previewQuery, previewUrl, type AltitudeReference, type TimeZoneMode } from './url-state';
-import { clockLabel, frameIndexFor } from './timeline';
+import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
+import { frameIndexFor } from './timeline';
 import { WindOverlay } from './wind-overlay';
 import { createWindControls, type WindStatus } from './wind-controls';
 import { createCompactTimeline } from './compact-timeline';
@@ -60,7 +60,6 @@ const startup = previewQuery(window.location.search, offlineFixture);
 
 const stored = (key: string): string | null => { try { return window.localStorage.getItem(key); } catch { return null; } };
 const store = (key: string, value: string): void => { try { window.localStorage.setItem(key, value); } catch { /* ignore */ } };
-const browserLocalZone = (): string => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } };
 
 const initialModel = startup.model ?? (offlineFixture ? import.meta.env.VITE_MODEL ?? 'gfs' : AUTO_MODEL_ID);
 const savedOpacity = stored('preview-lift-opacity'), savedOpacityNum = savedOpacity?.trim() ? Number(savedOpacity) : NaN;
@@ -106,10 +105,9 @@ function startPreview(lifecycle: AbortController): void {
   const pointSeries = new PointSeriesController(api);
   const savedUnits = startup.units ?? stored('preview-units');
   let pointUnitSystem: UnitSystem = savedUnits === 'imperial' ? 'imperial' : 'metric';
-  let timeZoneMode: TimeZoneMode = startup.timeZoneMode ?? (stored('preview-tz') === 'local' ? 'local' : 'utc');
   let pointHorizon: PointHorizon = 'day', windgram: PointWindgram | null = null;
   let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
-  let pointSelection: { update: ReturnType<PointWindgram['renderPointWindgram']>; frame: string | null; units: UnitSystem; mapFrame: string | null } | null = null;
+  let pointSelection: { update: ReturnType<PointWindgram['renderPointWindgram']>; frame: string | null; units: UnitSystem; mapFrame: string | null; mapOffset: number } | null = null;
   let expiryTimer: number | null = null, disposeExpiry = () => {};
   let urlReady = false, historyRevision = 0, applyingHistory: number | null = null, opacityCommitted = false;
   let windVisibleOverride: boolean | null = startup.windVisible;
@@ -118,17 +116,11 @@ function startPreview(lifecycle: AbortController): void {
   let queuedWindLoad: (() => void) | null = null;
   let locationRevision = 0, locationMarker: HTMLElement | null = null, locationPoint: [number, number] | null = null, locationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const activeZone = () => timeZoneMode === 'local' ? browserLocalZone() : 'UTC';
-  const activeZoneLabel = () => timeZoneMode === 'local' ? 'Local' : 'UTC';
-  const makeClock = () => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: activeZone() });
-  const makePointClock = () => {
-    const fmt = new Intl.DateTimeFormat('en-CA', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: activeZone() });
-    return (ms: number): string => {
-      const p = Object.fromEntries(fmt.formatToParts(ms).map(part => [part.type, part.value]));
-      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${activeZoneLabel()}`;
-    };
-  };
-  let displayedClock = makeClock(), pointClock = makePointClock();
+  const openedAt = map.getCenter();
+  const home = { lat: openedAt.lat, lng: openedAt.lng };
+  let followsPlace = startup.camera !== null;
+  const browserOffsetMinutes = -new Date().getTimezoneOffset();
+  let mapOffsetMinutes = followsPlace && Number.isFinite(home.lng) ? longitudeOffsetHours(home.lng) * 60 : browserOffsetMinutes;
   const hasWindData = (): boolean => Boolean(build?.manifest.mapData);
 
   const windOverlay = new WindOverlay(map);
@@ -158,19 +150,29 @@ function startPreview(lifecycle: AbortController): void {
     syncWindReservation();
   };
   const compactTimeline = createCompactTimeline(element('compact-timeline'), {
-    timeZone: activeZone(), zoneLabel: activeZoneLabel(),
-    onToggleTimeZone: () => setTimeZoneMode(timeZoneMode === 'utc' ? 'local' : 'utc'),
+    offsetMinutes: mapOffsetMinutes,
     onSelect: index => selectIndex(index, 'push')
   });
   syncWindSupport();
   windControls.setUnits(pointUnitSystem);
   windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
 
-  function setTimeZoneMode(mode: TimeZoneMode, commit = true): void {
-    timeZoneMode = mode; store('preview-tz', mode); displayedClock = makeClock(); pointClock = makePointClock();
-    compactTimeline.setTimeZone?.(activeZone(), activeZoneLabel());
-    updateOverlayStatus(); updatePointWind();
-    if (commit) writeUrl('replace');
+  function syncMapClock(): void {
+    if (!followsPlace) {
+      const center = map.getCenter();
+      const moved = Math.abs(center.lat - home.lat) > 1e-4 || Math.abs(normalizeLon(center.lng) - normalizeLon(home.lng)) > 1e-4;
+      if (!moved) return;
+      followsPlace = true;
+    }
+    const lng = map.getCenter().lng;
+    const next = Number.isFinite(lng) ? longitudeOffsetHours(lng) * 60 : mapOffsetMinutes;
+    if (next === mapOffsetMinutes) return;
+    mapOffsetMinutes = next;
+    compactTimeline.setOffsetMinutes(next);
+    updateTimeUi();
+    updateOverlayStatus();
+    paintMapHorizon();
+    updatePointSelection();
   }
 
   function setWindField(): void {
@@ -217,7 +219,7 @@ function startPreview(lifecycle: AbortController): void {
     const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(Math.hypot(sample.u, sample.v), pointUnitSystem) : null;
     const value = speed !== null ? `${speed} ${windSpeedUnitLabel(pointUnitSystem)}`
       : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
-    pointWind.textContent = `Map wind · ${pointClock(Date.parse(validTime))} · ${value}`;
+    pointWind.textContent = `Map wind · ${formatPlaceTime(Date.parse(validTime), longitudeOffsetHours(context.point.lon) * 60, 'stamp')} · ${value}`;
   }
 
   function coversBounds(outer: readonly [number, number, number, number], inner: readonly [number, number, number, number]): boolean {
@@ -359,7 +361,7 @@ function startPreview(lifecycle: AbortController): void {
     const validTime = currentModel === AUTO_MODEL_ID ? requestedTime ?? undefined : build?.manifest.frames.find(f => f.id === selectedFrame)?.validTime;
     const next = previewUrl(window.location.pathname, {
       model: currentModel, reference, layer: customLayer, opacity, lat: camera.lat, lon: camera.lng, zoom: map.getZoom(),
-      validTime, ...(windVisibleOverride !== null ? { windVisible: wState.visible } : {}), windStyle: wState.style, windHeight: wState.height, units: pointUnitSystem, timeZoneMode
+      validTime, ...(windVisibleOverride !== null ? { windVisible: wState.visible } : {}), windStyle: wState.style, windHeight: wState.height, units: pointUnitSystem
     });
     if (next !== `${window.location.pathname}${window.location.search}`) window.history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', next);
   }
@@ -382,13 +384,18 @@ function startPreview(lifecycle: AbortController): void {
     compactTimeline.update(build ? renderedFrames(build.manifest) : [], selectedFrame, !enabled);
   }
 
+  function paintMapHorizon(now = Date.now()): void {
+    if (!build || expired) return;
+    const notice = mapForecastHorizonNotice(build.manifest, now, ms => formatPlaceTime(ms, mapOffsetMinutes, 'stamp'));
+    horizonNotice.textContent = notice ?? ''; horizonNotice.hidden = notice === null;
+  }
+
   function updateFreshness(): void {
     overlay.refresh();
     if (!build || expired) return;
     const now = Date.now();
     if (build.expiresAtMs <= now) { expireView(); return; }
-    const notice = mapForecastHorizonNotice(build.manifest, now);
-    horizonNotice.textContent = notice ?? ''; horizonNotice.hidden = notice === null;
+    paintMapHorizon(now);
     freshness.textContent = (currentModel === AUTO_MODEL_ID ? `${build.manifest.model} · ` : '') + formatBuildFreshness(build.manifest, build.expiresAtMs, now);
   }
 
@@ -439,7 +446,7 @@ function startPreview(lifecycle: AbortController): void {
     const selected = frames.find(f => f.id === selectedFrame) ?? frames[0];
     timeInput.max = String(Math.max(0, frames.length - 1));
     if (document.activeElement !== timeInput) timeInput.value = String(Math.max(0, frames.findIndex(f => f.id === selectedFrame)));
-    timestamp.textContent = selected ? `Selected · ${clockLabel(Date.parse(selected.validTime), longitudeOffsetHours(map.getCenter().lng) * 60)}` : 'No frame selected';
+    timestamp.textContent = selected ? `Selected · ${formatPlaceTime(Date.parse(selected.validTime), mapOffsetMinutes, 'stamp')}` : 'No frame selected';
   }
 
   function updateOverlayStatus(): void {
@@ -448,7 +455,7 @@ function startPreview(lifecycle: AbortController): void {
     const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
     const olderBuild = displayed && displayed.build !== build;
     const displayedTime = displayed?.build.manifest.frames.find(f => f.id === displayed.frame)?.validTime;
-    const displayedLabel = displayedTime ? `${displayedClock.format(Date.parse(displayedTime))} ${activeZoneLabel()}` : '';
+    const displayedLabel = displayedTime ? formatPlaceTime(Date.parse(displayedTime), mapOffsetMinutes, 'stamp') : '';
     frameStatus.dataset.quality = quality ?? 'none';
     const status = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
       : pending ? `Showing ${displayedLabel} · ${replacementFailed ? 'Selected time unavailable' : 'Loading selected time…'}`
@@ -471,9 +478,9 @@ function startPreview(lifecycle: AbortController): void {
     updatePointWind();
     if (!updatePointSeries) return;
     const frame = pointSeries.frameId, mapFrame = displayedPointFrame();
-    if (pointSelection?.update === updatePointSeries && pointSelection.frame === frame && pointSelection.units === pointUnitSystem && pointSelection.mapFrame === mapFrame) return;
-    pointSelection = { update: updatePointSeries, frame, units: pointUnitSystem, mapFrame };
-    updatePointSeries(frame, pointUnitSystem, mapFrame);
+    if (pointSelection?.update === updatePointSeries && pointSelection.frame === frame && pointSelection.units === pointUnitSystem && pointSelection.mapFrame === mapFrame && pointSelection.mapOffset === mapOffsetMinutes) return;
+    pointSelection = { update: updatePointSeries, frame, units: pointUnitSystem, mapFrame, mapOffset: mapOffsetMinutes };
+    updatePointSeries(frame, pointUnitSystem, mapFrame, undefined, mapOffsetMinutes);
   }
 
   function expireView(): void {
@@ -604,7 +611,7 @@ function startPreview(lifecycle: AbortController): void {
   function showPoint(context: PointSeriesContext, payload: PointSeries, totalFrames: number, loading: boolean): void {
     if (!windgram) return;
     updatePointSeries = windgram.renderPointWindgram(pointBody, payload, context.build, {
-      point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), unitSystem: pointUnitSystem, totalFrames, loading,
+      point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), mapOffsetMinutes, unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
         const index = renderedFrames(context.build.manifest).findIndex(f => f.id === id);
@@ -649,8 +656,6 @@ function startPreview(lifecycle: AbortController): void {
       syncLayerPicker(); syncReference();
       const nextUnits: UnitSystem = state.units ?? 'metric';
       if (nextUnits !== pointUnitSystem) setUnits(nextUnits);
-      const nextTz: TimeZoneMode = state.timeZoneMode ?? 'utc';
-      if (nextTz !== timeZoneMode) setTimeZoneMode(nextTz, false);
       windVisibleOverride = state.windVisible;
       const nextVisible = state.windVisible ?? (windControls.preferredVisible?.() ?? true), nextStyle = state.windStyle ?? 'trails', nextHeight = state.windHeight ?? 'surface';
       lastControlVisible = nextVisible;
@@ -740,11 +745,26 @@ function startPreview(lifecycle: AbortController): void {
     }, { timeout: 10_000 });
   });
 
+  function displayDiagnostic(label: string, value: string): string {
+    if (label === 'Cycle' || label === 'Expires') {
+      const ms = Date.parse(value);
+      return Number.isFinite(ms) ? formatViewerTime(ms, browserTimeZone()) : value;
+    }
+    if (label === 'Horizon') {
+      const [start, end] = value.split(' → ');
+      const a = Date.parse(start ?? ''), b = Date.parse(end ?? ''), lon = pointSeries.current?.point.lon;
+      if (!Number.isFinite(a) || !Number.isFinite(b) || lon === undefined || !Number.isFinite(lon)) return value;
+      const offset = longitudeOffsetHours(lon) * 60;
+      return `${formatPlaceTime(a, offset, 'stamp')} → ${formatPlaceTime(b, offset, 'stamp')}`;
+    }
+    return value;
+  }
+
   pointHorizonSelect.value = pointHorizon;
   pointHorizonSelect.addEventListener('change', () => { pointHorizon = pointHorizonSelect.value === 'forecast' ? 'forecast' : 'day'; void loadPointRange(); });
   pointClose.addEventListener('click', closePoint);
   pointBuildDetails.addEventListener('toggle', () => {
-    if (pointBuildDetails.open && build && pointSeries.current && !meta.children.length) renderBuildDiagnostics(meta, build);
+    if (pointBuildDetails.open && build && pointSeries.current && !meta.children.length) renderBuildDiagnostics(meta, build, displayDiagnostic);
   });
   document.addEventListener('keydown', event => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button')) return;
@@ -763,8 +783,10 @@ function startPreview(lifecycle: AbortController): void {
   }, globalListener);
 
   map.on('click', event => { if (!mapFailed) void openPoint(normalizePoint(event.lngLat.lat, event.lngLat.lng)); });
+  map.on('move', syncMapClock);
   map.on('movestart', event => { if (currentModel === AUTO_MODEL_ID && !('previewHistory' in event)) { applyingHistory = null; autoAbort?.abort(); } });
   map.on('moveend', () => {
+    syncMapClock();
     updateScale();
     if (currentModel !== AUTO_MODEL_ID) updateWind();
     if (build && !expired) updateTimeUi();

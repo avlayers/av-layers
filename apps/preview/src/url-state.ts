@@ -5,7 +5,6 @@ import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
 
 export type AltitudeReference = 'agl' | 'msl';
 export type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
-export type TimeZoneMode = 'utc' | 'local';
 
 function finiteParam(value: string | null): number | null {
   if (value === null || value.trim() === '') return null;
@@ -40,7 +39,6 @@ export function previewQuery(search: string, offline: boolean) {
     windStyle: wstyle === 'trails' || wstyle === 'barbs' || wstyle === 'hybrid' ? wstyle as WindStyleParam : null,
     windHeight: parseWindHeight(params.get('wheight')),
     units: units === 'metric' || units === 'imperial' ? units as UnitSystem : null,
-    timeZoneMode: params.get('tz') === 'local' ? 'local' as TimeZoneMode : params.get('tz') === 'utc' ? 'utc' as TimeZoneMode : null,
     camera: lat !== null && Math.abs(lat) <= 90 && lon !== null && zoom !== null
       ? { center: [lon, lat] as [number, number], zoom } : null
   };
@@ -59,7 +57,6 @@ export function previewUrl(pathname: string, state: {
   windStyle?: WindStyleParam;
   windHeight?: 'surface' | number | 'lift';
   units?: UnitSystem;
-  timeZoneMode?: TimeZoneMode;
 }): string {
   const params = new URLSearchParams({
     model: state.model, ref: state.reference, opacity: String(Math.round(state.opacity * 100) / 100),
@@ -71,6 +68,5 @@ export function previewUrl(pathname: string, state: {
   if (state.windStyle && state.windStyle !== 'trails') params.set('wstyle', state.windStyle);
   if (state.windHeight && state.windHeight !== 'surface') params.set('wheight', String(state.windHeight));
   if (state.units && state.units !== 'metric') params.set('units', state.units);
-  if (state.timeZoneMode === 'local') params.set('tz', 'local');
   return `${pathname}?${params}`;
 }

@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { FIXTURE_BUILD_ID, fixtureBuild } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedPointBuild, retainedProfileBuild, retainedUnprefixedPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
-import { ApiClient, pointSeriesSelection } from '@av/client';
+import { ApiClient, formatPlaceTime, formatPointMapTimes, longitudeOffsetHours, pointSeriesSelection } from '@av/client';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -249,8 +249,9 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   const chosenFrame = m.frames.find(f => f.id === chosenId)!;
   panel.renderState({ ...state, opacity: 0.75 });
   const time = nodes.find(element => element.className === 'av-point-time')!;
-  expect(time.textContent).toContain(`Point: ${chosenFrame.validTime.slice(0, 10)}`);
-  expect(time.textContent).toContain(`Map: ${m.frames[m.mapFrameCount! - 1].validTime.slice(0, 10)}`);
+  const clicked = longitudeOffsetHours(point.lon) * 60;
+  expect(time.textContent).toContain(`Point: ${formatPlaceTime(Date.parse(chosenFrame.validTime), clicked, 'stamp')}`);
+  expect(time.textContent).toContain(`Map: ${formatPlaceTime(Date.parse(m.frames[m.mapFrameCount! - 1].validTime), clicked, 'stamp')}`);
   const units = nodes.find(element => element.id === 'av-units')!;
   units.value = 'imperial'; units.dispatchEvent(new Event('change'));
   const summary = nodes.find(element => element.className === 'av-windgram-lift-summary')!.textContent;
@@ -258,7 +259,7 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   expect(nodes.find(element => element.className === 'av-windgram-profile-status')?.hidden).toBe(true);
   expect(nodes.find(element => element.className === 'av-windgram-key')!.innerHTML).toContain('windgram-legend');
   panel.renderState({ ...state, frameId: null, displayedFrameId: null });
-  expect(time.textContent).toContain(`Point: ${chosenFrame.validTime.slice(0, 10)}`);
+  expect(time.textContent).toContain(`Point: ${formatPlaceTime(Date.parse(chosenFrame.validTime), clicked, 'stamp')}`);
   expect(time.textContent).toContain('Map: unavailable');
   horizon.dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(pointPanel.ariaBusy).toBe('false'));
@@ -422,7 +423,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     expect(nodes.find(node => node.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
     expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(' · Map: ');
-    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[39].validTime.slice(0, 16).replace('T', ' '));
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[39].validTime), longitudeOffsetHours(point.lon) * 60, 'stamp'));
     expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe('Map forecast');
     if (!keepKnown) {
       panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f069', displayedFrameId: m.frames[0].id });
@@ -440,7 +441,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     const incomplete = nodes.find(node => node.className === 'av-point-incomplete')!;
     expect(incomplete.hidden).toBe(false); expect(incomplete.role).toBe('status');
     expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
-    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[keepKnown ? 39 : 38].validTime), longitudeOffsetHours(point.lon) * 60, 'stamp'));
     const units = nodes.find(node => node.id === 'av-units')!;
     units.value = 'imperial'; units.dispatchEvent(new Event('change'));
     expect(summary.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
@@ -454,7 +455,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
   expect(nodes.find(node => node.className === 'av-point')?.ariaBusy).toBe('false');
   expect(nodes.find(node => node.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
   expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
-  expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(m.frames[38].validTime.slice(0, 16).replace('T', ' '));
+  expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[38].validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
   expect(pages).toHaveLength(3);
 });
 
@@ -467,15 +468,19 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   panel.renderState(state);
   await panel.openPoint(build, { lat: 32.9, lon: -117.25 });
   const time = visit(panel.root as unknown as FakeElement).find(element => element.className === 'av-point-time')!;
-  const stamp = (value: string) => value.slice(0, 16).replace('T', ' ');
-  expect(time.textContent).toBe(`Point: ${stamp(second.validTime)} UTC · Map: unavailable`);
+  const offset = longitudeOffsetHours(-117.25) * 60;
+  const clocks = (pointTime: string, mapTime: string | null) => formatPointMapTimes(
+    { validTime: pointTime, offsetMinutes: offset },
+    mapTime ? { validTime: mapTime, offsetMinutes: offset } : null
+  );
+  expect(time.textContent).toBe(clocks(second.validTime, null));
   panel.renderState({ ...state, displayedFrameId: first.id, notice: 'Loading selected forecast.' });
-  const split = `Point: ${stamp(second.validTime)} UTC · Map: ${stamp(first.validTime)} UTC`;
+  const split = clocks(second.validTime, first.validTime);
   expect(time.textContent).toBe(split);
   panel.renderState({ ...state, displayedFrameId: first.id, message: 'Forecast replacement failed.' });
   expect(time.textContent).toBe(split);
   panel.renderState({ ...state, displayedFrameId: second.id });
-  expect(time.textContent).toBe(`Point and map: ${stamp(second.validTime)} UTC`);
+  expect(time.textContent).toBe(clocks(second.validTime, second.validTime));
   panel.renderState(state);
   expect(time.textContent).toContain('Map: unavailable');
 });

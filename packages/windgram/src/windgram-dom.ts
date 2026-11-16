@@ -1,4 +1,4 @@
-import { formatMapLiftCell, formatPointMapLift } from '@av/client';
+import { formatMapLiftCell, formatPlaceTime, formatPointMapLift } from '@av/client';
 import { renderWindgramSvg } from './windgram-chart.ts';
 import { clamp, formatQuantity, svgNumber as fmt } from './windgram-format.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
@@ -58,9 +58,6 @@ function mountWindgramInspector(
   readout?.setAttribute?.('aria-live', 'polite');
   readout?.setAttribute?.('aria-atomic', 'true');
   const instructions = `${heightMode ? 'Hover to inspect height' : 'Hover for lift top'} · click or tap to pin · left/right arrows change hour${heightMode ? ' · up/down changes height' : ''} · Escape clears`;
-  const timeFormat = new Intl.DateTimeFormat('en-US', {
-    timeZone: view.timeZone, weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
-  });
   let activeHour: number | null = null;
   let activeHeightM: number | null = null;
   let pinned = false;
@@ -105,7 +102,7 @@ function mountWindgramInspector(
         else if (screen.x > rect.right - 32) host.scrollLeft += screen.x - rect.right + 32;
       }
     }
-    const when = timeFormat.format(new Date(hour.validAt));
+    const when = formatPlaceTime(Date.parse(hour.validAt), view.offsetMinutes, 'stamp');
     const heightM = heightMode ? clamp(inspectedHeightM ?? activeHeightM ?? hour.usableLiftTopM ?? view.floorM + 100, view.floorM, view.topM) : hour.usableLiftTopM;
     if (heightMode) activeHeightM = heightM;
     if (heightM === null || heightM < view.floorM || heightM > view.topM) {

@@ -25,6 +25,93 @@ export function longitudeOffsetHours(lon: number): number {
   return Math.round(normalizeLon(lon) / 15);
 }
 
+export type PlaceTimeStyle = 'clock' | 'stamp';
+
+export interface PlaceClock {
+  readonly validTime: string;
+  readonly offsetMinutes: number;
+}
+
+const MONTH_DAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', month: 'short', day: 'numeric' };
+
+/** Local calendar date `YYYY-MM-DD` for a fixed offset from UTC. */
+export function placeDateKey(utcMs: number, offsetMinutes: number): string {
+  if (!Number.isFinite(utcMs) || !Number.isFinite(offsetMinutes)) return '';
+  return new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+function clockDigits(utcMs: number): string {
+  const date = new Date(utcMs);
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
+}
+
+function monthDay(utcMs: number): string {
+  return new Date(utcMs).toLocaleDateString('en-US', MONTH_DAY);
+}
+
+/** Local time for a fixed offset, with UTC in parentheses. */
+export function formatPlaceTime(utcMs: number, offsetMinutes: number, style: PlaceTimeStyle = 'stamp'): string {
+  if (!Number.isFinite(utcMs) || !Number.isFinite(offsetMinutes)) return '—';
+  const localMs = utcMs + offsetMinutes * 60_000;
+  const localClock = clockDigits(localMs);
+  const utcClock = clockDigits(utcMs);
+  const sameDay = placeDateKey(utcMs, offsetMinutes) === placeDateKey(utcMs, 0);
+  if (style === 'clock') return sameDay ? `${localClock} (${utcClock} UTC)` : `${localClock} (${utcClock} UTC, ${monthDay(utcMs)})`;
+  const localDate = monthDay(localMs);
+  return sameDay ? `${localDate}, ${localClock} (${utcClock} UTC)` : `${localDate}, ${localClock} (${monthDay(utcMs)}, ${utcClock} UTC)`;
+}
+
+/** IANA zone of this browser, or `UTC` when the zone cannot be read. */
+export function browserTimeZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; }
+}
+
+function viewerFallback(utcMs: number): string {
+  const year = new Date(utcMs).getUTCFullYear();
+  const clock = clockDigits(utcMs);
+  return `${monthDay(utcMs)}, ${year}, ${clock} (${clock} UTC)`;
+}
+
+/** Browser wall-clock time, with UTC in parentheses. */
+export function formatViewerTime(utcMs: number, timeZone: string): string {
+  if (!Number.isFinite(utcMs)) return '—';
+  let localDate = '';
+  let localMonthDay = '';
+  let hour = Number.NaN;
+  let minute = '';
+  try {
+    const date = new Date(utcMs);
+    localDate = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    localMonthDay = new Intl.DateTimeFormat('en-US', { timeZone, month: 'short', day: 'numeric' }).format(date);
+    const clock = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) => clock.find(item => item.type === type)?.value ?? '';
+    hour = Number(part('hour')) % 24;
+    minute = part('minute');
+  } catch {
+    return viewerFallback(utcMs);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(localDate) || !localMonthDay || !Number.isFinite(hour) || !/^\d{2}$/.test(minute)) return viewerFallback(utcMs);
+  const localYear = localDate.slice(0, 4);
+  const local = `${localMonthDay}, ${localYear}, ${String(hour).padStart(2, '0')}:${minute}`;
+  const utcDate = new Date(utcMs).toISOString().slice(0, 10);
+  const utcClock = clockDigits(utcMs);
+  if (localDate === utcDate) return `${local} (${utcClock} UTC)`;
+  const utcYear = utcDate.slice(0, 4);
+  const utcWhen = localYear === utcYear ? `${monthDay(utcMs)}, ${utcClock}` : `${monthDay(utcMs)}, ${utcYear}, ${utcClock}`;
+  return `${local} (${utcWhen} UTC)`;
+}
+
+/** Point and map clocks. The same instant and offset share one stamp. */
+export function formatPointMapTimes(point: PlaceClock | null, map: PlaceClock | null): string {
+  if (!point) return 'Point time unavailable';
+  const pointMs = Date.parse(point.validTime);
+  const pointStamp = formatPlaceTime(pointMs, point.offsetMinutes, 'stamp');
+  if (!map) return `Point: ${pointStamp} · Map: unavailable`;
+  const mapMs = Date.parse(map.validTime);
+  if (pointMs === mapMs && point.offsetMinutes === map.offsetMinutes) return `Point and map: ${pointStamp}`;
+  return `Point: ${pointStamp} · Map: ${formatPlaceTime(mapMs, map.offsetMinutes, 'stamp')}`;
+}
+
 export function frameTime(value: string): number {
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) throw new RangeError(`Invalid frame timestamp: ${value}`);
@@ -168,11 +255,11 @@ export function mapForecastEnd(manifest: MapTimeline): number | null {
   return frames.length ? Math.max(...frames.map(frame => frameTime(frame.validTime))) : null;
 }
 
-export function mapForecastHorizonNotice(manifest: MapTimeline, nowMs = Date.now()): string | null {
+export function mapForecastHorizonNotice(manifest: MapTimeline, nowMs = Date.now(), formatTime?: (ms: number) => string): string | null {
   const endMs = mapForecastEnd(manifest);
-  return endMs !== null && nowMs >= endMs
-    ? `Map forecast ended at ${new Date(endMs).toISOString()} — update overdue. Showing historical forecast.`
-    : null;
+  if (endMs === null || nowMs < endMs) return null;
+  const when = formatTime ? formatTime(endMs) : new Date(endMs).toISOString();
+  return `Map forecast ended at ${when} — update overdue. Showing historical forecast.`;
 }
 
 export function buildAgeMs(createdAt: string, now = Date.now()): number {

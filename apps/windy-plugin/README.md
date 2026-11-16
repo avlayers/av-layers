@@ -12,8 +12,8 @@ pnpm --filter @av/windy-plugin serve
 Click the map for the selected hour’s sampled AGL and MSL lift. The native
 sounding and later hours fill in as pages arrive. The chart uses MSL and labels
 native thermal tops and model ground separately. Later point times retain the
-map frame and show both UTC times. The scalar chart covers builds that publish
-no native profiles.
+map frame and show both clocks as local time with UTC in parentheses. The scalar
+chart covers builds that publish no native profiles.
 The pane shows the displayed frame's UTC time. The overlay hides when Windy's
 selected time falls outside the map forecast. Closing the pane ends point
 requests while the overlay continues following Windy's timeline until build expiry.

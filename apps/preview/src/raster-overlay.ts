@@ -1,10 +1,9 @@
 import type { Map, MapSourceDataEvent, ErrorEvent } from 'maplibre-gl';
-import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, planViewportPrefetch, previewRasterLayer, previewRasterSource, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
+import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAX_RASTER_SOURCES, rasterSourceLimit } from './raster-budget';
-import { dayKey } from './timeline';
 import { RasterOverview } from './raster-overview';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }
@@ -432,9 +431,9 @@ export class RasterOverlay {
   }
   private timelineFrames(slot: Slot): string[] {
     const frames = renderedFrames(slot.build.manifest), index = frames.findIndex(f => f.id === slot.frame);
-    const offset = longitudeOffsetHours(this.map.getCenter().lng) * 60, selectedDay = dayKey(Date.parse(frames[index].validTime), offset);
+    const offset = longitudeOffsetHours(this.map.getCenter().lng) * 60, selectedDay = placeDateKey(Date.parse(frames[index].validTime), offset);
     const before = frames.slice(0, index).reverse(), after = frames.slice(index + 1);
-    return (this.direction === -1 ? [...before, ...after] : [...after, ...before]).filter(f => dayKey(Date.parse(f.validTime), offset) === selectedDay).map(f => f.id);
+    return (this.direction === -1 ? [...before, ...after] : [...after, ...before]).filter(f => placeDateKey(Date.parse(f.validTime), offset) === selectedDay).map(f => f.id);
   }
   private prefetchBytes(): void {
     const slot = this.active;

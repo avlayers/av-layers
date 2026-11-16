@@ -206,21 +206,15 @@ export function renderWindgramSvg(
       'text-anchor="end" class="wg-axis-unit"',
     ),
   );
-  const referenceTime = view.timeAxis[0]?.validAt ?? view.hours[0]?.validAt;
-  const timeZoneLabel = referenceTime
-    ? new Intl.DateTimeFormat('en-US', { timeZone: view.timeZone, timeZoneName: 'short' })
-      .formatToParts(new Date(referenceTime)).find(part => part.type === 'timeZoneName')?.value ?? view.timeZone
-    : view.timeZone;
-  const clock = view.timeZone.startsWith('Etc/GMT') ? `${timeZoneLabel} (longitude)` : timeZoneLabel;
   parts.push(text(view.width / 2, view.bottom + 41,
-    `${clock} · Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
+    `Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
     'text-anchor="middle" class="wg-axis-unit wg-footer"'));
   parts.push(
     '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true"><line data-cursor-vertical=""/><line data-cursor-horizontal=""/><circle data-cursor-point="" r="7"/><g data-cursor-readout=""><rect data-cursor-back="" height="47" rx="6" class="wg-inspector-back"/><text x="10" y="20" data-cursor-agl="" class="wg-inspector-agl"/><text x="10" y="36" data-cursor-msl="" class="wg-inspector-msl"/></g></g>',
   );
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
   const coverage = uncovered.length && firstData && lastData ? ` Forecast available ${firstData.label}–${lastData.label}; hatched hours unavailable.` : !view.hours.length ? ' Daylight forecast unavailable in this run.' : '';
-  const description = `Windgram${first ? ` ${first.label}–${last.label}` : ''} · ${view.timeZone}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
+  const description = `Windgram${first ? ` ${first.label}–${last.label}` : ''}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
   return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-labelledby="${id}-title ${id}-description" class="windgram${view.compact ? ' windgram-compact' : ''}"><title id="${id}-title">Wind, temperature and clouds by hour and altitude</title><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
 }
 

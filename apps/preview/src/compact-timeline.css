@@ -23,7 +23,7 @@
   flex-direction: column;
   justify-content: center;
   min-width: 82px;
-  max-width: 122px;
+  max-width: 168px;
   overflow: hidden;
   line-height: 1.15;
   white-space: nowrap;
@@ -31,9 +31,6 @@
 .ct-date-line { overflow: hidden; color: #526170; font-size: 10px; text-overflow: ellipsis; }
 .ct-time-line { display: flex; align-items: baseline; min-width: 0; font-variant-numeric: tabular-nums; }
 .ct-time { font-size: 12px; font-weight: 600; }
-.ct-zone { overflow: hidden; min-width: 0; color: #6b7784; font-size: 9.5px; text-overflow: ellipsis; }
-.ct-zone-toggle { padding: 2px 4px; margin: -2px 0; border-radius: 3px; background: #eef3f6; color: #16324f; font-weight: 600; }
-.ct-zone-toggle:hover { background: #dfe9f1; }
 
 .ct-play { display: flex; flex: 0 0 36px; align-items: center; justify-content: center; height: 100%; padding: 0; border-right: 1px solid #e4e9ee; }
 .ct-play-glyph { width: 0; height: 0; border-top: 5px solid transparent; border-bottom: 5px solid transparent; border-left: 7px solid currentColor; }

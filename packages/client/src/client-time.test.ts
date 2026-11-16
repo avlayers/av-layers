@@ -1,10 +1,29 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './index';
+import { formatPlaceTime, formatPointMapTimes, formatViewerTime, mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, placeDateKey, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './index';
 
 afterEach(() => vi.useRealTimers());
 
 it('keeps the clock on its own side of the date line at exact boundaries', () => {
   expect([179.99, 180, 540, -179.99, -180, -540].map(longitudeOffsetHours)).toEqual([12, 12, 12, -12, -12, -12]);
+});
+
+it('prints place time as local clock with UTC in parentheses', () => {
+  expect(formatPlaceTime(Date.parse('2026-10-30T06:00:00.000Z'), -60, 'stamp')).toBe('Oct 30, 05:00 (06:00 UTC)');
+  expect(formatPlaceTime(Date.parse('2026-10-30T00:30:00.000Z'), -60, 'clock')).toBe('23:30 (00:30 UTC, Oct 30)');
+  expect(placeDateKey(Date.parse('2026-10-30T00:30:00.000Z'), -60)).toBe('2026-10-29');
+  expect(formatPlaceTime(Number.NaN, 0)).toBe('—');
+  const instant = { validTime: '2026-10-30T06:00:00.000Z', offsetMinutes: -60 };
+  expect(formatPointMapTimes(instant, { ...instant })).toBe('Point and map: Oct 30, 05:00 (06:00 UTC)');
+  expect(formatPointMapTimes(instant, { validTime: instant.validTime, offsetMinutes: 0 })).toBe('Point: Oct 30, 05:00 (06:00 UTC) · Map: Oct 30, 06:00 (06:00 UTC)');
+  expect(formatPointMapTimes(instant, null)).toBe('Point: Oct 30, 05:00 (06:00 UTC) · Map: unavailable');
+  expect(formatPointMapTimes(null, instant)).toBe('Point time unavailable');
+});
+
+it('prints the viewer clock from the requested zone, including a date split', () => {
+  expect(formatViewerTime(Date.parse('2026-10-30T12:00:00.000Z'), 'America/New_York')).toBe('Oct 30, 2026, 08:00 (12:00 UTC)');
+  expect(formatViewerTime(Date.parse('2026-01-01T02:00:00.000Z'), 'America/New_York')).toBe('Dec 31, 2025, 21:00 (Jan 1, 2026, 02:00 UTC)');
+  expect(formatViewerTime(Date.parse('2026-10-30T12:00:00.000Z'), 'Not/AZone')).toBe('Oct 30, 2026, 12:00 (12:00 UTC)');
+  expect(formatViewerTime(Number.NaN, 'UTC')).toBe('—');
 });
 
 it('expires at the deadline without waiting for the freshness interval', () => {
@@ -124,6 +143,7 @@ it('shows map forecast exhaustion at the last valid time, independently of inter
   const horizon = Date.parse('2026-10-30T09:00:00Z');
   expect(mapForecastHorizonNotice(manifest, horizon - 1)).toBeNull();
   expect(mapForecastHorizonNotice(manifest, horizon)).toContain('Map forecast ended at 2026-10-30T09:00:00.000Z');
+  expect(mapForecastHorizonNotice(manifest, horizon, () => 'Oct 30, 09:00 (09:00 UTC)')).toContain('Map forecast ended at Oct 30, 09:00 (09:00 UTC)');
   expect(mapForecastHorizonNotice(manifest, horizon + 6 * 3600_000)).toContain('Showing historical forecast');
 });
 

@@ -7,7 +7,7 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedProfileBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { REGION_A_BOUNDS, REGION_A_POINT, REGION_B_BOUNDS, REGION_B_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures';
-import { type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
+import { browserTimeZone, formatPlaceTime, formatPointMapTimes, formatViewerTime, longitudeOffsetHours, type PinnedBuild, type PointSeriesLoader, type RasterTileProtocol } from '@av/client';
 
 class Element extends EventTarget {
   children: Element[] = [];
@@ -230,11 +230,9 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
   };
 } }));
 let timelineSelect: (index: number) => void;
-let timelineToggleTz: (() => void) | undefined;
-vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect; onToggleTimeZone?: () => void }) => {
+vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
   timelineSelect = options.onSelect;
-  timelineToggleTz = options.onToggleTimeZone;
-  return { update() {}, setTimeZone() {}, destroy() {} };
+  return { update() {}, setOffsetMinutes() {}, destroy() {} };
 } }));
 
 const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
@@ -284,7 +282,7 @@ beforeEach(() => {
   vi.resetModules();
   maps.length = 0; protocols.clear(); initializationError = null; autoLoadRaster = true; setWorkerUrl.mockClear();
   windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
-  markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true; timelineToggleTz = undefined;
+  markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true;
   deferWindCancellation = false; windCancel = null;
   windSample = { status: 'valid', u: 3, v: 4 };
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
@@ -784,7 +782,7 @@ it('shows the horizon warning as time advances without hiding tile errors or dis
   map().emit('error', { sourceId: sourceId(), tile: {} });
   vi.advanceTimersByTime(5000);
   expect(ui('horizon-notice').hidden).toBe(false);
-  expect(ui('horizon-notice').textContent).toContain('Map forecast ended at 2026-10-31T00:00:00.000Z');
+  expect(ui('horizon-notice').textContent).toContain(`Map forecast ended at ${formatPlaceTime(horizon, -new Date().getTimezoneOffset(), 'stamp')}`);
   expect(ui('tile-error').hidden).toBe(false);
   expect(ui('time').disabled).toBe(false);
   expect(map().layers.has(sourceId())).toBe(true);
@@ -834,6 +832,10 @@ it('preserves a loaded build across BFCache restoration and renews its raster ge
   ui('point-build-details').dispatchEvent(new Event('toggle'));
   const links = ui('meta').children.flatMap(child => child.children);
   expect(links.some(link => link.href === manifest.source.provenanceUrl)).toBe(true);
+  const rows = new Map<string, string>();
+  for (let index = 0; index < ui('meta').children.length; index += 2) rows.set(ui('meta').children[index]!.textContent, ui('meta').children[index + 1]!.textContent);
+  expect(rows.get('Cycle')).toBe(formatViewerTime(Date.parse(manifest.cycle), browserTimeZone()));
+  expect(rows.get('Horizon')).toContain(formatPlaceTime(Date.parse(manifest.frames[0]!.validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
   const currentSource = sourceId();
   await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   page('pagehide', true); page('pageshow', true);
@@ -993,7 +995,24 @@ it('stops a pending point request and keeps sampling disabled after graphics rec
 it('labels the map clock as longitude time alongside UTC', async () => {
   win.href = 'http://localhost:5173/?model=gfs&lat=41&lon=-8&z=7&t=2026-10-30T06%3A00%3A00.000Z';
   await start();
-  expect(ui('timestamp').textContent).toBe('Selected · 05:00 longitude time (UTC−01:00) · 06:00 UTC');
+  expect(ui('timestamp').textContent).toBe('Selected · Oct 30, 05:00 (06:00 UTC)');
+  expect(new URL(win.href).searchParams.has('tz')).toBe(false);
+});
+
+it('uses the browser clock until the map leaves home, then the center longitude', async () => {
+  await start();
+  const selected = manifest.frames[Number(ui('time').value)]!.validTime;
+  const browserOffset = -new Date().getTimezoneOffset();
+  const stamp = (offset: number) => `Selected · ${formatPlaceTime(Date.parse(selected), offset, 'stamp')}`;
+  expect(ui('timestamp').textContent).toBe(stamp(browserOffset));
+  map().center = { lng: 0, lat: 20.00001 };
+  map().emit('move');
+  expect(ui('timestamp').textContent).toBe(stamp(browserOffset));
+  const lng = browserOffset === 12 * 60 ? 0 : 180;
+  map().center = { lng, lat: 20 };
+  map().emit('move');
+  expect(ui('timestamp').textContent).toBe(stamp(longitudeOffsetHours(lng) * 60));
+  expect(new URL(win.href).searchParams.has('tz')).toBe(false);
 });
 
 it('uses the default camera when a shared URL has an invalid latitude', async () => {
@@ -1328,15 +1347,16 @@ it('keeps point selection current while skipping redraws for unchanged overlay s
   expect(update).toHaveBeenCalledOnce();
   expect(update.mock.calls[0][1]).toBe('imperial');
   await selectFrame(1);
-  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  const mapOffset = -new Date().getTimezoneOffset();
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id, undefined, mapOffset);
   await selectFrame(2);
   update.mockClear();
   ui('time').value = '1';
   ui('time').dispatchEvent(new Event('input'));
   expect(update).toHaveBeenCalledOnce();
-  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[2].id);
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[2].id, undefined, mapOffset);
   await Promise.resolve();
-  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id);
+  expect(update).toHaveBeenLastCalledWith(manifest.frames[1].id, 'imperial', manifest.frames[1].id, undefined, mapOffset);
   ui('point-close').dispatchEvent(new Event('click'));
   update.mockClear();
   await selectFrame(2);
@@ -1400,10 +1420,10 @@ it('pages the full native point forecast while later point times keep the raster
   windResolve!('ready');
   await Promise.resolve();
   expect(ui('point-horizon-label').hidden).toBe(false);
-  expect(ui('horizon-notice').textContent).toContain(`Map forecast ended at ${mapEnd}`);
+  expect(ui('horizon-notice').textContent).toContain(`Map forecast ended at ${formatPlaceTime(Date.parse(mapEnd), -new Date().getTimezoneOffset(), 'stamp')}`);
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
-  expect(ui('point-wind').textContent).toContain(`Map wind · ${mapEnd.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
+  expect(ui('point-wind').textContent).toContain(`Map wind · ${formatPlaceTime(Date.parse(mapEnd), longitudeOffsetHours(-117.25) * 60, 'stamp')} · 18 km/h`);
   const chart = ui('point-body').children[0];
   const raster = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
   const mapUrl = raster(), mapTime = ui('time').value;
@@ -1439,7 +1459,7 @@ it('pages the full native point forecast while later point times keep the raster
   const requests = fetchMock.mock.calls.length;
   ui('point-horizon').value = 'day'; ui('point-horizon').dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
-  expect(ui('point-wind').textContent).toContain(`Map wind · ${mapEnd.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
+  expect(ui('point-wind').textContent).toContain(`Map wind · ${formatPlaceTime(Date.parse(mapEnd), longitudeOffsetHours(-117.25) * 60, 'stamp')} · 18 km/h`);
   expect(fetchMock).toHaveBeenCalledTimes(requests);
 });
 
@@ -1485,12 +1505,15 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
     expect(nodes.find(child => child.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
-    const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
-    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(39)} UTC · Map: ${stamp(0)} UTC`);
+    const clocks = (point: number, map: number) => formatPointMapTimes(
+      { validTime: published.frames[point]!.validTime, offsetMinutes: longitudeOffsetHours(-117.25) * 60 },
+      { validTime: published.frames[map]!.validTime, offsetMinutes: -new Date().getTimezoneOffset() }
+    );
+    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(clocks(39, 0));
     if (!keepKnown) {
       await selectFrame(38);
       expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.textContent).toBe('Loading native profile…');
-      expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(`Point: ${stamp(38)} UTC · Map: ${stamp(0)} UTC`);
+      expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toBe(clocks(38, 0));
     }
   } finally { release(); }
   if (fail) {
@@ -1504,7 +1527,7 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
     const incomplete = nodes.find(child => child.className === 'av-point-incomplete')!;
     expect(incomplete.hidden).toBe(false); expect((incomplete as unknown as HTMLElement).role).toBe('status');
     expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
-    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[keepKnown ? 39 : 38].validTime.slice(0, 16).replace('T', ' '));
+    expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(published.frames[keepKnown ? 39 : 38]!.validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
     ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
     dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
@@ -1518,7 +1541,7 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
   const finalNodes = visit(ui('point-body').children[0]);
   expect(finalNodes.find(child => child.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
   expect(finalNodes.find(child => child.className === 'av-point-incomplete')?.hidden).toBe(true);
-  expect(finalNodes.find(child => child.className === 'av-point-time')?.textContent).toContain(published.frames[38].validTime.slice(0, 16).replace('T', ' '));
+  expect(finalNodes.find(child => child.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(published.frames[38]!.validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
 });
 
 it('labels the displayed raster through pending, failed and successful point-time replacements', async () => {
@@ -1532,32 +1555,35 @@ it('labels the displayed raster through pending, failed and successful point-tim
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await vi.waitFor(() => expect(ui('point-body').children).toHaveLength(1));
   const series = ui('point-body').children[0], time = series.children.find(child => child.className === 'av-point-time')!;
-  const stamp = (index: number) => published.frames[index].validTime.slice(0, 16).replace('T', ' ');
-  expect(time.textContent).toContain(`Point: ${stamp(0)} UTC · Map: unavailable`);
+  const clocks = (point: number, map: number | null) => formatPointMapTimes(
+    { validTime: published.frames[point]!.validTime, offsetMinutes: longitudeOffsetHours(-117.25) * 60 },
+    map === null ? null : { validTime: published.frames[map]!.validTime, offsetMinutes: -new Date().getTimezoneOffset() }
+  );
+  expect(time.textContent).toBe(clocks(0, null));
   const first = sourceId();
   map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
-  expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
+  expect(time.textContent).toBe(clocks(0, 0));
   await selectFrame(1);
   const pending = [...map().layers.keys()].find(id => id !== first)!;
-  expect(time.textContent).toBe(`Point: ${stamp(1)} UTC · Map: ${stamp(0)} UTC`);
+  expect(time.textContent).toBe(clocks(1, 0));
   map().emit('error', { sourceId: pending });
   expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
-  expect(time.textContent).toBe(`Point: ${stamp(1)} UTC · Map: ${stamp(0)} UTC`);
+  expect(time.textContent).toBe(clocks(1, 0));
   expect(map().getSource(first)).toBeDefined();
   await selectFrame(2);
   const replacement = [...map().layers.keys()].find(id => id !== first)!;
-  expect(time.textContent).toBe(`Point: ${stamp(2)} UTC · Map: ${stamp(0)} UTC`);
+  expect(time.textContent).toBe(clocks(2, 0));
   map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
-  expect(time.textContent).toBe(`Point and map: ${stamp(2)} UTC`);
+  expect(time.textContent).toBe(clocks(2, 2));
   const previous = new URL(win.href);
   previous.searchParams.set('t', published.frames[0].validTime);
   win.href = previous.href;
   win.dispatchEvent(new Event('popstate'));
-  expect(time.textContent).toBe(`Point: ${stamp(0)} UTC · Map: ${stamp(2)} UTC`);
+  expect(time.textContent).toBe(clocks(0, 2));
   await Promise.resolve();
   const restored = [...map().layers.keys()].find(id => id !== replacement)!;
   map().emit('sourcedata', { sourceId: restored, tile: {} }); map().emit('render'); map().emit('render');
-  expect(time.textContent).toBe(`Point and map: ${stamp(0)} UTC`);
+  expect(time.textContent).toBe(clocks(0, 0));
 });
 
 it('hides precip-rate in preview while keeping future non-lift layers and km/mi unit switching', async () => {
@@ -1635,15 +1661,7 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
   expect(windStatuses.at(-1)).toBe('ready');
 });
 
-it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point-wind in Local timezone', async () => {
-  const OriginalDTF = Intl.DateTimeFormat;
-  vi.stubGlobal('Intl', {
-    ...Intl,
-    DateTimeFormat: Object.assign(function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
-      const inst = new OriginalDTF(...args);
-      return args.length ? inst : { ...inst, resolvedOptions: () => ({ ...inst.resolvedOptions(), timeZone: 'Asia/Yerevan' }) };
-    }, OriginalDTF)
-  });
+it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point wind at the clicked longitude', async () => {
   deferWind = true;
   win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';
   await start();
@@ -1655,13 +1673,7 @@ it('persists wind URL param only as an explicit override, preserves stored hidde
   map().emit('click', { lngLat: { lat: 40.18, lng: 44.51 } });
   await vi.waitFor(() => expect(ui('point-wind').textContent).toContain('UTC'));
   const frameIso = manifest.frames.find(f => f.id === windLoads[0]!.frame)!.validTime;
-  expect(ui('point-wind').textContent).toBe(`Map wind · ${frameIso.slice(0, 16).replace('T', ' ')} UTC · 18 km/h`);
-
-  timelineToggleTz?.();
-  const yerevanParts = Object.fromEntries(new OriginalDTF('en-CA', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'Asia/Yerevan'
-  }).formatToParts(Date.parse(frameIso)).map(p => [p.type, p.value]));
-  expect(ui('point-wind').textContent).toBe(`Map wind · ${yerevanParts.year}-${yerevanParts.month}-${yerevanParts.day} ${yerevanParts.hour}:${yerevanParts.minute} Local · 18 km/h`);
+  expect(ui('point-wind').textContent).toBe(`Map wind · ${formatPlaceTime(Date.parse(frameIso), longitudeOffsetHours(44.51) * 60, 'stamp')} · 18 km/h`);
 
   windChange({ ...windState, visible: false });
   expect(new URL(win.href).searchParams.get('wind')).toBe('0');

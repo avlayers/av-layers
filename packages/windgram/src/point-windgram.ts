@@ -1,4 +1,4 @@
-import { formatMapLiftCell, hasNativeProfiles, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/client';
+import { formatMapLiftCell, formatPointMapTimes, hasNativeProfiles, longitudeOffsetHours, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/client';
 import { mountWindgram, type WindgramMount } from './dom.ts';
 import { panelStyles } from './panel-styles.ts';
 import { renderPointSeries } from './scalar-point.ts';
@@ -24,10 +24,11 @@ export interface PointWindgramOptions {
   readonly unitSystem: UnitSystem;
   readonly totalFrames?: number;
   readonly loading?: boolean;
+  readonly mapOffsetMinutes?: number;
   onFrame(id: string): void;
 }
 
-type Update = (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean) => void;
+type Update = (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean, mapOffsetMinutes?: number) => void;
 type FrameRef = { readonly id: string; readonly validTime: string };
 type DayHour = { readonly id: string; readonly validAt: string };
 type PointWindgramInput = Pick<PointSeries, 'frames'>;
@@ -151,6 +152,7 @@ function createPointWindgram(
   container.replaceChildren(section);
 
   let units: UnitSystem = options.unitSystem;
+  let mapOffsetMinutes = options.mapOffsetMinutes ?? longitudeOffsetHours(options.point.lon) * 60;
   let loading = options.loading ?? false;
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
@@ -234,10 +236,11 @@ function createPointWindgram(
     mounted?.setMode(inspectionMode);
   });
 
-  const update: Update = (frameId, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading) => {
+  const update: Update = (frameId, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = mapOffsetMinutes) => {
     if (disposed) return;
     const timeZone = data.forecast.site.timeZone;
     units = nextUnits;
+    if (typeof nextMapOffset === 'number') mapOffsetMinutes = nextMapOffset;
     loading = nextLoading;
     selectedFrameId = frameId;
     mapFrameId = nextMapFrameId;
@@ -246,10 +249,11 @@ function createPointWindgram(
     const loadedFrame = frameId === null ? undefined : data.loaded.get(frameId);
     const pointFrame = loadedFrame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
-    const utc = (value: string) => `${value.slice(0, 10)} ${value.slice(11, 16)} UTC`;
-    time.textContent = pointFrame && pointFrame.id !== mapFrameId
-      ? `Point: ${utc(pointFrame.validTime)} · Map: ${mapFrame ? utc(mapFrame.validTime) : 'unavailable'}`
-      : pointFrame ? `Point and map: ${utc(pointFrame.validTime)}` : 'Point time unavailable';
+    const pointOffset = longitudeOffsetHours(options.point.lon) * 60;
+    time.textContent = formatPointMapTimes(
+      pointFrame ? { validTime: pointFrame.validTime, offsetMinutes: pointOffset } : null,
+      mapFrame ? { validTime: mapFrame.validTime, offsetMinutes: mapOffsetMinutes } : null
+    );
     time.hidden = !pointFrame || pointFrame.id === mapFrameId;
 
     const index = data.frames.findIndex(frame => frame.id === selectedFrameId);
@@ -312,8 +316,9 @@ function createPointWindgram(
   const refresh = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions) => {
     data = derive(nextInput, nextOptions);
     onFrame = nextOptions.onFrame;
+    if (typeof nextOptions.mapOffsetMinutes === 'number') mapOffsetMinutes = nextOptions.mapOffsetMinutes;
     syncDayButtons();
-    update(nextOptions.frameId, nextOptions.unitSystem, nextOptions.mapFrameId, nextOptions.loading);
+    update(nextOptions.frameId, nextOptions.unitSystem, nextOptions.mapFrameId, nextOptions.loading, mapOffsetMinutes);
   };
 
   syncDayButtons();

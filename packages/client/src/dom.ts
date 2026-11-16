@@ -7,8 +7,9 @@ function node<K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTM
   return element;
 }
 
-export function renderBuildDiagnostics(container: HTMLElement, build: PinnedBuild): void {
+export function renderBuildDiagnostics(container: HTMLElement, build: PinnedBuild, format?: (label: string, value: string) => string): void {
   container.replaceChildren(...buildDiagnosticRows(build).flatMap(([label, value]) => {
+    value = format ? format(label, value) : value;
     const detail = node('dd');
     if (label === 'Source data' && /^https?:\/\//i.test(value)) {
       const link = node('a', 'View source receipts');

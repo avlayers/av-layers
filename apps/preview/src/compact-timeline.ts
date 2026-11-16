@@ -1,39 +1,31 @@
+import { formatPlaceTime, placeDateKey } from '@av/client';
 import './compact-timeline.css';
 
 export interface TimelineFrame { readonly id: string; readonly validTime: string }
-export interface CompactTimelineOptions { onSelect(index: number): void; timeZone?: string; zoneLabel?: string; onToggleTimeZone?: () => void }
-export interface CompactTimeline { update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void; setTimeZone?(timeZone: string, zoneLabel?: string): void; destroy(): void }
+export interface CompactTimelineOptions { onSelect(index: number): void; offsetMinutes?: number }
+export interface CompactTimeline { update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void; setOffsetMinutes(offsetMinutes: number): void; destroy(): void }
 
 interface LocalTime { day: string; hour: number; minute: number }
 interface DayGroup { day: string; indices: number[] }
 
-const PLAYBACK_INTERVAL_MS = 700, DEFAULT_TIME_ZONE = 'UTC';
-const partsFormatters = new Map<string, Intl.DateTimeFormat>();
+const PLAYBACK_INTERVAL_MS = 700;
+const DATE_LINE: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' };
 
-function localTimeFromMs(ms: number, timeZone: string): LocalTime | null {
-  if (!Number.isFinite(ms)) return null;
-  let fmt = partsFormatters.get(timeZone);
-  if (!fmt) {
-    fmt = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
-    partsFormatters.set(timeZone, fmt);
-  }
-  const v: Record<string, string> = {};
-  for (const p of fmt.formatToParts(new Date(ms))) if (p.type !== 'literal') v[p.type] = p.value;
-  const hour = Number(v.hour) % 24, minute = Number(v.minute);
-  return v.year && v.month && v.day && Number.isFinite(hour) && Number.isFinite(minute) ? { day: `${v.year}-${v.month}-${v.day}`, hour, minute } : null;
+function localTimeFromMs(ms: number, offsetMinutes: number): LocalTime | null {
+  if (!Number.isFinite(ms) || !Number.isFinite(offsetMinutes)) return null;
+  const shifted = new Date(ms + offsetMinutes * 60_000);
+  const day = shifted.toISOString().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? { day, hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() } : null;
 }
 
-export const localDayKey = (validTime: string, timeZone: string): string | null => localTimeFromMs(Date.parse(validTime), timeZone)?.day ?? null;
-export const localTimeParts = (validTime: string, timeZone: string): LocalTime | null => localTimeFromMs(Date.parse(validTime), timeZone);
-
-export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string, hour: number, minute: number): number {
+export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, hour: number, minute: number): number {
   if (!indices.length) return -1;
   const target = hour * 60 + minute;
   let best = indices[0]!, bestDist = Infinity, bestMs = Infinity;
   for (const index of indices) {
     const f = frames[index];
     if (!f) continue;
-    const ms = Date.parse(f.validTime), local = localTimeFromMs(ms, timeZone);
+    const ms = Date.parse(f.validTime), local = localTimeFromMs(ms, offsetMinutes);
     if (!local) continue;
     const dist = Math.abs(local.hour * 60 + local.minute - target);
     if (dist < bestDist || (dist === bestDist && ms < bestMs)) { best = index; bestDist = dist; bestMs = ms; }
@@ -46,21 +38,15 @@ export function scrollLeftForCell(cellLeft: number, cellWidth: number, scrollLef
   return cellLeft < scrollLeft ? cellLeft : cellLeft + cellWidth > scrollLeft + viewportWidth ? cellLeft + cellWidth - viewportWidth : scrollLeft;
 }
 
-function groupDays(frames: readonly TimelineFrame[], timeZone: string): DayGroup[] {
+function groupDays(frames: readonly TimelineFrame[], offsetMinutes: number): DayGroup[] {
   const groups = new Map<string, number[]>();
-  frames.forEach((f, i) => { const d = localDayKey(f.validTime, timeZone); if (d) groups.set(d, [...(groups.get(d) ?? []), i]); });
+  frames.forEach((f, i) => { const d = placeDateKey(Date.parse(f.validTime), offsetMinutes); if (d) groups.set(d, [...(groups.get(d) ?? []), i]); });
   return [...groups.entries()].map(([day, indices]) => ({ day, indices }));
 }
 
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
-  let timeZone = options.timeZone || DEFAULT_TIME_ZONE, zoneText = options.zoneLabel ?? timeZone;
-  const makeFmt = (tz: string) => ({
-    date: new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short', month: 'short', day: 'numeric' }),
-    clock: new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }),
-    cell: new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-  });
-  let fmt = makeFmt(timeZone);
+  let offsetMinutes = Number.isFinite(options.offsetMinutes) ? options.offsetMinutes! : 0;
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] => {
     const n = doc.createElement(tag); n.className = cls; if (text !== undefined) n.textContent = text; return n;
   };
@@ -71,9 +57,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const previousDay = btn('ct-day ct-prev', 'Previous available day', '‹'), nextDay = btn('ct-day ct-next', 'Next available day', '›');
   const dateText = el('div', 'ct-date-text'), dateLine = el('span', 'ct-date-line', 'No forecast time');
   const timeLine = el('span', 'ct-time-line'), timeLabel = el('time', 'ct-time', '--:--');
-  const zoneLabel = options.onToggleTimeZone ? btn('ct-zone ct-zone-toggle', 'Toggle UTC and local time', zoneText) : el('span', 'ct-zone', zoneText);
-  if (options.onToggleTimeZone) zoneLabel.addEventListener('click', () => options.onToggleTimeZone!());
-  timeLine.append(timeLabel, el('span', 'ct-sep', ' · '), zoneLabel); dateText.append(dateLine, timeLine);
+  timeLine.append(timeLabel); dateText.append(dateLine, timeLine);
   dateBlock.append(previousDay, dateText, nextDay);
 
   const play = btn('ct-play', 'Play forecast'), playGlyph = el('span', 'ct-play-glyph');
@@ -87,13 +71,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   let selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
 
   const controlsDisabled = () => disabled || !frames.length;
-  const dayPosition = () => selectedIndex < 0 ? -1 : days.findIndex(g => g.day === localDayKey(frames[selectedIndex]!.validTime, timeZone));
+  const dayPosition = () => selectedIndex < 0 ? -1 : days.findIndex(g => g.day === placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes));
+  const dateLabel = (ms: number) => new Date(ms + offsetMinutes * 60_000).toLocaleDateString('en-US', DATE_LINE);
 
   function rebuild(): void {
     const hadFocus = cells.includes(doc.activeElement as HTMLButtonElement), prevScroll = hours.scrollLeft;
     cells = frames.map((frame, index) => {
-      const ms = Date.parse(frame.validTime), local = localTimeFromMs(ms, timeZone), ok = Number.isFinite(ms);
-      const cell = btn('ct-hour', `${ok ? fmt.cell.format(new Date(ms)) : 'Unknown date'} at ${ok ? fmt.clock.format(new Date(ms)) : '--:--'} ${zoneText}`);
+      const ms = Date.parse(frame.validTime), local = localTimeFromMs(ms, offsetMinutes), ok = Number.isFinite(ms);
+      const cell = btn('ct-hour', ok ? formatPlaceTime(ms, offsetMinutes, 'stamp') : 'Unknown date');
       cell.setAttribute('role', 'radio'); cell.dataset.index = String(index);
       cell.append(el('span', 'ct-hour-label', local ? String(local.hour).padStart(2, '0') : '--'));
       cell.addEventListener('click', () => select(index, true, false));
@@ -119,9 +104,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!frame || !Number.isFinite(ms)) {
       dateLine.textContent = 'No forecast time'; timeLabel.textContent = '--:--'; timeLabel.removeAttribute('dateTime');
     } else {
-      dateLine.textContent = fmt.date.format(new Date(ms)); timeLabel.textContent = fmt.clock.format(new Date(ms)); timeLabel.setAttribute('dateTime', frame.validTime);
+      dateLine.textContent = dateLabel(ms); timeLabel.textContent = formatPlaceTime(ms, offsetMinutes, 'clock'); timeLabel.setAttribute('dateTime', frame.validTime);
     }
-    zoneLabel.textContent = zoneText; zoneLabel.setAttribute('title', timeZone);
     const off = controlsDisabled(), pos = dayPosition(), playing = timer !== null;
     play.disabled = off; hours.setAttribute('aria-disabled', String(off));
     for (const c of cells) c.disabled = off;
@@ -141,8 +125,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const stopPlayback = () => { if (timer !== null) { clearInterval(timer); timer = null; } if (!destroyed) render(); };
   const moveDay = (dir: number) => {
     const pos = dayPosition(), target = pos >= 0 ? days[pos + dir] : undefined, cur = frames[selectedIndex];
-    const local = cur ? localTimeFromMs(Date.parse(cur.validTime), timeZone) : null;
-    if (target && local) select(nearestFrameIndexForDay(frames, target.indices, timeZone, local.hour, local.minute), true, false);
+    const local = cur ? localTimeFromMs(Date.parse(cur.validTime), offsetMinutes) : null;
+    if (target && local) select(nearestFrameIndexForDay(frames, target.indices, offsetMinutes, local.hour, local.minute), true, false);
   };
   previousDay.addEventListener('click', () => moveDay(-1));
   nextDay.addEventListener('click', () => moveDay(1));
@@ -177,17 +161,15 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
       const changed = frames.length !== nextFrames.length || frames.some((f, i) => f.id !== nextFrames[i]!.id || f.validTime !== nextFrames[i]!.validTime);
-      frames = nextFrames.slice(); days = groupDays(frames, timeZone);
+      frames = nextFrames.slice(); days = groupDays(frames, offsetMinutes);
       selectedIndex = frames.findIndex(f => f.id === selectedFrame); disabled = nextDisabled;
       if (changed) rebuild();
       render();
       if (controlsDisabled()) stopPlayback();
     },
-    setTimeZone(nextZone: string, nextLabel?: string) {
-      if (destroyed) return;
-      const resolved = nextZone || DEFAULT_TIME_ZONE, label = nextLabel ?? resolved;
-      if (resolved === timeZone && label === zoneText) return;
-      timeZone = resolved; zoneText = label; fmt = makeFmt(timeZone); days = groupDays(frames, timeZone);
+    setOffsetMinutes(next: number) {
+      if (destroyed || !Number.isFinite(next) || next === offsetMinutes) return;
+      offsetMinutes = next; days = groupDays(frames, offsetMinutes);
       rebuild(); render();
     },
     destroy() {
