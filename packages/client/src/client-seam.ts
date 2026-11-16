@@ -68,9 +68,8 @@ function featureCollection(lines: GeographicPoint[][], label: string) {
   };
 }
 
-const lineLayout = { 'line-cap': 'butt', 'line-join': 'miter' };
-const haloLayer = { id: SEAM_HALO_ID, type: 'line', source: SEAM_SOURCE_ID, layout: lineLayout, paint: { 'line-color': '#1c2430', 'line-opacity': 0.45, 'line-width': 2.5 } };
-const dashLayer = { id: SEAM_LINE_ID, type: 'line', source: SEAM_SOURCE_ID, layout: lineLayout, paint: { 'line-color': '#f4f7f8', 'line-width': 1.25, 'line-dasharray': [2, 2] } };
+const haloLayer = { id: SEAM_HALO_ID, type: 'line', source: SEAM_SOURCE_ID, paint: { 'line-color': '#1c2430', 'line-opacity': 0.45, 'line-width': 2.5 } };
+const dashLayer = { id: SEAM_LINE_ID, type: 'line', source: SEAM_SOURCE_ID, paint: { 'line-color': '#f4f7f8', 'line-width': 1.25, 'line-dasharray': [2, 2] } };
 const labelLayer = {
   id: SEAM_LABEL_ID, type: 'symbol', source: SEAM_SOURCE_ID,
   layout: {

@@ -251,16 +251,17 @@ export function viewportTiles(bounds: { west: number; south: number; east: numbe
   return tiles;
 }
 
-/** True when a drawn edge meets the viewport, including a segment shifted across the antimeridian. */
+/** True when a drawn edge meets the viewport, including another world copy of that edge. */
 export function outlineMeetsView(lines: readonly { lat: number; lon: number }[][], bounds: { west: number; south: number; east: number; north: number }): boolean {
   if (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || !(bounds.north > bounds.south)) return false;
   const east = bounds.east < bounds.west ? bounds.east + 360 : bounds.east;
   if (!(east > bounds.west)) return false;
-  const hits = (x1: number, y1: number, x2: number, y2: number) => segmentMeets(x1, y1, x2, y2, bounds.west, bounds.south, east, bounds.north);
+  const viewMid = (bounds.west + east) / 2;
   for (const line of lines) for (let index = 1; index < line.length; index += 1) {
     const start = line[index - 1]!, end = line[index]!;
     if (![start.lat, start.lon, end.lat, end.lon].every(Number.isFinite)) continue;
-    if (hits(start.lon, start.lat, end.lon, end.lat) || hits(start.lon + 360, start.lat, end.lon + 360, end.lat)) return true;
+    const shift = 360 * Math.round((viewMid - (start.lon + end.lon) / 2) / 360);
+    if (segmentMeets(start.lon + shift, start.lat, end.lon + shift, end.lat, bounds.west, bounds.south, east, bounds.north)) return true;
   }
   return false;
 }

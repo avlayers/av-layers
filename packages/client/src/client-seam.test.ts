@@ -18,6 +18,7 @@ it('counts an endpoint and a dateline-shifted segment, and ignores a ring that o
   expect(outlineMeetsView(edge, { west: 4, south: 9, east: 6, north: 11 })).toBe(true);
   expect(outlineMeetsView(edge, { west: 1, south: 1, east: 2, north: 2 })).toBe(false);
   expect(outlineMeetsView([[{ lat: 0, lon: -179 }, { lat: 0, lon: -175 }]], { west: 170, south: -1, east: -170, north: 1 })).toBe(true);
+  expect(outlineMeetsView(coverageParallels([-180, -55, 180, 65]), { west: -250, south: 60, east: -220, north: 70 })).toBe(true);
   const icon = seamLines(getProduct('icon-eu')!.grid, [-23.5, 29.5, 62.5, 70.5]);
   expect(outlineMeetsView(icon, { west: 0, south: 40, east: 10, north: 50 })).toBe(false);
   expect(outlineMeetsView(icon, { west: 60, south: 28, east: 64, north: 32 })).toBe(true);

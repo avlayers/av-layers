@@ -187,7 +187,8 @@ export function gridOutline(grid: Grid): GeographicPoint[][] {
   if (!isValidGridGeometry(grid) || grid.wrapLongitude) return [];
   const geometry = prepareGridGeometry(grid);
   const width = grid.width - 1, height = grid.height - 1;
-  const step = grid.kind === 'lambert-conformal' ? Math.max(1, Math.floor(48_000 / Math.abs(grid.dxM))) : Math.max(width, height, 1);
+  // Lambert visits every cell. A coarser step can cross a null cell and still look continuous.
+  const step = grid.kind === 'lambert-conformal' ? 1 : Math.max(width, height, 1);
   const lines: GeographicPoint[][] = [];
   let current: GeographicPoint[] = [], broke = false;
   const commit = (split: boolean) => {
@@ -197,6 +198,8 @@ export function gridOutline(grid: Grid): GeographicPoint[][] {
   };
   const add = (x: number, y: number) => {
     const point = geometry.gridToGeographic(x, y);
+    // Unwrapped longitude keeps a short antimeridian crossing in one segment.
+    if (point && grid.kind === 'regular-latlon') point.lon = grid.lon0 + x * grid.dx;
     if (!point) { commit(true); return; }
     const previous = current.at(-1);
     if (previous && Math.abs(point.lon - previous.lon) > 180) commit(true);
