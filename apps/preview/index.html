@@ -28,9 +28,10 @@
       </button>
       <p id="location-status" class="sr-only" role="status"></p>
       <div id="wind-controls"></div>
-      <p id="distance-scale" aria-label="Map scale"></p>
       <div id="map-controls">
-        <aside id="legend" class="ribbon" hidden>
+        <div id="map-dock">
+          <p id="distance-scale" aria-label="Map scale"></p>
+          <aside id="legend" class="ribbon" hidden>
           <div id="lift-controls"><span id="lift-units">Lift m</span>
           <div id="reference" role="group" aria-label="Lift reference">
             <button id="ref-agl" type="button" class="ref">AGL</button>
@@ -51,14 +52,15 @@
           </details>
           </div>
           <div id="legend-body"></div>
-        </aside>
-        <footer id="timebar">
+          </aside>
+          <footer id="timebar">
           <div id="compact-timeline"></div>
           <input id="time" class="sr-only" type="range" min="0" max="0" step="1" value="0" aria-label="Forecast time" tabindex="-1" />
           <p id="timestamp" class="sr-only">No frame selected</p>
           <p id="frame-status" role="status" aria-live="polite">Loading forecast…</p>
           <p id="timeline-status" class="sr-only" hidden></p>
-        </footer>
+          </footer>
+        </div>
       </div>
       <p id="horizon-notice" class="toast" role="status" hidden></p>
       <p id="tile-error" class="toast error" role="alert" hidden></p>

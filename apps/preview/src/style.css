@@ -56,7 +56,9 @@ html, body, #app { margin: 0; height: 100%; }
 @keyframes location-ring { to { transform: scale(1.7); opacity: 0; } }
 @keyframes location-search { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .location-pulse::after, #locate[aria-busy="true"] svg { animation: none; } }
-#distance-scale { position: absolute; z-index: 1; left: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); margin: 0; border: 1px solid #555; border-top: 0; padding: 0 3px 1px; background: #ffffffb8; font-size: 9px; text-align: center; }
+#map-controls > #map-dock { position: relative; display: flex; flex: 0 1 auto; align-items: flex-end; gap: 8px; width: max-content; max-width: 100%; pointer-events: none; }
+#map-dock > * { pointer-events: auto; }
+#distance-scale { position: absolute; z-index: 1; left: 0; bottom: calc(100% + 6px); margin: 0; border: 1px solid #555; border-top: 0; padding: 0 3px 1px; background: #ffffffb8; font-size: 9px; text-align: center; }
 
 button, #opacity-label { font: 13px/1 ui-sans-serif, system-ui, sans-serif; }
 .model-button, .ref { border: 0; background: transparent; color: #1c2430; padding: 9px 12px; cursor: pointer; }
@@ -176,7 +178,7 @@ a { color: #1c6b8a; }
 @media (max-width: 720px) {
   #map-controls { flex-wrap: wrap; justify-content: flex-start; }
   .ribbon { flex-basis: 248px; }
+  #map-controls > #map-dock { flex-wrap: wrap; width: 100%; }
   #timebar { flex: 1 0 100%; max-width: none; height: 50px; }
-  #distance-scale { bottom: calc(132px + env(safe-area-inset-bottom)); }
   #legend:not([hidden]) ~ #timebar #frame-status { bottom: calc(100% + 66px); }
 }

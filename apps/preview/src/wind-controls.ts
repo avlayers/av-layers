@@ -142,7 +142,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   function renderStatus(): void {
     attr(root, { 'data-status': status, 'data-quality': overview ? 'overview' : 'detail' });
     trigger.setAttribute('aria-busy', String(state.visible && status === 'loading'));
-    const text = status !== 'ready' ? STATUS_LABELS[status] : overview ? 'Overview wind' : '';
+    const text = status !== 'ready' ? STATUS_LABELS[status] : '';
     statusLine.textContent = text; statusLine.hidden = !state.visible || !text;
   }
 

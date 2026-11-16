@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import {
   createCompactTimeline,
   nearestFrameIndexForDay,
-  scrollLeftForCell,
+  scrollLeftForDay,
   type TimelineFrame
 } from './compact-timeline';
 
@@ -30,7 +30,9 @@ class Element extends EventTarget {
   tabIndex = -1;
   disabled = false;
   scrollLeft = 0;
+  scrollWidth = 0;
   clientWidth = 0;
+  style: Record<string, string> = {};
   offsetLeft = 0;
   offsetWidth = 36;
   getBoundingClientRect(): { left: number } { return { left: this.offsetLeft - (this.parentNode?.scrollLeft ?? 0) }; }
@@ -130,11 +132,12 @@ it('chooses the nearest frame on a target day and keeps ties stable', () => {
   expect(nearestFrameIndexForDay(tied, [0, 1], 0, 12, 0)).toBe(0);
 });
 
-it('keeps a cell fully visible without scrolling the page', () => {
-  expect(scrollLeftForCell(100, 30, 0, 90)).toBe(40);
-  expect(scrollLeftForCell(10, 30, 40, 90)).toBe(10);
-  expect(scrollLeftForCell(50, 30, 40, 90)).toBe(40);
-  expect(scrollLeftForCell(50, 30, 40, 0)).toBe(40);
+it('centers the selected day and keeps the selected hour visible', () => {
+  expect(scrollLeftForDay(120, 80, 140, 36, 100, 400, 0)).toBe(110);
+  expect(scrollLeftForDay(0, 400, 0, 36, 100, 500, 20)).toBe(0);
+  expect(scrollLeftForDay(0, 400, 360, 36, 100, 500, 0)).toBe(328);
+  expect(scrollLeftForDay(300, 36, 300, 36, 100, 436, 0)).toBe(268);
+  expect(scrollLeftForDay(50, 30, 50, 30, 0, 80, 40)).toBe(40);
 });
 
 it('renders published sparse frames in UTC by default', () => {
@@ -302,12 +305,13 @@ it('disables controls and does not start playback when disabled', () => {
   timeline.destroy();
 });
 
-it('reveals the selected cell by scrolling whole cells', () => {
+it('centers the selected day and clamps when the strip cannot reach the middle', () => {
   const { host, timeline } = setup();
   timeline.update(frames, 'a');
   const root = host.children[0]!;
   const list = byClass(root, 'ct-hours');
   list.clientWidth = 72;
+  list.scrollWidth = 108;
   list.offsetLeft = 172;
   for (const [index, cell] of cells(root).entries()) {
     cell.offsetLeft = list.offsetLeft + index * 36;
@@ -315,6 +319,18 @@ it('reveals the selected cell by scrolling whole cells', () => {
   }
   key(list, 'End');
   expect(list.scrollLeft).toBe(36);
+  list.scrollWidth = 200;
+  key(list, 'End');
+  expect(list.scrollLeft).toBe(54);
+  list.scrollLeft = 80;
+  timeline.update(frames, 'c');
+  expect(list.scrollLeft).toBe(80);
+  key(list, 'ArrowLeft');
+  list.scrollLeft = 80;
+  timeline.update(frames, 'b');
+  expect(list.scrollLeft).toBe(80);
+  timeline.update([frames[0]!, { ...frames[1]!, validTime: '2026-11-13T22:00:00Z' }, frames[2]!], 'b');
+  expect(list.scrollLeft).not.toBe(80);
   key(list, 'Home');
   expect(list.scrollLeft).toBe(0);
   timeline.destroy();
