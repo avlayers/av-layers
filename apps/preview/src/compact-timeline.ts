@@ -22,7 +22,6 @@ interface DayGroup { day: string; indices: number[] }
 
 const PLAYBACK_INTERVAL_MS = 700;
 const DAY_MS = 86_400_000;
-const PLACE_EPSILON_DEG = 0.25;
 const NIGHT = '#1c3358';
 const DAWN = '#e8893a';
 const DAYLIGHT = '#f6e27a';
@@ -249,6 +248,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       button.dataset.day = group.day;
       button.addEventListener('click', () => {
         if (button.disabled || controlsDisabled() || !group.indices.length) return;
+        if (timer !== null) stopPlayback();
         const current = selectedIndex >= 0 ? frames[selectedIndex] : undefined;
         const local = current ? localTimeFromMs(Date.parse(current.validTime), offsetMinutes) : null;
         select(nearestFrameIndexForDay(frames, group.indices, offsetMinutes, local?.hour ?? 12, local?.minute ?? 0), 'push', false);
@@ -356,6 +356,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   track.addEventListener('pointerdown', event => {
     const pointer = event as PointerEvent;
     if ((pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
+    if (timer !== null) stopPlayback();
     gestureStart = selectedIndex;
     activePointer = pointer.pointerId ?? 1;
     if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
@@ -370,24 +371,27 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
     activePointer = null;
-    if (!destroyed && gestureStart >= 0 && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
+    if (!destroyed && !controlsDisabled() && gestureStart >= 0 && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
     gestureStart = -1;
   };
   track.addEventListener('pointermove', movePointer);
   track.addEventListener('pointerup', releasePointer);
   track.addEventListener('pointercancel', releasePointer);
-  track.addEventListener('keydown', event => {
+  const stepFromKey = (event: Event) => {
     const key = (event as KeyboardEvent).key;
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
     event.preventDefault();
     if (controlsDisabled()) return;
+    if (timer !== null) stopPlayback();
     const current = selectedIndex < 0 ? 0 : selectedIndex;
     const index = key === 'Home' ? 0
       : key === 'End' ? frames.length - 1
         : key === 'ArrowLeft' || key === 'ArrowUp' ? Math.max(0, current - 1)
           : Math.min(frames.length - 1, selectedIndex < 0 ? 0 : current + 1);
     select(index, 'replace', true);
-  });
+  };
+  track.addEventListener('keydown', stepFromKey);
+  root.addEventListener('keydown', event => { if (event.target !== track) stepFromKey(event); });
 
   const onVisibility = () => { if (doc.visibilityState === 'hidden') stopPlayback(); };
   doc.addEventListener('visibilitychange', onVisibility);
@@ -418,7 +422,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     },
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude) || Math.abs(nextLatitude) > 90) return;
-      if (hasCenter && Math.abs(nextLatitude - latitude) < PLACE_EPSILON_DEG && Math.abs(nextLongitude - longitude) < PLACE_EPSILON_DEG) return;
+      if (hasCenter && nextLatitude.toFixed(2) === latitude.toFixed(2) && nextLongitude.toFixed(2) === longitude.toFixed(2)) return;
       latitude = nextLatitude;
       longitude = nextLongitude;
       hasCenter = true;

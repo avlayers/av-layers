@@ -193,7 +193,7 @@ it('keeps the neutral ribbon until a map center arrives and ignores a small pan'
   timeline.setMapCenter(37.54, -77.46);
   expect(ribbon.style.background).toContain('#e8893a');
   const painted = ribbon.style.background;
-  timeline.setMapCenter(37.6, -77.3);
+  timeline.setMapCenter(37.541, -77.464);
   expect(ribbon.style.background).toBe(painted);
   expect(byClass(host.children[0]!, 'ct-time').textContent).toBe('21:00 (21:00 UTC)');
   expect(onSelect).not.toHaveBeenCalled();
@@ -346,5 +346,47 @@ it('disables controls and does not start playback when disabled', () => {
   timeline.update(frames, 'b', false);
   expect(play.disabled).toBe(false);
   expect(byClass(root, 'ct-track').tabIndex).toBe(0);
+  timeline.destroy();
+});
+
+it('pauses playback when the user scrubs, picks a day, or uses arrow keys', () => {
+  vi.useFakeTimers();
+  const { host, onSelect, timeline } = setup();
+  timeline.update(frames, 'a');
+  const root = host.children[0]!;
+  const play = byClass(root, 'ct-play');
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 100;
+  click(play);
+  pointer(track, 'pointerdown', 10);
+  expect(play.getAttribute('aria-pressed')).toBe('false');
+  const calls = onSelect.mock.calls.length;
+  vi.advanceTimersByTime(2100);
+  expect(onSelect.mock.calls.length).toBe(calls);
+
+  click(play);
+  key(root, 'ArrowRight');
+  expect(play.getAttribute('aria-pressed')).toBe('false');
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+  vi.advanceTimersByTime(2100);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+
+  click(play);
+  click(named(root, 'ct-day')[1]!);
+  expect(play.getAttribute('aria-pressed')).toBe('false');
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.destroy();
+});
+
+it('does not record a scrub when the timeline is disabled before release', () => {
+  const { host, onSelect, timeline } = setup();
+  timeline.update(frames, 'a');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetWidth = 100;
+  pointer(track, 'pointerdown', 90);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'none');
+  timeline.update(frames, 'b', true);
+  pointer(track, 'pointerup', 90);
+  expect(onSelect.mock.calls.some(call => call[1] === 'push')).toBe(false);
   timeline.destroy();
 });
