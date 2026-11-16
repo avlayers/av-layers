@@ -1,8 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   createCompactTimeline,
-  localDayKey,
-  localTimeParts,
   nearestFrameIndexForDay,
   scrollLeftForCell,
   type TimelineFrame
@@ -74,11 +72,11 @@ class Document extends EventTarget {
 
 let doc: Document;
 
-function setup(timeZone?: string) {
+function setup(offsetMinutes?: number) {
   doc = new Document();
   const host = doc.createElement('div');
   const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, timeZone });
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, offsetMinutes });
   return { host, onSelect, timeline };
 }
 
@@ -117,15 +115,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it('derives local date and time through IANA timezones across DST', () => {
-  expect(localDayKey('2026-03-08T06:30:00Z', 'America/New_York')).toBe('2026-03-08');
-  expect(localTimeParts('2026-03-08T06:30:00Z', 'America/New_York')).toMatchObject({ hour: 1, minute: 30 });
-  expect(localTimeParts('2026-03-08T07:30:00Z', 'America/New_York')).toMatchObject({ hour: 3, minute: 30 });
-  expect(localTimeParts('2026-11-01T05:30:00Z', 'America/New_York')).toMatchObject({ hour: 1, minute: 30 });
-  expect(localTimeParts('2026-11-01T06:30:00Z', 'America/New_York')).toMatchObject({ hour: 1, minute: 30 });
-  expect(localDayKey('2026-11-01T06:30:00Z', 'UTC')).toBe('2026-11-01');
-});
-
 it('chooses the nearest frame on a target day and keeps ties stable', () => {
   const day: TimelineFrame[] = [
     { id: 'a', validTime: '2026-11-14T03:00:00Z' },
@@ -133,12 +122,12 @@ it('chooses the nearest frame on a target day and keeps ties stable', () => {
     { id: 'c', validTime: '2026-11-14T16:00:00Z' },
     { id: 'd', validTime: '2026-11-14T22:00:00Z' }
   ];
-  expect(nearestFrameIndexForDay(day, [0, 1, 2, 3], 'UTC', 12, 0)).toBe(1);
+  expect(nearestFrameIndexForDay(day, [0, 1, 2, 3], 0, 12, 0)).toBe(1);
   const tied: TimelineFrame[] = [
     { id: 'a', validTime: '2026-11-14T10:00:00Z' },
     { id: 'b', validTime: '2026-11-14T14:00:00Z' }
   ];
-  expect(nearestFrameIndexForDay(tied, [0, 1], 'UTC', 12, 0)).toBe(0);
+  expect(nearestFrameIndexForDay(tied, [0, 1], 0, 12, 0)).toBe(0);
 });
 
 it('keeps a cell fully visible without scrolling the page', () => {
@@ -153,8 +142,10 @@ it('renders published sparse frames in UTC by default', () => {
   timeline.update(frames, 'b');
   const root = host.children[0]!;
   expect(byClass(root, 'ct-date-line').textContent).toBe('Fri, Nov 13');
-  expect(byClass(root, 'ct-time').textContent).toBe('21:00');
-  expect(byClass(root, 'ct-zone').textContent).toBe('UTC');
+  expect(byClass(root, 'ct-time').textContent).toBe('21:00 (21:00 UTC)');
+  expect(cells(root).map(cell => cell.getAttribute('aria-label'))).toEqual([
+    'Nov 13, 18:00 (18:00 UTC)', 'Nov 13, 21:00 (21:00 UTC)', 'Nov 14, 00:00 (00:00 UTC)'
+  ]);
   expect(cells(root).map(cell => byClass(cell, 'ct-hour-label').textContent)).toEqual(['18', '21', '00']);
   expect(cells(root).map(cell => cell.getAttribute('aria-checked'))).toEqual(['false', 'true', 'false']);
   expect(cells(root).map(cell => cell.tabIndex)).toEqual([-1, 0, -1]);
@@ -171,14 +162,22 @@ it('selects numeric frame ids only by identity', () => {
   timeline.destroy();
 });
 
-it('uses the explicit IANA timezone for labels and selection', () => {
-  const { host, timeline } = setup('America/New_York');
+it('labels hours from a fixed offset and regroups without changing the selected frame', () => {
+  vi.useFakeTimers();
+  const { host, onSelect, timeline } = setup(-300);
   timeline.update(frames, 'a');
   const root = host.children[0]!;
   expect(byClass(root, 'ct-date-line').textContent).toBe('Fri, Nov 13');
-  expect(byClass(root, 'ct-time').textContent).toBe('13:00');
-  expect(byClass(root, 'ct-zone').textContent).toBe('America/New_York');
+  expect(byClass(root, 'ct-time').textContent).toBe('13:00 (18:00 UTC)');
   expect(cells(root).map(cell => byClass(cell, 'ct-hour-label').textContent)).toEqual(['13', '16', '19']);
+  const play = byClass(root, 'ct-play');
+  click(play);
+  timeline.setOffsetMinutes(0);
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(cells(root).map(cell => byClass(cell, 'ct-hour-label').textContent)).toEqual(['18', '21', '00']);
+  expect(play.getAttribute('aria-pressed')).toBe('true');
+  vi.advanceTimersByTime(700);
+  expect(onSelect).toHaveBeenLastCalledWith(1);
   timeline.destroy();
 });
 
@@ -207,7 +206,7 @@ it('selects frames by click and keyboard with one group tab stop', () => {
 });
 
 it('moves to the nearest hour on adjacent days and disables boundary arrows', () => {
-  const { host, onSelect, timeline } = setup('America/New_York');
+  const { host, onSelect, timeline } = setup(-300);
   const days: TimelineFrame[] = [
     { id: 'd1a', validTime: '2026-11-13T05:00:00Z' },
     { id: 'd1b', validTime: '2026-11-13T12:00:00Z' },
@@ -225,13 +224,13 @@ it('moves to the nearest hour on adjacent days and disables boundary arrows', ()
   click(next);
   expect(onSelect).toHaveBeenLastCalledWith(4);
   expect(byClass(root, 'ct-date-line').textContent).toBe('Sat, Nov 14');
-  expect(byClass(root, 'ct-time').textContent).toBe('15:00');
+  expect(byClass(root, 'ct-time').textContent).toBe('15:00 (20:00 UTC)');
   expect(previous.disabled).toBe(false);
   expect(next.disabled).toBe(true);
 
   click(previous);
   expect(onSelect).toHaveBeenLastCalledWith(2);
-  expect(byClass(root, 'ct-time').textContent).toBe('13:00');
+  expect(byClass(root, 'ct-time').textContent).toBe('13:00 (18:00 UTC)');
   timeline.destroy();
 });
 

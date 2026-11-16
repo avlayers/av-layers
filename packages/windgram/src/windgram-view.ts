@@ -1,5 +1,6 @@
 // Assemble time, altitude and profile geometry for a Windgram day.
 
+import { longitudeOffsetHours } from '@av/client';
 import { windFromComponents } from '@av/soaring';
 import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast } from './internal-meteo.ts';
 import type { WindgramLayout, WindgramHour as PublicHour, WindgramOptions } from './scene-types.ts';
@@ -76,6 +77,7 @@ export interface WindgramView extends WindgramLayout {
   capeLabel: string;
   precipitationSemantics: 'instantRate' | 'windowMeanRate' | null;
   sourceHours: readonly ProfileHour[];
+  offsetMinutes: number;
   presentation: WindgramPresentation;
   anchors: HeightAnchor[];
   hours: WindgramHour[];
@@ -132,6 +134,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     capeLabel: profile.semantics.capeLabel ?? 'CAPE',
     precipitationSemantics: profile.semantics.precipitation,
     sourceHours: hours,
+    offsetMinutes: Number.isFinite(profile.site.longitude) ? longitudeOffsetHours(profile.site.longitude) * 60 : 0,
     timeZone: options.timeZone,
     anchors,
     sampling,

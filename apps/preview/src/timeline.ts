@@ -1,17 +1,3 @@
-export function dayKey(utcMs: number, offsetMinutes: number): string {
-  return new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 10);
-}
-
-export function clockLabel(validMs: number, offsetMinutes: number): string {
-  const local = new Date(validMs + offsetMinutes * 60_000);
-  const utc = new Date(validMs);
-  const hhmm = (date: Date) => `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`;
-  const sign = offsetMinutes >= 0 ? '+' : '−';
-  const abs = Math.abs(offsetMinutes);
-  const zone = `UTC${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
-  return `${hhmm(local)} longitude time (${zone}) · ${hhmm(utc)} UTC`;
-}
-
 export function frameIndexFor(frames: readonly { validTime: string }[], requested: string | null, now: number): number {
   if (requested) {
     const exact = frames.findIndex(frame => frame.validTime === requested);
