@@ -208,6 +208,23 @@ export function buildDayScale(width: number, bounds: NightBounds | null, selecte
   return { linear: false, width, segments: parts };
 }
 
+function scaleAtWidth(scale: DayScale, width: number): DayScale {
+  if (!(width > 0) || Math.abs(scale.width - width) < 0.5) return scale;
+  const parts = scale.segments.map(part => ({ ...part }));
+  const folded = parts.filter(part => part.folded).length;
+  const openMinutes = parts.filter(part => !part.folded).reduce((sum, part) => sum + part.end - part.start, 0);
+  if (scale.linear || openMinutes <= 0 || width < folded * MOON_PX + 80) return linearScale(width);
+  const openWidth = width - folded * MOON_PX;
+  let x = 0;
+  for (const part of parts) {
+    const span = part.folded ? MOON_PX : openWidth * (part.end - part.start) / openMinutes;
+    part.x0 = x;
+    part.x1 = x + span;
+    x += span;
+  }
+  return { linear: false, width, segments: parts };
+}
+
 export function minuteToX(scale: DayScale, minute: number): number {
   const clamped = Math.min(DAY_MINUTES, Math.max(0, minute));
   const segment = scale.segments.find(part => clamped < part.end) ?? scale.segments.at(-1);
@@ -340,8 +357,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   }
 
   function currentScale(width: number): DayScale {
-    if (gestureScale && Math.abs(gestureScale.width - width) < 0.5) return gestureScale;
-    return liveScale(width);
+    if (!gestureScale) return liveScale(width);
+    gestureScale = scaleAtWidth(gestureScale, width);
+    return gestureScale;
   }
 
   function placeMinute(scale: DayScale, minute: number): number {
@@ -604,6 +622,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   return {
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
+      gestureScale = null;
       frames = nextFrames.slice();
       selectedIndex = frames.findIndex(frame => frame.id === selectedFrame);
       disabled = nextDisabled;
@@ -613,6 +632,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     },
     setOffsetMinutes(next: number) {
       if (destroyed || !Number.isFinite(next) || next === offsetMinutes) return;
+      gestureScale = null;
       offsetMinutes = next;
       solarCache.clear();
       syncDays();
@@ -624,6 +644,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude) || Math.abs(nextLatitude) > 90) return;
       if (hasCenter && nextLatitude.toFixed(2) === latitude.toFixed(2) && nextLongitude.toFixed(2) === longitude.toFixed(2)) return;
+      gestureScale = null;
       latitude = nextLatitude;
       longitude = nextLongitude;
       hasCenter = true;
