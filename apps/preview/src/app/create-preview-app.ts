@@ -11,7 +11,7 @@ import { previewQuery, previewUrl } from '../features/navigation/url-state';
 import type { PreviewCommands } from './preview-commands';
 import type { PreviewInitialState, PreviewStore } from '../stores/app-store';
 import { createPreviewStore, emptyOverlay } from '../stores/app-store';
-import { activeLayer, committedFrame, LIFT_LAYERS, layerOptions, resumeModelFor, selectedFrameFor, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
+import { activeLayer, committedFrame, LIFT_LAYERS, layerOptions, resumeModelFor, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createMap, maplibregl } from '../features/map/map-controller';
 import { RasterOverlay } from '../features/raster/raster-overlay';
 import { CoverageSeam } from '../features/map/coverage-seam';
@@ -119,7 +119,11 @@ export function createPreviewApp(): PreviewApp {
   const aborted = () => lifecycle.signal.aborted;
   const displayedRaster = () => {
     const displayed = view.overlay.value.displayed;
-    return displayed && displayed.build === build() ? { build: displayed.build, frame: displayed.frame } : null;
+    return displayed ? { build: displayed.build, frame: displayed.frame } : null;
+  };
+  const displayedPointFrame = () => {
+    const displayed = view.overlay.value.displayed;
+    return displayed && displayed.build === build() ? displayed.frame : null;
   };
 
   const showError = (message: string): void => { writer.notices({ error: message }); };
@@ -374,7 +378,8 @@ export function createPreviewApp(): PreviewApp {
     const state = previewQuery(window.location.search, offlineFixture), change = ++historyRevision;
     applyingHistory = change;
     try {
-      writer.intent({ reference: state.reference, customLayer: visibleCustomLayer(state.layer) });
+      const requestedLayer = visibleCustomLayer(state.layer);
+      writer.intent({ reference: state.reference, customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)) });
       const nextUnits: UnitSystem = state.units ?? 'metric';
       if (nextUnits !== intent().units) commandSetUnits(nextUnits);
       const nextVisible = state.windVisible ?? (preferences.wind()?.visible ?? true);
@@ -393,8 +398,9 @@ export function createPreviewApp(): PreviewApp {
       if (intent().model === AUTO_MODEL_ID) { await loadAuto(); return; }
       if (build()) {
         const previous = selectedFrame();
-        const frame = selectedFrameFor(build()!, state.validTime, Date.now());
-        if (frame !== previous) { timeline?.pause(); writer.forecast({ selectedFrame: frame }); pointSession?.followMapFrame(frame); }
+        const committed = committedFrame(build()!, state.validTime, Date.now());
+        if (committed.id !== previous) { timeline?.pause(); writer.forecast({ selectedFrame: committed.id }); pointSession?.followMapFrame(committed.id); }
+        if (committed.validTime) writer.intent({ requestedTime: committed.validTime });
         updateTimeUi(); updateOverlay();
       }
     } finally { if (applyingHistory === change) applyingHistory = null; }
@@ -551,7 +557,7 @@ export function createPreviewApp(): PreviewApp {
         getUnits: () => intent().units,
         getHorizon: () => intent().pointHorizon,
         getMapOffset: () => mapOffsetMinutes,
-        getDisplayedFrame: () => displayedRaster()?.frame ?? null,
+        getDisplayedFrame: displayedPointFrame,
         ensureLive,
         pauseTimeline: () => timeline?.pause(),
         selectFrameById: id => {

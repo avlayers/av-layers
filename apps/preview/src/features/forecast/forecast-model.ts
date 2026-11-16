@@ -16,6 +16,9 @@ export const isLiftLayer = (layer: LayerId): boolean => layer === 'usable-lift-a
 export const visibleCustomLayer = (layer: LayerId | null): LayerId | null =>
   layer && !HIDDEN_PREVIEW_LAYERS.has(layer) ? layer : null;
 
+export const restoredCustomLayer = (build: PinnedBuild | null, requested: LayerId | null, changingModel: boolean): LayerId | null =>
+  changingModel ? requested : validatedCustomLayer(build, requested);
+
 export const resumeModelFor = (pending: ModelId | null, requested: ModelId): ModelId | null =>
   pending ?? (requested === 'auto' ? requested : null);
 

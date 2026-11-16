@@ -64,6 +64,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
         options.pauseTimeline();
         options.selectFrameById(id);
         updateSelection();
+        options.publish.changed();
       }
     });
     host.tabIndex = 0;

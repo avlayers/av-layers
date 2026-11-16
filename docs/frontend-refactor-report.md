@@ -45,6 +45,15 @@ The adversarial review found and this branch fixes:
 
 New focused tests cover wind acquisition/display status, height replacement, committed frame selection, custom-layer validation, point-only selection, resume policy and the scheduler queue bound.
 
+Second review round fixes:
+
+- Wind reconciliation receives the actual displayed raster, including a previous build, so a new model's wind waits for its own raster.
+- Numeric acquisition failure stays `unavailable`; an unusable retained field is cleared, while a genuinely retained source remains recoverable.
+- Point-only selection publishes the changed selection so dependent map-wind readouts clear.
+- Same-model history restoration commits the clamped frame's valid time and validates a restored layer against the loaded build.
+- Direct destruction disposes every distinct owned wind source, including retirement entries.
+- Tests now cover failed acquisition, cross-build alignment, point selection notification, history frame normalization and same-model layer validation.
+
 ## Verification
 
 Environment: macOS arm64, pnpm 10.34.9, repository Node 22.23.4, Chromium via Playwright.
@@ -53,14 +62,14 @@ Environment: macOS arm64, pnpm 10.34.9, repository Node 22.23.4, Chromium via Pl
 | --- | --- |
 | `pnpm lint` | pass |
 | `pnpm typecheck` | pass (root, preview TSX, API) |
-| `pnpm test:frontend` | 33 files, 576 tests pass |
+| `pnpm test:frontend` | 33 files, 581 tests pass |
 | `pnpm verify` | pass |
 | `pnpm smoke:wind --fixture` | 12/12 checks pass, 0 page errors |
 | `pnpm bench:preview --scenario smoke` | pass, 0 stale-frame paints |
 | `git diff --check` | pass |
 
 Baseline frontend unit suite: 28 files, 639 tests, median 4.65 s (runs 5.80/4.62/4.65).
-Candidate: 33 files, 576 tests, median 4.26 s (runs 4.26/4.23/4.28).
+Candidate: 33 files, 581 tests, median 4.27 s (runs 4.27/4.30/4.24).
 
 ## Compressed assets
 
@@ -68,7 +77,7 @@ Measured with zlib gzip, matching the build checker.
 
 | Asset | Base | Candidate |
 | --- | ---: | ---: |
-| Startup JS | 391,946 B | 399,682 B |
+| Startup JS | 391,946 B | 399,802 B |
 | Lazy JS (aggregate) | 27,336 B | 31,757 B |
 | Worker JS | 150,556 B | 150,556 B |
 | CSS | 14,641 B | 15,212 B |
@@ -78,16 +87,16 @@ The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 
 ## Source size
 
-Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,051 lines (+890).
-Authored preview tests: 5,145 → 3,542 lines (−1,603). `main.test.ts` was replaced by
+Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,078 lines (+917).
+Authored preview tests: 5,145 → 3,615 lines (−1,530). `main.test.ts` was replaced by
 focused store, URL, timeline-model and scheduler tests plus the real-browser smoke.
 
 ## Limitations
 
 - Runtime lines increased. The fewer-lines goal is not met.
-- Test count fell from 639 to 576. The removed bootstrap fake-DOM suite is replaced by focused controller/store tests plus the browser smoke; BFCache, history-race and replacement-failure transitions are still not covered at the composition boundary.
+- Test count fell from 639 to 581. The removed bootstrap fake-DOM suite is replaced by focused controller/store tests plus the browser smoke; some composition-boundary transitions still lack direct coverage.
 - The timeline and wind-controls DOM remain imperative; the plan's full TSX conversion for those two areas is not complete.
 - Only the transparency/smoke benchmark scenario was run after the migration. The paired 3× baseline/candidate 40-frame and 250 ms cold timing comparison was not run, so rendering-performance parity is unverified beyond the smoke result.
 - Physical iOS/Android devices and Firefox/WebKit were not tested. The existing smoke is Chromium-only.
-- The startup and lazy gates pass with limited headroom (about 318 B and 243 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
-- `create-preview-app.ts` still owns forecast discovery, history application and expiry. The extracted browser lifecycle and feature sessions reduce, but do not finish, that split.
+- The startup and lazy gates pass with limited headroom (about 198 B and 243 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
+- `create-preview-app.ts` is 735 lines and still owns forecast discovery, history application and expiry. The extracted browser lifecycle and feature sessions reduce, but do not finish, that split.

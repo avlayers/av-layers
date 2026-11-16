@@ -50,5 +50,6 @@ describe('point session selection beyond the map horizon', () => {
     expect(test.series.frameId).toBe('f027');
     expect(test.options.selectFrameById).toHaveBeenCalledWith('f027');
     expect(update).toHaveBeenLastCalledWith('f027', 'metric', 'f024', undefined, 0);
+    expect(test.options.publish.changed).toHaveBeenCalled();
   });
 });

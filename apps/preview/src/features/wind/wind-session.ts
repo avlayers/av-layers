@@ -67,6 +67,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
   let windPrefetchBlocked = false, windDisplayed = false, windLoading = false, height: WindHeight = 'surface';
   let fillTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
+  let acquireStatus: WindStatus = 'unavailable';
   const windHeld = new Map<string, WindRequest>();
   const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
 
@@ -126,9 +127,17 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     else if (!sameBuild && windDisplayed) { field.clear(); windDisplayed = false; installedWind = null; publish.displayed(false); }
     publish.quality(!!(aligned && windView?.source.isOverview));
     if (aligned) setStatus('ready');
-    else if (windView) setStatus(options.replacementFailed() ? 'unavailable' : 'loading');
+    else if (acquireStatus === 'unavailable' || options.replacementFailed()) setStatus('unavailable');
+    else if (acquireStatus === 'loading' || windView) setStatus('loading');
     publish.reservation();
     publish.pointWind();
+  }
+
+  function dropUnusable(): void {
+    const previous = windView;
+    windView = null; installedWind = null; windDisplayed = false;
+    field.clear(); publish.displayed(false);
+    if (previous && !retained(previous)) previous.source.dispose();
   }
 
   function cancelRequest(): void {
@@ -146,6 +155,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     releasePrefetch(); dropRetired(); cancelRequest();
     if (installedWind && installedWind !== windView) installedWind.source.dispose();
     windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
+    acquireStatus = 'unavailable';
     field.clear(); publish.quality(false); publish.displayed(false); setStatus('unavailable'); publish.reservation(); publish.pointWind();
   }
 
@@ -217,12 +227,19 @@ export function createWindSession(options: WindSessionOptions): WindSession {
             if (previous === installedWind) installedWind = null;
             if (!retained(previous)) previous.source.dispose();
           }
-          setStatus('ready');
-        } else setStatus(retain() ? 'ready' : status);
+          acquireStatus = 'ready'; setStatus('ready');
+        } else {
+          const keep = retain();
+          acquireStatus = keep ? 'ready' : 'unavailable';
+          setStatus(acquireStatus);
+          if (!keep) dropUnusable();
+        }
         reconcile();
         if (status === 'ready') scheduleFill();
       } catch {
-        if (windRequest === request && !request.controller.signal.aborted) { setStatus(retain() ? 'ready' : 'unavailable'); reconcile(); }
+        if (windRequest === request && !request.controller.signal.aborted) {
+          const keep = retain(); acquireStatus = keep ? 'ready' : 'unavailable'; setStatus(acquireStatus); if (!keep) dropUnusable(); reconcile();
+        }
       } finally {
         if (windRequest === request) windRequest = null;
         if (!retained(request)) request.source.dispose();
@@ -244,7 +261,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     const covered = (candidate: WindView) => (candidate.source.isOverview === false || map.getZoom() <= candidate.zoom) && coversBounds(candidate.bounds, camera);
     for (const [frame, held] of windHeld) if (held.build !== build || !covered(held)) { windHeld.delete(frame); if (!retained(held)) held.source.dispose(); }
     if (identity && identity.build === build && identity.frame === selectedFrame && covered(identity)) {
-      cancelRequest(); setStatus('ready'); reconcile(); scheduleFill(); return;
+      cancelRequest(); acquireStatus = 'ready'; setStatus('ready'); reconcile(); scheduleFill(); return;
     }
     cancelFill();
     if (windPrefetch && !covered(windPrefetch)) releasePrefetch();
@@ -262,6 +279,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (key === windRequest?.key) return;
     if (identity && identity.build !== build) clear();
     else cancelRequest();
+    acquireStatus = 'loading';
     setStatus('loading');
     const request: WindRequest = {
       zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, core: camera, key, controller: new AbortController(),
@@ -281,12 +299,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (destroyed) return;
       destroyed = true;
       cancelFill();
-      for (const [view, timer] of retiring) { clearTimeout(timer); if (!retained(view)) view.source.dispose(); }
+      const owned = new Set<WindView>([...retiring.keys(), ...windHeld.values(), windView, installedWind, windRequest, windPrefetch].filter((view): view is WindView => Boolean(view)));
+      for (const timer of retiring.values()) clearTimeout(timer);
       retiring.clear();
-      for (const view of windHeld.values()) view.source.dispose();
+      for (const view of owned) view.source.dispose();
       windHeld.clear();
-      windView?.source.dispose(); installedWind?.source.dispose();
-      windRequest?.source.dispose(); windPrefetch?.source.dispose();
       windView = installedWind = windRequest = windPrefetch = null;
       options.scheduler.dispose();
     }
