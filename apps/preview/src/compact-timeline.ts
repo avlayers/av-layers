@@ -84,7 +84,7 @@ export function dayHatchFractions(frames: readonly TimelineFrame[], indices: rea
   const minutes = localMinutes(frames, indices, offsetMinutes);
   if (!minutes.length) return [];
   const segments: { start: number; end: number }[] = [];
-  const push = (from: number, to: number) => { if (to - from >= 0.004) segments.push({ start: from, end: to }); };
+  const push = (from: number, to: number) => { if (to > from) segments.push({ start: from, end: to }); };
   push(0, minutes[0]! / 1440);
   for (let i = 1; i < minutes.length; i++) {
     const previous = minutes[i - 1]!, next = minutes[i]!;

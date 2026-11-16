@@ -172,6 +172,12 @@ it('keeps each hour one hour wide and leaves wider gaps unselectable', () => {
     [21 / 24, 1]
   ]);
   expect(dayHatchFractions(frames, [], 0)).toEqual([]);
+  const tight: TimelineFrame[] = [
+    { id: 'noon', validTime: '2026-11-14T12:00:00Z' },
+    { id: 'later', validTime: '2026-11-14T13:05:00Z' }
+  ];
+  expect(dayHatchFractions(tight, [0, 1], 0)).toContainEqual({ start: 750 / 1440, end: 755 / 1440 });
+  expect(frameIndexForDayFraction(tight, [0, 1], 0, 752 / 1440)).toBe(-1);
 });
 
 it('places a morning color stop for a map-center local day', () => {

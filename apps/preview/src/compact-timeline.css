@@ -31,7 +31,7 @@
 .ct-days::-webkit-scrollbar { display: none; }
 
 .compact-timeline .ct-day {
-  flex: 1 0 auto;
+  flex: 0 0 auto;
   min-width: 44px;
   height: 16px;
   margin: 0;
@@ -87,7 +87,7 @@
 
 .ct-track {
   position: relative;
-  flex: 1 1 96px;
+  flex: 1 1 auto;
   min-width: 96px;
   overflow: hidden;
   border-radius: 4px;
@@ -116,10 +116,10 @@
   pointer-events: none;
 }
 .ct-tick {
-  color: #1c2430;
+  color: #16324f;
   font-size: 9px;
   font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 1px 0 #fff, 0 -1px 0 #fff;
 }
 .ct-playhead {
   z-index: 3;
