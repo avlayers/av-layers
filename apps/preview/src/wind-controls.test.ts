@@ -316,6 +316,10 @@ describe('wind controls', () => {
     expect(status.textContent).toBe('Wind unavailable');
     controls.setStatus('ready');
     expect(status.hidden).toBe(true);
+    controls.setQuality(true);
+    expect(status.hidden).toBe(true);
+    expect(status.textContent).toBe('');
+    expect(root.getAttribute('data-quality')).toBe('overview');
     controls.destroy();
   });
 

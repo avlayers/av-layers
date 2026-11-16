@@ -33,9 +33,14 @@ export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indice
   return best;
 }
 
-export function scrollLeftForCell(cellLeft: number, cellWidth: number, scrollLeft: number, viewportWidth: number): number {
-  if (viewportWidth <= 0 || cellWidth <= 0) return scrollLeft;
-  return cellLeft < scrollLeft ? cellLeft : cellLeft + cellWidth > scrollLeft + viewportWidth ? cellLeft + cellWidth - viewportWidth : scrollLeft;
+export function scrollLeftForDay(dayLeft: number, dayWidth: number, cellLeft: number, cellWidth: number, viewportWidth: number, contentWidth: number, scrollLeft: number): number {
+  if (viewportWidth <= 0 || dayWidth <= 0 || cellWidth <= 0) return scrollLeft;
+  const anchorLeft = dayWidth <= viewportWidth ? dayLeft : cellLeft;
+  const anchorWidth = dayWidth <= viewportWidth ? dayWidth : cellWidth;
+  let next = anchorLeft + anchorWidth / 2 - viewportWidth / 2;
+  if (cellLeft < next) next = cellLeft;
+  else if (cellLeft + cellWidth > next + viewportWidth) next = cellLeft + cellWidth - viewportWidth;
+  return Math.min(Math.max(0, contentWidth - viewportWidth), Math.max(0, next));
 }
 
 function groupDays(frames: readonly TimelineFrame[], offsetMinutes: number): DayGroup[] {
@@ -54,7 +59,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   const root = el('div', 'compact-timeline'), dateBlock = el('div', 'ct-date');
   root.setAttribute('role', 'group'); root.setAttribute('aria-label', 'Forecast timeline');
-  const previousDay = btn('ct-day ct-prev', 'Previous available day', '‹'), nextDay = btn('ct-day ct-next', 'Next available day', '›');
+  const dayButton = (cls: string, label: string, direction: 'prev' | 'next') => {
+    const b = el('button', cls);
+    b.type = 'button';
+    b.setAttribute('aria-label', label);
+    b.innerHTML = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="${direction === 'prev' ? 'M10 3 5 8l5 5' : 'M6 3l5 5-5 5'}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    return b;
+  };
+  const previousDay = dayButton('ct-day ct-prev', 'Previous available day', 'prev'), nextDay = dayButton('ct-day ct-next', 'Next available day', 'next');
   const dateText = el('div', 'ct-date-text'), dateLine = el('span', 'ct-date-line', 'No forecast time');
   const timeLine = el('span', 'ct-time-line'), timeLabel = el('time', 'ct-time', '--:--');
   timeLine.append(timeLabel); dateText.append(dateLine, timeLine);
@@ -69,6 +81,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], cells: HTMLButtonElement[] = [];
   let selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
+  let placedFor = '', placedScroll = -1;
 
   const controlsDisabled = () => disabled || !frames.length;
   const dayPosition = () => selectedIndex < 0 ? -1 : days.findIndex(g => g.day === placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes));
@@ -88,6 +101,25 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (hadFocus) (cells[selectedIndex] ?? cells[0])?.focus({ preventScroll: true });
   }
 
+  function placeSelection(): void {
+    const active = cells[selectedIndex];
+    if (!active || hours.clientWidth <= 0) return;
+    const signature = `${selectedIndex}:${offsetMinutes}:${Math.round(hours.clientWidth)}:${frames.length}:${frames[0]?.validTime}:${frames[frames.length - 1]?.validTime}`;
+    if (signature === placedFor && Math.abs(hours.scrollLeft - placedScroll) > 1) return;
+    const day = placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes);
+    const group = day ? cells.filter((_, index) => placeDateKey(Date.parse(frames[index]!.validTime), offsetMinutes) === day) : [active];
+    const first = group[0] ?? active, last = group[group.length - 1] ?? active;
+    const pad = Math.max(0, Math.round((hours.clientWidth - active.offsetWidth) / 2));
+    hours.style.paddingLeft = `${pad}px`;
+    hours.style.paddingRight = `${pad}px`;
+    const origin = hours.getBoundingClientRect().left;
+    const leftOf = (cell: HTMLButtonElement) => cell.getBoundingClientRect().left - origin + hours.scrollLeft;
+    const dayLeft = leftOf(first), cellLeft = leftOf(active);
+    hours.scrollLeft = scrollLeftForDay(dayLeft, leftOf(last) + last.offsetWidth - dayLeft, cellLeft, active.offsetWidth, hours.clientWidth, hours.scrollWidth, hours.scrollLeft);
+    placedFor = signature;
+    placedScroll = hours.scrollLeft;
+  }
+
   function render(): void {
     cells.forEach((cell, i) => {
       const sel = i === selectedIndex;
@@ -95,11 +127,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       cell.setAttribute('aria-checked', String(sel));
       cell.tabIndex = sel || (selectedIndex < 0 && i === 0) ? 0 : -1;
     });
-    const activeCell = cells[selectedIndex];
-    if (activeCell) {
-      const left = activeCell.getBoundingClientRect().left - hours.getBoundingClientRect().left + hours.scrollLeft;
-      hours.scrollLeft = scrollLeftForCell(left, activeCell.offsetWidth, hours.scrollLeft, hours.clientWidth);
-    }
+    placeSelection();
     const frame = selectedIndex >= 0 ? frames[selectedIndex] : undefined, ms = frame ? Date.parse(frame.validTime) : NaN;
     if (!frame || !Number.isFinite(ms)) {
       dateLine.textContent = 'No forecast time'; timeLabel.textContent = '--:--'; timeLabel.removeAttribute('dateTime');
@@ -156,6 +184,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const onVisibility = () => { if (doc.visibilityState === 'hidden') stopPlayback(); };
   doc.addEventListener('visibilitychange', onVisibility);
   doc.defaultView?.addEventListener('pagehide', stopPlayback);
+  const resizeObserver = typeof ResizeObserver === 'function' && hours.nodeType === 1 ? new ResizeObserver(() => { if (!destroyed) placeSelection(); }) : null;
+  resizeObserver?.observe(hours, { box: 'border-box' });
 
   return {
     update(nextFrames, selectedFrame, nextDisabled = false) {
@@ -174,7 +204,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     },
     destroy() {
       if (destroyed) return;
-      destroyed = true; stopPlayback();
+      destroyed = true; stopPlayback(); resizeObserver?.disconnect();
       doc.removeEventListener('visibilitychange', onVisibility);
       doc.defaultView?.removeEventListener('pagehide', stopPlayback);
       root.remove();
