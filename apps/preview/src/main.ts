@@ -386,7 +386,9 @@ function startPreview(lifecycle: AbortController): void {
           if (!(error instanceof RangeError) || request.controller.signal.aborted) throw error;
           releasePrefetch();
           if (!windView || retain()) throw error;
-          if (windView.frame !== request.frame) { windPrefetchBlocked = true; setWindStatus('ready'); reconcileWind(); return; }
+          windPrefetchBlocked = true;
+          for (const held of windHeld.values()) if (held !== windView) held.source.dispose();
+          windHeld.clear();
           dropRetired(); windView.source.dispose(); windView = null; windDisplayed = false; installedWind = null; windOverlay.clear();
           status = await request.source.load({ ...request, signal: request.controller.signal });
         }

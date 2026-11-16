@@ -1838,6 +1838,23 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
   expect(windStatuses.at(-1)).toBe('ready');
 });
 
+it('drops the previous wind hour when the selected frame exceeds the numeric budget', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const painted = windFields.at(-1);
+  failOnceBudget = true;
+  await selectFrame(1);
+  await vi.waitFor(() => expect(windLoads.length).toBeGreaterThan(1));
+  expect(windFields.at(-1)).toBeNull();
+  windResolve!('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  expect(windFields.at(-1)).not.toBe(painted);
+  expect(windStatuses.at(-1)).toBe('ready');
+});
+
 it('draws a coverage parallel that meets the view and removes it when the view leaves', async () => {
   await start();
   expect(map().sources.has('av-seam')).toBe(false);
