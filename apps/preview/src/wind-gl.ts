@@ -37,7 +37,7 @@ void main(){v_side=0.;int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corne
  gl_Position=vec4(ndc*clip.w,clip.zw);}`;
 const WHITE = `#version 300 es
 precision mediump float;in float v_side;out vec4 o;
-void main(){float a=.94*smoothstep(1.,.2,abs(v_side));o=vec4(vec3(a),a);}`;
+void main(){float a=.94*(1.-smoothstep(.2,1.,abs(v_side)));o=vec4(vec3(a),a);}`;
 const BLIT = `#version 300 es
 precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
 void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
@@ -154,7 +154,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     const savedVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
     const savedCull = gl.isEnabled(gl.CULL_FACE);
     const savedMask = gl.getParameter(gl.COLOR_WRITEMASK) as [boolean, boolean, boolean, boolean];
-    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND); gl.colorMask(true, true, true, true);
     gl.bindFramebuffer(gl.FRAMEBUFFER, stateFbo[1 - index]); gl.viewport(0, 0, STATE, STATE);
     gl.useProgram(update);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
@@ -182,11 +182,11 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trails[trail]);
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset || jump ? 0 : sx, reset || jump ? 0 : sy);
-    // Matches the canvas trail fade so the history buffer holds the streak.
+    // Same coefficient as the canvas trail fade.
     gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 0.9));
     draw(blit, gl.TRIANGLES, 3);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.CULL_FACE); gl.colorMask(true, true, true, true);
+    gl.disable(gl.CULL_FACE);
     gl.useProgram(lines);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, states[1 - index]);
