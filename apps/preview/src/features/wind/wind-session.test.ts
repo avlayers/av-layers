@@ -36,7 +36,7 @@ function harness() {
   const statuses: WindStatus[] = [], qualities: boolean[] = [], fields: WindHeight[] = [], modes: string[] = [], displayed: boolean[] = [];
   let build = buildA, frame = framesA[0]!.id, height: WindHeight = 'surface', failed = false;
   let displayedRaster: { build: typeof buildA; frame: string } | null = null;
-  let bounds = { west: -110, east: -90, south: 30, north: 45 };
+  let bounds = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
   const clear = vi.fn(), prepared = vi.fn();
   const session = createWindSession({
     apiBaseUrl: 'https://api.test', lowMemory: false,
@@ -171,3 +171,4 @@ it('installs the prepared lattice before a warmed selection commits', async () =
   expect(test.prepared.mock.calls.at(-1)![0]).toMatchObject({ height: 'surface', size: 1 });
   test.session.destroy();
 });
+

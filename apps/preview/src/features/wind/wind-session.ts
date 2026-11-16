@@ -4,7 +4,7 @@ import { renderedFrames } from '@av/contracts/publication';
 import { type WindDataCache, type WindPreparedGrid, WindCapacityError, WindDataSource } from '@av/client/wind';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import type { MapBoundsPort, Bounds } from '../map/viewport-policy';
-import { cameraBounds, coversBounds, FOCUS_DWELL_MS, windBounds } from '../map/viewport-policy';
+import { boundsAreaKm2, cameraBounds, coversBounds, createViewportWarmth, FOCUS_DWELL_MS, windBounds } from '../map/viewport-policy';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
@@ -70,6 +70,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   let acquireStatus: WindStatus = 'unavailable';
   const windHeld = new Map<string, WindRequest>();
   const failures = new Map<string, number>();
+  const warmth = createViewportWarmth();
+  function fullHorizon(): boolean {
+    const bounds = map.getBounds();
+    return warmth.update(boundsAreaKm2([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]));
+  }
   const isCapacity = (error: unknown): boolean => error instanceof WindCapacityError || (error instanceof RangeError && /byte budget/.test(error.message));
   const failureKey = (build: PinnedBuild, frame: string): string => `${build.manifest.buildId}:${frame}`;
   const cooling = (build: PinnedBuild, frame: string): boolean => (failures.get(failureKey(build, frame)) ?? 0) > Date.now();
@@ -184,7 +189,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
 
   function ensurePrefetch(): void {
     const { build, selectedFrame, visible, mapReady, expired, mapFailed } = state();
-    if (destroyed || windPrefetch || options.lowMemory || !visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
+    if (destroyed || windPrefetch || options.lowMemory || !visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed || !fullHorizon()) return;
     const frames = renderedFrames(build.manifest), index = frames.findIndex(frame => frame.id === selectedFrame);
     const frame = frames.map(item => item.id)
       .filter(id => id !== selectedFrame && id !== windView?.frame && id !== windRequest?.frame && !windHeld.has(id) && !cooling(build, id))
