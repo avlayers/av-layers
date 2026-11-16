@@ -471,7 +471,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         if (layout.key) assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
         if (layout.key && layout.attribution) assert(!intersects(layout.key, layout.attribution), `${width}px key overlaps attribution`);
         assert(layout.unit !== null && layout.unit.scrollWidth <= layout.unit.clientWidth + 1, `${width}px rail unit label is clipped`);
-        assert(layout.timeline.width <= 560, `${width}px timeline width is ${layout.timeline.width}`);
+        const timelineFloor = width >= 721 ? width - 320 : width - 40;
+        assert(layout.timeline.width >= timelineFloor, `${width}px timeline width is ${layout.timeline.width}`);
       }
       await page.setViewportSize({ width: 1200, height: viewportHeight(1200) });
     });
