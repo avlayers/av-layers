@@ -1,6 +1,7 @@
 # Preview frontend refactor report
 
 Base revision: `cc42d75` (the actual execution checkout). Candidate: this branch.
+Preact `10.29.8`, `@preact/signals` `2.11.4`, `@preact/preset-vite` `2.10.6`.
 Implementation: one branch, one PR.
 
 ## What moved
@@ -19,6 +20,23 @@ Implementation: one branch, one PR.
 The compact timeline and wind-controls DOM remain imperative islands mounted into
 stable Preact hosts. This preserves the folded-night gesture model and the
 wind-control preference record while the rest of the UI is Preact-owned.
+
+## Review fixes
+
+The adversarial review found and this branch fixes:
+
+- BFCache now records an interrupted model/Auto lookup and resumes it on `pageshow`.
+- Wind overlay options use the overlay's `style`/`visible`/`paused` keys, so a deep link selecting barbs or hybrid starts correctly.
+- A model change keeps the committed raster visible until replacement succeeds or expires.
+- Point hours outside the map prefix still refresh the chart selection and map-wind readout.
+- Permanent disposal aborts model/Auto requests and guards late continuations.
+- Wind status and quality reach the imperative wind controls; an aligned field reports ready after a frame change.
+- An interrupted point request keeps the card and its message visible.
+- Startup keeps the browser clock offset until the map leaves home.
+- Switching to Auto clears a pending explicit model.
+- Concurrent map clicks share one point-session initialization.
+- Wind disposal releases sources held only by retirement timers.
+- The lazy point and wind-control modules share one emitted chunk to reduce gzip overhead.
 
 ## Verification
 
@@ -43,17 +61,17 @@ Measured with zlib gzip, matching the build checker.
 
 | Asset | Base | Candidate |
 | --- | ---: | ---: |
-| Startup JS | 391,946 B | 399,850 B |
-| Lazy JS (aggregate) | 27,336 B | 31,953 B |
+| Startup JS | 391,946 B | 399,612 B |
+| Lazy JS (aggregate) | 27,336 B | 31,755 B |
 | Worker JS | 150,556 B | 150,556 B |
-| CSS | 14,641 B | 15,203 B |
+| CSS | 14,641 B | 15,212 B |
 | Windy plugin | 97,775 B | 97,775 B |
 
 The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 
 ## Source size
 
-Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,058 lines (+897).
+Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,072 lines (+911).
 Authored preview tests: 5,145 → 3,348 lines (−1,797). `main.test.ts` was replaced by
 focused store, URL, timeline-model and scheduler tests plus the real-browser smoke.
 
@@ -64,4 +82,4 @@ focused store, URL, timeline-model and scheduler tests plus the real-browser smo
 - The timeline and wind-controls DOM remain imperative; the plan's full TSX conversion for those two areas is not complete.
 - Only the transparency/smoke benchmark scenario was run after the migration. The paired 3× baseline/candidate 40-frame and 250 ms cold timing comparison was not run, so rendering-performance parity is unverified beyond the smoke result.
 - Physical iOS/Android devices and Firefox/WebKit were not tested. The existing smoke is Chromium-only.
-- The startup and lazy gates pass with little headroom (about 150 B and 47 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
+- The startup and lazy gates pass with limited headroom (about 388 B and 245 B respectively at the measured zlib sizes). Further startup additions need a matching removal.

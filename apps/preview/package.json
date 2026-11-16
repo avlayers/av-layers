@@ -16,7 +16,7 @@
     "@av/windgram": "workspace:*",
     "@preact/signals": "2.11.4",
     "maplibre-gl": "6.16.0",
-    "preact": "11.2.0"
+    "preact": "10.29.8"
   },
   "devDependencies": {
     "@preact/preset-vite": "2.10.6",

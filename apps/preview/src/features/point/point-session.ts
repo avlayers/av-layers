@@ -33,6 +33,7 @@ export interface PointSessionOptions {
 export interface PointSession {
   open(point: GeoPoint): Promise<void>;
   close(): void;
+  suspend(): void;
   loadRange(): Promise<void>;
   updateSelection(): void;
   followMapFrame(frameId: string | null): void;
@@ -62,6 +63,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
         if (options.getBuild() !== context.build || !options.ensureLive() || !series.selectFrame(context, id)) return;
         options.pauseTimeline();
         options.selectFrameById(id);
+        updateSelection();
       }
     });
     host.tabIndex = 0;
@@ -70,13 +72,17 @@ export function createPointSession(options: PointSessionOptions): PointSession {
     options.publish.changed();
   }
 
-  function close(): void {
+  function suspend(): void {
     series.close();
-    options.publish.busy(false);
-    setStatus('');
-    windgram?.disposePointWindgram(body()!);
+    if (body()) windgram?.disposePointWindgram(body()!);
     body()?.replaceChildren();
     updatePointSeries = selection = null;
+  }
+
+  function close(): void {
+    suspend();
+    options.publish.busy(false);
+    setStatus('');
     options.publish.wind('');
     options.publish.close();
   }
@@ -119,7 +125,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   }
 
   return {
-    open, close, loadRange, updateSelection,
+    open, close, suspend, loadRange, updateSelection,
     followMapFrame(frameId) { series.followMapFrame(frameId); updateSelection(); },
     renderBuildDetails(container, build) { renderBuildDetails(container, build, series.current?.point.lon); },
     get current() { return series.current; },

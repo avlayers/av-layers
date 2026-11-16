@@ -126,7 +126,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (aligned) setField(installedWind && installedWind.build === windView!.build ? 'swap' : 'replace');
     else if (!sameBuild && windDisplayed) { field.clear(); windDisplayed = false; installedWind = null; publish.displayed(false); }
     publish.quality(!!(aligned && windView?.source.isOverview));
-    if (lastStatus === 'ready') setStatus(aligned ? 'ready' : options.replacementFailed() ? 'unavailable' : 'loading');
+    if (aligned) setStatus('ready');
+    else if (lastStatus === 'ready') setStatus(options.replacementFailed() ? 'unavailable' : 'loading');
     publish.reservation();
     publish.pointWind();
   }
@@ -281,7 +282,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (destroyed) return;
       destroyed = true;
       cancelFill();
-      for (const timer of retiring.values()) clearTimeout(timer);
+      for (const [view, timer] of retiring) { clearTimeout(timer); if (!retained(view)) view.source.dispose(); }
       retiring.clear();
       for (const view of windHeld.values()) view.source.dispose();
       windHeld.clear();

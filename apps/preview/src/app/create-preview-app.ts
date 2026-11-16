@@ -94,6 +94,7 @@ export function createPreviewApp(): PreviewApp {
   let startWindControls: () => Promise<void> = async () => {};
   let timeline: CompactTimeline | null = null;
   let pointSession: PointSession | null = null;
+  let pointSessionPromise: Promise<void> | null = null;
   let ensurePointSession: () => Promise<void> = async () => {};
   let locationController: ReturnType<typeof createLocationController> | null = null;
 
@@ -103,7 +104,7 @@ export function createPreviewApp(): PreviewApp {
   let urlReady = false, historyRevision = 0, applyingHistory: number | null = null, opacityCommitted = false;
   let lastControlVisible = initial.intent.windVisible;
   let expiryTimer: number | null = null, disposeExpiry = (): void => {};
-  let loadAbort: AbortController | null = null, autoAbort: AbortController | null = null;
+  let loadAbort: AbortController | null = null, autoAbort: AbortController | null = null, resumeModel: ModelId | null = null;
   let destroyed = false;
   let appRoot: HTMLElement | null = null;
 
@@ -290,7 +291,7 @@ export function createPreviewApp(): PreviewApp {
     if (!build()) writer.notices({ freshness: 'Finding a forecast for this location…' });
     try {
       const next = await resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
-      if (request.signal.aborted || autoAbort !== request || intent().model !== AUTO_MODEL_ID) return;
+      if (destroyed || request.signal.aborted || autoAbort !== request || intent().model !== AUTO_MODEL_ID) return;
       if (next) {
         const current = build();
         if (current?.manifest.model === next.build.manifest.model && current.manifest.buildId === next.build.manifest.buildId) {
@@ -317,10 +318,12 @@ export function createPreviewApp(): PreviewApp {
   }
 
   async function loadModel(model: ModelId, resolved?: AutoForecastSelection): Promise<void> {
-    if (mapFailed() || !map) return;
+    if (mapFailed() || !map || destroyed) return;
+    resumeModel = null;
     windSession?.clear();
     if (model === AUTO_MODEL_ID && !resolved) {
       loadAbort?.abort(); loadAbort = null;
+      writer.forecast({ pendingModel: null });
       writer.intent({ model });
       await loadAuto(); return;
     }
@@ -333,10 +336,10 @@ export function createPreviewApp(): PreviewApp {
     writer.intent({ model });
     writer.forecast({ pendingModel: model, expired: false, build: null, selectedFrame: null, layers: [] });
     writer.notices({ tileError: '', horizon: '', error: '', frameStatus: 'Loading forecast…', freshness: `Loading ${model} latest immutable build…` });
-    syncWindSupport(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
+    syncWindSupport(); closePoint(); updateTimeUi();
     try {
       const next = resolved?.build ?? await api.latest(model, { signal: requestAbort.signal });
-      if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
+      if (destroyed || requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       writer.forecast({ build: next });
       syncWindSupport(); syncLayers();
       const frame = resolved ? resolved.frame.id : selectedFrameFor(next, intent().requestedTime, Date.now());
@@ -497,11 +500,6 @@ export function createPreviewApp(): PreviewApp {
     map = createMap({ container, offlineFixture, camera: startup.camera, deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory });
     const openedAt = map.getCenter();
     home = { lat: openedAt.lat, lng: openedAt.lng };
-    if (!startup.camera) {
-      const initialOffset = Number.isFinite(home.lng) ? longitudeOffsetHours(home.lng) * 60 : browserOffsetMinutes;
-      mapOffsetMinutes = initialOffset;
-      writer.forecast({ offsetMinutes: initialOffset, mapCenter: null });
-    }
 
     overlay = new RasterOverlay(map, apiBaseUrl, intent().opacity, state => {
       writer.overlay(state);
@@ -510,13 +508,13 @@ export function createPreviewApp(): PreviewApp {
     }, rasterScheduler.fetch);
     seam = new CoverageSeam(map);
     windOverlay = new WindOverlay(map);
-    windOverlay.setOptions({ ...intent(), units: intent().units });
+    windOverlay.setOptions({ style: intent().windStyle, visible: intent().windVisible, paused: intent().windPaused, units: intent().units });
 
     const windHost = rootQuery<HTMLElement>('#wind-controls', root);
     if (!windHost) throw new Error('Missing element #wind-controls');
     startWindControls = async () => {
       if (windControls || destroyed) return;
-      const { createWindControls } = await import('../features/wind/wind-controls');
+      const { createWindControls } = await import('../features/lazy');
       if (windControls || destroyed) return;
       windControls = createWindControls(windHost, {
         initial: { style: intent().windStyle, visible: intent().windVisible, height: intent().windHeight },
@@ -524,6 +522,8 @@ export function createPreviewApp(): PreviewApp {
       });
       lastControlVisible = windControls.state.visible;
       windControls.setUnits(intent().units);
+      windControls.setStatus(view.wind.value.status);
+      windControls.setQuality?.(view.wind.value.overview);
       syncWindReservation();
     };
 
@@ -538,9 +538,10 @@ export function createPreviewApp(): PreviewApp {
 
     ensurePointSession = async () => {
       if (pointSession) return;
-      const { createPointSession } = await import('../features/point/point-session');
-      if (destroyed) return;
-      pointSession = createPointSession({
+      pointSessionPromise ??= (async () => {
+        const { createPointSession } = await import('../features/lazy');
+        if (destroyed) return;
+        pointSession = createPointSession({
         api, series: pointSeries,
         body: () => rootQuery<HTMLElement>('#point-body', root),
         getBuild: build,
@@ -564,9 +565,11 @@ export function createPreviewApp(): PreviewApp {
           busy: busy => writer.point({ busy }),
           horizon: (selectable, label) => writer.point({ horizonSelectable: selectable, horizonLabel: label }),
           wind: text => writer.point({ wind: text }),
-          changed: () => updatePointWind()
-        }
-      });
+            changed: () => updatePointWind()
+          }
+        });
+      })();
+      try { await pointSessionPromise; } catch { pointSessionPromise = null; }
     };
 
     windSession = createWindSession({
@@ -574,8 +577,8 @@ export function createPreviewApp(): PreviewApp {
       overlay: { setWindActive: (active, resident) => overlay!.setWindActive(active, resident) },
       field: { setField: (field, mode) => windOverlay!.setField(field, mode), clear: () => windOverlay!.clear() },
       publish: {
-        status: status => writer.wind({ status }),
-        quality: overview => writer.wind({ overview }),
+        status: status => { writer.wind({ status }); windControls?.setStatus(status); },
+        quality: overview => { writer.wind({ overview }); windControls?.setQuality?.(overview); },
         displayed: displayed => writer.wind({ displayed }),
         reservation: syncWindReservation,
         pointWind: updatePointWind
@@ -660,12 +663,13 @@ export function createPreviewApp(): PreviewApp {
 
     function pageHide(event: PageTransitionEvent): void {
       windCache.clear(); windSession?.clear(); locationController?.reset();
+      resumeModel = event.persisted ? (forecast().pendingModel ?? (intent().model === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
       loadAbort?.abort(); autoAbort?.abort();
       const pointInterrupted = event.persisted && pointSession?.pending;
       if (pointInterrupted) {
+        pointSession?.suspend();
         writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' });
-      }
-      if (!event.persisted || pointInterrupted) pointSession?.close();
+      } else if (!event.persisted) pointSession?.close();
       if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
       overlay?.clear(true);
       if (event.persisted) return;
@@ -674,6 +678,7 @@ export function createPreviewApp(): PreviewApp {
 
     function pageShow(event: PageTransitionEvent): void {
       if (!event.persisted) return;
+      if (resumeModel !== null) { const model = resumeModel; resumeModel = null; void loadModel(model); return; }
       if (build() && ensureLive()) {
         updateTimeUi(); updateOverlay(); refreshSeam(); updateFreshness();
         if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
@@ -698,6 +703,7 @@ export function createPreviewApp(): PreviewApp {
   function disposePermanently(): void {
     if (destroyed) return;
     destroyed = true;
+    loadAbort?.abort(); autoAbort?.abort();
     lifecycle.abort();
     disposeExpiry();
     if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }

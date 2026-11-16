@@ -47,7 +47,7 @@ function Legend(props: { build: PinnedBuild | null; layer: LayerId | null; units
           <span id="opacity-readout">{`${Math.round(props.opacity * 100)}%`}</span>
         </label>
         <details id="legend-key" class="ribbon-key">
-          <summary id="legend-key-toggle" aria-label="Map layer key" title="Map layer key">ⓘ</summary>
+          <summary id="legend-key-toggle" aria-label="Map layer key">ⓘ</summary>
           <div class="ribbon-key-body">
             <p id="legend-reference">{model?.reference ?? ''}</p>
             <p id="legend-no-lift">{model?.noLift ?? ''}</p>
@@ -111,7 +111,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         <div class="topbar-row">
           <details id="model-picker">
             <summary id="model-selected" data-model={emblem}>
-              <svg class="model-emblem" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 24 11 8l5 8 5-12 9 20M8 24l5-8 6 8M2 29h28" /></svg>
+              <svg class="model-emblem" viewBox="0 0 32 32" aria-hidden="true"><path d="M2 24 11 8l5 8 5-12 9 20M2 29h28" /></svg>
               <span id="model-name">{name}</span>
             </summary>
             <div id="models" role="toolbar" aria-label="Forecast model">
@@ -154,7 +154,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         </div>
       </header>
       <button
-        id="locate" type="button" aria-label="Go to current location" title="Go to current location"
+        id="locate" type="button" aria-label="Go to current location"
         aria-busy={location.busy} disabled={location.busy || forecast.mapFailed} onClick={commands.locate}
       >
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
@@ -202,7 +202,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
       <section id="point-card" aria-label="Point forecast" hidden={!point.open} aria-busy={point.busy}>
         <div class="point-actions">
           <details id="point-settings">
-            <summary aria-label="Forecast settings" title="Forecast settings">⚙︎</summary>
+            <summary aria-label="Forecast settings">⚙︎</summary>
             <div class="point-settings-body">
               <p id="point-location">{point.location}</p>
               <label id="point-horizon-label" class="point-units" hidden={!point.horizonSelectable}>

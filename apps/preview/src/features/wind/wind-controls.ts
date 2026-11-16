@@ -28,8 +28,8 @@ const stroke = 'fill="none" stroke="currentColor" stroke-width="1.35" stroke-lin
 const eyeBase = '<path d="M1 6s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4Z"/>';
 const ICONS = {
   trails: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M1 8c3-3 5 3 9 0s6 3 9 0M1 12c3-3 5 3 9 0s6 3 9 0"/>'),
-  barbs: svg(20, 16, 20, 16, stroke, '<path d="M5 15 14 2m0 0 3 3m-5 0 3 3"/>'),
-  hybrid: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M1 11c3-3 5 3 9 0s6 3 9 0M11 10 16 3"/>'),
+  barbs: svg(20, 16, 20, 16, stroke, '<path d="M5 15 14 2m0 0 3 3"/>'),
+  hybrid: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M11 10 16 3"/>'),
   eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', eyeBase),
   'eye-off': svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', `${eyeBase}<path d="m2 1 12 10"/>`),
   pause: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1 1h3v10H1zm5 0h3v10H7z"/>'),
@@ -67,8 +67,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   const root = el('div', 'wind-controls'), menu = el('div', 'wind-controls-menu'), trigger = btn('wind-controls-trigger');
   attr(trigger, { 'aria-haspopup': 'dialog', 'aria-controls': 'wind-controls-popup' });
   const triggerGlyph = el('span', 'wind-controls-trigger-glyph'), triggerState = el('span', 'wind-controls-trigger-state');
-  const chevron = el('span', 'wind-controls-chevron'); chevron.setAttribute('aria-hidden', 'true'); chevron.textContent = '▾';
-  trigger.append(triggerGlyph, triggerState, chevron);
+  trigger.append(triggerGlyph, triggerState);
 
   const popup = el('div', 'wind-controls-popup');
   popup.hidden = true; popup.id = 'wind-controls-popup'; attr(popup, { role: 'dialog', 'aria-label': 'Wind display' });
