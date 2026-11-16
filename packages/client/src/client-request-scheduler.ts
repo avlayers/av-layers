@@ -2,7 +2,7 @@ interface SchedulerOptions {
   fetchImpl?: typeof fetch;
   maxActive?: number;
   maxQueued?: number;
-  /** When set, a slot frees at response headers and declared bodies stay under this cap. */
+  /** When set, the concurrency slot frees at headers. Each request reserves 1 MiB until content-length arrives. */
   maxInFlightBytes?: number;
 }
 
@@ -69,9 +69,10 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
       const reason = controller.signal.reason;
       if (delivered) streamController?.error(reason);
       else reject(reason);
-      // Cancellation still owns a slot until the fetch or body releases its resources.
+      // A body-gated request keeps its slot until the fetch or body settles. A byte-budget
+      // request releases its reserve here so a cancel does not keep the cap full.
       if (reader) void cancelReader(reason);
-      else if (!started) finish();
+      else if (!started || maxInFlightBytes !== undefined) finish();
     }
     function externalAbort() { controller.abort(signal?.reason); }
     controller.signal.addEventListener('abort', abort, { once: true });

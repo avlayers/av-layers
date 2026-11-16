@@ -9,9 +9,10 @@ export interface WindGl { setFields(from: WindSampleField | null, to: WindSample
 const STATE = 64, GRID = 128, LAYER = 'av-wind-particles';
 const FULL = `#version 300 es
 out vec2 v_uv;
-void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));v_uv=p*.5;gl_Position=vec4(p*2.-1.,0,1);}`;
+void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vec2 c=p*2.-1.;v_uv=c*.5+.5;gl_Position=vec4(c,0,1);}`;
 const UPDATE = `#version 300 es
-precision highp float;uniform sampler2D u_state,u_a,u_b;uniform vec4 u_bounds;uniform float u_dt,u_zoom,u_mix,u_reset;out vec4 o;
+precision highp float;uniform sampler2D u_state,u_a,u_b;uniform vec4 u_bounds;uniform float u_dt,u_zoom,u_mix,u_reset,u_world;out vec4 o;
+vec2 merc(vec2 p){float r=p.y*.01745329251;return vec2((p.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
 void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
  if(u_reset>0.||s.z<=0.){float n=fract(sin(dot(vec2(p)+s.w,vec2(12.9898,78.233)))*43758.5453);float m=fract(n*91.7);
   o=vec4(mix(u_bounds.x,u_bounds.z,n),mix(u_bounds.y,u_bounds.w,m),1.5+n*2.5,s.w+1.);return;}
@@ -21,20 +22,25 @@ void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
  vec2 w=va&&vb?mix(a.rg,b.rg,u_mix)*200.-100.:(vb?b.rg:a.rg)*200.-100.;
  float speed=length(w),boost=speed>0.&&speed<4.?sqrt(4./speed):1.,c=cos(s.y*.01745329251);
  float sec=u_dt*600.*exp2(9.-u_zoom)*c*boost,lat=s.y+w.y*sec/6371000./.01745329251,lon=s.x+w.x*sec/(6371000.*c)/.01745329251;
- if(abs(lat)>85.){o=vec4(s.xy,0,s.w);return;}o=vec4(lon,lat,s.z-u_dt,s.w);}`;
+ if(abs(lat)>85.){o=vec4(s.xy,0,s.w);return;}
+ vec2 stepPx=(merc(vec2(lon,lat))-merc(s.xy))*u_world;if(dot(stepPx,stepPx)>900.){o=vec4(s.xy,0,s.w);return;}
+ o=vec4(lon,lat,s.z-u_dt,s.w);}`;
 const LINES = `#version 300 es
-uniform sampler2D u_prev,u_curr;uniform mat4 u_matrix;uniform float u_world,u_max;uniform vec2 u_view;
+uniform sampler2D u_prev,u_curr;uniform mat4 u_matrix;uniform float u_world,u_max,u_half;uniform vec2 u_view;out float v_side;
 vec2 mercator(vec2 lonlat){float r=lonlat.y*.01745329251;return vec2((lonlat.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
-void main(){int id=gl_VertexID>>1;ivec2 p=ivec2(id&63,id>>6);vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);
- if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
+void main(){v_side=0.;int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corner:corner==3?2:corner==4?1:3;ivec2 p=ivec2(id&63,id>>6);
+ vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
  vec2 pa=mercator(a.xy),pb=mercator(b.xy);vec4 ca=u_matrix*vec4(pa*u_world,0,1),cb=u_matrix*vec4(pb*u_world,0,1);
- vec2 d=(ca.xy/ca.w-cb.xy/cb.w)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
- vec2 m=(gl_VertexID&1)==0?pa:pb;gl_Position=u_matrix*vec4(m*u_world,0,1);}`;
+ vec2 na=ca.xy/ca.w,nb=cb.xy/cb.w,d=(na-nb)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
+ float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(0.,1.),grow=dir*max(0.,1.2-len)*.5*px;
+ na-=grow;nb+=grow;vec2 n=vec2(-dir.y,dir.x)*u_half*px;v_side=c==1||c==3?1.:-1.;vec4 clip=c>1?cb:ca;vec2 ndc=(c>1?nb:na)+(v_side>0.?n:-n);
+ gl_Position=vec4(ndc*clip.w,clip.zw);}`;
 const WHITE = `#version 300 es
-precision mediump float;out vec4 o;void main(){o=vec4(.95,.95,.95,.95);}`;
+precision mediump float;in float v_side;out vec4 o;
+void main(){o=abs(v_side)<.55?vec4(.95,.95,.95,.95):vec4(0,0,0,.45);}`;
 const BLIT = `#version 300 es
 precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
-void main(){o=texture(u_tex,v_uv-u_shift)*u_keep;}`;
+void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
 
 const valid = (s: { u: number | null; v: number | null; status: number }) => (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null;
 const encode = (v: number) => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
@@ -146,6 +152,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     const savedVp = gl.getParameter(gl.VIEWPORT) as Int32Array;
     const savedProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
     const savedVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
+    const savedCull = gl.isEnabled(gl.CULL_FACE);
+    const savedMask = gl.getParameter(gl.COLOR_WRITEMASK) as [boolean, boolean, boolean, boolean];
     gl.disable(gl.DEPTH_TEST); gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, stateFbo[1 - index]); gl.viewport(0, 0, STATE, STATE);
     gl.useProgram(update);
@@ -158,21 +166,26 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform4f(gl.getUniformLocation(update, 'u_bounds'), bounds.west, bounds.south, bounds.east, bounds.north);
     gl.uniform1f(gl.getUniformLocation(update, 'u_dt'), state.paused ? 0 : dt);
     gl.uniform1f(gl.getUniformLocation(update, 'u_zoom'), nextZoom);
+    gl.uniform1f(gl.getUniformLocation(update, 'u_world'), 512 * 2 ** nextZoom);
     gl.uniform1f(gl.getUniformLocation(update, 'u_mix'), state.from ? Math.min(1, (now - blendAt) / PLAYBACK_STEP_MS) : 1);
     gl.uniform1f(gl.getUniformLocation(update, 'u_reset'), reset);
     draw(update, gl.TRIANGLES, 3);
     const point = map.project([0, 0]);
-    const sx = (point.x - shiftX) / Math.max(1, map.getCanvas().clientWidth), sy = (shiftY - point.y) / Math.max(1, map.getCanvas().clientHeight);
+    const width = Math.max(1, map.getCanvas().clientWidth), height = Math.max(1, map.getCanvas().clientHeight);
+    const sx = (point.x - shiftX) / width, sy = (shiftY - point.y) / height;
+    const jump = Math.hypot(sx, sy) > 0.5;
     shiftX = point.x; shiftY = point.y;
     const nextTrail = 1 - trail;
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.BLEND);
     gl.bindFramebuffer(gl.FRAMEBUFFER, trailFbo[nextTrail]); gl.viewport(0, 0, trailW, trailH);
     gl.useProgram(blit);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trails[trail]);
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
-    gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset ? 0 : sx, reset ? 0 : sy);
-    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset ? 0 : Math.exp(-dt * 0.9));
+    gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset || jump ? 0 : sx, reset || jump ? 0 : sy);
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 2.4));
     draw(blit, gl.TRIANGLES, 3);
+    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.CULL_FACE); gl.colorMask(true, true, true, true);
     gl.useProgram(lines);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, states[1 - index]);
@@ -182,8 +195,11 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
     gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
     gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
-    draw(lines, gl.LINES, STATE * STATE * 2);
+    gl.uniform1f(gl.getUniformLocation(lines, 'u_half'), 1.8);
+    draw(lines, gl.TRIANGLES, STATE * STATE * 6);
     index = 1 - index; trail = nextTrail; reset = 0;
+    gl.colorMask(savedMask[0], savedMask[1], savedMask[2], savedMask[3]);
+    if (savedCull) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, savedFbo); gl.viewport(savedVp[0]!, savedVp[1]!, savedVp[2]!, savedVp[3]!);
     gl.useProgram(savedProgram); gl.bindVertexArray(savedVao); gl.bindTexture(gl.TEXTURE_2D, null);
   }
