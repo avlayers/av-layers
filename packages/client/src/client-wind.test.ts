@@ -4,7 +4,7 @@ import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/laye
 import { planSample } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.ts';
-import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindCapacityError, WindDataCache, WindDataSource } from './client-wind.ts';
+import { preparedBounds, WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindCapacityError, WindDataCache, WindDataSource } from './client-wind.ts';
 
 const bounds = [-1, -1, 2, 2] as const;
 function build() {
@@ -756,4 +756,15 @@ it('prepares a quantized rendered lattice once per height and extent', async () 
   expect(agl).not.toBe(first);
   expect(sample).toHaveBeenCalledTimes(32);
   source.dispose();
+});
+
+
+it('prepares one coherent longitude interval across the dateline', () => {
+  for (const bounds of [[179.85, 0, -179.85, 1], [179.85, 0, 180.15, 1]] as const) {
+    const prepared = preparedBounds(bounds);
+    expect(prepared[2] - prepared[0]).toBeCloseTo(0.3, 6);
+    expect((prepared[0] + prepared[2]) / 2).toBeGreaterThanOrEqual(-180);
+    expect((prepared[0] + prepared[2]) / 2).toBeLessThanOrEqual(180);
+  }
+  expect(preparedBounds([-1, -1, 2, 2])).toEqual([-1, -1, 2, 2]);
 });

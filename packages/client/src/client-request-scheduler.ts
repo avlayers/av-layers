@@ -49,7 +49,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxActive = options.maxActive ?? 6, maxQueued = options.maxQueued ?? 64, maxInFlightBytes = options.maxInFlightBytes;
   const maxBackgroundActive = options.maxBackgroundActive ?? Math.min(6, maxActive);
-  const maxBackgroundBytes = options.maxBackgroundBytes ?? BACKGROUND_BYTES;
+  const maxBackgroundBytes = options.maxBackgroundBytes ?? Math.min(BACKGROUND_BYTES, maxInFlightBytes ?? BACKGROUND_BYTES);
   if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 12
     || !Number.isSafeInteger(maxQueued) || maxQueued < 0 || maxQueued > 64
     || (maxInFlightBytes !== undefined && (!Number.isSafeInteger(maxInFlightBytes) || maxInFlightBytes < 1024 || maxInFlightBytes > MAX_IN_FLIGHT_BYTES))
@@ -102,38 +102,39 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     const settled = new Promise<void>(resolve => { settleResponse = resolve; });
     const response = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
     const controller = new AbortController();
-    const taskReserve = spec?.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : HEADER_RESERVE_BYTES;
+    const taskReserve = spec ? (spec.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : spec.maxResponseBytes) : HEADER_RESERVE_BYTES;
     let foreground = spec?.foreground ?? (init as RequestInit & { priority?: string } | undefined)?.priority !== 'low';
-    let started = false, finished = false, delivered = false, heldBytes = 0, chargedBackground = false;
+    let started = false, finished = false, delivered = false, heldBytes = 0, backgroundHeld = false;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let cancellation: Promise<void> | undefined;
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     const charge = (next: number) => {
-      const delta = next - heldBytes;
+      const capped = Math.min(next, taskReserve);
+      const delta = capped - heldBytes;
       bodyBytes += delta;
-      if (chargedBackground) backgroundBytes += delta;
-      heldBytes = next;
+      if (backgroundHeld) backgroundBytes += delta;
+      heldBytes = capped;
     };
     const releaseCharge = () => {
       bodyBytes -= heldBytes;
-      if (chargedBackground) backgroundBytes -= heldBytes;
-      heldBytes = 0; chargedBackground = false;
+      if (backgroundHeld) backgroundBytes -= heldBytes;
+      heldBytes = 0; backgroundHeld = false;
     };
     function finish() {
       if (finished) return;
       finished = true;
-      releaseCharge();
       signal?.removeEventListener('abort', externalAbort);
       controller.signal.removeEventListener('abort', abort);
       live.delete(controller);
       if (started) {
         active.delete(controller);
-        if (!foreground) backgroundActive--;
+        if (backgroundHeld) backgroundActive--;
       } else {
         const index = queued.indexOf(task);
         if (index >= 0) queued.splice(index, 1);
       }
+      releaseCharge();
       settleResponse();
       pump();
     }
@@ -150,12 +151,10 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     }
     function externalAbort() { controller.abort(signal?.reason); }
     function promote() {
-      if (foreground) return;
+      if (foreground || finished) return;
       foreground = true;
-      if (started) {
-        backgroundActive--;
-        if (chargedBackground) backgroundBytes -= heldBytes;
-        chargedBackground = false;
+      if (backgroundHeld) {
+        backgroundActive--; backgroundBytes -= heldBytes; backgroundHeld = false;
       }
       pump();
     }
@@ -165,7 +164,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
       started = true;
       active.add(controller);
       live.add(controller);
-      if (!foreground) { backgroundActive++; chargedBackground = true; }
+      if (!foreground) { backgroundActive++; backgroundHeld = true; }
       charge(taskReserve);
       void (async () => {
         try {
@@ -181,7 +180,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
             throw new ForecastCapacityError('capacity', 'Response exceeds its admitted size');
           }
           const encoding = fetched.headers.get('content-encoding');
-          if (length !== null && (encoding === null || encoding === 'identity')) charge(length);
+          if (length !== null && encoding === 'identity') charge(length);
           pump();
           if (controller.signal.aborted) {
             await fetched.body?.cancel(controller.signal.reason).catch(() => {});

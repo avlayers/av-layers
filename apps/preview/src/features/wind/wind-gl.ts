@@ -185,7 +185,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     for (const fbo of [...stateFbo, ...trailFbo]) context.deleteFramebuffer(fbo);
     if (vao) context.deleteVertexArray(vao);
     for (const program of [updateProg, lineProg, blitProg]) if (program) context.deleteProgram(program);
-    gl = null; state.ready = false;
+    gl = null; state.ready = false; uploadedPrepared = null;
   }
   function frame(matrix: ArrayLike<number>): void {
     if (!gl || state.failed || !state.ready || state.hidden || (!state.to && !state.prepared)) return;
@@ -279,7 +279,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   const layer: CustomLayerInterface = {
     id: LAYER, type: 'custom', renderingMode: '2d',
     onAdd(_map, context) {
-      try { releaseGl(); } catch { gl = null; state.ready = false; }
+      try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; }
       gl = context;
       maxTrailSide = Math.min(TRAIL_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
       sized = false;
@@ -327,7 +327,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
         state.failed = true; report(false);
       }
     },
-    onRemove() { try { releaseGl(); } catch { gl = null; state.ready = false; } },
+    onRemove() { try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; } },
     prerender(_context, options) {
       try { frame(options.modelViewProjectionMatrix as unknown as ArrayLike<number>); }
       catch { state.failed = true; report(false); }
@@ -368,7 +368,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     },
     setMotion(paused, hidden) { state.paused = paused; state.hidden = hidden; if (!hidden && state.ready) map.triggerRepaint(); },
     destroy() {
-      state.destroyed = true; state.to = null; state.prepared = null;
+      state.destroyed = true; state.to = null; state.prepared = null; uploadedPrepared = null;
       for (const event of ['idle', 'styledata'] as const) map.off(event, raise);
       if (state.added && map.getLayer(LAYER)) map.removeLayer(LAYER);
     }

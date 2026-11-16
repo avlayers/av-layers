@@ -65,3 +65,11 @@ it('uploads a prepared lattice instead of reconstructing it from a field', () =>
   view.setField({ sample: () => ({ status: 0, u: 1, v: 1 }) });
   expect(gl.setFields).toHaveBeenCalled();
 });
+
+it('installs field and prepared data before renderer synchronization', () => {
+  const view = overlay();
+  const prepared = { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(16), size: 2, height: 'surface' as const, key: 'prepared:install' };
+  view.install({ sample: () => ({ status: 0, u: 1, v: 1 }) }, prepared);
+  expect(gl.setPrepared).toHaveBeenLastCalledWith(prepared);
+  expect(gl.setFields).not.toHaveBeenCalled();
+});

@@ -15,8 +15,7 @@ interface Window { west: number; east: number; top: number; bottom: number }
 interface Tile { x: number; y: number; z: number; canonicalX: number; drawX: number; drawY: number }
 interface Box { left: number; right: number; top: number; bottom: number; z: number }
 interface Geometry extends Window { tiles: Tile[]; width: number; height: number; zoom: number; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
-interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; requiredZoom: number; frames: string[] }
-const warmth = createViewportWarmth();
+interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; requiredZoom: number; warmed: boolean; frames: string[] }
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 interface Job { context: Context; frame: string; controller: AbortController }
@@ -98,24 +97,23 @@ function requiredZoom(map: Map, maxzoom: number): number {
 }
 
 /** Native-pixel crop for small views; the mosaic remains the wide-view fallback. */
-function cropGeometry(map: Map, maxzoom: number, frames: number): Geometry | null {
+function cropGeometry(map: Map, maxzoom: number, frames: number, warmed: boolean): Geometry | null {
   const window = viewport(map), bounds = map.getBounds();
-  if (!window || window.bottom <= window.top) return null;
+  if (!warmed || !window || window.bottom <= window.top) return null;
   const west = bounds.getWest(), east = bounds.getEast(), south = bounds.getSouth(), north = bounds.getNorth();
-  const area = boundsAreaKm2([west, south, east, north]);
-  if (!warmth.update(area)) return null;
   const zoom = requiredZoom(map, maxzoom);
   const crop = planRasterCrop([west, south, east, north], zoom);
   if (!crop || frames * crop.bytes > DECODE_CAP) return null;
   return {
-    west: window.west, east: window.east, top: window.top, bottom: window.bottom,
+    west: crop.left / crop.worldSize, east: crop.right / crop.worldSize,
+    top: crop.top / crop.worldSize, bottom: crop.bottom / crop.worldSize,
     tiles: crop.tiles, width: crop.width, height: crop.height, zoom, coordinates: crop.coordinates
   };
 }
 
 /** Padded tile mosaic for a rested camera. Shrink the margin before dropping zoom. */
-function geometry(map: Map, maxzoom: number, frames: number): Geometry | null {
-  const crop = cropGeometry(map, maxzoom, frames);
+function geometry(map: Map, maxzoom: number, frames: number, warmed: boolean): Geometry | null {
+  const crop = cropGeometry(map, maxzoom, frames, warmed);
   if (crop) return crop;
   const window = viewport(map);
   if (!window || window.bottom <= window.top || !Number.isFinite(map.getZoom())) return null;
@@ -145,6 +143,7 @@ export class RasterOverview {
   private context: Context | null = null;
   private selected: string | null = null;
   private shown: string | null = null;
+  private readonly warmth = createViewportWarmth();
   private readonly images = new globalThis.Map<string, ImageBitmap>();
   private readonly unavailable = new Set<string>();
   private readonly retried = new Set<string>();
@@ -170,13 +169,15 @@ export class RasterOverview {
     if (!this.supported || this.disposed) return;
     if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !renderedFrames(build.manifest).some(value => value.id === frame)) { this.clear(); return; }
     const required = requiredZoom(this.map, layerMaxZoom(build.manifest, layer));
-    if (this.context?.build !== build || this.context.layer !== layer || this.context.requiredZoom !== required || !this.covers()) {
+    const bounds = this.map.getBounds();
+    const warmed = this.warmth.update(boundsAreaKm2([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]));
+    if (this.context?.build !== build || this.context.layer !== layer || this.context.requiredZoom !== required || this.context.warmed !== warmed || !this.covers()) {
       this.clear();
       const frames = renderedFrames(build.manifest);
-      const area = geometry(this.map, layerMaxZoom(build.manifest, layer), frames.length);
+      const area = geometry(this.map, layerMaxZoom(build.manifest, layer), frames.length, warmed);
       if (!area) return;
       this.canvas!.width = area.width; this.canvas!.height = area.height;
-      this.context = { build, layer, geometry: area, requiredZoom: required, frames: [] };
+      this.context = { build, layer, geometry: area, requiredZoom: required, warmed, frames: [] };
       this.protocol.setBuildExpiry(build.manifest.buildId, build.expiresAtMs);
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
     }

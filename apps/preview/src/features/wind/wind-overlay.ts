@@ -115,6 +115,19 @@ export class WindOverlay {
     this.resize();
   }
 
+  install(field: WindField | null, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap' = 'replace'): void {
+    if (this.destroyed) return;
+    if (mode === 'swap' && !prepared && this.field && field && this.field !== field) {
+      this.prepared = null;
+      this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
+      for (const particle of this.particles) particle.wind = undefined;
+      this.barbSamples.clear(); this.syncGl(); this.drawBarbs(); this.schedule(); return;
+    }
+    if (this.field === field && this.prepared === prepared && !this.blendFrom) return;
+    this.blendFrom = null; this.field = field; this.prepared = prepared; this.barbSamples.clear();
+    this.syncGl(); this.resetTrails(); this.drawBarbs(); this.schedule();
+  }
+
   setPrepared(prepared: WindPreparedGrid | null): void {
     if (this.destroyed || this.prepared === prepared) return;
     this.prepared = prepared;

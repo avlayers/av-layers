@@ -206,7 +206,7 @@ it('evicts a queued speculative request to admit foreground work when the queue 
 it('opens eight raster requests inside 4 MiB before their bodies finish', async () => {
   const streams = Array.from({ length: 8 }, () => {
     let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12' } });
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12', 'content-encoding': 'identity' } });
     return { response, stream };
   });
   let index = 0;
@@ -292,7 +292,7 @@ it('still dispatches an immediately admissible request with zero queue capacity'
 it('keeps eight live bodies while headers arrive immediately', async () => {
   const streams = Array.from({ length: 10 }, () => {
     let stream!: ReadableStreamDefaultController<Uint8Array>;
-    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12' } });
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12', 'content-encoding': 'identity' } });
     return { response, stream };
   });
   let index = 0;
@@ -323,11 +323,11 @@ it('keeps speculative count and byte headroom while a full background queue admi
   });
   let index = 0;
   const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => streams[index++]!.response), maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxQueued: 64 });
-  const background = Array.from({ length: 68 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: 2 * 1024 * 1024 }).response.catch(() => null));
+  const background = Array.from({ length: 68 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: 1024 * 1024 }).response.catch(() => null));
   await vi.waitFor(() => expect(scheduler.detail().backgroundActive).toBe(2));
   expect(scheduler.detail().backgroundBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
   expect(scheduler.stats()).toEqual({ active: 2, queued: 64 });
-  const selected = scheduler.request({ url: 'https://example.test/selected', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024 });
+  const selected = scheduler.request({ url: 'https://example.test/selected', priority: 'foreground', kind: 'raster', maxResponseBytes: 1024 * 1024 });
   await vi.waitFor(() => expect(scheduler.stats().active).toBe(3));
   expect(scheduler.detail().live).toBeLessThanOrEqual(8);
   expect(scheduler.stats().active).toBe(3);
@@ -343,7 +343,7 @@ it('reserves unknown, malformed and compressed lengths at the header watermark',
     new Response(new ReadableStream<Uint8Array>({ start() {} })),
     new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12x' } }),
     new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '10', 'content-encoding': 'gzip' } }),
-    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12' } })
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12', 'content-encoding': 'identity' } })
   ];
   let index = 0;
   const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => responses[index++]!), maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
@@ -388,7 +388,7 @@ it('retains admission through a late response body cancellation', async () => {
   complete(new Response(new ReadableStream<Uint8Array>({ cancel })));
   await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
   expect(settled).toBe(false);
-  expect(scheduler.detail().bodyBytes).toBe(1024 * 1024);
+  expect(scheduler.detail().bodyBytes).toBe(4 * 1024 * 1024);
   release();
   await handle.settled;
   expect(settled).toBe(true);
@@ -433,4 +433,56 @@ it('promotes queued speculative work without a duplicate fetch', async () => {
   expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
   scheduler.dispose();
   await background.settled;
+});
+
+
+it('keeps a hidden encoding reservation conservative instead of trusting the wire length', async () => {
+  const responses = [
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12' } }),
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12', 'content-encoding': 'br' } })
+  ];
+  let index = 0;
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => responses[index++]!), maxActive: 4, maxInFlightBytes: 4 * 1024 * 1024 });
+  const requests = [0, 1].map(i => scheduler.fetch(`https://example.test/${i}`).catch(() => null));
+  await vi.waitFor(() => expect(scheduler.detail().active).toBe(2));
+  expect(scheduler.detail().bodyBytes).toBe(2 * 1024 * 1024);
+  scheduler.dispose();
+  await Promise.all(requests);
+});
+
+it('makes promotion after settlement a no-op and never releases background ownership twice', async () => {
+  let finish!: () => void;
+  const scheduler = createForecastRequestScheduler({
+    maxActive: 4, maxBackgroundActive: 1, maxInFlightBytes: 4 * 1024 * 1024,
+    fetchImpl: vi.fn(() => new Promise<Response>(resolve => { finish = () => resolve(new Response(null)); }))
+  });
+  const background = scheduler.request({ url: 'https://example.test/bg', priority: 'background', kind: 'raster', maxResponseBytes: 1024 });
+  expect(scheduler.detail()).toMatchObject({ backgroundActive: 1, backgroundBytes: 1024 });
+  finish();
+  await background.response;
+  await background.settled;
+  expect(scheduler.detail()).toMatchObject({ backgroundActive: 0, backgroundBytes: 0, active: 0 });
+  background.promote();
+  background.promote();
+  expect(scheduler.detail()).toMatchObject({ backgroundActive: 0, backgroundBytes: 0, active: 0 });
+  scheduler.dispose();
+});
+
+it('dispatches a small explicit request under a tiny byte ceiling', async () => {
+  const fetchImpl = vi.fn(async () => new Response(null));
+  const scheduler = createForecastRequestScheduler({ fetchImpl: fetchImpl as typeof fetch, maxActive: 4, maxInFlightBytes: 64 * 1024, maxBackgroundBytes: 64 * 1024 });
+  const handle = scheduler.request({ url: 'https://example.test/small', priority: 'foreground', kind: 'json', maxResponseBytes: 1024 });
+  expect(await handle.response).toBeInstanceOf(Response);
+  await handle.settled;
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(scheduler.detail().bodyBytes).toBe(0);
+  scheduler.dispose();
+});
+
+it('reserves the explicit safe maximum before headers arrive', async () => {
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(() => new Promise<Response>(() => {})), maxActive: 4, maxInFlightBytes: 4 * 1024 * 1024 });
+  const handle = scheduler.request({ url: 'https://example.test/unknown', priority: 'foreground', kind: 'raster', maxResponseBytes: 3 * 1024 * 1024 });
+  await vi.waitFor(() => expect(scheduler.detail().bodyBytes).toBe(3 * 1024 * 1024));
+  scheduler.dispose();
+  await handle.response.catch(() => {});
 });

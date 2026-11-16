@@ -6,6 +6,14 @@ import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type
 import type { PinnedBuild } from './client-types.ts';
 
 type WindStatus = 'valid' | 'unavailable' | 'outside' | 'no-lift';
+/** Positive, unwrapped longitude interval aligned to the world copy nearest the window center. */
+export function preparedBounds(bounds: GeographicBounds): GeographicBounds {
+  const [west, south, east, north] = bounds;
+  const span = east >= west ? east - west : east + 360 - west;
+  const start = normalizeLon(west + span / 2) - span / 2;
+  return [start, south, start + span, north];
+}
+
 export interface WindPreparedGrid {
   readonly bounds: GeographicBounds;
   readonly data: Uint8Array<ArrayBuffer>;
@@ -325,8 +333,8 @@ export class WindDataSource {
     const cached = this.preparedGrids.get(key);
     if (cached) return cached;
     const data = new Uint8Array(new ArrayBuffer(size * size * 4));
-    const [west, south, east, north] = current.bounds;
-    const span = east >= west ? east - west : east + 360 - west;
+    const [west, south, east, north] = preparedBounds(current.bounds);
+    const span = east - west;
     for (let y = 0; y < size; y++) {
       const lat = south + (north - south) * (y + 0.5) / size;
       for (let x = 0; x < size; x++) {
