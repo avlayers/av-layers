@@ -308,7 +308,7 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   await import('./main');
   expect(fetchMock).toHaveBeenCalled();
   expect(map().sources.size).toBe(0);
-  expect(map().options.maxTileCacheSize).toBe(16);
+  expect(map().options.maxTileCacheSize).toBeUndefined();
   map().emit('style.load');
   await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
   expect(sourceId()).toBeDefined();
@@ -331,11 +331,11 @@ it('starts wind and raster at style readiness before basemap tiles finish', asyn
   expect(windLoads).toHaveLength(1);
 });
 
-it.each(['pagehide', 'gpu failure'])('shares the forecast scheduler and disposes it last on %s', async teardown => {
+it.each(['pagehide', 'gpu failure'])('gives raster and wind separate schedulers and disposes them last on %s', async teardown => {
   await start();
-  expect(schedulerFetches).toHaveLength(1);
-  expect(windFetches[0]).toBe(schedulerFetches[0]);
+  expect(schedulerFetches).toHaveLength(2);
   expect(rasterFetches[0]).toBe(schedulerFetches[0]);
+  expect(windFetches[0]).toBe(schedulerFetches[1]);
   page('pagehide', true);
   expect(disposalOrder).not.toContain('scheduler');
   page('pageshow', true);
@@ -353,20 +353,29 @@ it('keeps the neutral offline basemap for the synthetic fixture', async () => {
   expect(map().options.style?.sources).toEqual({});
 });
 
-it('clears stale wind immediately and ignores an overtaken frame request', async () => {
+it('keeps painted wind until the next frame is ready and ignores an overtaken request', async () => {
   deferWind = true;
   await start();
-  const oldRequest = windLoads.at(-1)!;
-  const resolveOld = windResolve!;
-  await selectFrame(1);
-  expect(oldRequest.signal?.aborted).toBe(true);
-  expect(windFields.at(-1)).toBeNull();
-  resolveOld('ready');
+  windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  const painted = windFields.at(-1);
+  expect(painted).toMatchObject({ sample: expect.any(Function) });
+  const first = windLoads.at(-1)!;
+  await selectFrame(1);
+  expect(first.signal?.aborted).toBe(false);
+  expect(windFields.at(-1)).toBe(painted);
+  const second = windLoads.at(-1)!;
+  const resolveSecond = windResolve!;
+  await selectFrame(2);
+  expect(second.signal?.aborted).toBe(true);
+  expect(windFields.at(-1)).toBe(painted);
+  resolveSecond('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBe(painted);
   windResolve!('ready');
   await Promise.resolve();
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  expect(windFields.at(-1)).not.toBe(painted);
   const count = windLoads.length;
   windChange({ style: 'barbs', visible: true, paused: false, height: 2400 });
   ui('units-imperial').dispatchEvent(new Event('click'));
@@ -518,22 +527,23 @@ it('shows initial wind before raster loads and keeps later frames aligned with d
   map().emit('sourcedata', { sourceId: first, tile: {} }); map().emit('render'); map().emit('render');
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
 
+  const painted = windFields.at(-1);
   await selectFrame(1);
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toBe(painted);
   windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toBe(painted);
   const failed = [...map().layers.keys()].find(id => id !== first)!;
   map().emit('error', { sourceId: failed });
   expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
   expect(ui('frame-status').textContent).toContain('Showing');
   expect(ui('frame-status').textContent).toContain('Selected time unavailable');
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toBe(painted);
 
   await selectFrame(2);
   windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toBe(painted);
   const replacement = [...map().layers.keys()].find(id => id !== first)!;
   map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
@@ -581,7 +591,7 @@ it('uses URL opacity before saved opacity and shares display units', async () =>
 
 it('reports an unavailable forecast when the viewport exceeds raster memory admission', async () => {
   await start();
-  Object.assign(map(), { coveringTiles: () => Array.from({ length: 256 }) });
+  Object.assign(map(), { coveringTiles: () => Array.from({ length: 273 }) });
   map().emit('resize');
   expect(map().sources.size).toBe(0);
   expect(ui('frame-status').textContent).toBe('Forecast unavailable · No forecast shown');

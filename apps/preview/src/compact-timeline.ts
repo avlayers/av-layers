@@ -1,14 +1,15 @@
 import { formatPlaceTime, placeDateKey } from '@av/client';
 import './compact-timeline.css';
+import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface TimelineFrame { readonly id: string; readonly validTime: string }
-export interface CompactTimelineOptions { onSelect(index: number): void; offsetMinutes?: number }
+export interface CompactTimelineOptions { onSelect(index: number): void; onPlayback?(playing: boolean): void; offsetMinutes?: number }
 export interface CompactTimeline { update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void; setOffsetMinutes(offsetMinutes: number): void; destroy(): void }
 
 interface LocalTime { day: string; hour: number; minute: number }
 interface DayGroup { day: string; indices: number[] }
 
-const PLAYBACK_INTERVAL_MS = 700;
+const PLAYBACK_INTERVAL_MS = PLAYBACK_STEP_MS;
 const DATE_LINE: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' };
 
 function localTimeFromMs(ms: number, offsetMinutes: number): LocalTime | null {
@@ -150,7 +151,12 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (notify) options.onSelect(index);
   }
 
-  const stopPlayback = () => { if (timer !== null) { clearInterval(timer); timer = null; } if (!destroyed) render(); };
+  const stopPlayback = () => {
+    const wasPlaying = timer !== null;
+    if (timer !== null) { clearInterval(timer); timer = null; }
+    if (wasPlaying) options.onPlayback?.(false);
+    if (!destroyed) render();
+  };
   const moveDay = (dir: number) => {
     const pos = dayPosition(), target = pos >= 0 ? days[pos + dir] : undefined, cur = frames[selectedIndex];
     const local = cur ? localTimeFromMs(Date.parse(cur.validTime), offsetMinutes) : null;
@@ -169,6 +175,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       select(selectedIndex + 1, true, false);
       if (selectedIndex >= frames.length - 1) stopPlayback();
     }, PLAYBACK_INTERVAL_MS);
+    options.onPlayback?.(true);
     render();
   });
 

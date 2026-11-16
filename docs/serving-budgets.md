@@ -21,27 +21,34 @@ combined work across all grids selected by a request.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
-- **Client forecast transport:** preview routes numeric wind and raster fetches
-  through one [scheduler](../packages/client/src/client-request-scheduler.ts),
-  with six active requests including body consumption and cancellation, plus
-  64 queued requests. Selected foreground work takes priority over queued
-  speculation and evicts a queued low-priority prefetch if all 64 queue slots
-  are occupied. Preview and Windy share the
-  [raster scheduler](../packages/client/src/client-raster.ts).
+- **Client forecast transport:** preview gives numeric wind and raster fetches
+  separate [schedulers](../packages/client/src/client-request-scheduler.ts).
+  Raster keeps eight requests active. A request reserves 1 MiB until its
+  content-length replaces that reserve, and a new request starts only while that
+  reserve still fits in 4 MiB. The concurrency slot frees when headers arrive.
+  Wind keeps six
+  requests active until each body finishes. Either scheduler queues 64 requests.
+  Selected foreground work takes priority over queued speculation and evicts a
+  queued low-priority prefetch if all 64 queue slots are occupied. Preview and
+  Windy share the [raster scheduler](../packages/client/src/client-raster.ts).
   It keeps 16 requests active and queues 64. Background work starts while fewer
-  than 2 background reads are active; admitted reads finish after demotion. The
-  compressed tile cache is 48 MiB including entry overhead. Preview retains up to
-  four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
-  with 16 offscreen tiles per source. Preview's 120 MiB forecast envelope reserves
-  8 MiB for numeric wind, 32 MiB for wind canvases (up to 8,388,608 combined RGBA
-  device pixels across 2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding
-  wind shrinks both canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping
-  any warm 8 MiB numeric cache charged until cleared.
+  than 2 background reads are active; admitted reads finish after demotion. A
+  tile that has returned HTTP 200 is stored in the compressed cache when its
+  caller leaves. The compressed tile cache is 48 MiB including entry overhead.
+  Preview retains up to four source handles using
+  [viewport memory admission](../apps/preview/src/raster-budget.ts), charging 48
+  offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
+  forecast tile cache at 16 entries; other devices leave that cache at MapLibre's
+  default. Preview's 120 MiB forecast envelope reserves 8 MiB for numeric wind,
+  32 MiB for wind canvases (up to 8,388,608 combined RGBA device pixels across
+  2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding wind shrinks both
+  canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping any warm
+  8 MiB numeric cache charged until cleared.
   Numeric wind skips outside tiles via `windMask`/`fineMask` before admission,
   aligns multi-tile span requests to canonical 8-tile stripes (`<= 1 MiB`), and
   falls back to overview data if a detail chunk is unavailable.
-  Raster admission charges visible
-  and cached tiles at twice RGBA storage; large viewports shrink the prepared window.
+  Raster admission charges each visible and offscreen tile once at RGBA storage;
+  large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
   With viewport overviews, one transport handle loads up to two coarse tiles at once.
   Up to 40 decoded 256² images share a 24 MiB reservation within the raster allowance;
@@ -49,9 +56,14 @@ combined work across all grids selected by a request.
   Overview retention stops when one fine source and that reservation cannot fit.
   A complete overview remains visible if detailed tiles fail. Time changes with an
   admitted overview window defer cold detail for 100 ms; prepared detail switches immediately.
+  Playback keeps that overview on screen and fades the previous bitmap across the
+  700 ms step, then resumes fine tiles 100 ms after playback stops.
   The overview queue replaces speculative high-resolution byte prefetch and prepares
-  the selected layer before additional fine sources. Viewport, layer, build and expiry
-  changes release decoded overviews. Unsupported browsers retain the raster-only path.
+  the selected layer before additional fine sources. A pan keeps a covering overview.
+  Layer, build, resize, and expiry changes release decoded overviews. Unsupported
+  browsers retain the raster-only path. Playback blends the previous numeric wind
+  field for 700 ms. Preview draws those trails through the map WebGL context when
+  a float color target is available. The 2D canvas draws them when that target is absent.
   Speculative overview preparation stops after 1 MiB of returned compressed tile bytes
   per viewport context, including cache reuse. An in-flight pair may finish; explicit
   time selections remain eligible. The timeline reports partial readiness when limited.

@@ -201,6 +201,61 @@ it('evicts a queued speculative request to admit foreground work when the queue 
   scheduler.dispose();
 });
 
-it.each([{ maxActive: 0 }, { maxActive: 7 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }])('rejects invalid limits: %j', options => {
+it('opens eight raster requests inside 4 MiB before their bodies finish', async () => {
+  const streams = Array.from({ length: 8 }, () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12' } });
+    return { response, stream };
+  });
+  let index = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async () => streams[index++]!.response);
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const requests = streams.map((_, i) => scheduler.fetch(`https://example.test/${i}`));
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(8));
+  expect(scheduler.stats().queued).toBe(0);
+  const bodies = (await Promise.all(requests)).map(response => response.arrayBuffer());
+  streams.forEach(item => { item.stream.enqueue(new Uint8Array([1])); item.stream.close(); });
+  await Promise.all(bodies);
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
+  scheduler.dispose();
+});
+
+it('holds further raster requests once declared bodies reach 4 MiB', async () => {
+  const streams = Array.from({ length: 6 }, () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': String(1024 * 1024) } });
+    return { response, stream };
+  });
+  let index = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async () => streams[index++]!.response);
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const requests = streams.map((_, i) => scheduler.fetch(`https://example.test/${i}`));
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
+  await Promise.resolve();
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 2 });
+  streams.slice(0, 4).forEach(item => item.stream.close());
+  await Promise.all(requests.slice(0, 4).map(async request => (await request).arrayBuffer()));
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(6));
+  streams.slice(4).forEach(item => item.stream.close());
+  await Promise.all(requests.slice(4).map(async request => (await request).arrayBuffer()));
+  scheduler.dispose();
+});
+
+it('aborts a raster body after its concurrency slot is released', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const cancel = vi.fn();
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; }, cancel }), { headers: { 'content-length': '12' } }));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const response = await scheduler.fetch('https://example.test/tile');
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
+  const rejected = expect(response.arrayBuffer()).rejects.toMatchObject({ name: 'AbortError' });
+  scheduler.dispose();
+  await rejected;
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(stream).toBeDefined();
+});
+
+it.each([{ maxActive: 0 }, { maxActive: 13 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }, { maxInFlightBytes: 4 * 1024 * 1024 + 1 }])('rejects invalid limits: %j', options => {
   expect(() => createForecastRequestScheduler(options)).toThrow('Invalid forecast request limits');
 });

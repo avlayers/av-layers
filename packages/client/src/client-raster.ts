@@ -48,6 +48,8 @@ interface TileTask {
   deadlineAt: number;
   controller: AbortController;
   consumers: Set<Consumer>;
+  /** Set once HTTP 200 is known, so a departing caller leaves the body to be cached. */
+  retain: boolean;
   timer: ReturnType<typeof setTimeout>;
 }
 const abortError = () => new DOMException('Tile request cancelled', 'AbortError');
@@ -180,7 +182,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   }
   async function run(task: TileTask): Promise<void> {
     try {
-      const { until: responseExpiry, ...result } = await request(task.url, task.controller.signal, interactive(task));
+      const { until: responseExpiry, ...result } = await request(task, interactive(task));
       task.controller.signal.throwIfAborted();
       if ((buildExpiry.get(task.build) ?? Infinity) <= Date.now()) throw abortError();
       const until = Math.min(responseExpiry, buildExpiry.get(task.build) ?? Infinity);
@@ -229,11 +231,12 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); reader.releaseLock();
     }
   }
-  async function request(url: string, signal: AbortSignal, interactive: boolean): Promise<RasterTileResponse & { until: number }> {
+  async function request(task: TileTask, foreground: boolean): Promise<RasterTileResponse & { until: number }> {
+    const signal = task.controller.signal;
     for (let attempt = 0; ; attempt++) {
       signal.throwIfAborted();
       let response: Response | undefined;
-      try { response = await fetchImpl(url, { signal, redirect: 'error', headers: { accept: 'image/webp' }, priority: interactive ? 'high' : 'low' } as RequestInit); }
+      try { response = await fetchImpl(task.url, { signal, redirect: 'error', headers: { accept: 'image/webp' }, priority: foreground ? 'high' : 'low' } as RequestInit); }
       catch (error) {
         signal.throwIfAborted();
         if (!(error instanceof TypeError) || attempt === 2) throw error;
@@ -243,6 +246,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
         await delay(retryDelayMs * (attempt + 1) + Math.random() * retryDelayMs, signal); continue;
       }
       if (response.status !== 200) { void response?.body?.cancel().catch(() => {}); throw new Error(`Raster request failed: HTTP ${response.status}`); }
+      task.retain = true;
       const cacheControl = response.headers.get('cache-control') ?? undefined, expires = response.headers.get('expires') ?? undefined;
       const maxAge = Number(/(?:^|,)\s*max-age=(\d+)/i.exec(cacheControl ?? '')?.[1]);
       const age = Number(response.headers.get('age') ?? 0), date = Date.parse(response.headers.get('date') ?? ''), expiration = Date.parse(expires ?? '');
@@ -281,7 +285,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       if (queued.length >= maxQueued && (active.size >= maxActive || prefetchBlocked)) return Promise.reject(new Error('Raster request queue is full'));
       const controller = new AbortController();
       const deadline = Math.min(timeoutMs, (buildExpiry.get(build) ?? Infinity) - now);
-      task = { url, build, zoom, requestedAt: now, order: ++order, deadlineAt: now + deadline, controller, consumers: new Set(), timer: undefined! };
+      task = { url, build, zoom, requestedAt: now, order: ++order, deadlineAt: now + deadline, controller, consumers: new Set(), retain: false, timer: undefined! };
       const owned = task;
       task.timer = setTimeout(() => controller.abort(timeoutError()), deadline);
       controller.signal.addEventListener('abort', () => {
@@ -300,7 +304,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
         cancel(reason) {
           if (!owned.consumers.delete(consumer)) return;
           consumer.cleanup(); reject(reason);
-          if (!owned.consumers.size) owned.controller.abort(abortError());
+          if (!owned.consumers.size && !owned.retain) owned.controller.abort(abortError());
           pump();
         }
       };
