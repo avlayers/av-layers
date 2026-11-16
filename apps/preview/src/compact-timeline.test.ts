@@ -436,6 +436,7 @@ it('folds both nights during daylight and opens only the night that contains the
   expect(folded.linear).toBe(false);
   expect(folded.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning', 'evening']);
   expect(folded.segments[0]!.x1 - folded.segments[0]!.x0).toBe(28);
+  expect(folded.segments.at(-1)!.x1).toBe(400);
   const evening = buildDayScale(400, bounds, 19 * 60);
   expect(evening.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning']);
   expect(evening.segments.find(segment => segment.kind === 'evening')!.x1).toBeGreaterThan(evening.segments.find(segment => segment.kind === 'day')!.x1);
@@ -563,6 +564,17 @@ it('pause stops playback without selecting another frame', () => {
   expect(byClass(host.children[0]!, 'ct-play').getAttribute('aria-pressed')).toBe('false');
   vi.advanceTimersByTime(2100);
   expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('records a scrub that starts with no selection', () => {
+  const { host, onSelect, timeline } = setup();
+  timeline.update(frames, null);
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetWidth = 240;
+  pointer(track, 'pointerdown', 200);
+  pointer(track, 'pointerup', 200);
+  expect(onSelect.mock.calls.some(call => call[1] === 'push')).toBe(true);
   timeline.destroy();
 });
 

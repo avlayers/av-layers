@@ -194,6 +194,10 @@ export function buildDayScale(width: number, bounds: NightBounds | null, selecte
     const selected = selectedMinute !== null && selectedMinute >= part.start && selectedMinute < part.end;
     part.folded = part.kind !== 'day' && !selected;
   }
+  return layoutSegments(parts, width);
+}
+
+function layoutSegments(parts: ScaleSegment[], width: number): DayScale {
   const folded = parts.filter(part => part.folded).length;
   const openMinutes = parts.filter(part => !part.folded).reduce((sum, part) => sum + part.end - part.start, 0);
   if (openMinutes <= 0 || width < folded * MOON_PX + 80) return linearScale(width);
@@ -205,24 +209,15 @@ export function buildDayScale(width: number, bounds: NightBounds | null, selecte
     part.x1 = x + span;
     x += span;
   }
+  const last = parts.at(-1);
+  if (last) last.x1 = width;
   return { linear: false, width, segments: parts };
 }
 
 function scaleAtWidth(scale: DayScale, width: number): DayScale {
   if (!(width > 0) || Math.abs(scale.width - width) < 0.5) return scale;
-  const parts = scale.segments.map(part => ({ ...part }));
-  const folded = parts.filter(part => part.folded).length;
-  const openMinutes = parts.filter(part => !part.folded).reduce((sum, part) => sum + part.end - part.start, 0);
-  if (scale.linear || openMinutes <= 0 || width < folded * MOON_PX + 80) return linearScale(width);
-  const openWidth = width - folded * MOON_PX;
-  let x = 0;
-  for (const part of parts) {
-    const span = part.folded ? MOON_PX : openWidth * (part.end - part.start) / openMinutes;
-    part.x0 = x;
-    part.x1 = x + span;
-    x += span;
-  }
-  return { linear: false, width, segments: parts };
+  if (scale.linear) return linearScale(width);
+  return layoutSegments(scale.segments.map(part => ({ ...part })), width);
 }
 
 export function minuteToX(scale: DayScale, minute: number): number {
@@ -584,7 +579,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     activePointer = null;
     const held = gestureScale !== null;
     gestureScale = null;
-    if (!destroyed && !controlsDisabled() && gestureStart >= 0 && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
+    if (!destroyed && !controlsDisabled() && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
     gestureStart = -1;
     if (held && !destroyed) render();
   };
