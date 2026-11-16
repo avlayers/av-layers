@@ -22,7 +22,7 @@ import { clockLabel, frameIndexFor } from './timeline';
 import { WindOverlay } from './wind-overlay';
 import { createWindControls, type WindStatus } from './wind-controls';
 import { createCompactTimeline } from './compact-timeline';
-import { googleTerrainStyle, type TerrainBasemap } from './basemap';
+import { naturalBasemapStyle } from './basemap';
 
 type PointWindgram = typeof import('@av/windgram');
 
@@ -77,17 +77,10 @@ opacityReadout.textContent = `${Math.round(initialOpacity * 100)}%`;
 
 const modelButtons: HTMLButtonElement[] = [];
 
-const basemapStyle = (): maplibregl.StyleSpecification => ({
-  version: 8,
-  sources: { basemap: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'], tileSize: 256, maxzoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' } },
-  layers: [{ id: 'basemap', type: 'raster', source: 'basemap' }]
-});
-
-interface InitialDiscovery { controller: AbortController; model?: ModelId; build?: Promise<PinnedBuild>; auto?: Promise<AutoForecastSelection | null> }
 interface WindView { zoom: number; build: PinnedBuild; frame: string; bounds: [number, number, number, number]; source: WindDataSource }
 interface WindRequest extends WindView { controller: AbortController; key: string }
 
-function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null, initialDiscovery: InitialDiscovery | null): void {
+function startPreview(lifecycle: AbortController): void {
   modelBar.replaceChildren(); modelButtons.length = 0;
   for (const choice of offlineFixture ? [{ modelId: initialModel, label: 'Synthetic fixture' }] : [...MODEL_OPTIONS, { modelId: AUTO_MODEL_ID, label: 'Auto' }]) {
     const button = Object.assign(document.createElement('button'), { type: 'button', className: 'model-button', value: choice.modelId, textContent: choice.label });
@@ -96,9 +89,8 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
 
   const map = new maplibregl.Map({
     container: 'map', center: startup.camera?.center ?? [0, 20], zoom: startup.camera?.zoom ?? 2, maxTileCacheSize: RASTER_CACHE_TILES,
-    style: offlineFixture ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] } : terrain?.style ?? basemapStyle()
+    style: offlineFixture ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] } : naturalBasemapStyle(window.devicePixelRatio)
   });
-  terrain?.attach(map);
   const globalListener = { signal: lifecycle.signal };
 
   let build: PinnedBuild | null = null, currentModel: ModelId = initialModel, reference: AltitudeReference = startup.reference;
@@ -537,9 +529,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     const layers = customLayer ? [customLayer, ...LIFT] : reference === 'agl' ? LIFT : [...LIFT].reverse();
     if (!build) freshness.textContent = 'Finding a forecast for this location…';
     try {
-      const pending = initialDiscovery?.auto;
-      if (pending) { initialDiscovery!.auto = undefined; request.signal.addEventListener('abort', () => initialDiscovery?.controller.abort(), { once: true }); }
-      const next = await (pending ?? resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) }));
+      const next = await resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
       if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
@@ -582,9 +572,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
     freshness.textContent = `Loading ${model} latest immutable build…`; timestamp.textContent = 'No frame selected';
     updateOverlayStatus();
     try {
-      const pending = initialDiscovery?.model === model ? initialDiscovery.build : undefined;
-      if (pending) { initialDiscovery!.build = undefined; requestAbort.signal.addEventListener('abort', () => initialDiscovery?.controller.abort(), { once: true }); }
-      const next = resolved?.build ?? await (pending ?? api.latest(model, { signal: requestAbort.signal }));
+      const next = resolved?.build ?? await api.latest(model, { signal: requestAbort.signal });
       if (requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       build = next; syncModels(); syncWindSupport(); syncLayerPicker();
       pointHorizonLabel.hidden = pointSeriesSelection(next).frames.length === next.manifest.frames.length;
@@ -785,7 +773,7 @@ function startPreview(lifecycle: AbortController, terrain: TerrainBasemap | null
   });
 
   const teardownAll = () => {
-    windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy(); terrain?.dispose();
+    windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
     overlay.destroy(); scheduler.dispose(); map.remove();
   };
 
@@ -850,43 +838,7 @@ function showMapFailure(error: unknown): void {
 
 function bootstrap(): void {
   const lifecycle = new AbortController();
-  const key = offlineFixture ? '' : import.meta.env.VITE_GOOGLE_MAPS_API_KEY?.trim() ?? '';
-  if (!key) {
-    try { startPreview(lifecycle, null, null); } catch (error) { lifecycle.abort(); showMapFailure(error); }
-    return;
-  }
-  const controller = new AbortController();
-  lifecycle.signal.addEventListener('abort', () => controller.abort(), { once: true });
-  const discovery: InitialDiscovery = { controller };
-  if (initialModel === AUTO_MODEL_ID) {
-    const [lng, lat] = startup.camera?.center ?? [0, 20], time = Date.parse(startup.validTime ?? ''), startLayer = visibleCustomLayer(startup.layer);
-    const layers = startLayer ? [startLayer, ...LIFT] : startup.reference === 'agl' ? LIFT : [...LIFT].reverse();
-    discovery.auto = resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: controller.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
-    void discovery.auto.catch(() => {});
-  } else {
-    discovery.model = initialModel; discovery.build = api.latest(initialModel, { signal: controller.signal });
-    void discovery.build.catch(() => {});
-  }
-  const onPagehide = (event: PageTransitionEvent): void => {
-    lifecycle.abort();
-    if (event.persisted) window.addEventListener('pageshow', bootstrap, { once: true });
-  };
-  window.addEventListener('pagehide', onPagehide);
-  const session = new AbortController();
-  lifecycle.signal.addEventListener('abort', () => session.abort(), { once: true });
-  const timeout = setTimeout(() => session.abort(), 2_500);
-  void googleTerrainStyle(key, session.signal).catch(() => {
-    if (!lifecycle.signal.aborted) {
-      const warning = Object.assign(document.createElement('p'), { className: 'toast basemap-warning', textContent: 'Google terrain unavailable. Using OpenStreetMap.' });
-      warning.setAttribute('role', 'status'); document.getElementById('app')?.append(warning);
-    }
-    return null;
-  }).finally(() => clearTimeout(timeout)).then(terrain => {
-    window.removeEventListener('pagehide', onPagehide);
-    if (lifecycle.signal.aborted) { terrain?.dispose(); return; }
-    try { startPreview(lifecycle, terrain, discovery); }
-    catch (error) { terrain?.dispose(); lifecycle.abort(); showMapFailure(error); }
-  });
+  try { startPreview(lifecycle); } catch (error) { lifecycle.abort(); showMapFailure(error); }
 }
 
 bootstrap();
