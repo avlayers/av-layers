@@ -248,7 +248,10 @@ export class RasterOverview {
     const job: Job = { context, frame, controller: new AbortController() }; this.job = job;
     void this.load(job).then(image => {
       if (!this.current(job) || !context.frames.includes(frame)) { image.close(); return; }
-      this.images.set(frame, image); this.onReady();
+      const previous = this.images.get(frame);
+      this.images.set(frame, image);
+      if (previous && previous !== image) previous.close();
+      this.onReady();
     }).catch(() => {
       if (this.current(job)) { this.unavailable.add(frame); this.onReady(); }
     }).finally(() => {

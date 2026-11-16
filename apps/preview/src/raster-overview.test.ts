@@ -189,6 +189,37 @@ it('keeps a local zoom-9 view on native tiles and covers a fidget inside it', as
   } finally { f.overview.destroy(); }
 });
 
+it('keeps an in-flight mosaic running when the selected frame is already decoded', async () => {
+  const f = fixture(true), b = build(2), [first, second] = b.manifest.frames;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', first.id);
+    let done = 0;
+    while (!f.overview.ready(b, 'usable-lift-agl', first.id)) {
+      if (f.requests.length === done) {
+        await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id) || f.requests.length > done).toBe(true));
+        if (f.overview.ready(b, 'usable-lift-agl', first.id)) break;
+      }
+      const batch = f.requests.length;
+      for (let index = done; index < batch; index++) f.finish(index);
+      done = batch;
+    }
+    await vi.waitFor(() => expect(f.requests.length).toBeGreaterThan(done));
+    const inflight = f.requests.slice(done);
+    f.overview.select(b, 'usable-lift-agl', first.id);
+    expect(inflight.every(request => request.signal.aborted)).toBe(false);
+    expect(f.requests).toHaveLength(done + inflight.length);
+    while (!f.overview.ready(b, 'usable-lift-agl', second.id)) {
+      if (f.requests.length === done) {
+        await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', second.id) || f.requests.length > done).toBe(true));
+        if (f.overview.ready(b, 'usable-lift-agl', second.id)) break;
+      }
+      const batch = f.requests.length;
+      for (let index = done; index < batch; index++) f.finish(index);
+      done = batch;
+    }
+  } finally { f.overview.destroy(); }
+});
+
 it('preempts an obsolete frame and retains the single reserved transport across contexts', async () => {
   const f = fixture(true), b = build(2), [first, second] = b.manifest.frames;
   try {
