@@ -70,7 +70,6 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const windHeld = new Map<string, WindRequest>();
   const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
 
-  let lastStatus: WindStatus = 'unavailable';
   const hasWindData = (): boolean => Boolean(state().build?.manifest.mapData);
   const retained = (view: WindView): boolean =>
     windView === view || windRequest === view || windPrefetch === view || retiring.has(view) || [...windHeld.values()].includes(view as WindRequest);
@@ -96,7 +95,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   function cancelFill(): void {
     if (fillTimer !== null) { clearTimeout(fillTimer); fillTimer = null; }
   }
-  function setStatus(status: WindStatus): void { lastStatus = status; publish.status(status); }
+  function setStatus(status: WindStatus): void { publish.status(status); }
 
   function setField(mode: 'replace' | 'swap'): void {
     const view = windView;
@@ -121,13 +120,13 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (destroyed) return;
     const displayed = options.displayedRaster();
     const build = state().build;
-    const sameBuild = Boolean(windView && windView.build === build && lastStatus !== 'unavailable');
+    const sameBuild = Boolean(windView && windView.build === build);
     const aligned = Boolean(sameBuild && windView!.frame === state().selectedFrame && (!displayed || displayed.build === windView!.build && displayed.frame === windView!.frame));
     if (aligned) setField(installedWind && installedWind.build === windView!.build ? 'swap' : 'replace');
     else if (!sameBuild && windDisplayed) { field.clear(); windDisplayed = false; installedWind = null; publish.displayed(false); }
     publish.quality(!!(aligned && windView?.source.isOverview));
     if (aligned) setStatus('ready');
-    else if (lastStatus === 'ready') setStatus(options.replacementFailed() ? 'unavailable' : 'loading');
+    else if (windView) setStatus(options.replacementFailed() ? 'unavailable' : 'loading');
     publish.reservation();
     publish.pointWind();
   }

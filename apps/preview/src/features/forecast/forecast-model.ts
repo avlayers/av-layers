@@ -2,6 +2,7 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedLayers } from '@av/contracts/layers';
 import type { PinnedBuild } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
+import type { ModelId } from '@av/contracts/publication';
 import type { AltitudeReference } from '../navigation/url-state';
 import { frameIndexFor } from '../timeline/timeline-model';
 
@@ -14,6 +15,12 @@ export const isLiftLayer = (layer: LayerId): boolean => layer === 'usable-lift-a
 
 export const visibleCustomLayer = (layer: LayerId | null): LayerId | null =>
   layer && !HIDDEN_PREVIEW_LAYERS.has(layer) ? layer : null;
+
+export const resumeModelFor = (pending: ModelId | null, requested: ModelId): ModelId | null =>
+  pending ?? (requested === 'auto' ? requested : null);
+
+export const validatedCustomLayer = (build: PinnedBuild | null, requested: LayerId | null): LayerId | null =>
+  requested && build && !build.templates[requested] ? null : requested;
 
 export const shortLayerName = (layer: LayerId, descriptor?: { label: string }): string =>
   layer.startsWith('cloud') ? 'Cloud' : (descriptor?.label ?? layer).replace(/\s*\(.*\)$/, '');
@@ -40,6 +47,10 @@ export function activeLayer(build: PinnedBuild | null, reference: AltitudeRefere
 }
 
 export function selectedFrameFor(build: PinnedBuild, requestedTime: string | null, now: number): string | null {
-  const frames = renderedFrames(build.manifest);
-  return frames[frameIndexFor(frames, requestedTime, now)]?.id ?? null;
+  return committedFrame(build, requestedTime, now).id;
+}
+
+export function committedFrame(build: PinnedBuild, requestedTime: string | null, now: number): { id: string | null; validTime: string | null } {
+  const frames = renderedFrames(build.manifest), frame = frames[frameIndexFor(frames, requestedTime, now)];
+  return { id: frame?.id ?? null, validTime: frame?.validTime ?? null };
 }

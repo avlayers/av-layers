@@ -11,7 +11,7 @@ import { previewQuery, previewUrl } from '../features/navigation/url-state';
 import type { PreviewCommands } from './preview-commands';
 import type { PreviewInitialState, PreviewStore } from '../stores/app-store';
 import { createPreviewStore, emptyOverlay } from '../stores/app-store';
-import { activeLayer, LIFT_LAYERS, layerOptions, selectedFrameFor, visibleCustomLayer } from '../features/forecast/forecast-model';
+import { activeLayer, committedFrame, LIFT_LAYERS, layerOptions, resumeModelFor, selectedFrameFor, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createMap, maplibregl } from '../features/map/map-controller';
 import { RasterOverlay } from '../features/raster/raster-overlay';
 import { CoverageSeam } from '../features/map/coverage-seam';
@@ -22,6 +22,7 @@ import { WindOverlay } from '../features/wind/wind-overlay';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
 type PointSession = ReturnType<typeof import('../features/point/point-session').createPointSession>;
 import { createLocationController } from '../features/location/location-controller';
+import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 
 const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
@@ -80,6 +81,7 @@ export function createPreviewApp(): PreviewApp {
   const pointSeries = new PointSeriesController(api);
   const lifecycle = new AbortController();
 
+  preferences.setUnits(initialUnits);
   const lowMemory = ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? Number.POSITIVE_INFINITY) <= 4;
   const windCache = new WindDataCache(lowMemory ? WIND_NUMERIC_BYTES : WIND_WINDOW_BYTES, lowMemory ? 256 : WIND_WINDOW_ENTRIES);
   const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
@@ -125,7 +127,7 @@ export function createPreviewApp(): PreviewApp {
 
   function syncWindReservation(): void {
     if (!overlay) return;
-    const active = Boolean(build()?.manifest.mapData) && (windControls?.state.visible ?? intent().windVisible);
+    const active = Boolean(build()?.manifest.mapData) && intent().windVisible;
     overlay.setWindActive(active, active || Boolean(windSession?.resident) || windCache.allocatedBytes > 0);
   }
 
@@ -142,7 +144,8 @@ export function createPreviewApp(): PreviewApp {
   function syncLayers(): void {
     const current = build();
     writer.forecast({ layers: layerOptions(current) });
-    if (intent().customLayer && (!current || !current.templates[intent().customLayer!])) writer.intent({ customLayer: null });
+    const customLayer = validatedCustomLayer(current, intent().customLayer);
+    if (customLayer !== intent().customLayer) writer.intent({ customLayer });
   }
 
   function updateScale(): void {
@@ -342,8 +345,9 @@ export function createPreviewApp(): PreviewApp {
       if (destroyed || requestAbort.signal.aborted || loadAbort !== requestAbort) return;
       writer.forecast({ build: next });
       syncWindSupport(); syncLayers();
-      const frame = resolved ? resolved.frame.id : selectedFrameFor(next, intent().requestedTime, Date.now());
-      writer.forecast({ selectedFrame: frame });
+      const committed = resolved ? { id: resolved.frame.id, validTime: resolved.frame.validTime } : committedFrame(next, intent().requestedTime, Date.now());
+      writer.forecast({ selectedFrame: committed.id });
+      if (!resolved && committed.validTime) writer.intent({ requestedTime: committed.validTime });
       updateTimeUi(); updateOverlay(); updateFreshness();
       disposeExpiry = watchBuildExpiry(next.expiresAtMs, expireView, [document, window]);
       if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
@@ -377,13 +381,11 @@ export function createPreviewApp(): PreviewApp {
       const nextStyle = state.windStyle ?? 'trails', nextHeight = state.windHeight ?? 'surface';
       const previousHeight = intent().windHeight;
       lastControlVisible = nextVisible;
-      if (windControls && (nextVisible !== windControls.state.visible || nextStyle !== windControls.state.style || nextHeight !== windControls.state.height)) {
-        windControls.setState?.({ visible: nextVisible, style: nextStyle, height: nextHeight });
-        syncWindReservation();
-        windOverlay?.setOptions({ ...windControls.state, units: intent().units });
-        windSession?.heightChanged(previousHeight);
-      }
       writer.intent({ windVisibleOverride: state.windVisible, windVisible: nextVisible, windStyle: nextStyle, windHeight: nextHeight });
+      windControls?.setState?.({ visible: nextVisible, style: nextStyle, height: nextHeight });
+      windOverlay?.setOptions({ style: nextStyle, visible: nextVisible, paused: intent().windPaused, units: intent().units });
+      syncWindReservation();
+      windSession?.heightChanged(previousHeight);
       if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); overlay?.setOpacity(state.opacity); }
       if (state.camera) map?.jumpTo(state.camera, { previewHistory: true });
       writer.intent({ requestedTime: state.validTime });
@@ -646,10 +648,12 @@ export function createPreviewApp(): PreviewApp {
       showMapFailure(event.error);
     });
 
-    document.addEventListener('visibilitychange', updateFreshness, globalListener);
-    window.addEventListener('focus', updateFreshness, globalListener);
-    window.addEventListener('pagehide', event => pageHide(event), globalListener);
-    window.addEventListener('pageshow', event => pageShow(event), globalListener);
+    installBrowserLifecycle({
+      document, window, signal: lifecycle.signal,
+      onVisibility: updateFreshness,
+      onPageHide: pageHide,
+      onPageShow: pageShow
+    });
     window.addEventListener('popstate', () => { void applyHistory(); }, globalListener);
 
     syncWindSupport(); syncLayers(); updateScale();
@@ -663,7 +667,7 @@ export function createPreviewApp(): PreviewApp {
 
     function pageHide(event: PageTransitionEvent): void {
       windCache.clear(); windSession?.clear(); locationController?.reset();
-      resumeModel = event.persisted ? (forecast().pendingModel ?? (intent().model === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
+      resumeModel = event.persisted ? resumeModelFor(forecast().pendingModel, intent().model) : null;
       loadAbort?.abort(); autoAbort?.abort();
       const pointInterrupted = event.persisted && pointSession?.pending;
       if (pointInterrupted) {

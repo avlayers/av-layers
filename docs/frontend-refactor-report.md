@@ -25,18 +25,25 @@ wind-control preference record while the rest of the UI is Preact-owned.
 
 The adversarial review found and this branch fixes:
 
-- BFCache now records an interrupted model/Auto lookup and resumes it on `pageshow`.
-- Wind overlay options use the overlay's `style`/`visible`/`paused` keys, so a deep link selecting barbs or hybrid starts correctly.
-- A model change keeps the committed raster visible until replacement succeeds or expires.
-- Point hours outside the map prefix still refresh the chart selection and map-wind readout.
-- Permanent disposal aborts model/Auto requests and guards late continuations.
-- Wind status and quality reach the imperative wind controls; an aligned field reports ready after a frame change.
-- An interrupted point request keeps the card and its message visible.
+- History restoration commits the restored wind height before notifying the wind session, so the installed field samples the restored height.
+- Point-only forecast hours refresh the chart and map-wind readout even when no rendered map frame exists; a focused point-session test covers it.
+- BFCache records the interrupted model/Auto discovery and resumes it on `pageshow`; late completions are guarded by request identity and disposal.
+- Switching to Auto clears an interrupted manual `pendingModel`, so recovery controls stay enabled.
+- Wind acquisition and presentation status are separate; a retained source becomes ready again when the raster recovers, and a height change rebuilds the installed field. Focused tests cover both completion orders and height replacement.
+- A requested custom layer survives discovery and is validated only against the resolved build.
+- Wind overlay options use explicit `style`/`visible`/`paused` keys for deep links and saved preferences.
+- Wind status and quality are forwarded to the imperative controls, including state published before lazy mounting.
+- A replacement model keeps the committed raster visible until the new display succeeds or the committed display expires.
+- Manual model loads normalize the committed requested time to the selected frame, so a model switch with a different grid does not drift the selected time.
+- URL-selected units are persisted at startup, matching the previous startup `setUnits` call.
 - Startup keeps the browser clock offset until the map leaves home.
-- Switching to Auto clears a pending explicit model.
+- Permanent disposal aborts model/Auto requests and guards late continuations.
 - Concurrent map clicks share one point-session initialization.
 - Wind disposal releases sources held only by retirement timers.
-- The lazy point and wind-control modules share one emitted chunk to reduce gzip overhead.
+- Browser lifecycle subscriptions moved to `platform/browser-lifecycle.ts`; wind intent decisions read the store rather than the imperative controls.
+- The unused `ModelPicker` and `LocateControl` components are removed.
+
+New focused tests cover wind acquisition/display status, height replacement, committed frame selection, custom-layer validation, point-only selection, resume policy and the scheduler queue bound.
 
 ## Verification
 
@@ -46,14 +53,14 @@ Environment: macOS arm64, pnpm 10.34.9, repository Node 22.23.4, Chromium via Pl
 | --- | --- |
 | `pnpm lint` | pass |
 | `pnpm typecheck` | pass (root, preview TSX, API) |
-| `pnpm test:frontend` | 30 files, 563 tests pass |
+| `pnpm test:frontend` | 33 files, 576 tests pass |
 | `pnpm verify` | pass |
 | `pnpm smoke:wind --fixture` | 12/12 checks pass, 0 page errors |
 | `pnpm bench:preview --scenario smoke` | pass, 0 stale-frame paints |
 | `git diff --check` | pass |
 
 Baseline frontend unit suite: 28 files, 639 tests, median 4.65 s (runs 5.80/4.62/4.65).
-Candidate: 30 files, 563 tests, median 4.23 s (runs 4.22/4.23/4.23).
+Candidate: 33 files, 576 tests, median 4.26 s (runs 4.26/4.23/4.28).
 
 ## Compressed assets
 
@@ -61,8 +68,8 @@ Measured with zlib gzip, matching the build checker.
 
 | Asset | Base | Candidate |
 | --- | ---: | ---: |
-| Startup JS | 391,946 B | 399,612 B |
-| Lazy JS (aggregate) | 27,336 B | 31,755 B |
+| Startup JS | 391,946 B | 399,682 B |
+| Lazy JS (aggregate) | 27,336 B | 31,757 B |
 | Worker JS | 150,556 B | 150,556 B |
 | CSS | 14,641 B | 15,212 B |
 | Windy plugin | 97,775 B | 97,775 B |
@@ -71,15 +78,16 @@ The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 
 ## Source size
 
-Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,072 lines (+911).
-Authored preview tests: 5,145 → 3,348 lines (−1,797). `main.test.ts` was replaced by
+Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,051 lines (+890).
+Authored preview tests: 5,145 → 3,542 lines (−1,603). `main.test.ts` was replaced by
 focused store, URL, timeline-model and scheduler tests plus the real-browser smoke.
 
 ## Limitations
 
 - Runtime lines increased. The fewer-lines goal is not met.
-- Test count fell from 639 to 563. The removed bootstrap fake-DOM suite was replaced by narrower controller/store coverage; that is a coverage reduction, not a consolidation of equal scope.
+- Test count fell from 639 to 576. The removed bootstrap fake-DOM suite is replaced by focused controller/store tests plus the browser smoke; BFCache, history-race and replacement-failure transitions are still not covered at the composition boundary.
 - The timeline and wind-controls DOM remain imperative; the plan's full TSX conversion for those two areas is not complete.
 - Only the transparency/smoke benchmark scenario was run after the migration. The paired 3× baseline/candidate 40-frame and 250 ms cold timing comparison was not run, so rendering-performance parity is unverified beyond the smoke result.
 - Physical iOS/Android devices and Firefox/WebKit were not tested. The existing smoke is Chromium-only.
-- The startup and lazy gates pass with limited headroom (about 388 B and 245 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
+- The startup and lazy gates pass with limited headroom (about 318 B and 243 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
+- `create-preview-app.ts` still owns forecast discovery, history application and expiry. The extracted browser lifecycle and feature sessions reduce, but do not finish, that split.
