@@ -171,7 +171,7 @@ function startPreview(lifecycle: AbortController): void {
     compactTimeline.setOffsetMinutes(next);
     updateTimeUi();
     updateOverlayStatus();
-    updateFreshness();
+    paintMapHorizon();
     updatePointSelection();
   }
 
@@ -384,13 +384,18 @@ function startPreview(lifecycle: AbortController): void {
     compactTimeline.update(build ? renderedFrames(build.manifest) : [], selectedFrame, !enabled);
   }
 
+  function paintMapHorizon(now = Date.now()): void {
+    if (!build || expired) return;
+    const notice = mapForecastHorizonNotice(build.manifest, now, ms => formatPlaceTime(ms, mapOffsetMinutes, 'stamp'));
+    horizonNotice.textContent = notice ?? ''; horizonNotice.hidden = notice === null;
+  }
+
   function updateFreshness(): void {
     overlay.refresh();
     if (!build || expired) return;
     const now = Date.now();
     if (build.expiresAtMs <= now) { expireView(); return; }
-    const notice = mapForecastHorizonNotice(build.manifest, now, ms => formatPlaceTime(ms, mapOffsetMinutes, 'stamp'));
-    horizonNotice.textContent = notice ?? ''; horizonNotice.hidden = notice === null;
+    paintMapHorizon(now);
     freshness.textContent = (currentModel === AUTO_MODEL_ID ? `${build.manifest.model} · ` : '') + formatBuildFreshness(build.manifest, build.expiresAtMs, now);
   }
 
