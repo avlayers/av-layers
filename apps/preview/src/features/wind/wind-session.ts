@@ -58,6 +58,7 @@ export interface WindSession {
   readonly displayed: boolean;
   readonly resident: boolean;
   readonly current: { build: PinnedBuild; frame: string; source: WindDataSource } | null;
+  readonly installed: { build: PinnedBuild; frame: string; source: WindDataSource; height: WindHeight } | null;
   destroy(): void;
 }
 
@@ -65,7 +66,7 @@ export interface WindSession {
 export function createWindSession(options: WindSessionOptions): WindSession {
   const { map, publish, field, state } = options;
   let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
-  let windDisplayed = false, windLoading = false, height: WindHeight = 'surface';
+  let windDisplayed = false, windLoading = false, height: WindHeight = 'surface', installedHeight: WindHeight = 'surface';
   let fillTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
   let acquireStatus: WindStatus = 'unavailable';
   const windHeld = new Map<string, WindRequest>();
@@ -124,6 +125,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (mode === 'swap' && installedWind === view) return;
     const previous = mode === 'swap' ? installedWind : null;
     height = state().height;
+    installedHeight = height;
     const prepared = typeof view.source.prepare === 'function' ? view.source.prepare(height) : null;
     field.setField(typeof view.source.field === 'function' ? view.source.field(height) : {
       sample: (lat, lon) => {
@@ -327,6 +329,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     get displayed() { return windDisplayed; },
     get resident() { return Boolean(windView || windRequest || windPrefetch || windHeld.size || retiring.size); },
     get current() { return windView; },
+    get installed() { return installedWind && windDisplayed ? { build: installedWind.build, frame: installedWind.frame, source: installedWind.source, height: installedHeight } : null; },
     destroy() {
       if (destroyed) return;
       destroyed = true;

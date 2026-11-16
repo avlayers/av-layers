@@ -172,3 +172,15 @@ it('installs the prepared lattice before a warmed selection commits', async () =
   test.session.destroy();
 });
 
+
+it('reports the installed height rather than the pending intent', async () => {
+  const test = harness();
+  await ready(test);
+  test.setDisplayed({ build: test.buildA, frame: test.framesA[0]!.id });
+  test.session.reconcile();
+  test.setHeight(1000);
+  expect(test.session.installed).toMatchObject({ frame: test.framesA[0]!.id, height: 'surface' });
+  test.session.heightChanged('surface');
+  expect(test.session.installed).toMatchObject({ height: 1000 });
+  test.session.destroy();
+});

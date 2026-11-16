@@ -430,9 +430,9 @@ export function createPreviewApp(): PreviewApp {
       getMapOffset: () => mapOffsetMinutes,
       getDisplayedFrame: displayedPointFrame,
       getWind: () => {
-        const current = windSession?.current;
-        return current && windSession?.displayed
-          ? { build: current.build, frame: current.frame, sample: (lat, lon) => current.source.sample(lat, lon, intent().windHeight) }
+        const installed = windSession?.installed;
+        return installed
+          ? { build: installed.build, frame: installed.frame, sample: (lat, lon) => installed.source.sample(lat, lon, installed.height) }
           : null;
       },
       ensureLive: () => forecastSession.ensureLive(),
