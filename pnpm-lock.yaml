@@ -168,6 +168,9 @@ importers:
       '@av/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@av/solar':
+        specifier: workspace:*
+        version: link:../../packages/solar
       '@av/windgram':
         specifier: workspace:*
         version: link:../../packages/windgram

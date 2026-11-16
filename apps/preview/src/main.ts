@@ -151,21 +151,22 @@ function startPreview(lifecycle: AbortController): void {
   };
   const compactTimeline = createCompactTimeline(element('compact-timeline'), {
     offsetMinutes: mapOffsetMinutes,
-    onSelect: index => selectIndex(index, 'push')
+    ...(followsPlace && Number.isFinite(home.lat) && Number.isFinite(home.lng) ? { latitude: home.lat, longitude: home.lng } : {}),
+    onSelect: (index, history = 'push') => selectIndex(index, history)
   });
   syncWindSupport();
   windControls.setUnits(pointUnitSystem);
   windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
 
   function syncMapClock(): void {
+    const center = map.getCenter();
     if (!followsPlace) {
-      const center = map.getCenter();
       const moved = Math.abs(center.lat - home.lat) > 1e-4 || Math.abs(normalizeLon(center.lng) - normalizeLon(home.lng)) > 1e-4;
       if (!moved) return;
       followsPlace = true;
     }
-    const lng = map.getCenter().lng;
-    const next = Number.isFinite(lng) ? longitudeOffsetHours(lng) * 60 : mapOffsetMinutes;
+    if (Number.isFinite(center.lat) && Number.isFinite(center.lng)) compactTimeline.setMapCenter(center.lat, center.lng);
+    const next = Number.isFinite(center.lng) ? longitudeOffsetHours(center.lng) * 60 : mapOffsetMinutes;
     if (next === mapOffsetMinutes) return;
     mapOffsetMinutes = next;
     compactTimeline.setOffsetMinutes(next);
