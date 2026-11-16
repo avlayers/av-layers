@@ -1,11 +1,18 @@
 import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, encodeWindByte, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
 
 type WindStatus = 'valid' | 'unavailable' | 'outside' | 'no-lift';
+export interface WindPreparedGrid {
+  readonly bounds: GeographicBounds;
+  readonly data: Uint8Array<ArrayBuffer>;
+  readonly size: number;
+  readonly height: 'surface' | number | 'lift';
+  readonly key: string;
+}
 export interface WindSample { status: WindStatus; u: number | null; v: number | null }
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
@@ -265,6 +272,7 @@ export class WindDataSource {
   private pending: Promise<unknown> = Promise.resolve();
   private readonly cache: WindDataCache;
   private readonly held = new Set<CachedBytes>();
+  private readonly preparedGrids = new Map<string, WindPreparedGrid>();
   private active?: AbortController;
   constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean; retryDelaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void>; random?: () => number } = {}) {
     this.cache = options.cache ?? new WindDataCache();
@@ -302,6 +310,36 @@ export class WindDataSource {
         return out;
       }
     };
+  }
+
+  /**
+   * Quantized rendered lattice for the admitted extent. Sampling runs against the scientific
+   * sampler once per retained frame; selection only uploads the returned bytes.
+   */
+  prepare(height: 'surface' | number | 'lift', size = 128): WindPreparedGrid | null {
+    const current = this.current;
+    if (!current || current.build.expiresAtMs <= Date.now()) return null;
+    if (!Number.isSafeInteger(size) || size < 1 || size > 1024) throw new RangeError('Invalid wind preparation size');
+    if (height !== 'surface' && height !== 'lift' && (!Number.isFinite(height) || height < 0)) throw new RangeError('Invalid AGL height');
+    const key = `${this.generation}:${height}:${size}`;
+    const cached = this.preparedGrids.get(key);
+    if (cached) return cached;
+    const data = new Uint8Array(new ArrayBuffer(size * size * 4));
+    const [west, south, east, north] = current.bounds;
+    const span = east >= west ? east - west : east + 360 - west;
+    for (let y = 0; y < size; y++) {
+      const lat = south + (north - south) * (y + 0.5) / size;
+      for (let x = 0; x < size; x++) {
+        const sample = this.sample(lat, normalizeLon(west + span * (x + 0.5) / size), height);
+        if (sample.status !== 'valid' || sample.u === null || sample.v === null) continue;
+        const offset = (y * size + x) * 4;
+        data[offset] = encodeWindByte(sample.u); data[offset + 1] = encodeWindByte(sample.v); data[offset + 3] = 255;
+      }
+    }
+    const grid: WindPreparedGrid = { bounds: [west, south, east, north], data, size, height, key };
+    if (this.preparedGrids.size >= 4) this.preparedGrids.delete(this.preparedGrids.keys().next().value!);
+    this.preparedGrids.set(key, grid);
+    return grid;
   }
 
   private release(): void {
@@ -606,7 +644,7 @@ export class WindDataSource {
   }
 
   dispose(): void {
-    this.disposed = true; this.controller?.abort(); this.current = undefined; this.generation++;
+    this.disposed = true; this.controller?.abort(); this.current = undefined; this.preparedGrids.clear(); this.generation++;
     if (!this.active) this.release();
   }
 }

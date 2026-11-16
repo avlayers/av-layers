@@ -1,7 +1,7 @@
 import { normalizeLon } from '@av/contracts/geometry';
 import type { PinnedBuild } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
-import { type WindDataCache, WindCapacityError, WindDataSource } from '@av/client/wind';
+import { type WindDataCache, type WindPreparedGrid, WindCapacityError, WindDataSource } from '@av/client/wind';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import type { MapBoundsPort, Bounds } from '../map/viewport-policy';
 import { cameraBounds, coversBounds, FOCUS_DWELL_MS, windBounds } from '../map/viewport-policy';
@@ -23,7 +23,7 @@ export interface WindSessionOptions {
   readonly scheduler: WindSchedulerPort;
   readonly cache: WindCachePort;
   readonly overlay: { setWindActive(active: boolean, resident: boolean): void };
-  readonly field: { setField(field: WindField, mode: 'replace' | 'swap'): void; clear(): void };
+  readonly field: { setField(field: WindField, mode: 'replace' | 'swap'): void; setPrepared(prepared: WindPreparedGrid | null): void; clear(): void };
   readonly publish: {
     status(status: WindStatus): void;
     quality(overview: boolean): void;
@@ -119,6 +119,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (mode === 'swap' && installedWind === view) return;
     const previous = mode === 'swap' ? installedWind : null;
     height = state().height;
+    const prepared = typeof view.source.prepare === 'function' ? view.source.prepare(height) : null;
     field.setField(typeof view.source.field === 'function' ? view.source.field(height) : {
       sample: (lat, lon) => {
         const sample = view.source.sample(lat, normalizeLon(lon), height);
@@ -126,6 +127,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         return { ...sample, status };
       }
     }, mode);
+    field.setPrepared(prepared);
     installedWind = view;
     windDisplayed = true;
     publish.displayed(true);

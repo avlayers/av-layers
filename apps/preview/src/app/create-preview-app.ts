@@ -456,7 +456,7 @@ export function createPreviewApp(): PreviewApp {
     windSession = createWindSession({
       apiBaseUrl, map, lowMemory, scheduler: windScheduler, cache: windCache,
       overlay: { setWindActive: (active, resident) => overlay!.setWindActive(active, resident) },
-      field: { setField: (field, mode) => windOverlay!.setField(field, mode), clear: () => windOverlay!.clear() },
+      field: { setField: (field, mode) => windOverlay!.setField(field, mode), setPrepared: prepared => windOverlay!.setPrepared(prepared), clear: () => windOverlay!.clear() },
       publish: {
         status: status => { writer.wind({ status }); windControls?.setStatus(status); },
         quality: overview => { writer.wind({ overview }); windControls?.setQuality?.(overview); },

@@ -18,6 +18,7 @@ vi.mock('@av/client/wind', () => ({
     });
     readonly dispose = vi.fn();
     readonly sample = vi.fn((_lat: number, _lon: number, height: WindHeight) => ({ u: 1, v: 2, status: 'valid', height }));
+    readonly prepare = vi.fn((height: WindHeight) => ({ bounds: [0, 0, 1, 1], data: new Uint8Array(4), size: 1, height, key: `prepared:${height}` }));
   }
 }));
 
@@ -36,14 +37,14 @@ function harness() {
   let build = buildA, frame = framesA[0]!.id, height: WindHeight = 'surface', failed = false;
   let displayedRaster: { build: typeof buildA; frame: string } | null = null;
   let bounds = { west: -110, east: -90, south: 30, north: 45 };
-  const clear = vi.fn();
+  const clear = vi.fn(), prepared = vi.fn();
   const session = createWindSession({
     apiBaseUrl: 'https://api.test', lowMemory: false,
     map: { getZoom: () => 5, getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north }) },
     scheduler: { fetch: vi.fn() as unknown as typeof fetch },
     cache: { isBuildUnavailable: () => false, allocatedBytes: 0, clear: vi.fn() },
     overlay: { setWindActive: vi.fn() },
-    field: { setField: (_field, mode) => { fields.push(height); modes.push(mode); }, clear },
+    field: { setField: (_field, mode) => { fields.push(height); modes.push(mode); }, setPrepared: prepared, clear },
     publish: {
       status: status => statuses.push(status), quality: overview => qualities.push(overview),
       displayed: value => displayed.push(value), reservation: vi.fn(), pointWind: vi.fn()
@@ -53,7 +54,7 @@ function harness() {
     replacementFailed: () => failed
   });
   return {
-    session, buildA, buildB, framesA, framesB, statuses, fields, modes, displayed, clear,
+    session, buildA, buildB, framesA, framesB, statuses, fields, modes, displayed, clear, prepared,
     setBuild: (value: typeof buildA) => { build = value; }, setFrame: (value: string) => { frame = value; },
     setDisplayed: (value: typeof displayedRaster) => { displayedRaster = value; }, setFailed: (value: boolean) => { failed = value; },
     setHeight: (value: WindHeight) => { height = value; }, setBounds: (value: typeof bounds) => { bounds = value; }
@@ -161,4 +162,12 @@ describe('wind warming recovery', () => {
     await vi.waitFor(() => expect(wind.loads.filter(frame => frame === test.framesA[1]!.id).length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
     test.session.destroy();
   });
+});
+
+it('installs the prepared lattice before a warmed selection commits', async () => {
+  const test = harness();
+  await ready(test);
+  expect(test.prepared).toHaveBeenCalled();
+  expect(test.prepared.mock.calls.at(-1)![0]).toMatchObject({ height: 'surface', size: 1 });
+  test.session.destroy();
 });

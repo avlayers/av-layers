@@ -1,10 +1,12 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
+import { decodeWindByte, encodeWindByte } from '@av/contracts/wind-data';
+import type { WindPreparedGrid } from '@av/client/wind';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
 import { WIND_TRAIL_WIDTH } from '../raster/raster-budget';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
-export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
+export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setPrepared(prepared: WindPreparedGrid | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
 
 const STATE = 64, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
 const FULL = `#version 300 es
@@ -60,8 +62,7 @@ export function trailTargetSize(bufferWidth: number, bufferHeight: number, maxSi
 }
 
 const valid = (s: { u: number | null; v: number | null; status: number }) => (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null;
-export const encodeWindByte = (v: number) => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
-const decodeWindByte = (byte: number) => byte / 255 * 200 - 100;
+export { encodeWindByte } from '@av/contracts/wind-data';
 
 export interface EncodedWind { u: number; v: number }
 
@@ -106,12 +107,12 @@ function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgr
 /** Draws particle trails into the map WebGL context. Returns null when the map cannot host a custom layer. */
 export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl | null {
   if (typeof map.addLayer !== 'function' || typeof map.once !== 'function') return null;
-  const state = { from: null as WindSampleField | null, to: null as WindSampleField | null, paused: false, hidden: true, added: false, ready: false, failed: false, destroyed: false };
+  const state = { from: null as WindSampleField | null, to: null as WindSampleField | null, prepared: null as WindPreparedGrid | null, paused: false, hidden: true, added: false, ready: false, failed: false, destroyed: false };
   const report = (ok: boolean) => queueMicrotask(() => { if (!state.destroyed) onReady(ok); });
   let gl: WebGL2RenderingContext | null = null;
   let updateProg: WebGLProgram | null = null, lineProg: WebGLProgram | null = null, blitProg: WebGLProgram | null = null;
   let vao: WebGLVertexArrayObject | null = null, states: WebGLTexture[] = [], stateFbo: WebGLFramebuffer[] = [], winds: WebGLTexture[] = [], trails: WebGLTexture[] = [], trailFbo: WebGLFramebuffer[] = [];
-  let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false;
+  let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false, uploadedPrepared: WindPreparedGrid | null = null;
   let bounds = { west: -180, south: -85, east: 180, north: 85 }, trailW = 1, trailH = 1, maxTrailSide = TRAIL_SIDE;
   const blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), pending = { a: blank, b: blank, dirty: false };
 
@@ -158,7 +159,16 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     reset = 1;
   }
   function uploadWind(): void {
-    if (!gl || !pending.dirty) return;
+    if (!gl) return;
+    if (state.prepared) {
+      if (uploadedPrepared === state.prepared) return;
+      gl.bindTexture(gl.TEXTURE_2D, winds[0]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, state.prepared.size, state.prepared.size, 0, gl.RGBA, gl.UNSIGNED_BYTE, state.prepared.data);
+      uploadedPrepared = state.prepared;
+      return;
+    }
+    if (!pending.dirty) return;
+    uploadedPrepared = null;
     for (const [texture, data] of [[winds[0], pending.a], [winds[1], pending.b]] as const) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
@@ -178,15 +188,20 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl = null; state.ready = false;
   }
   function frame(matrix: ArrayLike<number>): void {
-    if (!gl || state.failed || !state.ready || state.hidden || !state.to) return;
+    if (!gl || state.failed || !state.ready || state.hidden || (!state.to && !state.prepared)) return;
     const now = performance.now(), dt = last ? Math.min((now - last) / 1000, 0.1) : 0;
     if (state.from && now - blendAt >= PLAYBACK_STEP_MS) state.from = null;
     last = now;
     const nextZoom = map.getZoom();
-    if (!inside() || nextZoom !== zoom) {
+    if (state.prepared) {
+      if (uploadedPrepared !== state.prepared) {
+        bounds = { west: state.prepared.bounds[0], south: state.prepared.bounds[1], east: state.prepared.bounds[2], north: state.prepared.bounds[3] };
+        reset = 1;
+      }
+    } else if (!inside() || nextZoom !== zoom) {
       const area = viewBounds();
       if (area) bounds = area;
-      pending.a = grid(state.from ?? state.to); pending.b = grid(state.to); pending.dirty = true; reset = 1; zoom = nextZoom;
+      pending.a = grid(state.from ?? state.to); pending.b = grid(state.to!); pending.dirty = true; reset = 1; zoom = nextZoom;
     }
     uploadWind(); sizeTrail();
     const update = updateProg!, blit = blitProg!, lines = lineProg!;
@@ -201,7 +216,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.useProgram(update);
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
     gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, winds[0]);
-    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, winds[1]);
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, state.prepared ? winds[0] : winds[1]);
     gl.uniform1i(gl.getUniformLocation(update, 'u_state'), 0);
     gl.uniform1i(gl.getUniformLocation(update, 'u_a'), 1);
     gl.uniform1i(gl.getUniformLocation(update, 'u_b'), 2);
@@ -247,7 +262,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.useProgram(savedProgram); gl.bindVertexArray(savedVao); gl.bindTexture(gl.TEXTURE_2D, null);
   }
   function present(): void {
-    if (!gl || state.failed || !state.ready || state.hidden || !state.to) return;
+    if (!gl || state.failed || !state.ready || state.hidden || (!state.to && !state.prepared)) return;
     const savedProgram = gl.getParameter(gl.CURRENT_PROGRAM) as WebGLProgram | null;
     const savedVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
     const blit = blitProg!;
@@ -335,15 +350,25 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   else map.once('style.load', mount);
   return {
     setFields(from, to) {
+      if (state.prepared) { state.prepared = null; uploadedPrepared = null; }
       if (state.from === from && state.to === to) { if (state.ready && !state.hidden) map.triggerRepaint(); return; }
       state.from = from; state.to = to; blendAt = performance.now();
       if (Number.isNaN(zoom)) { const area = viewBounds(); if (area) bounds = area; }
       pending.a = grid(from ?? to); pending.b = grid(to); pending.dirty = true;
       if (state.ready) map.triggerRepaint();
     },
+    setPrepared(prepared) {
+      if (state.prepared === prepared) { if (prepared && state.ready && !state.hidden) map.triggerRepaint(); return; }
+      state.prepared = prepared; state.from = null; state.to = null; uploadedPrepared = null;
+      if (prepared) {
+        bounds = { west: prepared.bounds[0], south: prepared.bounds[1], east: prepared.bounds[2], north: prepared.bounds[3] };
+        reset = 1;
+      }
+      if (state.ready) map.triggerRepaint();
+    },
     setMotion(paused, hidden) { state.paused = paused; state.hidden = hidden; if (!hidden && state.ready) map.triggerRepaint(); },
     destroy() {
-      state.destroyed = true; state.to = null;
+      state.destroyed = true; state.to = null; state.prepared = null;
       for (const event of ['idle', 'styledata'] as const) map.off(event, raise);
       if (state.added && map.getLayer(LAYER)) map.removeLayer(LAYER);
     }

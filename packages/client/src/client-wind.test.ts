@@ -735,3 +735,25 @@ it('exposes capacity as a typed error and keeps ordinary validation as RangeErro
   expect((error as WindCapacityError).code).toBe('capacity');
   expect(() => new WindDataCache(1024, 1)).toThrow(RangeError);
 });
+
+
+it('prepares a quantized rendered lattice once per height and extent', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } })
+    : reply(String(url).includes('/wind/') ? wind : fine));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
+  const sample = vi.spyOn(source, 'sample');
+  const first = source.prepare('surface', 4)!;
+  expect(first.size).toBe(4);
+  expect(first.bounds).toEqual([...bounds]);
+  expect(sample).toHaveBeenCalledTimes(16);
+  expect(first.data.some(byte => byte !== 0)).toBe(true);
+  expect(source.prepare('surface', 4)).toBe(first);
+  expect(sample).toHaveBeenCalledTimes(16);
+  const agl = source.prepare(450, 4)!;
+  expect(agl).not.toBe(first);
+  expect(sample).toHaveBeenCalledTimes(32);
+  source.dispose();
+});
