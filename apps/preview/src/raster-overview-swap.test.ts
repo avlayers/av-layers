@@ -172,12 +172,17 @@ it.each(['movestart', 'resize'] as const)('cancels deferred refinement on %s and
     const b = await f.initial(), [, second] = b.manifest.frames;
     f.overview().warm(second.id); f.overlay.select(b, 'usable-lift-agl', second.id); f.emit('render');
     f.emit(event); f.emit('render');
-    expect(f.painted()).toEqual([]);
-    expect(f.state()).toMatchObject({ displayed: null, quality: null });
     const afterResize = f.fine(second.id);
-    vi.advanceTimersByTime(200);
-    if (event === 'movestart') { expect(f.fine(second.id)).toBeUndefined(); f.emit('moveend'); vi.advanceTimersByTime(100); }
-    else { expect(afterResize).toBeDefined(); expect(f.fine(second.id)).toBe(afterResize); }
+    if (event === 'movestart') {
+      expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
+      expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'overview' });
+      expect(f.fine(second.id)).toBeUndefined();
+      f.emit('moveend'); vi.advanceTimersByTime(100);
+    } else {
+      expect(f.painted()).toEqual([]);
+      expect(f.state()).toMatchObject({ displayed: null, quality: null });
+      expect(afterResize).toBeDefined(); expect(f.fine(second.id)).toBe(afterResize);
+    }
     const detail = f.fine(second.id)!; expect(detail).toBeDefined();
     await f.complete(detail);
     expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'detail' });
@@ -231,8 +236,27 @@ it.each(['sourcedata', 'sourcedataabort'] as const)('keeps the active viewport l
   } finally { f.overlay.destroy(); }
 });
 
+it('stays on the resident overview while playing and refines after pause', () => {
+  const f = fixture();
+  try {
+    const b = fixtureBuild(), [, second] = b.manifest.frames;
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    vi.advanceTimersByTime(100);
+    f.overview().warm(second.id);
+    f.overlay.setPlayback(true);
+    f.overlay.select(b, 'usable-lift-agl', second.id);
+    f.emit('render');
+    vi.advanceTimersByTime(500);
+    expect(f.fine(second.id)).toBeUndefined();
+    expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
+    f.overlay.setPlayback(false);
+    vi.advanceTimersByTime(100);
+    expect(f.fine(second.id)).toBeDefined();
+  } finally { f.overlay.destroy(); }
+});
+
 it.each([false, true])('keeps one fine source within a large viewport budget (overview ready: %s)', async ready => {
-  const f = fixture(64);
+  const f = fixture(80);
   try {
     const b = await f.initial(), [, second] = b.manifest.frames;
     if (ready) f.overview().warm(second.id);
@@ -271,7 +295,7 @@ it.each(['clear', 'expire', 'build', 'layer'] as const)('invalidates an unpainte
 });
 
 it('disables overview residency when one visible fine source consumes its reserved budget', async () => {
-  const f = fixture(128);
+  const f = fixture(177);
   try {
     const b = await f.initial(), [, second] = b.manifest.frames;
     expect(f.state()).toMatchObject({ overviewReady: 0, overviewTotal: 0 });

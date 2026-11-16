@@ -2,20 +2,27 @@ interface SchedulerOptions {
   fetchImpl?: typeof fetch;
   maxActive?: number;
   maxQueued?: number;
+  /** When set, the concurrency slot frees at headers. Each request reserves 1 MiB until content-length arrives. */
+  maxInFlightBytes?: number;
 }
+
+const HEADER_RESERVE_BYTES = 1024 * 1024;
+const MAX_IN_FLIGHT_BYTES = 4 * 1024 * 1024;
 
 export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const maxActive = options.maxActive ?? 6, maxQueued = options.maxQueued ?? 64;
-  if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 6
-    || !Number.isSafeInteger(maxQueued) || maxQueued < 0 || maxQueued > 64) throw new Error('Invalid forecast request limits');
+  const maxActive = options.maxActive ?? 6, maxQueued = options.maxQueued ?? 64, maxInFlightBytes = options.maxInFlightBytes;
+  if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 12
+    || !Number.isSafeInteger(maxQueued) || maxQueued < 0 || maxQueued > 64
+    || (maxInFlightBytes !== undefined && (!Number.isSafeInteger(maxInFlightBytes) || maxInFlightBytes < 1024 || maxInFlightBytes > MAX_IN_FLIGHT_BYTES))) throw new Error('Invalid forecast request limits');
 
-  const queued: Array<{ start(): void; controller: AbortController; low: boolean }> = [], active = new Set<AbortController>();
-  let disposed = false;
+  const queued: Array<{ start(): void; controller: AbortController; low: boolean }> = [], active = new Set<AbortController>(), live = new Set<AbortController>();
+  let disposed = false, bodyBytes = 0;
   const abortError = () => new DOMException('Forecast request cancelled', 'AbortError');
+  const fits = () => maxInFlightBytes === undefined || bodyBytes + HEADER_RESERVE_BYTES <= maxInFlightBytes;
 
   function pump() {
-    while (!disposed && active.size < maxActive && queued.length) {
+    while (!disposed && active.size < maxActive && queued.length && fits()) {
       const foreground = queued.findIndex(task => !task.low);
       queued.splice(foreground < 0 ? 0 : foreground, 1)[0].start();
     }
@@ -34,15 +41,19 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
 
     const controller = new AbortController();
     const task = { start, controller, low };
-    let started = false, finished = false, delivered = false;
+    let started = false, finished = false, delivered = false, heldBytes = 0;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let cancellation: Promise<void> | undefined;
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const charge = (next: number) => { bodyBytes += next - heldBytes; heldBytes = next; };
+    const releaseCharge = () => { bodyBytes -= heldBytes; heldBytes = 0; };
     function finish() {
       if (finished) return;
       finished = true;
+      releaseCharge();
       signal?.removeEventListener('abort', externalAbort);
       controller.signal.removeEventListener('abort', abort);
+      live.delete(controller);
       if (started) active.delete(controller);
       else {
         const index = queued.indexOf(task);
@@ -58,9 +69,10 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
       const reason = controller.signal.reason;
       if (delivered) streamController?.error(reason);
       else reject(reason);
-      // Cancellation still owns a slot until the fetch or body releases its resources.
+      // A body-gated request keeps its slot until the fetch or body settles. A byte-budget
+      // request releases its reserve here so a cancel does not keep the cap full.
       if (reader) void cancelReader(reason);
-      else if (!started) finish();
+      else if (!started || maxInFlightBytes !== undefined) finish();
     }
     function externalAbort() { controller.abort(signal?.reason); }
     controller.signal.addEventListener('abort', abort, { once: true });
@@ -68,9 +80,21 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     function start() {
       started = true;
       active.add(controller);
+      live.add(controller);
       void (async () => {
+        if (maxInFlightBytes !== undefined) charge(HEADER_RESERVE_BYTES);
         try {
           const response = await fetchImpl(input, { ...init, signal: controller.signal });
+          if (controller.signal.aborted) {
+            await response.body?.cancel(controller.signal.reason).catch(() => {});
+            finish(); return;
+          }
+          if (maxInFlightBytes !== undefined) {
+            const declared = Number(response.headers.get('content-length'));
+            charge(Number.isFinite(declared) && declared >= 0 ? declared : heldBytes);
+            active.delete(controller);
+            pump();
+          }
           if (controller.signal.aborted) {
             await response.body?.cancel(controller.signal.reason).catch(() => {});
             finish(); return;
@@ -118,7 +142,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     dispose() {
       if (disposed) return;
       disposed = true;
-      for (const controller of [...active]) controller.abort(abortError());
+      for (const controller of [...live]) controller.abort(abortError());
       for (const task of [...queued]) task.controller.abort(abortError());
     }
   };

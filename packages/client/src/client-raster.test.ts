@@ -82,21 +82,24 @@ it('enforces the total deadline during body consumption and cancels the stalled 
   const pending = expect(protocol.load({ url: protocol.url(tile()) }, new AbortController())).rejects.toMatchObject({ name: 'TimeoutError' });
   await vi.advanceTimersByTimeAsync(11); await pending; expect(cancel).toHaveBeenCalled();
 });
-it('cancels an active response body on caller abort and releases its slot for a queued tile', async () => {
-  const cancelled = [vi.fn(), vi.fn()];
-  const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(async () => new Response(new ReadableStream({ cancel: cancelled[0] }), { headers: { 'content-type': 'image/webp' } }))
-    .mockImplementationOnce(async () => new Response(new ReadableStream({ cancel: cancelled[1] }), { headers: { 'content-type': 'image/webp' } }))
-    .mockImplementation(async () => webp());
-  const protocol = setup({ fetchImpl, maxActive: 2 }), controllers = [new AbortController(), new AbortController()];
-  const active = controllers.map((controller, i) => protocol.load({ url: protocol.url(tile(i)) }, controller));
-  const rejected = active.map(pending => expect(pending).rejects.toMatchObject({ name: 'AbortError' }));
-  const queued = protocol.load({ url: protocol.url(tile(2)) }, new AbortController());
+it('caches a 200 after the caller leaves and still aborts before headers', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl, maxActive: 1 });
+  const early = new AbortController();
+  const rejected = expect(protocol.load({ url: protocol.url(tile()) }, early)).rejects.toMatchObject({ name: 'AbortError' });
+  early.abort(); await rejected;
+  expect(fetchImpl.mock.calls[0]![1]!.signal!.aborted).toBe(true);
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  fetchImpl.mockImplementationOnce(async () => new Response(new ReadableStream({ start(value) { controller = value; } }), { status: 200, headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const late = new AbortController();
+  const left = expect(protocol.load({ url: protocol.url(tile(1)) }, late)).rejects.toMatchObject({ name: 'AbortError' });
+  finish[0]?.(webp());
+  await vi.waitFor(() => expect(controller).toBeTypeOf('object'));
+  late.abort(); await left;
+  controller.enqueue(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]));
+  controller.close();
+  await vi.waitFor(() => expect(protocol.stats().cachedTiles).toBe(1));
+  await protocol.load({ url: protocol.url(tile(1)) }, new AbortController());
   expect(fetchImpl).toHaveBeenCalledTimes(2);
-  await Promise.resolve(); await Promise.resolve();
-  controllers[0].abort(); await rejected[0];
-  expect((await queued).data.byteLength).toBe(12); expect(cancelled[0]).toHaveBeenCalled();
-  expect(fetchImpl).toHaveBeenCalledTimes(3);
-  controllers[1].abort(); await rejected[1]; expect(cancelled[1]).toHaveBeenCalled();
 });
 it('cancels retry backoff on disposal and does not make another request', async () => {
   vi.useFakeTimers(); const fetchImpl = vi.fn<typeof fetch>(async () => new Response('busy', { status: 503 }));

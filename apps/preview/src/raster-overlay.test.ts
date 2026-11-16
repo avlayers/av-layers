@@ -624,7 +624,7 @@ it('shrinks the prepared window on resize and admits no speculative sources over
 });
 
 it('does not admit a raster when even one source exceeds the viewport budget', () => {
-  const f = fixture(256), b = build();
+  const f = fixture(273), b = build();
   try {
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
     expect(f.sources.size).toBe(0);
@@ -641,7 +641,7 @@ it.each(['resize', 'move'] as const)('prunes sources as the viewport grows on %s
     f.overlay.select(b, 'usable-lift-agl', frames[0].id); await completeWindow(f);
     expect(f.sources.size).toBe(4);
     if (event === 'move') f.emit('movestart');
-    f.setCoveringCount(256); f.emit(event);
+    f.setCoveringCount(273); f.emit(event);
     expect(f.sources.size).toBe(0);
     expect(f.states.at(-1)).toMatchObject({ displayed: null, replacementFailed: true });
     f.emit('render'); f.emit('idle');

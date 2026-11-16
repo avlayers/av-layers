@@ -1,10 +1,12 @@
 import { formatPlaceTime, placeDateKey } from '@av/client';
 import { solarPosition, sunriseSunsetInRange } from '@av/solar';
 import './compact-timeline.css';
+import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface TimelineFrame { readonly id: string; readonly validTime: string }
 export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
+  onPlayback?(playing: boolean): void;
   offsetMinutes?: number;
   latitude?: number;
   longitude?: number;
@@ -21,7 +23,7 @@ export interface RibbonStop { readonly at: number; readonly color: string }
 interface LocalTime { day: string; hour: number; minute: number }
 interface DayGroup { day: string; indices: number[] }
 
-const PLAYBACK_INTERVAL_MS = 700;
+const PLAYBACK_INTERVAL_MS = PLAYBACK_STEP_MS;
 const DAY_MS = 86_400_000;
 const NIGHT = '#1c3358';
 const DAWN = '#e8893a';
@@ -354,7 +356,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   }
 
   const stopPlayback = () => {
+    const wasPlaying = timer !== null;
     if (timer !== null) { clearInterval(timer); timer = null; }
+    if (wasPlaying) options.onPlayback?.(false);
     if (!destroyed) render();
   };
 
@@ -368,6 +372,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       select(selectedIndex + 1, 'replace', false);
       if (selectedIndex >= frames.length - 1) stopPlayback();
     }, PLAYBACK_INTERVAL_MS);
+    options.onPlayback?.(true);
     render();
   });
 
@@ -452,7 +457,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     destroy() {
       if (destroyed) return;
       destroyed = true;
-      if (timer !== null) { clearInterval(timer); timer = null; }
+      stopPlayback();
       activePointer = null;
       gestureStart = -1;
       resizeObserver?.disconnect();

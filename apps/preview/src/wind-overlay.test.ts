@@ -153,6 +153,20 @@ it.each([
   f.overlay.destroy();
 });
 
+it('keeps connected trails when the field is swapped', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture();
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  f.tick(1000); f.tick(1100);
+  const moves = f.canvases[0].context.moveTo.mock.calls.length;
+  f.canvases[0].context.clearRect.mockClear();
+  f.overlay.setField({ sample: () => ({ status: 0, u: 0, v: 10 }) }, 'swap');
+  expect(f.canvases[0].context.clearRect).not.toHaveBeenCalled();
+  f.tick(1200);
+  expect(f.canvases[0].context.moveTo.mock.calls.length).toBeGreaterThan(moves);
+  f.overlay.destroy();
+});
+
 it('advects connected trails downwind and clears them on replacement', () => {
   vi.spyOn(Math, 'random').mockReturnValue(0.5);
   const f = fixture(), field: WindField = { sample: () => ({ status: 0, u: 10, v: 0 }) };

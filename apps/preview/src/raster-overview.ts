@@ -3,6 +3,7 @@ import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInser
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
+import { PLAYBACK_STEP_MS } from './timeline';
 
 const FRAME_LIMIT = 40;
 const PREFILL_BYTES = 1024 * 1024;
@@ -54,7 +55,9 @@ function geometry(map: Map, maxzoom: number): Geometry | null {
 /** Resident 256² viewport images for one build/layer; the owner commits visible paint changes. */
 export class RasterOverview {
   readonly id = `av-overview-${crypto.randomUUID()}`;
+  private readonly blendId: string;
   readonly supported: boolean;
+  private playing = false;
   private readonly canvas: OffscreenCanvas | null;
   private readonly transport: RasterTileSourceTransport | null;
   private context: Context | null = null;
@@ -67,6 +70,7 @@ export class RasterOverview {
   private disposed = false;
 
   constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void) {
+    this.blendId = `${this.id}-blend`;
     this.canvas = typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function' && typeof map.getCanvas === 'function'
       ? new OffscreenCanvas(RASTER_TILE_SIZE, RASTER_TILE_SIZE) : null;
     this.supported = !!this.canvas?.getContext('2d') && typeof this.canvas.transferToImageBitmap === 'function';
@@ -97,6 +101,13 @@ export class RasterOverview {
     this.pump();
   }
 
+  setPlayback(playing: boolean): void {
+    this.playing = playing;
+    if (!playing) this.removeBlend();
+  }
+
+  coversView(): boolean { return this.covers(); }
+
   ready(build: PinnedBuild, layer: LayerId, frame: string): boolean {
     return !this.disposed && this.context?.build === build && this.context.layer === layer && build.expiresAtMs > Date.now() && this.images.has(frame) && this.covers();
   }
@@ -109,14 +120,19 @@ export class RasterOverview {
       this.map.addLayer({ ...previewRasterLayer(0), id: this.id, source: this.id, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
     }
     if (this.shown !== frame) {
+      const previous = this.playing && this.shown ? this.images.get(this.shown) : undefined;
       (this.map.getSource(this.id) as ImageSource).updateImage({ image: this.images.get(frame)!, coordinates });
       this.shown = frame;
+      if (previous) this.crossfade(previous, coordinates);
     }
     this.map.setPaintProperty(this.id, 'raster-opacity', clampOpacity(opacity));
     return true;
   }
 
-  hide(): void { if (this.map.getLayer(this.id)) this.map.setPaintProperty(this.id, 'raster-opacity', 0); }
+  hide(): void {
+    if (this.map.getLayer(this.id)) this.map.setPaintProperty(this.id, 'raster-opacity', 0);
+    if (this.map.getLayer(this.blendId)) this.map.setPaintProperty(this.blendId, 'raster-opacity', 0);
+  }
 
   refresh(): void { if (this.context && this.context.build.expiresAtMs <= Date.now()) { this.clear(); this.onReady(); } }
 
@@ -124,6 +140,7 @@ export class RasterOverview {
     this.job?.controller.abort();
     this.context = null; this.selected = null; this.shown = null;
     if (this.expiry !== null) clearTimeout(this.expiry); this.expiry = null;
+    this.removeBlend();
     if (this.map.getLayer(this.id)) this.map.removeLayer(this.id);
     if (this.map.getSource(this.id)) this.map.removeSource(this.id);
     for (const image of this.images.values()) image.close();
@@ -132,6 +149,24 @@ export class RasterOverview {
   }
 
   destroy(): void { this.disposed = true; this.clear(); this.transport?.dispose(); }
+
+  private crossfade(image: ImageBitmap, coordinates: Geometry['coordinates']): void {
+    const id = this.blendId;
+    if (!this.map.getSource(id)) {
+      this.map.addSource(id, { type: 'image', coordinates });
+      this.map.addLayer({ ...previewRasterLayer(1), id, source: id, paint: { ...previewRasterLayer(1).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
+    }
+    (this.map.getSource(id) as ImageSource).updateImage({ image, coordinates });
+    this.map.setPaintProperty(id, 'raster-opacity-transition', { duration: 0, delay: 0 });
+    this.map.setPaintProperty(id, 'raster-opacity', 1);
+    this.map.setPaintProperty(id, 'raster-opacity-transition', { duration: PLAYBACK_STEP_MS, delay: 0 });
+    queueMicrotask(() => { if (this.playing && this.map.getLayer(id)) this.map.setPaintProperty(id, 'raster-opacity', 0); });
+  }
+
+  private removeBlend(): void {
+    if (this.map.getLayer(this.blendId)) this.map.removeLayer(this.blendId);
+    if (this.map.getSource(this.blendId)) this.map.removeSource(this.blendId);
+  }
 
   private covers(): boolean {
     const current = viewport(this.map), area = this.context?.geometry;

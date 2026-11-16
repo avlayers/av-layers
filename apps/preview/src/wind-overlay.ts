@@ -2,6 +2,8 @@ import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import type { Map } from 'maplibre-gl';
 import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS } from './raster-budget';
+import { PLAYBACK_STEP_MS } from './timeline';
+import { attachWindGl, type WindGl } from './wind-gl';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindOverlayOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
@@ -19,6 +21,10 @@ export class WindOverlay {
   private readonly trailCtx: CanvasRenderingContext2D;
   private readonly barbCtx: CanvasRenderingContext2D;
   private field: WindField | null = null;
+  private blendFrom: WindField | null = null;
+  private blendStart = 0;
+  private gpu = false;
+  private readonly gl: WindGl | null;
   private options: WindOverlayOptions = { style: 'trails', visible: true, paused: false, units: 'metric' };
   private particles: Particle[] = [];
   private frame: number | null = null;
@@ -68,7 +74,7 @@ export class WindOverlay {
     this.width = canvas.clientWidth; this.height = canvas.clientHeight;
     const w = Math.max(1, this.width), h = Math.max(1, this.height), dpr = window.devicePixelRatio || 1;
     this.lastDpr = dpr;
-    const showBarbs = this.options.visible && this.options.style !== 'trails', showTrails = this.options.visible && this.options.style !== 'barbs';
+    const showBarbs = this.options.visible && this.options.style !== 'trails', showTrails = this.options.visible && this.options.style !== 'barbs' && !this.gpu;
     this.scale = showTrails ? Math.min(dpr, 1, Math.sqrt((WIND_TRAIL_PIXELS - 1) / (w * h)), 4096 / w, 4096 / h) : 1;
     const trailW = showTrails ? Math.max(1, Math.floor(w * this.scale)) : 1, trailH = showTrails ? Math.max(1, Math.floor(h * this.scale)) : 1;
     const barbBudget = Math.max(1, WIND_CANVAS_PIXELS - trailW * trailH);
@@ -85,8 +91,8 @@ export class WindOverlay {
 
   private readonly visibility = (): void => { this.lastTime = 0; this.schedule(); };
   private readonly syncContext = (): void => { this.resetTrails(); this.drawBarbs(); this.schedule(); };
-  private readonly mapContextLost = (): void => { this.mapLost = true; this.syncContext(); };
-  private readonly mapContextRestored = (): void => { this.mapLost = false; this.syncContext(); };
+  private readonly mapContextLost = (): void => { this.mapLost = true; this.syncContext(); this.syncGl(); };
+  private readonly mapContextRestored = (): void => { this.mapLost = false; this.syncContext(); this.syncGl(); };
   private readonly contextLost = (e: Event): void => { this.lostCanvases.add(e.currentTarget as HTMLCanvasElement); this.syncContext(); };
   private readonly contextRestored = (e: Event): void => { this.lostCanvases.delete(e.currentTarget as HTMLCanvasElement); this.syncContext(); };
 
@@ -103,12 +109,19 @@ export class WindOverlay {
     map.on('move', this.move); map.on('resize', this.resize);
     map.on('webglcontextlost', this.mapContextLost); map.on('webglcontextrestored', this.mapContextRestored);
     document.addEventListener('visibilitychange', this.visibility);
+    this.gl = attachWindGl(map, ok => { if (this.destroyed) return; this.gpu = ok; this.resize(); this.syncGl(); });
     this.resize();
   }
 
-  setField(field: WindField | null): void {
-    if (this.destroyed || this.field === field) return;
-    this.field = field; this.barbSamples.clear(); this.resetTrails(); this.drawBarbs(); this.schedule();
+  setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace'): void {
+    if (this.destroyed) return;
+    if (mode === 'swap' && this.field && field && this.field !== field) {
+      this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
+      for (const particle of this.particles) particle.wind = undefined;
+      this.barbSamples.clear(); this.syncGl(); this.drawBarbs(); this.schedule(); return;
+    }
+    if (this.field === field && !this.blendFrom) return;
+    this.blendFrom = null; this.field = field; this.barbSamples.clear(); this.syncGl(); this.resetTrails(); this.drawBarbs(); this.schedule();
   }
 
   setOptions(options: Partial<WindOverlayOptions>): void {
@@ -117,7 +130,7 @@ export class WindOverlay {
     if (prev.style !== this.options.style || prev.visible !== this.options.visible) { this.resize(); return; }
     if (prev.paused !== this.options.paused) this.lastTime = 0;
     if (prev.units !== this.options.units) this.drawBarbs();
-    this.schedule();
+    this.syncGl(); this.schedule();
   }
 
   clear(): void { this.setField(null); }
@@ -127,6 +140,7 @@ export class WindOverlay {
     this.destroyed = true; this.schedule();
     this.map.off('move', this.move); this.map.off('resize', this.resize);
     this.map.off('webglcontextlost', this.mapContextLost); this.map.off('webglcontextrestored', this.mapContextRestored);
+    this.gl?.destroy();
     document.removeEventListener('visibilitychange', this.visibility);
     for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.remove(); }
     this.field = null; this.particles = []; this.barbSamples.clear();
@@ -152,12 +166,12 @@ export class WindOverlay {
     if (this.lastTime && time - this.lastTime < 15) { this.schedule(); return; }
     const elapsed = this.lastTime ? Math.min((time - this.lastTime) / 1000, 0.1) : 0;
     this.lastTime = time;
-    if (elapsed > 0) this.advance(elapsed);
+    if (elapsed > 0 && !this.gpu) this.advance(elapsed);
     this.schedule();
   };
 
   private advance(elapsed: number): void {
-    const ctx = this.trailCtx, field = this.field!;
+    const ctx = this.trailCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = `rgba(0,0,0,${1 - Math.exp(-elapsed * 0.9)})`;
     ctx.fillRect(0, 0, this.trails.width, this.trails.height);
@@ -171,7 +185,7 @@ export class WindOverlay {
     const zoomScale = elapsed * 600 * 2 ** (9 - this.map.getZoom());
     let write = 0;
     for (let i = 0; i < this.particles.length; i++) {
-      const p = this.particles[i]!, wind = p.wind ?? field.sample(p.lat, p.lon);
+      const p = this.particles[i]!, wind = p.wind ?? this.sampleAt(p.lat, p.lon);
       if (!valid(wind) || p.age <= 0 || Math.abs(p.lat) >= MAX_LAT) continue;
       const speed = Math.hypot(wind.u, wind.v), boost = speed > 0 && speed < 4 ? Math.sqrt(4 / speed) : 1;
       const start = this.map.project([p.lon, p.lat]), cosLat = Math.cos(p.lat * DEG), sec = zoomScale * cosLat * boost;
@@ -179,18 +193,29 @@ export class WindOverlay {
       if (Math.abs(lat) >= MAX_LAT) continue;
       const end = this.map.project([lon, lat]), dist = Math.hypot(end.x - start.x, end.y - start.y);
       if (!Number.isFinite(dist) || end.x < 0 || end.y < 0 || end.x > this.width || end.y > this.height || dist > 30) continue;
-      const steps = Math.max(1, Math.ceil(dist));
-      let nextWind: ReturnType<WindField['sample']> = wind, blocked = false;
-      for (let s = 1; s <= steps; s++) {
-        nextWind = field.sample(p.lat + (lat - p.lat) * s / steps, p.lon + (lon - p.lon) * s / steps);
-        if (!valid(nextWind)) { blocked = true; break; }
-      }
-      if (blocked) continue;
+      const mid = this.sampleAt((p.lat + lat) / 2, (p.lon + lon) / 2);
+      if (!valid(mid)) continue;
+      const nextWind = this.sampleAt(lat, lon);
+      if (!valid(nextWind)) continue;
       ctx.moveTo(start.x, start.y); ctx.lineTo(end.x, end.y);
       p.lat = lat; p.lon = lon; p.age -= elapsed; p.wind = { status: nextWind.status, u: nextWind.u, v: nextWind.v };
       if (p.age > 0) this.particles[write++] = p;
     }
     ctx.stroke(); this.particles.length = write;
+  }
+
+  private sampleAt(lat: number, lon: number): ReturnType<WindField['sample']> {
+    const next = this.field!.sample(lat, lon), from = this.blendFrom;
+    if (!from) return next;
+    if (performance.now() - this.blendStart >= PLAYBACK_STEP_MS) { this.blendFrom = null; return next; }
+    const previous = from.sample(lat, lon), t = (performance.now() - this.blendStart) / PLAYBACK_STEP_MS;
+    if (!valid(previous) || !valid(next)) return valid(next) ? next : previous;
+    return { status: next.status, u: previous.u + (next.u - previous.u) * t, v: previous.v + (next.v - previous.v) * t };
+  }
+
+  private syncGl(): void {
+    this.gl?.setFields(this.blendFrom, this.field);
+    this.gl?.setMotion(this.options.paused || this.options.style === 'barbs', !this.options.visible || this.options.style === 'barbs' || !this.field || this.mapLost);
   }
 
   private haloStroke(ctx: CanvasRenderingContext2D): void {

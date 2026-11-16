@@ -19,7 +19,7 @@ import { CoverageSeam } from './coverage-seam';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
-import { frameIndexFor } from './timeline';
+import { frameIndexFor, PLAYBACK_STEP_MS } from './timeline';
 import { WindOverlay } from './wind-overlay';
 import { createWindControls, type WindStatus } from './wind-controls';
 import { createCompactTimeline } from './compact-timeline';
@@ -78,7 +78,7 @@ opacityReadout.textContent = `${Math.round(initialOpacity * 100)}%`;
 const modelButtons: HTMLButtonElement[] = [];
 
 interface WindView { zoom: number; build: PinnedBuild; frame: string; bounds: [number, number, number, number]; source: WindDataSource }
-interface WindRequest extends WindView { controller: AbortController; key: string }
+interface WindRequest extends WindView { controller: AbortController; key: string; settled?: 'ready' | 'unavailable'; failed?: unknown; done?: Promise<'ready' | 'unavailable'> }
 
 function startPreview(lifecycle: AbortController): void {
   modelBar.replaceChildren(); modelButtons.length = 0;
@@ -87,8 +87,10 @@ function startPreview(lifecycle: AbortController): void {
     modelButtons.push(button); modelBar.append(button);
   }
 
+  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
   const map = new maplibregl.Map({
-    container: 'map', center: startup.camera?.center ?? [0, 20], zoom: startup.camera?.zoom ?? 2, maxTileCacheSize: RASTER_CACHE_TILES,
+    container: 'map', center: startup.camera?.center ?? [0, 20], zoom: startup.camera?.zoom ?? 2,
+    ...(deviceMemory !== undefined && deviceMemory <= 4 ? { maxTileCacheSize: RASTER_CACHE_TILES } : {}),
     style: offlineFixture ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] } : naturalBasemapStyle(window.devicePixelRatio)
   });
   const globalListener = { signal: lifecycle.signal };
@@ -97,8 +99,9 @@ function startPreview(lifecycle: AbortController): void {
   let customLayer: LayerId | null = visibleCustomLayer(startup.layer), requestedTime = startup.validTime, selectedFrame: string | null = null, opacity = initialOpacity;
   let expired = false, mapFailed = false, mapReady = false, selectingOverlay = false;
   let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
-  const scheduler = createForecastRequestScheduler(), windCache = new WindDataCache();
-  const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => { overlayState = state; reconcileWind(); updateOverlayStatus(); }, scheduler.fetch);
+  const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const windScheduler = createForecastRequestScheduler(), windCache = new WindDataCache();
+  const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => { overlayState = state; reconcileWind(); updateOverlayStatus(); }, rasterScheduler.fetch);
   const seam = new CoverageSeam(map);
   const refreshSeam = (): void => { seam.sync(build, activeLayer()); };
 
@@ -114,7 +117,9 @@ function startPreview(lifecycle: AbortController): void {
   let expiryTimer: number | null = null, disposeExpiry = () => {};
   let urlReady = false, historyRevision = 0, applyingHistory: number | null = null, opacityCommitted = false;
   let windVisibleOverride: boolean | null = startup.windVisible;
-  let windView: WindView | null = null, windRequest: WindRequest | null = null;
+  let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
+  let windPlaying = false, windPrefetchBlocked = false;
+  const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
   let windLoadStatus: WindStatus = 'unavailable', windDisplayed = false, windLoading = false, windHeight: 'surface' | number | 'lift' = 'surface';
   let queuedWindLoad: (() => void) | null = null;
   let locationRevision = 0, locationMarker: HTMLElement | null = null, locationPoint: [number, number] | null = null, locationTimer: ReturnType<typeof setTimeout> | null = null;
@@ -138,7 +143,7 @@ function startPreview(lifecycle: AbortController): void {
       if (state.visible !== lastControlVisible) { lastControlVisible = state.visible; windVisibleOverride = state.visible; }
       syncWindReservation();
       windOverlay.setOptions({ ...state, units: pointUnitSystem });
-      if (windDisplayed && windHeight !== state.height) setWindField();
+      if (windDisplayed && windHeight !== state.height) setWindField('replace');
       updateWind(); updatePointWind(); writeUrl('replace');
     }
   });
@@ -155,7 +160,12 @@ function startPreview(lifecycle: AbortController): void {
   const compactTimeline = createCompactTimeline(element('compact-timeline'), {
     offsetMinutes: mapOffsetMinutes,
     ...(followsPlace && Number.isFinite(home.lat) && Number.isFinite(home.lng) ? { latitude: home.lat, longitude: home.lng } : {}),
-    onSelect: (index, history = 'push') => selectIndex(index, history)
+    onSelect: (index, history = 'push') => selectIndex(index, history),
+    onPlayback: playing => {
+      windPlaying = playing; overlay.setPlayback(playing);
+      if (playing) { windPrefetchBlocked = false; ensurePrefetch(); }
+      else releasePrefetch();
+    }
   });
   syncWindSupport();
   windControls.setUnits(pointUnitSystem);
@@ -179,9 +189,37 @@ function startPreview(lifecycle: AbortController): void {
     updatePointSelection();
   }
 
-  function setWindField(): void {
+  function windBounds(): [number, number, number, number] {
+    const bounds = map.getBounds(), west = bounds.getWest(), east = bounds.getEast();
+    return [east - west >= 360 ? -180 : normalizeLon(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : normalizeLon(east), Math.min(90, bounds.getNorth())];
+  }
+
+  function dropRetired(): void {
+    for (const [view, timer] of retiring) { clearTimeout(timer); view.source.dispose(); }
+    retiring.clear();
+  }
+
+  function retire(view: WindView): void {
+    if (retiring.has(view)) return;
+    retiring.set(view, setTimeout(() => {
+      retiring.delete(view);
+      if (windView !== view && windPrefetch !== view) view.source.dispose();
+    }, PLAYBACK_STEP_MS + 50));
+  }
+
+  function releasePrefetch(): void {
+    const prefetch = windPrefetch;
+    windPrefetch = null;
+    if (!prefetch) return;
+    prefetch.controller.abort();
+    if (windView !== prefetch && windRequest !== prefetch && !retiring.has(prefetch)) prefetch.source.dispose();
+  }
+
+  function setWindField(mode: 'replace' | 'swap'): void {
     const view = windView;
     if (!view) return;
+    if (mode === 'swap' && installedWind === view) return;
+    const previous = mode === 'swap' ? installedWind : null;
     const height = windControls.state.height;
     windHeight = height;
     windOverlay.setField(typeof view.source.field === 'function' ? view.source.field(height) : {
@@ -190,27 +228,36 @@ function startPreview(lifecycle: AbortController): void {
         const status = s.status === 'valid' ? STATUS_VALID : s.status === 'no-lift' ? STATUS_NO_LIFT : s.status === 'outside' ? STATUS_OUTSIDE : STATUS_UNAVAILABLE;
         return { ...s, status };
       }
-    });
+    }, mode);
+    installedWind = view;
+    windDisplayed = true;
+    if (previous && previous !== view) retire(previous);
   }
 
   function reconcileWind(): void {
     const displayed = overlayState.displayed;
-    const matches = windView && windLoadStatus !== 'unavailable'
-      && windView.build === build && windView.frame === selectedFrame
-      && (!displayed || displayed.build === windView.build && displayed.frame === windView.frame);
-    if (matches && !windDisplayed) { setWindField(); windDisplayed = true; }
-    else if (!matches && windDisplayed) { windOverlay.clear(); windDisplayed = false; }
-    windControls.setQuality?.(!!(matches && windView?.source.isOverview));
-    if (windLoadStatus === 'ready') windControls.setStatus(matches ? 'ready' : overlayState.replacementFailed ? 'unavailable' : 'loading');
+    const sameBuild = Boolean(windView && windView.build === build && (windLoadStatus !== 'unavailable' || windView.frame !== selectedFrame));
+    const aligned = Boolean(sameBuild && windView!.frame === selectedFrame && (!displayed || displayed.build === windView!.build && displayed.frame === windView!.frame));
+    if (aligned) setWindField(installedWind && installedWind.build === windView!.build ? 'swap' : 'replace');
+    else if (!sameBuild && windDisplayed) { windOverlay.clear(); windDisplayed = false; installedWind = null; }
+    windControls.setQuality?.(!!(aligned && windView?.source.isOverview));
+    if (windLoadStatus === 'ready') windControls.setStatus(aligned ? 'ready' : overlayState.replacementFailed ? 'unavailable' : 'loading');
     syncWindReservation();
     updatePointWind();
   }
 
   function setWindStatus(status: WindStatus): void { windLoadStatus = status; windControls.setStatus(status); }
-  function cancelWindRequest(): void { windRequest?.controller.abort(); windRequest?.source.dispose(); windRequest = null; queuedWindLoad = null; }
+  function cancelWindRequest(): void {
+    const request = windRequest;
+    windRequest = null; queuedWindLoad = null;
+    request?.controller.abort();
+    if (request && request !== windView && request !== windPrefetch && !retiring.has(request)) request.source.dispose();
+  }
 
   function clearWind(): void {
-    cancelWindRequest(); windView?.source.dispose(); windView = null; windDisplayed = false;
+    releasePrefetch(); dropRetired(); cancelWindRequest();
+    if (installedWind && installedWind !== windView) installedWind.source.dispose();
+    windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
     windOverlay.clear(); windControls.setQuality?.(false); setWindStatus('unavailable'); syncWindReservation(); updatePointWind();
   }
 
@@ -232,55 +279,94 @@ function startPreview(lifecycle: AbortController): void {
   }
 
   function updateWind(): void {
-    if (!windControls.state.visible || !hasWindData()) { cancelWindRequest(); syncWindReservation(); return; }
+    if (!windControls.state.visible || !hasWindData()) { cancelWindRequest(); releasePrefetch(); syncWindReservation(); return; }
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
     if (windCache.isBuildUnavailable(build.manifest.buildId)) { clearWind(); return; }
-    const bounds = map.getBounds(), west = bounds.getWest(), east = bounds.getEast();
-    const view: [number, number, number, number] = [east - west >= 360 ? -180 : normalizeLon(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : normalizeLon(east), Math.min(90, bounds.getNorth())];
-    const identity = windView;
-    if (identity && identity.build === build && identity.frame === selectedFrame
-      && (identity.source.isOverview === false || map.getZoom() <= identity.zoom)
-      && coversBounds(identity.bounds, view)) {
-      cancelWindRequest(); setWindStatus('ready'); reconcileWind(); return;
+    const view = windBounds(), identity = windView;
+    const covered = (candidate: WindView) => (candidate.source.isOverview === false || map.getZoom() <= candidate.zoom) && coversBounds(candidate.bounds, view);
+    if (identity && identity.build === build && identity.frame === selectedFrame && covered(identity)) {
+      cancelWindRequest(); setWindStatus('ready'); reconcileWind(); if (windPlaying) ensurePrefetch(); return;
+    }
+    const prefetch = windPrefetch;
+    if (prefetch && prefetch.build === build && prefetch.frame === selectedFrame && covered(prefetch) && prefetch.done) {
+      windPrefetch = null; cancelWindRequest();
+      watch(prefetch, prefetch.settled ? Promise.resolve(prefetch.settled) : prefetch.done); return;
     }
     const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view, map.getZoom()]);
     if (key === windRequest?.key) return;
-    if (!identity || identity.build !== build || identity.frame !== selectedFrame) clearWind();
+    if (identity && identity.build !== build) clearWind();
     else cancelWindRequest();
     setWindStatus('loading');
     const request: WindRequest = {
       zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, key, controller: new AbortController(),
-      source: new WindDataSource(apiBaseUrl, { fetchImpl: scheduler.fetch, cache: windCache, coalesceSpans: true })
+      source: new WindDataSource(apiBaseUrl, { fetchImpl: windScheduler.fetch, cache: windCache, coalesceSpans: true })
     };
-    windRequest = request;
-    if (windLoading) queuedWindLoad = () => { void loadWind(request); };
-    else void loadWind(request);
+    watch(request);
+    if (windPlaying) ensurePrefetch();
   }
 
-  async function loadWind(request: WindRequest): Promise<void> {
-    windLoading = true;
-    const retainFallback = () => Boolean(windView && windView.build === request.build && windView.frame === request.frame && coversBounds(windView.bounds, request.bounds));
-    try {
-      let status: 'ready' | 'unavailable';
+  function ensurePrefetch(): void {
+    if (!windPlaying || windPrefetchBlocked || windPrefetch || !windControls.state.visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
+    const frames = renderedFrames(build.manifest), index = frames.findIndex(frame => frame.id === selectedFrame), frame = frames[index + 1]?.id;
+    if (!frame || windView?.frame === frame || windRequest?.frame === frame) return;
+    const view = windBounds();
+    const request: WindRequest = {
+      zoom: map.getZoom(), build, frame, bounds: view, key: `prefetch:${frame}`, controller: new AbortController(),
+      source: new WindDataSource(apiBaseUrl, { fetchImpl: windScheduler.fetch, cache: windCache, coalesceSpans: true })
+    };
+    windPrefetch = request;
+    const done = request.source.load({ ...request, signal: request.controller.signal }).then(status => { request.settled = status; return status; }, error => { request.failed = error; throw error; });
+    request.done = done;
+    void done.then(status => {
+      if (windPrefetch !== request) return;
+      if (status !== 'ready') { windPrefetch = null; if (windView !== request && windRequest !== request) request.source.dispose(); }
+    }, error => {
+      if (error instanceof RangeError) windPrefetchBlocked = true;
+      if (windPrefetch === request) windPrefetch = null;
+      if (windView !== request && windRequest !== request && !retiring.has(request)) request.source.dispose();
+    });
+  }
+
+  function watch(request: WindRequest, work?: Promise<'ready' | 'unavailable'>): void {
+    windRequest = request;
+    const run = async () => {
+      windLoading = true;
+      const retain = () => Boolean(windView && windView.build === request.build && windView.frame === request.frame && coversBounds(windView.bounds, request.bounds));
+      const pending = work ?? (request.done = request.source.load({ ...request, signal: request.controller.signal }));
       try {
-        status = await request.source.load({ ...request, signal: request.controller.signal });
-      } catch (error) {
-        if (!(error instanceof RangeError) || !windView || retainFallback() || request.controller.signal.aborted) throw error;
-        windView.source.dispose(); windView = null; windDisplayed = false; windOverlay.clear();
-        status = await request.source.load({ ...request, signal: request.controller.signal });
+        let status: 'ready' | 'unavailable';
+        try { status = await pending; }
+        catch (error) {
+          if (!(error instanceof RangeError) || request.controller.signal.aborted) throw error;
+          releasePrefetch();
+          if (!windView || retain()) throw error;
+          if (windView.frame !== request.frame) { windPrefetchBlocked = true; setWindStatus('ready'); reconcileWind(); return; }
+          dropRetired(); windView.source.dispose(); windView = null; windDisplayed = false; installedWind = null; windOverlay.clear();
+          status = await request.source.load({ ...request, signal: request.controller.signal });
+        }
+        if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
+        if (status === 'ready') {
+          const previous = windView;
+          windView = request;
+          if (previous && previous !== request && (previous !== installedWind || !(windDisplayed && previous.build === request.build))) {
+            if (previous === installedWind) installedWind = null;
+            previous.source.dispose();
+          }
+          setWindStatus('ready');
+        } else setWindStatus(retain() ? 'ready' : status);
+        reconcileWind();
+        if (windPlaying) ensurePrefetch();
+      } catch {
+        if (windRequest === request && !request.controller.signal.aborted) { setWindStatus(retain() ? 'ready' : 'unavailable'); reconcileWind(); }
+      } finally {
+        if (windRequest === request) windRequest = null;
+        if (windView !== request && windPrefetch !== request && !retiring.has(request)) request.source.dispose();
+        windLoading = false;
+        const next = queuedWindLoad; queuedWindLoad = null; next?.();
       }
-      if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
-      if (status === 'ready') { windView?.source.dispose(); windView = request; if (windDisplayed) setWindField(); setWindStatus('ready'); }
-      else setWindStatus(retainFallback() ? 'ready' : status);
-      reconcileWind();
-    } catch {
-      if (windRequest === request && !request.controller.signal.aborted) { setWindStatus(retainFallback() ? 'ready' : 'unavailable'); reconcileWind(); }
-    } finally {
-      if (windRequest === request) windRequest = null;
-      if (windView !== request) request.source.dispose();
-      windLoading = false;
-      const next = queuedWindLoad; queuedWindLoad = null; next?.();
-    }
+    };
+    if (windLoading) queuedWindLoad = () => { void run(); };
+    else void run();
   }
 
   function updateScale(): void {
@@ -463,7 +549,7 @@ function startPreview(lifecycle: AbortController): void {
     frameStatus.dataset.quality = quality ?? 'none';
     const status = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
       : pending ? `Showing ${displayedLabel} · ${replacementFailed ? 'Selected time unavailable' : 'Loading selected time…'}`
-      : quality === 'overview' ? `${displayedLabel} · Overview · ${replacementFailed ? 'Detail unavailable' : 'Loading detail…'}`
+      : quality === 'overview' ? `${displayedLabel} · Overview${windPlaying ? '' : (replacementFailed ? ' · Detail unavailable' : ' · Loading detail…')}`
       : viewLoading ? `${displayedLabel} · Loading this view…` : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
     if (frameStatus.textContent !== status) frameStatus.textContent = status;
     timelineStatus.dataset.ready = String(overviewReady); timelineStatus.dataset.total = String(overviewTotal); timelineStatus.hidden = !overviewTotal;
@@ -517,7 +603,6 @@ function startPreview(lifecycle: AbortController): void {
   function selectIndex(index: number, history: 'none' | 'push' | 'replace'): void {
     const frame = build ? renderedFrames(build.manifest)[index] : undefined;
     if (!frame) return;
-    if (selectedFrame !== frame.id && windControls.state.visible) clearWind();
     if (currentModel === AUTO_MODEL_ID && requestedTime !== frame.validTime) autoAbort?.abort();
     selectedFrame = frame.id; requestedTime = frame.validTime;
     updateTimeUi(); pointSeries.followMapFrame(selectedFrame); updateOverlay(); updatePointSelection();
@@ -669,7 +754,7 @@ function startPreview(lifecycle: AbortController): void {
         windControls.setState?.({ visible: nextVisible, style: nextStyle, height: nextHeight });
         syncWindReservation();
         windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
-        if (windDisplayed && windHeight !== windControls.state.height) setWindField();
+        if (windDisplayed && windHeight !== windControls.state.height) setWindField('replace');
       }
       if (state.opacity !== null) {
         opacity = state.opacity; opacityInput.value = String(opacity);
@@ -829,7 +914,7 @@ function startPreview(lifecycle: AbortController): void {
 
   const teardownAll = () => {
     windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
-    seam.destroy(); overlay.destroy(); scheduler.dispose(); map.remove();
+    seam.destroy(); overlay.destroy(); windScheduler.dispose(); rasterScheduler.dispose(); map.remove();
   };
 
   map.on('error', (event: { error?: unknown }) => {
