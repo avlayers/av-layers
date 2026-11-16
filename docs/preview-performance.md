@@ -126,19 +126,29 @@ measured 13 November captures above.
   preparation; the intent is retained until the rectangle exceeds **1000 km²**.
   Dateline and full-world rectangles keep their coherent longitude span.
 - Small raster views ask MapLibre `coveringTiles` for the canonical source zoom,
-  then retain `visible × 1.2 + 2 px` per axis. The Armenia fixture is
-  391 × 221 px and 15.8223 MiB across 48 frames, replacing the earlier
-  1280 × 1024 mosaic at 5 MiB per frame.
-- A warmed wind frame uploads a prepared 128×128 RGBA lattice from its admitted
-  extent. Selection and the following GL prerender do not reconstruct the native
-  grid. The lattice is cached per source, height and extent; point sampling keeps
-  the exact native sampler.
+  then retain `visible × 1.2 + 2 px` per axis. Coverage comes from that integer
+  rectangle, so a pan inside the retained margin keeps the same prepared frames.
+  The native-z10 Armenia fixture is 391 × 221 px and 15.8223 MiB across 48 frames;
+  the fixture's capped source zoom produces 197 × 112 px at z9.
+- Background warming prepares each acquired wind frame's 128×128 RGBA lattice;
+  selection installs the prepared lattice and native fallback field in one
+  overlay operation before renderer synchronization. The following GL prerender
+  uploads the prepared bytes. Point sampling keeps the exact native sampler.
 - Numeric wind retries transient 502/503/504 responses three times inside the
   request deadline, then records a 30 s per-resource cooldown and advances to the
-  next promised time. Capacity is a typed outcome and evicts one retained frame
-  before the next attempt; a playback toggle is not required.
+  next promised time. Capacity is a typed outcome that records a bounded admitted
+  window, evicts only outside that window and stops expanding under unchanged
+  pressure; a playback toggle is not required.
 - Physical request admission counts headers and live bodies until settlement.
-  Unknown, malformed and compressed lengths keep the 1 MiB header reserve.
+  An explicit request reserves its validated expected size or its safe maximum.
+  Unknown, malformed and non-identity encodings keep that reservation; an
+  explicitly exposed `Content-Encoding: identity` permits an exact length.
+- Raster, numeric wind and forecast metadata share one app-owned scheduler.
+  Background wind requests carry low priority.
+
+Wind lattice preparation still runs on the main thread during background
+warming. The worker snapshot, prepared barb lattice, combined allocation ledger
+and raster/wind stage-then-commit barrier are not implemented.
 
 Browser evidence for these paths is not yet captured. The required
 `viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and

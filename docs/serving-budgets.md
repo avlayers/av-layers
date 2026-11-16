@@ -25,10 +25,12 @@ combined work across all grids selected by a request.
   separate [schedulers](../packages/client/src/client-request-scheduler.ts).
   Raster keeps eight requests active and numeric wind six. A request owns its
   count and byte reservation until the body settles or cancellation completes;
-  headers replace an unknown 1 MiB reserve only when an absolute length and an
-  identity content encoding make the byte domains equivalent. Unknown,
-  malformed and compressed lengths keep the header reserve. Either scheduler
-  queues 64 requests. Speculative work starts only below six bodies and 2 MiB;
+  an explicit request reserves its validated expected size or its safe maximum;
+  the fetch adapter keeps the 1 MiB header reserve. A declared length replaces
+  that reserve only with an exposed `Content-Encoding: identity`. Unknown,
+  malformed and compressed lengths keep the reservation. Either scheduler
+  queues 64 requests. Preview, numeric wind and forecast metadata share one
+  scheduler. Speculative work starts only below six bodies and 2 MiB;
   two transfer slots and 2 MiB stay available to foreground work. Selected work
   takes priority over queued speculation and evicts a queued background prefetch
   when all 64 slots are occupied. Promotion changes queue rank, not the running
@@ -76,10 +78,11 @@ combined work across all grids selected by a request.
   A camera rest outside the padded view waits 400 ms before replacing it.
   Movement during that wait keeps the previous images. Layer, build, and expiry
   changes release decoded overviews. Unsupported browsers retain the raster-only
-  path. A warmed frame uploads its prepared 128×128 RGBA lattice (64 KiB per
-  height) instead of resampling the native grid; the canvas and CPU paths keep
-  the 700 ms field blend. Preview draws those trails through the map WebGL
-  context when a float color target is available. Each trail target matches the map drawing buffer. The 2D trail
+  path. Background warming prepares each acquired frame's 128×128 RGBA lattice
+  (64 KiB per height) on the main thread; selection uploads it instead of
+  resampling the native grid. The canvas and CPU paths keep the 700 ms field
+  blend. Preview draws those trails through the map WebGL context when a float
+  color target is available. Each trail target matches the map drawing buffer. The 2D trail
   canvas is 1×1 while those targets are allocated. The 2D canvas draws the
   trails when that float target is absent.
   The timeline reports how many rested frames are decoded.
