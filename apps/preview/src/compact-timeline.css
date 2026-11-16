@@ -1,6 +1,8 @@
 .compact-timeline, .compact-timeline * { box-sizing: border-box; }
 
 .compact-timeline {
+  container-type: inline-size;
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -85,6 +87,20 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+@container (max-width: 520px) {
+  .ct-time {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    z-index: 2;
+    height: 16px;
+    max-width: none;
+    font-size: 10px;
+    line-height: 16px;
+  }
+  .ct-time-utc { display: none; }
+  .ct-days { padding-right: 42px; }
+}
 
 .ct-track {
   position: relative;
@@ -98,9 +114,11 @@
   touch-action: none;
 }
 .ct-track[aria-disabled="true"] { cursor: default; }
-.ct-ribbon, .ct-hatches, .ct-marks, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
+.ct-ribbon, .ct-hatches, .ct-marks, .ct-moons, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
 .ct-ribbon { inset: 0; z-index: 0; }
-.ct-hatches, .ct-marks { inset: 0; z-index: 1; }
+.ct-hatches, .ct-marks, .ct-moons { inset: 0; z-index: 1; }
+.ct-moon { position: absolute; top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; }
+.ct-moon-icon { display: block; width: 13px; height: 13px; }
 .ct-coarse { position: absolute; top: 0; bottom: 0; background: rgba(22, 50, 79, 0.14); }
 .ct-coarse-bar { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #16324f; }
 .ct-hatch {
@@ -121,14 +139,16 @@
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 2px #fff, 0 0 2px #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 1px 0 #fff, 0 -1px 0 #fff;
 }
-.ct-tick:first-child { transform: none; }
-.ct-tick:last-child { transform: translateX(-100%); }
+.ct-tick.is-start { transform: none; }
+.ct-tick.is-end { transform: translateX(-100%); }
+.ct-ticks:not(.is-folded) .ct-tick:first-child { transform: none; }
+.ct-ticks:not(.is-folded) .ct-tick:last-child { transform: translateX(-100%); }
 @container (max-width: 220px) {
-  .ct-tick:nth-child(even) { display: none; }
+  .ct-ticks:not(.is-folded) .ct-tick:nth-child(even) { display: none; }
 }
 @container (max-width: 140px) {
-  .ct-tick:nth-child(3),
-  .ct-tick:nth-child(7) { display: none; }
+  .ct-ticks:not(.is-folded) .ct-tick:nth-child(3),
+  .ct-ticks:not(.is-folded) .ct-tick:nth-child(7) { display: none; }
 }
 .ct-playhead {
   z-index: 3;

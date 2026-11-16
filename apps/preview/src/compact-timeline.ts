@@ -1,5 +1,5 @@
 import { formatPlaceTime, placeDateKey } from '@av/client';
-import { solarPosition, sunriseSunsetInRange } from '@av/solar';
+import { solarFluxFactor, sunriseSunsetInRange } from '@av/solar';
 import './compact-timeline.css';
 import { PLAYBACK_STEP_MS } from './timeline';
 
@@ -26,13 +26,18 @@ interface DayGroup { day: string; indices: number[] }
 const PLAYBACK_INTERVAL_MS = PLAYBACK_STEP_MS;
 const DAY_MS = 86_400_000;
 const NIGHT = '#1c3358';
-const DAWN = '#e8893a';
-const DAYLIGHT = '#f6e27a';
-const DUSK = '#d4652f';
+const PEAK = '#fff7d6';
 const NEUTRAL = '#e7edf2';
-const SHOULDER_PERCENT = 45 / 14.4;
+const RADIANCE: readonly [number, string][] = [[0, NIGHT], [0.12, '#243f68'], [0.4, '#d7b15f'], [0.72, '#ffe3a0'], [1, PEAK]];
+const FLUX_SAMPLES = 48;
 const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
+const DAY_MINUTES = 1440;
+const MOON_PX = 28;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
+
+export interface NightBounds { sunrise: number; sunset: number }
+interface ScaleSegment { kind: 'morning' | 'day' | 'evening'; start: number; end: number; folded: boolean; x0: number; x1: number }
+export interface DayScale { linear: boolean; width: number; segments: ScaleSegment[] }
 
 function localTimeFromMs(ms: number, offsetMinutes: number): LocalTime | null {
   if (!Number.isFinite(ms) || !Number.isFinite(offsetMinutes)) return null;
@@ -107,35 +112,129 @@ function monotonicStops(stops: readonly RibbonStop[]): readonly RibbonStop[] {
   return ordered;
 }
 
+function hexChannel(hex: string, index: number): number {
+  return Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
+}
+
+function mixHex(from: string, to: string, amount: number): string {
+  const t = Math.min(1, Math.max(0, amount));
+  let out = '#';
+  for (let index = 0; index < 3; index++) out += Math.round(hexChannel(from, index) + (hexChannel(to, index) - hexChannel(from, index)) * t).toString(16).padStart(2, '0');
+  return out;
+}
+
+function radianceColor(relative: number): string {
+  const t = Math.pow(Math.min(1, Math.max(0, relative)), 1.35);
+  const upper = RADIANCE.findIndex(stop => stop[0] >= t);
+  if (upper <= 0) return RADIANCE[0]![1];
+  const [fromAt, from] = RADIANCE[upper - 1]!;
+  const [toAt, to] = RADIANCE[upper]!;
+  return mixHex(from, to, (t - fromAt) / (toAt - fromAt));
+}
+
+function channelDistance(left: string, right: string): number {
+  let delta = 0;
+  for (let index = 0; index < 3; index++) delta += Math.abs(hexChannel(left, index) - hexChannel(right, index));
+  return delta;
+}
+
 export function solarRibbonStops(latitude: number, longitude: number, startMs: number, endMs: number): readonly RibbonStop[] | null {
   if (![latitude, longitude, startMs, endMs].every(Number.isFinite) || !(endMs > startMs) || Math.abs(latitude) > 90) return null;
-  const span = sunriseSunsetInRange(latitude, longitude, startMs, endMs);
-  if (!span) {
-    const noon = solarPosition(latitude, longitude, startMs + (endMs - startMs) / 2);
-    if (!Number.isFinite(noon.elevationDeg)) return null;
-    const color = noon.isDaylight ? DAYLIGHT : NIGHT;
-    return [{ at: 0, color }, { at: 100, color }];
+  const span = endMs - startMs;
+  const fluxes = Array.from({ length: FLUX_SAMPLES + 1 }, (_, index) => {
+    const flux = solarFluxFactor(latitude, longitude, startMs + span * index / FLUX_SAMPLES);
+    return Number.isFinite(flux) ? Math.max(0, flux) : 0;
+  });
+  let peakIndex = 0;
+  for (let index = 1; index < fluxes.length; index++) if (fluxes[index]! > fluxes[peakIndex]!) peakIndex = index;
+  const peak = fluxes[peakIndex]!;
+  const peakAt = peakIndex / FLUX_SAMPLES * 100;
+  if (peak <= 0) return [{ at: 0, color: NIGHT }, { at: 100, color: NIGHT }];
+  const samples = fluxes.map((flux, index) => ({ at: index / FLUX_SAMPLES * 100, color: radianceColor(flux / peak) }));
+  const kept: RibbonStop[] = [];
+  for (const stop of samples) {
+    const previous = kept.at(-1);
+    if (!previous || Math.abs(stop.at - peakAt) < 1e-6 || channelDistance(previous.color, stop.color) >= 20) kept.push(stop);
   }
-  const percent = (ms: number) => Math.min(100, Math.max(0, (ms - startMs) / (endMs - startMs) * 100));
-  const sunrise = percent(span.sunrise);
-  const sunset = percent(span.sunset);
-  const noon = (sunrise + sunset) / 2;
-  const shoulder = Math.min(SHOULDER_PERCENT, Math.max(0, sunset - sunrise) / 4);
-  return monotonicStops([
-    { at: 0, color: NIGHT },
-    { at: sunrise - shoulder, color: NIGHT },
-    { at: sunrise, color: DAWN },
-    { at: Math.min(noon, sunrise + shoulder * 2), color: DAYLIGHT },
-    { at: noon, color: DAYLIGHT },
-    { at: Math.max(noon, sunset - shoulder * 2), color: DAYLIGHT },
-    { at: sunset, color: DUSK },
-    { at: sunset + shoulder, color: NIGHT },
-    { at: 100, color: NIGHT }
-  ]);
+  return monotonicStops(kept);
 }
 
 function ribbonGradient(stops: readonly RibbonStop[]): string {
   return `linear-gradient(90deg, ${stops.map(stop => `${stop.color} ${Math.round(stop.at * 100) / 100}%`).join(', ')})`;
+}
+
+/** Sunrise and sunset as minutes after local midnight. Polar days and nights stay linear. */
+export function solarMinuteBounds(latitude: number, longitude: number, day: string, offsetMinutes: number): NightBounds | null {
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || Math.abs(latitude) > 90 || !day) return null;
+  const start = Date.parse(`${day}T00:00:00Z`) - offsetMinutes * 60_000;
+  const span = sunriseSunsetInRange(latitude, longitude, start, start + DAY_MS);
+  if (!span) return null;
+  const minute = (ms: number) => Math.min(DAY_MINUTES, Math.max(0, (ms - start) / 60_000));
+  const sunrise = minute(span.sunrise);
+  const sunset = minute(span.sunset);
+  if (!(sunset > sunrise + 30) || sunrise < 1 && sunset > DAY_MINUTES - 1) return null;
+  return { sunrise, sunset };
+}
+
+function linearScale(width: number): DayScale {
+  return { linear: true, width, segments: [{ kind: 'day', start: 0, end: DAY_MINUTES, folded: false, x0: 0, x1: width }] };
+}
+
+/** Fold each night that does not contain the selected minute into a fixed moon. */
+export function buildDayScale(width: number, bounds: NightBounds | null, selectedMinute: number | null): DayScale {
+  if (!bounds) return linearScale(width);
+  const sunrise = bounds.sunrise < 1 ? 0 : bounds.sunrise;
+  const sunset = bounds.sunset > DAY_MINUTES - 1 ? DAY_MINUTES : bounds.sunset;
+  const candidates: ScaleSegment[] = [
+    { kind: 'morning', start: 0, end: sunrise, folded: false, x0: 0, x1: 0 },
+    { kind: 'day', start: sunrise, end: sunset, folded: false, x0: 0, x1: 0 },
+    { kind: 'evening', start: sunset, end: DAY_MINUTES, folded: false, x0: 0, x1: 0 },
+  ];
+  const parts = candidates.filter(part => part.end - part.start >= 1);
+  for (const part of parts) {
+    const selected = selectedMinute !== null && selectedMinute >= part.start && selectedMinute < part.end;
+    part.folded = part.kind !== 'day' && !selected;
+  }
+  return layoutSegments(parts, width);
+}
+
+function layoutSegments(parts: ScaleSegment[], width: number): DayScale {
+  const folded = parts.filter(part => part.folded).length;
+  const openMinutes = parts.filter(part => !part.folded).reduce((sum, part) => sum + part.end - part.start, 0);
+  if (openMinutes <= 0 || width < folded * MOON_PX + 80) return linearScale(width);
+  const openWidth = width - folded * MOON_PX;
+  let x = 0;
+  for (const part of parts) {
+    const span = part.folded ? MOON_PX : openWidth * (part.end - part.start) / openMinutes;
+    part.x0 = x;
+    part.x1 = x + span;
+    x += span;
+  }
+  const last = parts.at(-1);
+  if (last) last.x1 = width;
+  return { linear: false, width, segments: parts };
+}
+
+function scaleAtWidth(scale: DayScale, width: number): DayScale {
+  if (!(width > 0) || Math.abs(scale.width - width) < 0.5) return scale;
+  if (scale.linear) return linearScale(width);
+  return layoutSegments(scale.segments.map(part => ({ ...part })), width);
+}
+
+export function minuteToX(scale: DayScale, minute: number): number {
+  const clamped = Math.min(DAY_MINUTES, Math.max(0, minute));
+  const segment = scale.segments.find(part => clamped < part.end) ?? scale.segments.at(-1);
+  if (!segment || segment.end <= segment.start) return 0;
+  const fraction = Math.min(1, Math.max(0, (clamped - segment.start) / (segment.end - segment.start)));
+  return segment.x0 + fraction * (segment.x1 - segment.x0);
+}
+
+export function xToMinute(scale: DayScale, x: number): number {
+  const clamped = Math.min(scale.width, Math.max(0, x));
+  const segment = scale.segments.find(part => clamped < part.x1) ?? scale.segments.at(-1);
+  if (!segment || segment.x1 <= segment.x0) return 0;
+  const fraction = Math.min(1, Math.max(0, (clamped - segment.x0) / (segment.x1 - segment.x0)));
+  return segment.start + fraction * (segment.end - segment.start);
 }
 
 function localDayGroups(frames: readonly TimelineFrame[], offsetMinutes: number): DayGroup[] {
@@ -206,25 +305,21 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const ribbon = el('div', 'ct-ribbon');
   const hatches = el('div', 'ct-hatches');
   const marks = el('div', 'ct-marks');
+  const moons = el('div', 'ct-moons');
   const playhead = el('div', 'ct-playhead');
   const ticks = el('div', 'ct-ticks');
-  for (const node of [ribbon, hatches, marks, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
+  for (const node of [ribbon, hatches, marks, moons, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
   playhead.setAttribute('hidden', '');
   track.tabIndex = -1;
-  ticks.append(...TICKS.map((label, index) => {
-    const tick = el('span', 'ct-tick', label);
-    tick.style.left = `${(index / (TICKS.length - 1)) * 100}%`;
-    return tick;
-  }));
-  track.append(ribbon, hatches, marks, ticks, playhead);
+  track.append(ribbon, hatches, marks, moons, ticks, playhead);
   controls.append(play, timeLabel, track);
   root.append(daysRow, controls);
   host.append(root);
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
   let daySignature = '', selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
-  let activePointer: number | null = null, gestureStart = -1;
-  const ribbonCache = new Map<string, string>();
+  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false;
+  const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
 
   const controlsDisabled = () => disabled || !frames.length;
   const selectedGroup = (): DayGroup | undefined => {
@@ -232,44 +327,100 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     return days.find(group => group.day === day && group.indices.length) ?? days.find(group => group.indices.length);
   };
 
-  function ribbonCss(day: string): string {
-    if (!hasCenter || !day) return NEUTRAL;
+  function daySolar(day: string): { stops: readonly RibbonStop[] | null; bounds: NightBounds | null } {
+    if (!hasCenter || !day) return { stops: null, bounds: null };
     const key = `${latitude.toFixed(2)},${longitude.toFixed(2)},${day},${offsetMinutes}`;
-    const cached = ribbonCache.get(key);
+    const cached = solarCache.get(key);
     if (cached) return cached;
     const start = Date.parse(`${day}T00:00:00Z`) - offsetMinutes * 60_000;
-    const stops = solarRibbonStops(latitude, longitude, start, start + DAY_MS);
-    const css = stops ? ribbonGradient(stops) : NEUTRAL;
-    ribbonCache.set(key, css);
-    if (ribbonCache.size > 24) ribbonCache.delete(ribbonCache.keys().next().value!);
-    return css;
+    const solar = { stops: solarRibbonStops(latitude, longitude, start, start + DAY_MS), bounds: solarMinuteBounds(latitude, longitude, day, offsetMinutes) };
+    solarCache.set(key, solar);
+    if (solarCache.size > 24) solarCache.delete(solarCache.keys().next().value!);
+    return solar;
   }
 
-  function paintHatches(segments: readonly { start: number; end: number }[]): void {
-    hatches.replaceChildren(...segments.map(segment => {
-      const hatch = el('div', 'ct-hatch');
-      hatch.style.left = percent(segment.start);
-      hatch.style.width = percent(segment.end - segment.start);
-      return hatch;
-    }));
+  function trackWidth(): number {
+    const width = track.getBoundingClientRect().width;
+    return width > 0 ? width : 320;
   }
 
-  function paintCoarse(spans: readonly { start: number; end: number }[]): void {
+  function liveScale(width: number): DayScale {
+    const group = selectedGroup();
+    const frame = selectedIndex >= 0 ? frames[selectedIndex] : undefined;
+    const local = frame ? localTimeFromMs(Date.parse(frame.validTime), offsetMinutes) : null;
+    const bounds = group ? daySolar(group.day).bounds : null;
+    return buildDayScale(width, bounds, local ? local.hour * 60 + local.minute : null);
+  }
+
+  function currentScale(width: number): DayScale {
+    if (!gestureScale) return liveScale(width);
+    gestureScale = scaleAtWidth(gestureScale, width);
+    return gestureScale;
+  }
+
+  function placeMinute(scale: DayScale, minute: number): number {
+    return scale.width > 0 ? minuteToX(scale, minute) / scale.width : minute / DAY_MINUTES;
+  }
+
+  function paintRange(className: string, scale: DayScale, start: number, end: number): HTMLElement {
+    const node = el('div', className);
+    const left = placeMinute(scale, start * DAY_MINUTES);
+    node.style.left = percent(left);
+    node.style.width = percent(Math.max(0, placeMinute(scale, end * DAY_MINUTES) - left));
+    return node;
+  }
+
+  function paintHatches(scale: DayScale, segments: readonly { start: number; end: number }[]): void {
+    hatches.replaceChildren(...segments.map(segment => paintRange('ct-hatch', scale, segment.start, segment.end)));
+  }
+
+  function paintCoarse(scale: DayScale, spans: readonly { start: number; end: number }[]): void {
     const bars = new Set<number>();
     for (const span of spans) { bars.add(span.start); bars.add(span.end); }
     marks.replaceChildren(
-      ...spans.map(span => {
-        const shade = el('div', 'ct-coarse');
-        shade.style.left = percent(span.start);
-        shade.style.width = percent(span.end - span.start);
-        return shade;
-      }),
+      ...spans.map(span => paintRange('ct-coarse', scale, span.start, span.end)),
       ...[...bars].map(at => {
         const bar = el('div', 'ct-coarse-bar');
-        bar.style.left = percent(at);
+        bar.style.left = percent(placeMinute(scale, at * DAY_MINUTES));
         return bar;
       })
     );
+  }
+
+  function paintTicks(scale: DayScale): void {
+    const day = scale.segments.find(segment => segment.kind === 'day' && !segment.folded);
+    const visible = TICKS.filter(label => {
+      if (scale.linear || !day) return true;
+      const minute = Number(label) * 60;
+      return minute >= day.start && minute <= day.end;
+    });
+    const minGap = scale.linear ? 0 : 18;
+    const kept: string[] = [];
+    for (const label of visible) {
+      const minute = Number(label) * 60;
+      const previous = kept.at(-1);
+      if (minGap > 0 && previous !== undefined && minuteToX(scale, minute) - minuteToX(scale, Number(previous) * 60) < minGap) continue;
+      kept.push(label);
+    }
+    ticks.classList.toggle('is-folded', !scale.linear);
+    ticks.replaceChildren(...kept.map(label => {
+      const minute = Number(label) * 60;
+      const tick = el('span', `ct-tick${minute === 0 ? ' is-start' : minute === DAY_MINUTES ? ' is-end' : ''}`, label);
+      tick.style.left = percent(placeMinute(scale, minute === DAY_MINUTES ? DAY_MINUTES - 0.001 : minute));
+      return tick;
+    }));
+  }
+
+  function paintMoons(scale: DayScale): void {
+    moons.replaceChildren(...scale.segments.filter(segment => segment.folded).map(segment => {
+      const moon = el('div', 'ct-moon');
+      moon.style.left = percent(segment.x0 / scale.width);
+      moon.style.width = percent((segment.x1 - segment.x0) / scale.width);
+      const icon = el('span', 'ct-moon-icon');
+      icon.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="#f6f1e4" d="M9.6 1.6a6.2 6.2 0 1 0 4.6 10.6A6.8 6.8 0 1 1 9.6 1.6z"/></svg>';
+      moon.append(icon);
+      return moon;
+    }));
   }
 
   function reveal(button: HTMLButtonElement): void {
@@ -308,6 +459,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   }
 
   function render(): void {
+    const width = trackWidth();
+    const scale = currentScale(width);
     const selectedDay = selectedIndex >= 0 ? placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes) : '';
     const off = controlsDisabled();
     dayButtons.forEach((button, index) => {
@@ -323,23 +476,31 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const ms = frame ? Date.parse(frame.validTime) : Number.NaN;
     const local = frame && Number.isFinite(ms) ? localTimeFromMs(ms, offsetMinutes) : null;
     if (!frame || !Number.isFinite(ms)) {
-      timeLabel.textContent = '--:--';
+      timeLabel.replaceChildren(el('span', 'ct-time-local', '--:--'));
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
       playhead.setAttribute('hidden', '');
     } else {
-      timeLabel.textContent = formatPlaceTime(ms, offsetMinutes, 'clock');
+      const clock = formatPlaceTime(ms, offsetMinutes, 'clock');
+      const split = clock.indexOf(' (');
+      const localText = el('span', 'ct-time-local', split < 0 ? clock : clock.slice(0, split));
+      timeLabel.replaceChildren(localText, ...(split < 0 ? [] : [el('span', 'ct-time-utc', clock.slice(split))]));
       timeLabel.setAttribute('dateTime', frame.validTime);
       track.setAttribute('aria-valuetext', formatPlaceTime(ms, offsetMinutes, 'stamp'));
       if (local) {
         playhead.removeAttribute('hidden');
-        playhead.style.left = percent((local.hour * 60 + local.minute) / 1440);
+        playhead.style.left = percent(placeMinute(scale, local.hour * 60 + local.minute));
       } else playhead.setAttribute('hidden', '');
     }
     const group = selectedGroup();
-    ribbon.style.background = group ? ribbonCss(group.day) : NEUTRAL;
-    paintHatches(group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
-    paintCoarse(group ? coarseSpanFractions(frames, group.indices, offsetMinutes) : []);
+    const solar = group ? daySolar(group.day) : { stops: null, bounds: null };
+    const warped = solar.stops ? solar.stops.map(stop => ({ color: stop.color, at: placeMinute(scale, stop.at / 100 * DAY_MINUTES) * 100 })) : null;
+    ribbon.style.background = warped ? ribbonGradient(monotonicStops(warped)) : NEUTRAL;
+    paintHatches(scale, group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
+    paintCoarse(scale, group ? coarseSpanFractions(frames, group.indices, offsetMinutes) : []);
+    paintTicks(scale);
+    paintMoons(scale);
+    paintedWidth = width;
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
     track.setAttribute('aria-valuemax', String(Math.max(0, frames.length - 1)));
@@ -368,8 +529,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!group || controlsDisabled()) return;
     const rect = track.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const fraction = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-    const index = frameIndexForDayFraction(frames, group.indices, offsetMinutes, fraction);
+    const minute = xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)));
+    const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(minute)));
+    const index = nearestFrameIndexForDay(frames, group.indices, offsetMinutes, Math.floor(rounded / 60), rounded % 60);
     if (index >= 0) select(index, 'none', false);
   }
 
@@ -398,22 +560,35 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     if ((pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
     if (timer !== null) stopPlayback();
+    gestureScale = null;
+    gestureMoved = false;
+    gestureOriginX = pointer.clientX;
     gestureStart = selectedIndex;
     activePointer = pointer.pointerId ?? 1;
     if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
     seek(pointer.clientX);
+    const width = track.getBoundingClientRect().width;
+    if (width > 0) gestureScale = liveScale(width);
+    if (!destroyed) render();
   });
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
+    if (!gestureMoved && Math.abs(pointer.clientX - gestureOriginX) < 1) return;
+    gestureMoved = true;
     seek(pointer.clientX);
   };
   const releasePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
     activePointer = null;
-    if (!destroyed && !controlsDisabled() && gestureStart >= 0 && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
+    const held = gestureScale !== null;
+    gestureScale = null;
+    gestureMoved = false;
+    gestureOriginX = Number.NaN;
+    if (!destroyed && !controlsDisabled() && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
     gestureStart = -1;
+    if (held && !destroyed) render();
   };
   track.addEventListener('pointermove', movePointer);
   track.addEventListener('pointerup', releasePointer);
@@ -441,23 +616,31 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (destroyed) return;
     const selected = dayButtons.find(button => button.classList.contains('is-selected'));
     if (selected) reveal(selected);
+    if (Math.abs(trackWidth() - paintedWidth) >= 0.5) render();
   }) : null;
   resizeObserver?.observe(daysRow);
+  resizeObserver?.observe(track);
 
   return {
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
+      const nextIndex = nextFrames.findIndex(frame => frame.id === selectedFrame);
+      const sameFrames = nextFrames.length === frames.length && nextFrames.every((frame, index) => frame.id === frames[index]?.id && frame.validTime === frames[index]?.validTime);
+      const echo = activePointer !== null && sameFrames && nextDisabled === disabled && nextIndex === selectedIndex;
+      if (!echo) gestureScale = null;
       frames = nextFrames.slice();
-      selectedIndex = frames.findIndex(frame => frame.id === selectedFrame);
+      selectedIndex = nextIndex;
       disabled = nextDisabled;
+      if (activePointer !== null && !echo) gestureStart = selectedIndex;
       syncDays();
       render();
       if (controlsDisabled()) stopPlayback();
     },
     setOffsetMinutes(next: number) {
       if (destroyed || !Number.isFinite(next) || next === offsetMinutes) return;
+      gestureScale = null;
       offsetMinutes = next;
-      ribbonCache.clear();
+      solarCache.clear();
       syncDays();
       render();
     },
@@ -467,6 +650,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude) || Math.abs(nextLatitude) > 90) return;
       if (hasCenter && nextLatitude.toFixed(2) === latitude.toFixed(2) && nextLongitude.toFixed(2) === longitude.toFixed(2)) return;
+      gestureScale = null;
       latitude = nextLatitude;
       longitude = nextLongitude;
       hasCenter = true;
@@ -478,10 +662,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       stopPlayback();
       activePointer = null;
       gestureStart = -1;
+      gestureScale = null;
       resizeObserver?.disconnect();
       doc.removeEventListener('visibilitychange', onVisibility);
       doc.defaultView?.removeEventListener('pagehide', stopPlayback);
-      ribbonCache.clear();
+      solarCache.clear();
       root.remove();
     }
   };
