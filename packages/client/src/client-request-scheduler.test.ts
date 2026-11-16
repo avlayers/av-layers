@@ -486,3 +486,25 @@ it('reserves the explicit safe maximum before headers arrive', async () => {
   scheduler.dispose();
   await handle.response.catch(() => {});
 });
+
+it('rejects a body that exceeds its exact admitted size', async () => {
+  const chunk = new Uint8Array(600);
+  const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(chunk); controller.enqueue(chunk); } });
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response(stream)), maxActive: 4, maxInFlightBytes: 4 * 1024 * 1024 });
+  const handle = scheduler.request({ url: 'https://example.test/exact', priority: 'foreground', kind: 'wind', maxResponseBytes: 4096, expectedResponseBytes: 1024 });
+  const response = await handle.response;
+  await expect(response.arrayBuffer()).rejects.toThrow('exceeds its admitted size');
+  await handle.settled;
+  expect(scheduler.detail()).toMatchObject({ active: 0, bodyBytes: 0 });
+  scheduler.dispose();
+});
+
+it('admits a small background request under a tiny scheduler with reserved foreground headroom', async () => {
+  const fetchImpl = vi.fn(async () => new Response(null));
+  const scheduler = createForecastRequestScheduler({ fetchImpl: fetchImpl as typeof fetch, maxActive: 4, maxInFlightBytes: 64 * 1024, maxBackgroundBytes: 32 * 1024, maxBackgroundActive: 2 });
+  const handle = scheduler.request({ url: 'https://example.test/bg-small', priority: 'background', kind: 'raster', maxResponseBytes: 1024 });
+  expect(await handle.response).toBeInstanceOf(Response);
+  await handle.settled;
+  expect(fetchImpl).toHaveBeenCalledOnce();
+  scheduler.dispose();
+});

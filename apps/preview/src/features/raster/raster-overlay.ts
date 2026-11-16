@@ -1,5 +1,5 @@
 import type { Map, MapSourceDataEvent, ErrorEvent } from 'maplibre-gl';
-import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, seamInsertBefore, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
+import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, seamInsertBefore, type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
@@ -142,7 +142,7 @@ export class RasterOverlay {
     ['render', this.render], ['movestart', this.move], ['move', this.viewChanged], ['moveend', this.settled], ['idle', this.idle], ['resize', this.resized]
   ];
 
-  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch) {
+  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch, private readonly request?: (spec: ForecastRequestSpec) => ForecastRequestHandle) {
     this.opacity = opacity;
     for (const [ev, fn] of this.events) map.on(ev as never, fn as never);
   }
@@ -210,7 +210,9 @@ export class RasterOverlay {
 
   refresh(): void {
     this.overview?.refresh();
-    if (this.coarse && !this.overview?.ready(this.coarse.build, this.coarse.layer, this.coarse.frame)) this.clearOverview();
+    const stale = this.coarse && (this.coarse.build !== this.requested?.build || this.coarse.layer !== this.requested?.layer
+      || this.coarse.build.expiresAtMs <= Date.now() || !this.overview?.hasExtent());
+    if (stale) this.clearOverview();
     if (this.pendingOverview && !this.overview?.ready(this.pendingOverview.build, this.pendingOverview.layer, this.pendingOverview.frame)) this.cancelPaint();
     let changed = false;
     for (const s of [...this.slots]) if (s.build.expiresAtMs <= Date.now()) {
@@ -337,7 +339,7 @@ export class RasterOverlay {
 
   private ensureProtocol(): void {
     if (this.protocol) return;
-    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl });
+    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request });
     addProtocol(this.protocol.scheme, this.protocol.load);
     this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); });
     if (this.playing) (this.overview as { setPlayback?(playing: boolean): void }).setPlayback?.(true);

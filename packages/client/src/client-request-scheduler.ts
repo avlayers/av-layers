@@ -57,7 +57,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     || !Number.isSafeInteger(maxBackgroundBytes) || maxBackgroundBytes < 1024 || maxBackgroundBytes > (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES)) throw new Error('Invalid forecast request limits');
 
   const reserveActive = Math.min(FOREGROUND_RESERVE_ACTIVE, Math.max(0, maxActive - 1));
-  const reserveBytes = maxInFlightBytes === undefined ? 0 : Math.min(FOREGROUND_RESERVE_BYTES, maxInFlightBytes);
+  const reserveBytes = maxInFlightBytes === undefined ? 0 : Math.min(FOREGROUND_RESERVE_BYTES, Math.max(0, maxInFlightBytes - maxBackgroundBytes));
 
   interface Task {
     start(): void;
@@ -102,10 +102,12 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     const settled = new Promise<void>(resolve => { settleResponse = resolve; });
     const response = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
     const controller = new AbortController();
-    const taskReserve = spec ? (spec.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : spec.maxResponseBytes) : HEADER_RESERVE_BYTES;
+    const bodyLimit = spec ? (spec.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : spec.maxResponseBytes) : Number.POSITIVE_INFINITY;
+    const taskReserve = spec ? bodyLimit : HEADER_RESERVE_BYTES;
     let foreground = spec?.foreground ?? (init as RequestInit & { priority?: string } | undefined)?.priority !== 'low';
     let started = false, finished = false, delivered = false, heldBytes = 0, backgroundHeld = false;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let consumed = 0;
     let cancellation: Promise<void> | undefined;
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
@@ -175,7 +177,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
           }
           const declared = fetched.headers.get('content-length');
           const length = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
-          if (length !== null && spec && length > spec.maxResponseBytes) {
+          if (length !== null && spec && length > bodyLimit) {
             await fetched.body?.cancel(controller.signal.reason).catch(() => {});
             throw new ForecastCapacityError('capacity', 'Response exceeds its admitted size');
           }
@@ -194,8 +196,15 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
               try {
                 const result = await reader!.read();
                 if (finished || cancellation || controller.signal.aborted) return;
-                if (result.done) { reader!.releaseLock(); finish(); value.close(); }
-                else value.enqueue(result.value);
+                if (result.done) { reader!.releaseLock(); finish(); value.close(); return; }
+                consumed += result.value.length;
+                if (consumed > bodyLimit) {
+                  const error = new ForecastCapacityError('capacity', 'Response body exceeds its admitted size');
+                  value.error(error);
+                  await cancelReader(error);
+                  return;
+                }
+                value.enqueue(result.value);
               } catch (error) {
                 if (!finished && !cancellation) { reader!.releaseLock(); finish(); value.error(error); }
               }
@@ -252,7 +261,8 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
         || (spec.expectedResponseBytes !== undefined && (!Number.isSafeInteger(spec.expectedResponseBytes) || spec.expectedResponseBytes < 0 || spec.expectedResponseBytes > spec.maxResponseBytes))) {
         throw new ForecastCapacityError('configuration', 'Invalid forecast request size');
       }
-      const bound = spec.priority === 'foreground' ? (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES) : Math.min(maxBackgroundBytes, maxInFlightBytes ?? maxBackgroundBytes);
+      const bound = spec.priority === 'foreground' ? (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES)
+        : Math.min(maxBackgroundBytes, maxInFlightBytes === undefined ? maxBackgroundBytes : Math.max(0, maxInFlightBytes - reserveBytes));
       if (spec.maxResponseBytes > bound) throw new ForecastCapacityError('capacity', 'Forecast request exceeds its class bound');
       return schedule(spec.url, { priority: spec.priority === 'background' ? 'low' : 'high' } as RequestInit,
         { foreground: spec.priority === 'foreground', maxResponseBytes: spec.maxResponseBytes, expectedResponseBytes: spec.expectedResponseBytes });

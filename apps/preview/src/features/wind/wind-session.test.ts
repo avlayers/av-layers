@@ -1,28 +1,35 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderedFrames } from '@av/contracts/publication';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import type { WindHeight, WindStatus } from './wind-model';
 
-const wind = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'unavailable', loads: [] as string[], unavailable: new Set<string>(), capacity: new Set<string>() }));
+const wind = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'unavailable', loads: [] as string[], unavailable: new Set<string>(), capacity: new Set<string>(), sources: [] as Array<{ frame: string; prepared: Set<WindHeight> }> }));
 
 vi.mock('@av/client/wind', () => ({
   WindCapacityError: class extends Error { readonly code = 'capacity'; },
   WindDataSource: class {
     readonly isOverview = false;
     readonly admitted = undefined;
+    frame = '';
+    readonly prepared = new Set<WindHeight>();
+    constructor() { wind.sources.push(this); }
     readonly load = vi.fn(async (request?: { frame?: string }) => {
-      const frame = request?.frame ?? '';
-      wind.loads.push(frame);
-      if (wind.capacity.has(frame)) throw new RangeError('Wind cache exceeds byte budget');
-      return wind.unavailable.has(frame) ? 'unavailable' : wind.status;
+      this.frame = request?.frame ?? '';
+      wind.loads.push(this.frame);
+      if (wind.capacity.has(this.frame)) throw new RangeError('Wind cache exceeds byte budget');
+      return wind.unavailable.has(this.frame) ? 'unavailable' : wind.status;
     });
     readonly dispose = vi.fn();
     readonly sample = vi.fn((_lat: number, _lon: number, height: WindHeight) => ({ u: 1, v: 2, status: 'valid', height }));
-    readonly prepare = vi.fn((height: WindHeight) => ({ bounds: [0, 0, 1, 1], data: new Uint8Array(4), size: 1, height, key: `prepared:${height}` }));
+    readonly prepare = vi.fn((height: WindHeight) => { this.prepared.add(height); return { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height, key: `prepared:${height}` }; });
+    readonly hasPrepared = (height: WindHeight) => this.prepared.has(height);
   }
 }));
 
 import { createWindSession } from './wind-session';
+
+const opened: Array<{ destroy(): void }> = [];
+afterEach(() => { for (const session of opened.splice(0)) session.destroy(); wind.sources.length = 0; });
 
 function harness() {
   wind.status = 'ready'; wind.loads.length = 0; wind.unavailable.clear(); wind.capacity.clear();
@@ -53,6 +60,7 @@ function harness() {
     displayedRaster: () => displayedRaster,
     replacementFailed: () => failed
   });
+  opened.push(session);
   return {
     session, buildA, buildB, framesA, framesB, statuses, fields, modes, displayed, clear, prepared, install,
     setBuild: (value: typeof buildA) => { build = value; }, setFrame: (value: string) => { frame = value; },
@@ -149,14 +157,14 @@ describe('wind warming recovery', () => {
     test.session.destroy();
   });
 
-  it('resumes warming after capacity is released and the plan is cleared', async () => {
+  it('retries an unavailable time after an explicit clear and replan', async () => {
     const test = harness();
     await ready(test);
-    wind.capacity.add(test.framesA[1]!.id);
+    wind.unavailable.add(test.framesA[1]!.id);
     test.session.setPlaying(false);
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[1]!.id), { timeout: 5_000 });
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[2]!.id), { timeout: 5_000 });
-    wind.capacity.delete(test.framesA[1]!.id);
+    wind.unavailable.delete(test.framesA[1]!.id);
     test.session.clear();
     test.session.update();
     await vi.waitFor(() => expect(wind.loads.filter(frame => frame === test.framesA[1]!.id).length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
@@ -183,5 +191,18 @@ it('reports the installed height rather than the pending intent', async () => {
   expect(test.session.installed).toMatchObject({ frame: test.framesA[0]!.id, height: 'surface' });
   test.session.heightChanged('surface');
   expect(test.session.installed).toMatchObject({ height: 1000 });
+  test.session.destroy();
+});
+
+it('prepares every retained time for a changed height without another acquisition', async () => {
+  const test = harness();
+  await ready(test);
+  await vi.waitFor(() => expect(test.session.preparation.ready).toBe(test.session.preparation.admitted), { timeout: 5_000 });
+  const loads = wind.loads.length;
+  test.setHeight(500);
+  test.session.heightChanged('surface');
+  await vi.waitFor(() => expect(test.session.preparation.ready).toBe(test.session.preparation.admitted), { timeout: 5_000 });
+  expect(wind.sources.every(source => source.prepared.has(500))).toBe(true);
+  expect(wind.loads.length).toBe(loads);
   test.session.destroy();
 });

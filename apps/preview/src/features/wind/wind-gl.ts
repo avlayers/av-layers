@@ -64,6 +64,13 @@ export function trailTargetSize(bufferWidth: number, bufferHeight: number, maxSi
 const valid = (s: { u: number | null; v: number | null; status: number }) => (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null;
 export { encodeWindByte } from '@av/contracts/wind-data';
 
+/** World-copy translation that puts a prepared longitude interval near the displayed center. */
+export function preparedWorldShift(bounds: readonly [number, number, number, number], centerLongitude: number): number {
+  if (!Number.isFinite(centerLongitude)) return 0;
+  const shift = Math.round((centerLongitude - (bounds[0] + bounds[2]) / 2) / 360) * 360;
+  return shift === 0 ? 0 : shift;
+}
+
 export interface EncodedWind { u: number; v: number }
 
 /** Bilinear sample of an encoded wind grid. Alpha 0 adds neither vector nor weight. */
@@ -112,7 +119,10 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   let gl: WebGL2RenderingContext | null = null;
   let updateProg: WebGLProgram | null = null, lineProg: WebGLProgram | null = null, blitProg: WebGLProgram | null = null;
   let vao: WebGLVertexArrayObject | null = null, states: WebGLTexture[] = [], stateFbo: WebGLFramebuffer[] = [], winds: WebGLTexture[] = [], trails: WebGLTexture[] = [], trailFbo: WebGLFramebuffer[] = [];
-  let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false, uploadedPrepared: WindPreparedGrid | null = null;
+  let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false, uploadedPrepared: WindPreparedGrid | null = null, preparedShift = 0;
+  function preparedArea(prepared: WindPreparedGrid, shift: number) {
+    return { west: prepared.bounds[0] + shift, south: prepared.bounds[1], east: prepared.bounds[2] + shift, north: prepared.bounds[3] };
+  }
   let bounds = { west: -180, south: -85, east: 180, north: 85 }, trailW = 1, trailH = 1, maxTrailSide = TRAIL_SIDE;
   const blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), pending = { a: blank, b: blank, dirty: false };
 
@@ -194,9 +204,10 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     last = now;
     const nextZoom = map.getZoom();
     if (state.prepared) {
-      if (uploadedPrepared !== state.prepared) {
-        bounds = { west: state.prepared.bounds[0], south: state.prepared.bounds[1], east: state.prepared.bounds[2], north: state.prepared.bounds[3] };
-        reset = 1;
+      const center = map.getCenter?.().lng;
+      const shift = preparedWorldShift(state.prepared.bounds, Number.isFinite(center) ? center! : (state.prepared.bounds[0] + state.prepared.bounds[2]) / 2);
+      if (shift !== preparedShift || uploadedPrepared !== state.prepared) {
+        preparedShift = shift; bounds = preparedArea(state.prepared, shift); reset = 1;
       }
     } else if (!inside() || nextZoom !== zoom) {
       const area = viewBounds();
@@ -327,7 +338,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
         state.failed = true; report(false);
       }
     },
-    onRemove() { try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; } },
+    onRemove() { try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; } state.added = false; },
     prerender(_context, options) {
       try { frame(options.modelViewProjectionMatrix as unknown as ArrayLike<number>); }
       catch { state.failed = true; report(false); }
@@ -335,12 +346,14 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     render() { try { present(); } catch { state.failed = true; report(false); } }
   };
   const raise = () => {
-    if (!state.added || !map.getLayer(LAYER)) return;
+    if (state.destroyed) return;
+    if (!map.getLayer(LAYER)) { mount(); return; }
+    state.added = true;
     const layers = map.getStyle()?.layers;
     if (layers && layers[layers.length - 1]?.id !== LAYER) map.moveLayer(LAYER);
   };
   const mount = () => {
-    if (state.destroyed || state.added) return;
+    if (state.destroyed || map.getLayer(LAYER)) return;
     state.added = true;
     try { map.addLayer(layer); raise(); }
     catch { state.failed = true; report(false); }
@@ -361,7 +374,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
       if (state.prepared === prepared) { if (prepared && state.ready && !state.hidden) map.triggerRepaint(); return; }
       state.prepared = prepared; state.from = null; state.to = null; uploadedPrepared = null;
       if (prepared) {
-        bounds = { west: prepared.bounds[0], south: prepared.bounds[1], east: prepared.bounds[2], north: prepared.bounds[3] };
+        preparedShift = preparedWorldShift(prepared.bounds, map.getCenter?.().lng ?? (prepared.bounds[0] + prepared.bounds[2]) / 2);
+        bounds = preparedArea(prepared, preparedShift);
         reset = 1;
       }
       if (state.ready) map.triggerRepaint();

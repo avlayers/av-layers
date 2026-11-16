@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { WIND_CANVAS_BYTES } from '../raster/raster-budget';
-import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
+import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, preparedWorldShift, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
 
 const decode = (byte: number) => byte / 255 * 200 - 100;
 
@@ -72,4 +72,17 @@ it('keeps each trail target at the drawing-buffer size inside the canvas reserve
   expect(full.width * full.height * 2).toBe(WIND_CANVAS_BYTES);
   expect(trailTargetSize(8000, 1000)).toEqual({ width: 4096, height: 512 });
   expect(trailTargetSize(0, -5)).toEqual({ width: 1, height: 1 });
+});
+
+
+it('translates a dateline prepared interval into the displayed world copy', () => {
+  const bounds = [179.85, 0, 180.15, 1] as const;
+  for (const center of [179.97, -179.97, 180, -180]) {
+    const shift = preparedWorldShift(bounds, center);
+    const middle = (bounds[0] + bounds[2]) / 2 + shift;
+    expect(Math.abs(middle - center)).toBeLessThanOrEqual(180);
+    expect(bounds[2] + shift - (bounds[0] + shift)).toBeCloseTo(0.3, 8);
+  }
+  expect(preparedWorldShift(bounds, -179.97)).toBe(-360);
+  expect(preparedWorldShift(bounds, 179.97)).toBe(0);
 });

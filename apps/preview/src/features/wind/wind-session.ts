@@ -14,6 +14,8 @@ export interface WindCachePort {
   isBuildUnavailable(buildId: string): boolean;
   readonly allocatedBytes: number;
   clear(): void;
+  onRelease?: (() => void) | null;
+  evictUnreferenced?: () => number;
 }
 
 export interface WindSessionOptions {
@@ -68,12 +70,13 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const { map, publish, field, state } = options;
   let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
   let windDisplayed = false, windLoading = false, height: WindHeight = 'surface', installedHeight: WindHeight = 'surface';
-  let fillTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
+  let fillTimer: ReturnType<typeof setTimeout> | null = null, prepTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
   let acquireStatus: WindStatus = 'unavailable';
   const windHeld = new Map<string, WindRequest>();
   const failures = new Map<string, number>();
   let admittedWindow: number | null = null, capacityBlocked = false, blockedBytes = 0;
   const warmth = createViewportWarmth();
+  if ('onRelease' in options.cache) options.cache.onRelease = () => { if (capacityBlocked) scheduleFill(0); };
   function fullHorizon(): boolean {
     const bounds = map.getBounds();
     return warmth.update(boundsAreaKm2([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]));
@@ -107,9 +110,26 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     for (const [, held] of evicted) if (!retained(held)) held.source.dispose();
     return evicted.length > 0;
   }
+  function schedulePreparation(delay = 0): void {
+    if (destroyed || prepTimer !== null) return;
+    prepTimer = setTimeout(() => { prepTimer = null; prepareMissing(); }, delay);
+  }
+  function prepareMissing(): void {
+    if (destroyed) return;
+    const { build, selectedFrame, height } = state();
+    if (!build || !selectedFrame) return;
+    const limit = admittedWindow ?? Number.POSITIVE_INFINITY;
+    const held = orderedFrames(build, selectedFrame).slice(0, limit).map(id => windHeld.get(id))
+      .find(value => value && typeof value.source.hasPrepared === 'function' && !value.source.hasPrepared(height));
+    if (!held) return;
+    held.source.prepare?.(height);
+    schedulePreparation(0);
+  }
   function unblockIfReleased(): void {
     const { build } = state();
-    if (!capacityBlocked || options.cache.allocatedBytes >= blockedBytes) return;
+    if (!capacityBlocked) return;
+    const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
+    if (options.cache.allocatedBytes >= blockedBytes && reclaimed === 0) return;
     const promised = build ? renderedFrames(build.manifest).length : 0;
     capacityBlocked = false;
     if (admittedWindow !== null) admittedWindow = admittedWindow + 1 >= promised ? null : admittedWindow + 1;
@@ -160,7 +180,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     };
     if (field.install) field.install(installed, prepared, mode);
     else { field.setField(installed, mode); field.setPrepared(prepared); }
-    installedWind = view;
+    installedWind = view; schedulePreparation(0);
     windDisplayed = true;
     publish.displayed(true);
     if (previous && previous !== view) retire(previous);
@@ -203,6 +223,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     windHeld.clear();
     failures.clear();
     admittedWindow = null; capacityBlocked = false; blockedBytes = 0;
+    if (prepTimer !== null) { clearTimeout(prepTimer); prepTimer = null; }
     releasePrefetch(); dropRetired(); cancelRequest();
     if (installedWind && installedWind !== windView) installedWind.source.dispose();
     windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
@@ -244,6 +265,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         const admitted = request.source.admitted;
         if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
         if (typeof request.source.prepare === 'function') request.source.prepare(state().height);
+        schedulePreparation(0);
         failures.delete(failureKey(request.build, request.frame));
         windHeld.set(request.frame, request); scheduleFill(0);
       } else {
@@ -256,14 +278,17 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (!request.controller.signal.aborted) {
         capacity = isCapacity(error);
         if (capacity) {
-          capacityBlocked = true; blockedBytes = options.cache.allocatedBytes;
-          admittedWindow = Math.max(1, retainedCount());
-          evictFarthest(admittedWindow);
+          const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
+          if (!reclaimed) {
+            capacityBlocked = true; blockedBytes = options.cache.allocatedBytes;
+            admittedWindow = Math.max(1, retainedCount());
+            evictFarthest(admittedWindow);
+          }
         } else recordFailure(request.build, request.frame, false);
       }
       if (windPrefetch === request) windPrefetch = null;
       if (!retained(request)) request.source.dispose();
-      if (!capacity) scheduleFill(FOCUS_DWELL_MS);
+      if (!capacity || !capacityBlocked) scheduleFill(FOCUS_DWELL_MS);
     });
   }
 
@@ -363,13 +388,15 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   return {
     update, reconcile, clear,
     setPlaying(playing: boolean) { scheduleFill(playing ? 0 : FOCUS_DWELL_MS); },
-    heightChanged(previous) { if (windDisplayed && previous !== state().height) setField('replace'); },
+    heightChanged(previous) { if (previous !== state().height) { schedulePreparation(0); if (windDisplayed) setField('replace'); } },
     get displayed() { return windDisplayed; },
     get resident() { return Boolean(windView || windRequest || windPrefetch || windHeld.size || retiring.size); },
     get preparation() {
       const build = state().build, promised = build ? renderedFrames(build.manifest).length : 0;
       const admitted = admittedWindow === null ? promised : Math.min(admittedWindow, promised);
-      return { promised, admitted, ready: windHeld.size, limited: capacityBlocked || admitted < promised };
+      const currentHeight = state().height;
+      const ready = [...windHeld.values()].filter(held => typeof held.source.hasPrepared !== 'function' || held.source.hasPrepared(currentHeight)).length;
+      return { promised, admitted, ready, limited: capacityBlocked || admitted < promised };
     },
     get current() { return windView; },
     get installed() { return installedWind && windDisplayed ? { build: installedWind.build, frame: installedWind.frame, source: installedWind.source, height: installedHeight } : null; },
@@ -383,6 +410,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       for (const view of owned) view.source.dispose();
       windHeld.clear();
       failures.clear();
+      if ('onRelease' in options.cache) options.cache.onRelease = null;
+      if (prepTimer !== null) { clearTimeout(prepTimer); prepTimer = null; }
       windView = installedWind = windRequest = windPrefetch = null;
     }
   };

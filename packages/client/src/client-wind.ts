@@ -57,6 +57,8 @@ export class WindDataCache {
   private bytes = 0;
   private spanFailures = 0;
   private readonly failures = new Map<string, { until: number; attempts: number }>();
+  /** Called when a retain count reaches zero; capacity owners may re-plan. */
+  onRelease: (() => void) | null = null;
 
   constructor(private readonly budgetBytes = WIND_NUMERIC_BYTES, private readonly entryLimit = 256) {
     if (!Number.isSafeInteger(budgetBytes) || budgetBytes < WIND_FRAME_LIMIT || budgetBytes > WIND_WINDOW_BYTES
@@ -133,7 +135,16 @@ export class WindDataCache {
   }
 
   release(entry: CachedBytes): void {
-    if (!--entry.references && (entry.used === null || entry.expiresAt <= Date.now())) this.remove(entry);
+    if (--entry.references) return;
+    if (entry.used === null || entry.expiresAt <= Date.now()) this.remove(entry);
+    else this.onRelease?.();
+  }
+
+  /** Drop validated entries no owner references and return the freed bytes. */
+  evictUnreferenced(): number {
+    let freed = 0;
+    for (const entry of [...this.entries]) if (!entry.references) { freed += entry.bytes.length; this.remove(entry); }
+    return freed;
   }
 
   clear(): void {
@@ -324,6 +335,10 @@ export class WindDataSource {
    * Quantized rendered lattice for the admitted extent. Sampling runs against the scientific
    * sampler once per retained frame; selection only uploads the returned bytes.
    */
+  hasPrepared(height: 'surface' | number | 'lift', size = 128): boolean {
+    return this.preparedGrids.has(`${this.generation}:${height}:${size}`);
+  }
+
   prepare(height: 'surface' | number | 'lift', size = 128): WindPreparedGrid | null {
     const current = this.current;
     if (!current || current.build.expiresAtMs <= Date.now()) return null;

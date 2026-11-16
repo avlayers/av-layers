@@ -150,6 +150,18 @@ Wind lattice preparation still runs on the main thread during background
 warming. The worker snapshot, prepared barb lattice, combined allocation ledger
 and raster/wind stage-then-commit barrier are not implemented.
 
+The review revision also:
+
+- separates replacement preparation from the displayed raster generation, so
+  render/idle events cannot cancel an unfinished crop;
+- prepares every retained time for a changed height, selected frame first;
+- promotes an active physical raster request when its source becomes
+  interactive;
+- recovers useful wind preparation after a cache release notification;
+- enforces explicit body ceilings and rejects impossible background admission;
+- translates a dateline prepared interval into the displayed world copy;
+- reattaches the wind custom layer when the restored map style is missing it.
+
 Browser evidence for these paths is not yet captured. The required
 `viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and
 constrained-device budget remain unverified; the draft PR records them as
@@ -158,19 +170,25 @@ blocking release gates rather than reporting measured conclusions.
 
 ### Source-isolated benchmark smoke
 
-The harness now resolves every `@av/*` import through each variant's own
-`codeRoot` package exports before Vite's workspace links, and accepts the
-48-frame guard. Two runs on 16 November 2026 used Node 22.23.4, bundled
-Chromium 157 through ANGLE SwiftShader, a 1920 × 1080 viewport at DPR 1, 48
-hourly fixture frames, a 250 ms response floor, and unrestricted bandwidth:
+The harness resolves every `@av/*` import through each variant's own
+`codeRoot` package exports, archives the full baseline `packages` tree, fails
+when a workspace import escapes that tree, and fingerprints the modules Vite
+actually loaded. The earlier 2,499.7 ms versus 2,440.0 ms comparison is
+retracted: that run's baseline omitted package manifests and resolved candidate
+workspace code. No performance inference is drawn from it.
 
-| Run | Baseline first-correct p50 | Candidate first-correct p50 | Overview ready at 10 s |
-| --- | --- | --- | --- |
-| 48-frame cold wide view (z7.15, > 800 km²) | 2499.7 ms | 2440.0 ms | 1/48 both |
+The corrected 48-frame run on 16 November 2026 used Node 22.23.4, bundled
+Chromium through ANGLE SwiftShader, a 1920 × 1080 viewport at DPR 1, hourly
+fixture frames, a 250 ms response floor and unrestricted bandwidth:
 
-Both variants ran their own source and painted the requested time and layer.
-The view is outside full-horizon eligibility, so this run checks source
-isolation and foreground cold latency (G01/G07), not automatic full-timeline
-preparation. A 6-frame smoke at the same boundary also completed for both
-variants. The `viewport-warm` profile, eligible-area calibration, warm sweep,
-DPR 2, constrained memory, faults and real-basemap cases remain unverified.
+| Run | Baseline first-correct p50 | Candidate first-correct p50 | Loaded workspace files | Loaded hash prefix |
+| --- | --- | --- | --- | --- |
+| 48-frame cold wide view (z7.15, > 800 km²) | 2414.3 ms | 2457.7 ms | 73 / 74 | `299107ef19` / `26712f4499` |
+
+Probes resolved `@av/client`, `@av/client/dom`, `@av/client/wind`,
+`@av/contracts`, `@av/contracts/wind-data`, `@av/forecast/wind` and
+`@av/soaring` inside each variant's own tree. The view is outside full-horizon
+eligibility, so this run checks source isolation and foreground cold latency
+(G01/G07), not automatic full-timeline preparation. The `viewport-warm` profile,
+eligible-area calibration, warm sweep, DPR 2, constrained memory, faults and
+real-basemap cases remain unverified.

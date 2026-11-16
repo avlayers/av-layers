@@ -388,7 +388,7 @@ export function createPreviewApp(): PreviewApp {
       writer.overlay(state);
       windSession?.reconcile();
       updateOverlayStatus();
-    }, forecastScheduler.fetch);
+    }, forecastScheduler.fetch, spec => forecastScheduler.request(spec));
     seam = new CoverageSeam(map);
     windOverlay = new WindOverlay(map);
     windOverlay.setOptions({ style: intent().windStyle, visible: intent().windVisible, paused: intent().windPaused, units: intent().units });

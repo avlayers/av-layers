@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRasterTileProtocol, createSourceRasterTileProtocol } from './client-raster';
+import { createForecastRequestScheduler } from './client-request-scheduler';
 const base = 'https://api.test';
 const tile = (x = 0) => `${base}/tiles/gfs/build/usable-lift-msl/f003/7/${x}/50.webp`;
 const webp = () => new Response(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } });
@@ -419,4 +420,35 @@ it('demotes queued source work while allowing the current admitted read to settl
   source.setInteractive(true);
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   finish[1](webp()); await queued;
+});
+
+
+it('promotes the physical request when a queued source becomes interactive', async () => {
+  let tileFetches = 0;
+  const pending: Array<{ url: string; resolve: (response: Response) => void }> = [];
+  const scheduler = createForecastRequestScheduler({
+    maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxBackgroundActive: 6, maxBackgroundBytes: 2 * 1024 * 1024,
+    fetchImpl: vi.fn((input: RequestInfo | URL) => new Promise<Response>(resolve => {
+      const url = String(input);
+      if (url.includes('/tiles/')) tileFetches++;
+      pending.push({ url, resolve });
+    })) as typeof fetch
+  });
+  const first = scheduler.request({ url: 'https://api.test/wind/1', priority: 'background', kind: 'wind', maxResponseBytes: 1024 * 1024 });
+  const second = scheduler.request({ url: 'https://api.test/wind/2', priority: 'background', kind: 'wind', maxResponseBytes: 1024 * 1024 });
+  first.response.catch(() => {}); second.response.catch(() => {});
+  await vi.waitFor(() => expect(scheduler.detail().backgroundActive).toBe(2));
+  const protocol = setupSources({ request: spec => scheduler.request(spec), maxActive: 2, maxSources: 2 });
+  const source = protocol.createSource(false);
+  const load = protocol.load({ url: source.url(tile(0)) }, new AbortController());
+  await vi.waitFor(() => expect(scheduler.stats().queued).toBe(1));
+  expect(tileFetches).toBe(0);
+  source.setInteractive(true);
+  await vi.waitFor(() => expect(tileFetches).toBe(1));
+  pending.find(entry => entry.url.includes('/tiles/'))!.resolve(webp());
+  await expect(load).resolves.toMatchObject({ data: expect.any(ArrayBuffer) });
+  first.cancel(); second.cancel();
+  for (const entry of pending) if (!entry.url.includes('/tiles/')) entry.resolve(new Response(null));
+  await Promise.allSettled([first.settled, second.settled]);
+  scheduler.dispose();
 });

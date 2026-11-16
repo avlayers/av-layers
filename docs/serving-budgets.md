@@ -21,25 +21,23 @@ combined work across all grids selected by a request.
 - **Discovery response cache:** catalog, latest and retained-run lists share
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
-- **Client forecast transport:** preview gives numeric wind and raster fetches
-  separate [schedulers](../packages/client/src/client-request-scheduler.ts).
-  Raster keeps eight requests active and numeric wind six. A request owns its
-  count and byte reservation until the body settles or cancellation completes;
-  an explicit request reserves its validated expected size or its safe maximum;
-  the fetch adapter keeps the 1 MiB header reserve. A declared length replaces
-  that reserve only with an exposed `Content-Encoding: identity`. Unknown,
-  malformed and compressed lengths keep the reservation. Either scheduler
-  queues 64 requests. Preview, numeric wind and forecast metadata share one
-  scheduler. Speculative work starts only below six bodies and 2 MiB;
-  two transfer slots and 2 MiB stay available to foreground work. Selected work
-  takes priority over queued speculation and evicts a queued background prefetch
-  when all 64 slots are occupied. Promotion changes queue rank, not the running
-  fetch. Preview and
-  Windy share the [raster scheduler](../packages/client/src/client-raster.ts).
-  It keeps 16 requests active and queues 64. Background work starts while fewer
-  than 2 background reads are active; admitted reads finish after demotion. A
-  tile that has returned HTTP 200 is stored in the compressed cache when its
-  caller leaves. The compressed tile cache is 48 MiB including entry overhead.
+- **Client forecast transport:** preview, numeric wind and forecast metadata
+  share one [scheduler](../packages/client/src/client-request-scheduler.ts).
+  Eight forecast requests stay active. A request owns its count and byte
+  reservation until the body settles or cancellation completes. An explicit
+  request reserves its validated expected size or its safe maximum; the fetch
+  adapter keeps the 1 MiB header reserve. A declared length replaces that
+  reserve only with an exposed `Content-Encoding: identity`. Unknown, malformed
+  and compressed lengths keep the reservation. The queue holds 64 requests.
+  Speculative work starts only below six bodies and the background byte cap;
+  foreground keeps two transfer slots and up to 2 MiB, clamped to the configured
+  total. Selected work takes priority over queued speculation and evicts a
+  queued background prefetch when all 64 slots are occupied. Promotion of a
+  queued task changes queue rank; promotion of an active raster or wind consumer
+  reaches the physical request handle without a second fetch. A validated
+  expected size is exact: delivered bytes beyond it fail the stream. The raster
+  protocol keeps 16 inner requests active. A tile that has returned HTTP 200 is
+  stored in the compressed cache when its caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using
   [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 48
   offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
