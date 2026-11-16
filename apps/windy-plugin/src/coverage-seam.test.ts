@@ -21,8 +21,8 @@ it('draws the line on a map that can add a source and ignores a map that cannot'
     removeLayer() {},
     getBounds() { return { getWest: () => map.bounds.west, getSouth: () => map.bounds.south, getEast: () => map.bounds.east, getNorth: () => map.bounds.north }; }
   };
-  const cold = { ...map, isStyleLoaded: () => false };
-  syncPluginSeam(cold, build, 'usable-lift-msl');
+  const cold = { ...map, addSource() { throw new Error('Style is not done loading.'); } };
+  expect(() => syncPluginSeam(cold, build, 'usable-lift-msl')).not.toThrow();
   expect(sources.has('av-seam')).toBe(false);
   watchPluginSeam(map, () => syncPluginSeam(map, build, 'usable-lift-msl'));
   events.get('moveend')!();

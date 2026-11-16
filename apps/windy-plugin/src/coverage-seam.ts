@@ -3,10 +3,10 @@ import { syncCoverageSeam, type PinnedBuild } from '@av/client';
 
 /** Draw the seam when this map can host a GeoJSON source. Windy's glyphs are left unused. */
 export function syncPluginSeam(maplibre: object, build: PinnedBuild | null, layer: LayerId | null): void {
-  const host = maplibre as { addSource?: unknown; isStyleLoaded?: () => boolean };
+  const host = maplibre as { addSource?: unknown };
   if (typeof host.addSource !== 'function') return;
-  if (typeof host.isStyleLoaded === 'function' && !host.isStyleLoaded()) return;
-  syncCoverageSeam(host as Parameters<typeof syncCoverageSeam>[0], build, layer, false);
+  try { syncCoverageSeam(host as Parameters<typeof syncCoverageSeam>[0], build, layer, false); }
+  catch (error) { if (!(error instanceof Error) || error.message !== 'Style is not done loading.') throw error; }
 }
 
 export function watchPluginSeam(maplibre: object, sync: () => void): void {
