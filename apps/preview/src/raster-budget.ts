@@ -6,6 +6,7 @@ export const RASTER_CACHE_TILES = 16;
 export const RASTER_PAN_TILES = 48;
 export const MAX_RASTER_SOURCES = 4;
 export const WIND_TRAIL_PIXELS = 2 * 1024 * 1024;
+export const WIND_TRAIL_WIDTH = 1.45;
 export const WIND_CANVAS_PIXELS = 8 * 1024 * 1024;
 export const WIND_CANVAS_BYTES = WIND_CANVAS_PIXELS * 4;
 export const VIEWPORT_BYTES = 120 * 1024 * 1024;
