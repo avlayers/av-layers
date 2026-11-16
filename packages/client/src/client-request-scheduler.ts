@@ -33,7 +33,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     if (disposed) { reject(abortError()); return; }
     if (signal?.aborted) { reject(signal.reason); return; }
     const low = (init as RequestInit & { priority?: string } | undefined)?.priority === 'low';
-    if (active.size >= maxActive && queued.length >= maxQueued) {
+    if (!(active.size < maxActive && fits()) && queued.length >= maxQueued) {
       const evict = !low ? queued.findIndex(item => item.low) : -1;
       if (evict < 0) { reject(new Error('Forecast request queue is full')); return; }
       queued[evict]!.controller.abort(abortError());

@@ -1,17 +1,12 @@
-import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import './wind-controls.css';
+import {
+  parseWindPreferences, serializeWindPreferences, snapWindHeight as storedStop,
+  WIND_STATUS_LABELS as STATUS_LABELS, WIND_STORAGE_KEY as STORAGE_KEY, WIND_STOPS as STOPS,
+  WIND_STYLE_LABELS as STYLE_LABELS, WIND_STYLES as STYLES, windStopLabel as stopLabel, windStopValue as stopValue,
+  type StoredWindPreferences, type WindControlState, type WindHeight, type WindStatus, type WindStyle, type WindUnits
+} from './wind-model';
 
-export type WindStyle = 'trails' | 'barbs' | 'hybrid';
-export type WindHeight = 'surface' | number | 'lift';
-export type WindUnits = 'metric' | 'imperial';
-export type WindStatus = 'ready' | 'loading' | 'unavailable';
-
-export interface WindControlState {
-  readonly style: WindStyle;
-  readonly visible: boolean;
-  readonly paused: boolean;
-  readonly height: WindHeight;
-}
+export type { WindControlState, WindHeight, WindStatus, WindStyle, WindUnits } from './wind-model';
 
 export interface WindControlsOptions {
   onChange(state: WindControlState): void;
@@ -20,7 +15,6 @@ export interface WindControlsOptions {
 
 export interface WindControls {
   readonly state: WindControlState;
-  preferredVisible?(): boolean;
   setStatus(status: WindStatus): void;
   setQuality?(overview: boolean): void;
   setState?(next: Partial<Pick<WindControlState, 'style' | 'visible' | 'height'>>): void;
@@ -28,49 +22,29 @@ export interface WindControls {
   destroy(): void;
 }
 
-const STYLES: readonly WindStyle[] = ['trails', 'barbs', 'hybrid'];
-const STOPS: readonly number[] = WIND_HEIGHTS;
-const STORAGE_KEY = 'av.wind-controls.v1', METRES_PER_FOOT = 0.3048;
-const STYLE_LABELS: Record<WindStyle, string> = { trails: 'White trails', barbs: 'XC barbs', hybrid: 'Flow and sparse barbs' };
-const STATUS_LABELS: Record<WindStatus, string> = { ready: '', loading: 'Loading wind', unavailable: 'Wind unavailable' };
-
 const svg = (w: number, h: number, vw: number, vh: number, attrs: string, body: string) =>
   `<svg viewBox="0 0 ${vw} ${vh}" width="${w}" height="${h}" ${attrs}>${body}</svg>`;
 const stroke = 'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"';
 const eyeBase = '<path d="M1 6s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4Z"/>';
 const ICONS = {
-  trails: svg(20, 16, 20, 16, stroke, '<path d="M1 3.5c3-3 5 3 9 0s6 3 9 0"/><path d="M1 8c3-3 5 3 9 0s6 3 9 0"/><path d="M1 12.5c3-3 5 3 9 0s6 3 9 0"/>'),
-  barbs: svg(20, 16, 20, 16, stroke, '<path d="M5 15 14 2"/><path d="m14 2 3 3"/><path d="m11.8 5 3 3"/><path d="m9.6 8 3 3"/>'),
-  hybrid: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0"/><path d="M1 11c3-3 5 3 9 0s6 3 9 0"/><path d="M11 10 16 3"/><path d="m16 3 2 2"/>'),
-  eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor" stroke-width="1.2"', `${eyeBase}<circle cx="8" cy="6" r="1.8"/>`),
-  'eye-off': svg(14, 11, 16, 12, 'fill="none" stroke="currentColor" stroke-width="1.2"', `${eyeBase}<path d="m2 1 12 10"/>`),
-  pause: svg(9, 11, 10, 12, 'fill="currentColor"', '<rect x="1" y="1" width="2.7" height="10" rx="0.6"/><rect x="6.3" y="1" width="2.7" height="10" rx="0.6"/>'),
-  play: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1.5 1.2v9.6c0 .5.5.8.9.5l7.1-4.8a.6.6 0 0 0 0-1L2.4.7a.6.6 0 0 0-.9.5Z"/>'),
-  chevron: svg(7, 5, 8, 5, 'fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"', '<path d="m1 1 3 3 3-3"/>')
+  trails: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M1 8c3-3 5 3 9 0s6 3 9 0M1 12c3-3 5 3 9 0s6 3 9 0"/>'),
+  barbs: svg(20, 16, 20, 16, stroke, '<path d="M5 15 14 2m0 0 3 3"/>'),
+  hybrid: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M11 10 16 3"/>'),
+  eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', eyeBase),
+  'eye-off': svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', `${eyeBase}<path d="m2 1 12 10"/>`),
+  pause: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1 1h3v10H1zm5 0h3v10H7z"/>'),
+  play: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1 1v10l8-5z"/>')
 } as const;
 type IconName = keyof typeof ICONS;
 
 const attr = (n: Element, map: Record<string, string | boolean>) => { for (const [k, v] of Object.entries(map)) n.setAttribute(k, String(v)); };
-const isStyle = (v: unknown): v is WindStyle => STYLES.includes(v as WindStyle);
-const storedStop = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) && v > 0 ? STOPS.reduce((best, s) => Math.abs(s - v) < Math.abs(best - v) ? s : best) : undefined;
-const stopValue = (m: number, u: WindUnits): number => u === 'imperial' ? Math.round(m / METRES_PER_FOOT) : m;
-const stopLabel = (m: number, u: WindUnits): string => String(stopValue(m, u)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
-function readStored() {
-  try {
-    const p = JSON.parse(globalThis.localStorage?.getItem(STORAGE_KEY) ?? '') as Record<string, unknown>;
-    if (!p || typeof p !== 'object') return null;
-    return {
-      style: isStyle(p.style) ? p.style : undefined,
-      visible: typeof p.visible === 'boolean' ? p.visible : undefined,
-      height: (p.height === 'surface' || p.height === 'lift' ? p.height : storedStop(p.height)) as WindHeight | undefined,
-      fixedHeight: storedStop(p.fixedHeight)
-    };
-  } catch { return null; }
+function readStored(): StoredWindPreferences | null {
+  try { return parseWindPreferences(globalThis.localStorage?.getItem(STORAGE_KEY) ?? null); } catch { return null; }
 }
 
 const persist = (s: WindControlState, fixedHeight: number) => {
-  try { globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify({ style: s.style, visible: s.visible, height: s.height, fixedHeight })); } catch { /* ignore */ }
+  try { globalThis.localStorage?.setItem(STORAGE_KEY, serializeWindPreferences(s, fixedHeight)); } catch { /* ignore */ }
 };
 
 export function createWindControls(parent: HTMLElement, options: WindControlsOptions): WindControls {
@@ -93,7 +67,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   const root = el('div', 'wind-controls'), menu = el('div', 'wind-controls-menu'), trigger = btn('wind-controls-trigger');
   attr(trigger, { 'aria-haspopup': 'dialog', 'aria-controls': 'wind-controls-popup' });
   const triggerGlyph = el('span', 'wind-controls-trigger-glyph'), triggerState = el('span', 'wind-controls-trigger-state');
-  trigger.append(triggerGlyph, triggerState, icon('chevron', 'wind-controls-chevron'));
+  trigger.append(triggerGlyph, triggerState);
 
   const popup = el('div', 'wind-controls-popup');
   popup.hidden = true; popup.id = 'wind-controls-popup'; attr(popup, { role: 'dialog', 'aria-label': 'Wind display' });
@@ -238,7 +212,6 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   return {
     get state() { return snapshot(); },
-    preferredVisible() { return readStored()?.visible ?? true; },
     setStatus(next: WindStatus) { if (!destroyed && next in STATUS_LABELS) { status = next; renderStatus(); } },
     setQuality(next: boolean) { if (!destroyed && overview !== next) { overview = next; renderStatus(); } },
     setState(next) {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { addProtocol, type Map } from 'maplibre-gl';
 import type { RasterTileProtocol } from '@av/client';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
+import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));

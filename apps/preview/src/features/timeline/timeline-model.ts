@@ -1,5 +1,7 @@
 export const PLAYBACK_STEP_MS = 700;
 
+export interface TimelineFrame { readonly id: string; readonly validTime: string }
+
 export function frameIndexFor(frames: readonly { validTime: string }[], requested: string | null, now: number): number {
   if (requested) {
     const exact = frames.findIndex(frame => frame.validTime === requested);

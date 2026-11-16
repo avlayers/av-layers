@@ -259,3 +259,28 @@ it('aborts a raster body after its concurrency slot is released', async () => {
 it.each([{ maxActive: 0 }, { maxActive: 13 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }, { maxInFlightBytes: 4 * 1024 * 1024 + 1 }])('rejects invalid limits: %j', options => {
   expect(() => createForecastRequestScheduler(options)).toThrow('Invalid forecast request limits');
 });
+
+it('bounds the queue when byte pressure stops dispatch below the concurrency limit', async () => {
+  const streams = Array.from({ length: 80 }, () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': String(1024 * 1024) } });
+    return { response, stream };
+  });
+  let index = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async () => streams[index++]!.response);
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxQueued: 64, maxInFlightBytes: 4 * 1024 * 1024 });
+  const requests = streams.map((_, i) => scheduler.fetch(`https://example.test/${i}`).catch(() => undefined));
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
+  await Promise.resolve();
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 64 });
+  scheduler.dispose();
+  await Promise.all(requests);
+});
+
+it('still dispatches an immediately admissible request with zero queue capacity', async () => {
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new Uint8Array(4)));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxQueued: 0, maxInFlightBytes: 4 * 1024 * 1024 });
+  await expect(scheduler.fetch('https://example.test/now')).resolves.toBeInstanceOf(Response);
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
+  scheduler.dispose();
+});

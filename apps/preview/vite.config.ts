@@ -1,3 +1,4 @@
+import preact from '@preact/preset-vite';
 import { browserBundleBudget } from '../../scripts/browser-bundle.js';
 import { defineConfig } from 'vite';
 import { readFile, readdir } from 'node:fs/promises';
@@ -9,7 +10,7 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  plugins: [browserBundleBudget(400_000, 32_000), {
+  plugins: [preact(), browserBundleBudget(400_000, 32_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {
@@ -24,6 +25,7 @@ export default defineConfig({
     }
   }],
   build: {
+    minify: 'terser',
     target: 'es2022',
     sourcemap: true,
     outDir: 'dist'

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { WIND_CANVAS_BYTES } from './raster-budget';
+import { WIND_CANVAS_BYTES } from '../raster/raster-budget';
 import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
 
 const decode = (byte: number) => byte / 255 * 200 - 100;

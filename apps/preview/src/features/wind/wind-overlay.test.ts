@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
-import { barbGeometry } from '../../../packages/windgram/src/wind-barb';
-import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS } from './raster-budget';
+import { barbGeometry } from '../../../../../packages/windgram/src/wind-barb';
+import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS } from '../raster/raster-budget';
 import { WindOverlay, type WindField } from './wind-overlay';
 
 class Canvas extends EventTarget {

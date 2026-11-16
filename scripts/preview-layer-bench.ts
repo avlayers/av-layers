@@ -73,7 +73,7 @@ function summarize(samples: Sample[]) {
 async function sourceHash(directory: string) {
   const hash = createHash('sha256');
   for (const sourceDirectory of sourceDirectories) for (const path of (await readdir(join(directory, sourceDirectory), { recursive: true })).sort()) {
-    if (!/\.(?:ts|css)$/.test(path) || path.endsWith('.test.ts')) continue;
+    if (!/\.(?:ts|tsx|css)$/.test(path) || /\.test\.tsx?$/.test(path)) continue;
     hash.update(`${sourceDirectory}/${path}`).update(await readFile(join(directory, sourceDirectory, path)));
   }
   hash.update(await readFile(join(directory, 'apps/preview/index.html')));
@@ -138,6 +138,7 @@ try {
     const vite = await createVite({ configFile: false, root: join(codeRoot, 'apps/preview'), cacheDir: join(scratch, name, 'vite'), logLevel: 'error',
       server: { hmr: { server: hmr, protocol: 'wss', host: '127.0.0.1', clientPort: hmrAddress.port }, middlewareMode: true, fs: { allow: [root, scratch] } }, optimizeDeps: { noDiscovery: true },
       define: { 'import.meta.env.AV_API_BASE': JSON.stringify(base), 'import.meta.env.VITE_OFFLINE_FIXTURE': '"true"' },
+      esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
       resolve: { alias: [{ find: '@av/client/dom', replacement: join(codeRoot, 'packages/client/src/dom.ts') },
         { find: /^@av\/client$/, replacement: join(codeRoot, 'packages/client/src/index.ts') },
         { find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },

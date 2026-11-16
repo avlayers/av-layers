@@ -4,21 +4,21 @@ export default tseslint.config(
   { ignores: ['**/node_modules/**', '**/dist/**', '**/.wrangler/**', '**/output/**', '**/.cache/**', '**/.tools/**'] },
   ...tseslint.configs.recommended,
   {
-    files: ['**/*.ts'],
+    files: ['**/*.ts', '**/*.tsx'],
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
       '@typescript-eslint/no-explicit-any': 'error'
     }
   },
   {
-    files: ['packages/**/*.ts'],
+    files: ['packages/**/*.ts', 'packages/**/*.tsx'],
     ignores: ['**/*.test.ts'],
     rules: {
       'no-restricted-imports': ['error', { patterns: ['**/apps/**', '**/scripts/**'] }]
     }
   },
   {
-    files: ['packages/{client,windgram}/src/**/*.ts', 'apps/{preview,windy-plugin}/src/**/*.ts'],
+    files: ['packages/{client,windgram}/src/**/*.{ts,tsx}', 'apps/{preview,windy-plugin}/src/**/*.{ts,tsx}'],
     ignores: ['**/*.test.ts'],
     rules: {
       'no-restricted-imports': ['error', {

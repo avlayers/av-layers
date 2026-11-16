@@ -201,10 +201,10 @@ per-frame receipts also have independent versions.
 - After legacy retirement, split only responsibilities that still obscure the
   call path. Start with plan admission versus immutable receipt verification
   in [parallel builds](../apps/batch/src/parallel.ts), and preview URL/frame
-  state versus MapLibre and popup lifecycle in [main.ts](../apps/preview/src/main.ts).
+  state versus MapLibre and popup lifecycle in [main.ts](../apps/preview/src/app/create-preview-app.ts).
   Keep the existing raster controller and Windgram scene and panel seams.
   Preserve the Windy pane/overlay lifecycle and point updates while changing
-  either app. [Raster overlay](../apps/preview/src/raster-overlay.ts) ·
+  either app. [Raster overlay](../apps/preview/src/features/raster/raster-overlay.ts) ·
   [Windgram entry point](../packages/windgram/src/index.ts)
 - Use the existing [provider contract](../apps/batch/src/provider.ts).
   Share HTTP mechanics only where indexed and split GRIB have the same

@@ -10,7 +10,7 @@ import {
   solarMinuteBounds,
   solarRibbonStops,
   type TimelineFrame
-} from './compact-timeline';
+} from './timeline-controller';
 
 class ClassList {
   private readonly tokens = new Set<string>();

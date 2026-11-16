@@ -21,7 +21,7 @@
     "comparison": "node --import tsx apps/batch/src/comparison/cli.ts",
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit && pnpm --filter @av/api typecheck",
+    "typecheck": "tsc --noEmit && tsc -p apps/preview/tsconfig.json --noEmit && pnpm --filter @av/api typecheck",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
     "build": "pnpm --filter @av/preview build && pnpm --filter @av/api build",
@@ -38,7 +38,9 @@
     "bench:preview": "node --import tsx scripts/preview-layer-bench.ts",
     "smoke:wind": "node --import tsx scripts/wind-feature-smoke.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
-    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check"
+    "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check",
+    "test:frontend": "vitest run --project unit apps/preview apps/windy-plugin packages/client packages/windgram",
+    "check:frontend": "pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm --filter @av/preview build"
   },
   "devDependencies": {
     "@av/client": "workspace:*",

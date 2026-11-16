@@ -1,7 +1,7 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
-import { WIND_TRAIL_WIDTH } from './raster-budget';
-import { PLAYBACK_STEP_MS } from './timeline';
+import { WIND_TRAIL_WIDTH } from '../raster/raster-budget';
+import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
