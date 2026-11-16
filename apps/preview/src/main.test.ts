@@ -231,8 +231,10 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
   };
 } }));
 let timelineSelect: (index: number) => void;
-vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
+let timelinePlayback: ((playing: boolean) => void) | undefined;
+vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect; onPlayback?: (playing: boolean) => void }) => {
   timelineSelect = options.onSelect;
+  timelinePlayback = options.onPlayback;
   return { update() {}, setOffsetMinutes() {}, destroy() {} };
 } }));
 
@@ -381,6 +383,23 @@ it('keeps the displayed hour when a successor is aborted and ignores the late re
   expect(windLoads).toHaveLength(count);
   map().emit('movestart');
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+});
+
+it('drops a playback prefetch that no longer covers the viewport and reloads that hour', async () => {
+  deferWind = true;
+  await start();
+  const displayed = windLoads.at(-1)!;
+  windResolve!('ready');
+  await Promise.resolve();
+  const before = windLoads.length;
+  timelinePlayback!(true);
+  expect(windLoads).toHaveLength(before + 1);
+  const prefetch = windLoads.at(-1)!;
+  expect(prefetch.frame).not.toBe(displayed.frame);
+  map().bounds = { west: 10, east: 11, south: 32, north: 33 };
+  map().emit('moveend');
+  expect(prefetch.signal?.aborted).toBe(true);
+  expect(windLoads.at(-1)).toMatchObject({ frame: displayed.frame, bounds: [10, 32, 11, 33] });
 });
 
 it('keeps resident wind while hidden and loads once when the frame changes', async () => {

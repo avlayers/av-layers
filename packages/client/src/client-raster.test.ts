@@ -38,6 +38,29 @@ it('serves a heap miss from the browser cache and drops that build on eviction',
     await vi.waitFor(() => expect(stored.size).toBe(0));
   } finally { vi.unstubAllGlobals(); }
 });
+it('does not fetch a tile aborted during the browser-cache lookup or store a no-store body', async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const stored = new Map<string, Response>();
+  const cache = {
+    match: async (url: string) => { await gate; return stored.get(url); },
+    put: async (url: string, response: Response) => { stored.set(url, response.clone()); },
+    delete: async () => false,
+    keys: async () => []
+  };
+  vi.stubGlobal('caches', { open: async () => cache });
+  try {
+    const fetchImpl = vi.fn<typeof fetch>(async () => webp()), protocol = setup({ fetchImpl, maxCacheBytes: 0 });
+    const controller = new AbortController();
+    const pending = expect(protocol.load({ url: protocol.url(tile()) }, controller)).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort(); release(); await pending;
+    expect(fetchImpl).not.toHaveBeenCalled();
+    fetchImpl.mockImplementation(async () => { const response = webp(); response.headers.set('cache-control', 'no-store'); return response; });
+    await protocol.load({ url: protocol.url(tile(1)) }, new AbortController());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(stored.size).toBe(0);
+  } finally { vi.unstubAllGlobals(); }
+});
 it('admits two active requests, drains queued tiles, and preserves cache metadata', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl, maxActive: 2 });
   const pending = Array.from({ length: 5 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));

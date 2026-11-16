@@ -271,9 +271,13 @@ function startPreview(lifecycle: AbortController): void {
     return frames[index + 1]?.id;
   }
 
+  function windFits(request: WindView, view: [number, number, number, number]): boolean {
+    return coversBounds(request.bounds, view) && (request.source.isOverview === false || map.getZoom() <= request.zoom);
+  }
+
   function adoptPrefetch(view: [number, number, number, number]): boolean {
     const request = prefetchWind;
-    if (!request?.ready || request.build !== build || request.frame !== selectedFrame || !coversBounds(request.bounds, view)) return false;
+    if (!request?.ready || request.build !== build || request.frame !== selectedFrame || !windFits(request, view)) return false;
     prefetchWind = null; cancelWindRequest();
     const previous = windView, swap = Boolean(installedField && previous && previous.build === request.build);
     windView = request;
@@ -286,11 +290,11 @@ function startPreview(lifecycle: AbortController): void {
   function ensurePrefetch(): void {
     if (!playing || windPrefetchBlocked || retiringWind || !windControls.state.visible || !hasWindData() || !build || !selectedFrame || expired || mapFailed) return;
     if (!windView || windView.build !== build || windView.frame !== selectedFrame) return;
-    const frame = nextWindFrame(selectedFrame);
+    const frame = nextWindFrame(selectedFrame), bounds = windBounds();
     if (!frame) { releasePrefetch(); return; }
-    if (prefetchWind && prefetchWind.build === build && prefetchWind.frame === frame && !prefetchWind.controller.signal.aborted) return;
+    if (prefetchWind && prefetchWind.build === build && prefetchWind.frame === frame && !prefetchWind.controller.signal.aborted && windFits(prefetchWind, bounds)) return;
     releasePrefetch();
-    const request = makeWindRequest(frame, windBounds(), `prefetch:${frame}`);
+    const request = makeWindRequest(frame, bounds, `prefetch:${frame}`);
     prefetchWind = request;
     void request.source.load({ ...request, signal: request.controller.signal }).then(status => {
       if (prefetchWind !== request || request.controller.signal.aborted) { if (prefetchWind !== request) request.source.dispose(); return; }
@@ -326,19 +330,17 @@ function startPreview(lifecycle: AbortController): void {
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
     if (windCache.isBuildUnavailable(build.manifest.buildId)) { clearWind(); return; }
     const view = windBounds(), identity = windView;
-    if (identity && identity.build === build && identity.frame === selectedFrame
-      && (identity.source.isOverview === false || map.getZoom() <= identity.zoom)
-      && coversBounds(identity.bounds, view)) {
+    if (identity && identity.build === build && identity.frame === selectedFrame && windFits(identity, view)) {
       cancelWindRequest(); setWindStatus('ready'); reconcileWind(); ensurePrefetch(); return;
     }
-    if (prefetchWind && prefetchWind.build === build && prefetchWind.frame === selectedFrame && coversBounds(prefetchWind.bounds, view)) {
+    if (prefetchWind && prefetchWind.build === build && prefetchWind.frame === selectedFrame && windFits(prefetchWind, view)) {
       if (prefetchWind.ready) { adoptPrefetch(view); return; }
       cancelWindRequest(); setWindStatus('loading'); return;
     }
+    const upcoming = nextWindFrame(selectedFrame);
+    if (prefetchWind && !(prefetchWind.build === build && prefetchWind.frame === upcoming && windFits(prefetchWind, view))) releasePrefetch();
     const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view, map.getZoom()]);
     if (key === windRequest?.key) return;
-    const upcoming = nextWindFrame(selectedFrame);
-    if (prefetchWind && prefetchWind.frame !== selectedFrame && prefetchWind.frame !== upcoming) releasePrefetch();
     if (identity && identity.build !== build) clearWind();
     else cancelWindRequest();
     setWindStatus('loading');
@@ -366,6 +368,7 @@ function startPreview(lifecycle: AbortController): void {
         windView = request; request.ready = true;
         if (windDisplayed) paintWind(swap ? 'swap' : 'replace');
         retireWind(previous, swap);
+        windPrefetchBlocked = false;
         setWindStatus('ready');
       } else setWindStatus(retainFallback() ? 'ready' : status);
       reconcileWind(); ensurePrefetch();

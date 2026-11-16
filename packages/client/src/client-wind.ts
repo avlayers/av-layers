@@ -1,6 +1,7 @@
 import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
 import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
+import { browserCaches } from './browser-cache';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
@@ -16,11 +17,6 @@ const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 
 const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
 const WIND_BROWSER_CACHE = 'av-wind-v1';
 
-function browserCaches(): CacheStorage | undefined {
-  const storage = (globalThis as { caches?: CacheStorage }).caches;
-  return typeof storage?.open === 'function' ? storage : undefined;
-}
-
 function forgetWind(buildId?: string): void {
   const storage = browserCaches();
   if (!storage) return;
@@ -34,9 +30,9 @@ function forgetWind(buildId?: string): void {
 }
 
 function rememberWind(url: string, bytes: Uint8Array): void {
-  const storage = browserCaches();
+  const copy = bytes.slice(), storage = browserCaches();
   if (!storage) return;
-  void storage.open(WIND_BROWSER_CACHE).then(cache => cache.put(url, new Response(bytes.slice(), { status: 200, headers: { 'content-type': 'application/octet-stream' } }))).catch(() => {});
+  void storage.open(WIND_BROWSER_CACHE).then(cache => cache.put(url, new Response(copy, { status: 200, headers: { 'content-type': 'application/octet-stream' } }))).catch(() => {});
 }
 
 async function recallWind(url: string, limit: number): Promise<Uint8Array | undefined> {
@@ -365,6 +361,7 @@ export class WindDataSource {
       if (targets.every(item => item.used === null)) {
         const remembered = await recallWind(url, limit);
         if (remembered) {
+          attemptSignal.throwIfAborted();
           let offset = 0;
           for (const target of targets) { target.bytes.set(remembered.subarray(offset, offset + target.bytes.length)); offset += target.bytes.length; }
           return limit;
@@ -596,6 +593,7 @@ export class WindDataSource {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true; this.controller?.abort(); this.current = undefined; this.generation++;
     if (!this.active) this.release();
   }

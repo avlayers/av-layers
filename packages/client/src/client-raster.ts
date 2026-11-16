@@ -1,4 +1,5 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from '@av/contracts/format';
+import { browserCaches } from './browser-cache';
 export { createForecastRequestScheduler } from './client-request-scheduler.ts';
 
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
@@ -103,11 +104,6 @@ export function createSourceRasterTileProtocol(baseUrl: string, options: RasterT
 
 const RASTER_BROWSER_CACHE = 'av-raster-v1';
 
-function browserCaches(): CacheStorage | undefined {
-  const storage = (globalThis as { caches?: CacheStorage }).caches;
-  return typeof storage?.open === 'function' ? storage : undefined;
-}
-
 function webpBytes(data: Uint8Array): boolean {
   return data.length >= 12 && data[0] === 82 && data[1] === 73 && data[2] === 70 && data[3] === 70 && data[8] === 87 && data[9] === 69 && data[10] === 66 && data[11] === 80;
 }
@@ -184,12 +180,13 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     }).catch(() => {});
   }
   function rememberRaster(url: string, data: ArrayBuffer, cacheControl?: string, expires?: string): void {
-    const storage = browserCaches();
+    if (cacheControl && /(?:^|,)\s*(?:no-store|no-cache)(?:,|$)/i.test(cacheControl)) return;
+    const copy = data.slice(0), storage = browserCaches();
     if (!storage) return;
     const headers = new Headers({ 'content-type': 'image/webp' });
     if (cacheControl) headers.set('cache-control', cacheControl);
     if (expires) headers.set('expires', expires);
-    void storage.open(RASTER_BROWSER_CACHE).then(browser => browser.put(url, new Response(data.slice(0), { headers }))).catch(() => {});
+    void storage.open(RASTER_BROWSER_CACHE).then(browser => browser.put(url, new Response(copy, { headers }))).catch(() => {});
   }
   async function recallRaster(url: string, build: string): Promise<(RasterTileResponse & { until: number }) | undefined> {
     const storage = browserCaches();
@@ -314,7 +311,12 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       cacheHits++; cache.delete(url); cache.set(url, hit);
       return Promise.resolve({ ...hit.response, cacheControl: `public, max-age=${Math.max(0, Math.floor((hit.until - now) / 1000))}, immutable` });
     }
-    if (browserCaches()) return recallRaster(url, build).then(found => found ? retain(found) : enqueue());
+    if (browserCaches()) return recallRaster(url, build).then(found => {
+      if (signal?.aborted) return Promise.reject(signal.reason);
+      if (disposed) return Promise.reject(abortError());
+      if ((buildExpiry.get(build) ?? Infinity) <= Date.now()) { evictBuild(build); return Promise.reject(abortError()); }
+      return found ? retain(found) : enqueue();
+    });
     return enqueue();
     function retain(found: RasterTileResponse & { until: number }): RasterTileResponse {
       cacheHits++;
@@ -329,49 +331,49 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       return { ...result, cacheControl: `public, max-age=${Math.max(0, Math.floor((until - Date.now()) / 1000))}, immutable` };
     }
     function enqueue(): Promise<RasterTileResponse> {
-    if (isInteractive) {
-      while (consumers >= maxActive + maxQueued || (active.size >= maxActive && queued.length >= maxQueued && !tasks.has(url))) {
-        const background = queued.find(task => task.url !== url && !interactive(task));
-        if (!background) break;
-        background.controller.abort(abortError());
-      }
-    }
-    if (consumers >= maxActive + maxQueued) return Promise.reject(new Error('Raster request queue is full'));
-    cacheMisses++;
-    let task = tasks.get(url);
-    if (task) coalesced++;
-    else {
-      const prefetchBlocked = !isInteractive && activePrefetches() >= maxPrefetchActive;
-      if (queued.length >= maxQueued && (active.size >= maxActive || prefetchBlocked)) return Promise.reject(new Error('Raster request queue is full'));
-      const controller = new AbortController();
-      const deadline = Math.min(timeoutMs, (buildExpiry.get(build) ?? Infinity) - now);
-      task = { url, build, zoom, requestedAt: now, order: ++order, deadlineAt: now + deadline, controller, consumers: new Set(), timer: undefined! };
-      const owned = task;
-      task.timer = setTimeout(() => controller.abort(timeoutError()), deadline);
-      controller.signal.addEventListener('abort', () => {
-        const index = queued.indexOf(owned);
-        if (index >= 0) queued.splice(index, 1);
-        finish(owned, undefined, controller.signal.reason); pump();
-      }, { once: true });
-      tasks.set(url, task); queued.push(task);
-    }
-    if (isInteractive) { task.requestedAt = now; task.order = ++order; }
-    const owned = task;
-    return new Promise<RasterTileResponse>((resolve, reject) => {
-      consumers++;
-      const consumer: Consumer = { priority, resolve, reject,
-        cleanup() { consumers--; signal?.removeEventListener('abort', abort); },
-        cancel(reason) {
-          if (!owned.consumers.delete(consumer)) return;
-          consumer.cleanup(); reject(reason);
-          if (!owned.consumers.size) owned.controller.abort(abortError());
-          pump();
+      if (isInteractive) {
+        while (consumers >= maxActive + maxQueued || (active.size >= maxActive && queued.length >= maxQueued && !tasks.has(url))) {
+          const background = queued.find(task => task.url !== url && !interactive(task));
+          if (!background) break;
+          background.controller.abort(abortError());
         }
-      };
-      const abort = () => consumer.cancel(signal!.reason);
-      owned.consumers.add(consumer);
-      signal?.addEventListener('abort', abort, { once: true }); pump();
-    });
+      }
+      if (consumers >= maxActive + maxQueued) return Promise.reject(new Error('Raster request queue is full'));
+      cacheMisses++;
+      let task = tasks.get(url);
+      if (task) coalesced++;
+      else {
+        const prefetchBlocked = !isInteractive && activePrefetches() >= maxPrefetchActive;
+        if (queued.length >= maxQueued && (active.size >= maxActive || prefetchBlocked)) return Promise.reject(new Error('Raster request queue is full'));
+        const controller = new AbortController();
+        const deadline = Math.min(timeoutMs, (buildExpiry.get(build) ?? Infinity) - now);
+        task = { url, build, zoom, requestedAt: now, order: ++order, deadlineAt: now + deadline, controller, consumers: new Set(), timer: undefined! };
+        const owned = task;
+        task.timer = setTimeout(() => controller.abort(timeoutError()), deadline);
+        controller.signal.addEventListener('abort', () => {
+          const index = queued.indexOf(owned);
+          if (index >= 0) queued.splice(index, 1);
+          finish(owned, undefined, controller.signal.reason); pump();
+        }, { once: true });
+        tasks.set(url, task); queued.push(task);
+      }
+      if (isInteractive) { task.requestedAt = now; task.order = ++order; }
+      const owned = task;
+      return new Promise<RasterTileResponse>((resolve, reject) => {
+        consumers++;
+        const consumer: Consumer = { priority, resolve, reject,
+          cleanup() { consumers--; signal?.removeEventListener('abort', abort); },
+          cancel(reason) {
+            if (!owned.consumers.delete(consumer)) return;
+            consumer.cleanup(); reject(reason);
+            if (!owned.consumers.size) owned.controller.abort(abortError());
+            pump();
+          }
+        };
+        const abort = () => consumer.cancel(signal!.reason);
+        owned.consumers.add(consumer);
+        signal?.addEventListener('abort', abort, { once: true }); pump();
+      });
     }
   }
   sourceRegistry?.connect({
