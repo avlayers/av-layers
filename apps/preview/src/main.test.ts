@@ -709,7 +709,7 @@ it('reports an unavailable position without moving the map', async () => {
   vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) => { calls.push({ error, options }); } } });
   await start();
   const before = map().getCenter();
-  const unavailable = { code: 2, message: 'Network location provider returned 403', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
+  const unavailable: GeolocationPositionError = { code: 2, message: 'Network location provider returned 403', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
   ui('locate').dispatchEvent(new Event('click'));
   expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true]);
   calls[0]!.error(unavailable);
