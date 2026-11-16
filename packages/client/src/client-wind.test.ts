@@ -4,7 +4,7 @@ import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/laye
 import { planSample } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.ts';
-import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindDataCache, WindDataSource } from './client-wind.ts';
+import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindCapacityError, WindDataCache, WindDataSource } from './client-wind.ts';
 
 const bounds = [-1, -1, 2, 2] as const;
 function build() {
@@ -692,4 +692,46 @@ it('caches 409 builds with a bounded TTL, isolates single-span 404/400 fallbacks
   expect(await regionalSource.load({ build: regional, frame: regional.manifest.frames[1].id, bounds: [0, 0, 160, 80] })).toBe('ready');
   expect(surfaceField.sample(10, 10)).toEqual({ status: STATUS_VALID, u: 9, v: -2 });
   regionalSource.dispose();
+});
+
+
+it('retries transient numeric responses and cools an exhausted immutable resource', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id, cache = new WindDataCache();
+  let windAttempts = 0, fail = false;
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const target = String(url);
+    if (target.endsWith(`/data/${frame}`)) return new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } });
+    if (target.includes('/wind/')) {
+      windAttempts++;
+      if (fail || windAttempts === 1) return new Response(null, { status: 503 });
+    }
+    return reply(target.includes('/wind/') ? wind : fine);
+  });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
+  expect(windAttempts).toBe(2);
+  source.dispose();
+
+  windAttempts = 0; fail = true;
+  const failingCache = new WindDataCache();
+  const failing = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  await expect(failing.load({ build: pinned, frame, bounds })).rejects.toThrow('Transient numeric response 503');
+  expect(fetcher.mock.calls.filter(call => String(call[0]).includes('/wind/'))).toHaveLength(5);
+  failing.dispose();
+
+  const before = fetcher.mock.calls.length;
+  const cooling = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {} });
+  await expect(cooling.load({ build: pinned, frame, bounds })).rejects.toThrow('cooling down');
+  expect(fetcher.mock.calls).toHaveLength(before);
+  expect(failingCache.failedResources).toBeGreaterThan(0);
+  cooling.dispose();
+});
+
+it('exposes capacity as a typed error and keeps ordinary validation as RangeError', () => {
+  const cache = new WindDataCache(WIND_NUMERIC_BYTES, 2);
+  let error: unknown;
+  try { cache.take('https://example.test/chunk', WIND_NUMERIC_BYTES + 1, Date.now() + 1000); } catch (caught) { error = caught; }
+  expect(error).toBeInstanceOf(WindCapacityError);
+  expect((error as WindCapacityError).code).toBe('capacity');
+  expect(() => new WindDataCache(1024, 1)).toThrow(RangeError);
 });

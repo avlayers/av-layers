@@ -20,6 +20,12 @@ const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Arr
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
 
+/** Typed capacity outcome, separate from validation RangeErrors. */
+export class WindCapacityError extends Error {
+  readonly code = 'capacity';
+  constructor(message = 'Wind cache exceeds byte budget') { super(message); this.name = 'WindCapacityError'; }
+}
+
 interface CachedBytes {
   url: string;
   bytes: Uint8Array;
@@ -35,6 +41,7 @@ export class WindDataCache {
   private readonly unavailableBuilds = new Map<string, number>();
   private bytes = 0;
   private spanFailures = 0;
+  private readonly failures = new Map<string, { until: number; attempts: number }>();
 
   constructor(private readonly budgetBytes = WIND_NUMERIC_BYTES, private readonly entryLimit = 256) {
     if (!Number.isSafeInteger(budgetBytes) || budgetBytes < WIND_FRAME_LIMIT || budgetBytes > WIND_WINDOW_BYTES
@@ -73,6 +80,21 @@ export class WindDataCache {
     this.unavailableBuilds.set(buildId, now + UNAVAILABLE_BUILD_TTL_MS);
   }
 
+  failureRemaining(url: string, now = Date.now()): number {
+    const entry = this.failures.get(url);
+    if (!entry) return 0;
+    if (entry.until <= now) { this.failures.delete(url); return 0; }
+    return entry.until - now;
+  }
+
+  recordFailure(url: string, now = Date.now()): void {
+    this.failures.set(url, { until: now + 30_000, attempts: Math.min(3, (this.failures.get(url)?.attempts ?? 0) + 1) });
+  }
+
+  clearFailure(url: string): void { this.failures.delete(url); }
+
+  get failedResources(): number { return this.failures.size; }
+
   hasReady(url: string, limit: number, now = Date.now()): boolean {
     for (const e of this.entries) if (e.url === url && e.used !== null && e.expiresAt > now && e.bytes.length === limit) return true;
     return false;
@@ -89,7 +111,7 @@ export class WindDataCache {
       if (this.bytes + limit <= this.budgetBytes && this.entries.size < this.entryLimit) break;
       if (!e.references) this.remove(e);
     }
-    if (this.bytes + limit > this.budgetBytes || this.entries.size >= this.entryLimit) throw new RangeError('Wind cache exceeds byte budget');
+    if (this.bytes + limit > this.budgetBytes || this.entries.size >= this.entryLimit) throw new WindCapacityError();
     const entry: CachedBytes = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
     this.entries.add(entry); this.bytes += limit;
     return entry;
@@ -101,6 +123,7 @@ export class WindDataCache {
 
   clear(): void {
     this.unavailableBuilds.clear();
+    this.failures.clear();
     this.spanFailures = 0;
     for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
   }
@@ -230,6 +253,10 @@ function validateChunk(kind: string, bytes: Uint8Array, tileSize: number, levels
   return view;
 }
 
+class WindTransientError extends Error {
+  constructor(message: string) { super(message); this.name = 'WindTransientError'; }
+}
+
 export class WindDataSource {
   private controller?: AbortController;
   private current?: { build: PinnedBuild; bounds: GeographicBounds; tileSize: number; fineTileSize: number; native: Grid; fineGrid: Grid; nativeGeometry: GridGeometry; fineGeometry: GridGeometry; wind: Map<number, PackedWindChunk>; fine: Map<number, DataView>; windMask?: TileMask; fineMask?: TileMask; overview?: Overview };
@@ -239,7 +266,7 @@ export class WindDataSource {
   private readonly cache: WindDataCache;
   private readonly held = new Set<CachedBytes>();
   private active?: AbortController;
-  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean } = {}) {
+  constructor(private readonly baseUrl: string, private readonly options: { fetchImpl?: typeof fetch; cache?: WindDataCache; coalesceSpans?: boolean; retryDelaysMs?: readonly number[]; sleep?: (ms: number) => Promise<void>; random?: () => number } = {}) {
     this.cache = options.cache ?? new WindDataCache();
   }
 
@@ -333,6 +360,22 @@ export class WindDataSource {
     const root = `${this.baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(frame)}`;
     const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
       attemptSignal.throwIfAborted();
+      if (this.cache.failureRemaining(url) > 0) throw new Error('Numeric resource is cooling down');
+      const delays = this.options.retryDelaysMs ?? [250, 1000];
+      const sleep = this.options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+      for (let attempt = 0; ; attempt++) try {
+        return await readOnce(url, type, targets, attemptSignal);
+      } catch (error) {
+        const transient = error instanceof WindTransientError || (error instanceof TypeError && !attemptSignal.aborted);
+        if (!transient) { if (error instanceof WindTransientError) this.cache.recordFailure(url); throw error; }
+        if (attempt >= delays.length || attemptSignal.aborted) { this.cache.recordFailure(url); throw error; }
+        const jitter = 0.85 + (this.options.random?.() ?? Math.random()) * 0.3;
+        await sleep(delays[attempt]! * jitter);
+        attemptSignal.throwIfAborted();
+      }
+    };
+    const readOnce = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
+      attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
       const reqSig = AbortSignal.any([attemptSignal, reqCtrl.signal]);
@@ -343,6 +386,7 @@ export class WindDataSource {
         if (targets.length > 1 && res.status === 404) { await res.body?.cancel(); return 'retry-single'; }
         if (res.status === 409) { await res.body?.cancel(); return 'product-unavailable'; }
         if (res.status === 404) { await res.body?.cancel(); return null; }
+        if (res.status === 502 || res.status === 503 || res.status === 504) { await res.body?.cancel(); throw new WindTransientError(`Transient numeric response ${res.status}`); }
         if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
         const declared = res.headers.get('content-length');
         if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
@@ -365,6 +409,7 @@ export class WindDataSource {
           }
         } finally { reqSig.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
+        this.cache.clearFailure(url);
         return used;
       } finally { clearTimeout(timer); }
     };

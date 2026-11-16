@@ -3,13 +3,19 @@ import { renderedFrames } from '@av/contracts/publication';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import type { WindHeight, WindStatus } from './wind-model';
 
-const wind = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'unavailable' }));
+const wind = vi.hoisted(() => ({ status: 'ready' as 'ready' | 'unavailable', loads: [] as string[], unavailable: new Set<string>(), capacity: new Set<string>() }));
 
 vi.mock('@av/client/wind', () => ({
+  WindCapacityError: class extends Error { readonly code = 'capacity'; },
   WindDataSource: class {
     readonly isOverview = false;
     readonly admitted = undefined;
-    readonly load = vi.fn(async () => wind.status);
+    readonly load = vi.fn(async (request?: { frame?: string }) => {
+      const frame = request?.frame ?? '';
+      wind.loads.push(frame);
+      if (wind.capacity.has(frame)) throw new RangeError('Wind cache exceeds byte budget');
+      return wind.unavailable.has(frame) ? 'unavailable' : wind.status;
+    });
     readonly dispose = vi.fn();
     readonly sample = vi.fn((_lat: number, _lon: number, height: WindHeight) => ({ u: 1, v: 2, status: 'valid', height }));
   }
@@ -18,7 +24,7 @@ vi.mock('@av/client/wind', () => ({
 import { createWindSession } from './wind-session';
 
 function harness() {
-  wind.status = 'ready';
+  wind.status = 'ready'; wind.loads.length = 0; wind.unavailable.clear(); wind.capacity.clear();
   const withWind = (suffix: string) => {
     const build = fixtureBuild({ buildId: `20260101T000000Z-${suffix.repeat(36)}` });
     (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
@@ -34,7 +40,7 @@ function harness() {
   const session = createWindSession({
     apiBaseUrl: 'https://api.test', lowMemory: false,
     map: { getZoom: () => 5, getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north }) },
-    scheduler: { fetch: vi.fn() as unknown as typeof fetch, dispose: vi.fn() },
+    scheduler: { fetch: vi.fn() as unknown as typeof fetch },
     cache: { isBuildUnavailable: () => false, allocatedBytes: 0, clear: vi.fn() },
     overlay: { setWindActive: vi.fn() },
     field: { setField: (_field, mode) => { fields.push(height); modes.push(mode); }, clear },
@@ -127,5 +133,32 @@ describe('wind session acquisition and presentation status', () => {
     test.session.reconcile();
     expect(test.fields.length).toBeGreaterThan(before);
     expect(test.statuses.at(-1)).toBe('ready');
+  });
+});
+
+describe('wind warming recovery', () => {
+  it('advances past an unavailable nearest frame without a playback toggle', async () => {
+    const test = harness();
+    await ready(test);
+    wind.unavailable.add(test.framesA[1]!.id);
+    test.session.setPlaying(false);
+    await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[1]!.id), { timeout: 5_000 });
+    await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[2]!.id), { timeout: 5_000 });
+    expect(test.statuses.at(-1)).toBe('ready');
+    test.session.destroy();
+  });
+
+  it('resumes warming after capacity is released and the plan is cleared', async () => {
+    const test = harness();
+    await ready(test);
+    wind.capacity.add(test.framesA[1]!.id);
+    test.session.setPlaying(false);
+    await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[1]!.id), { timeout: 5_000 });
+    await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[2]!.id), { timeout: 5_000 });
+    wind.capacity.delete(test.framesA[1]!.id);
+    test.session.clear();
+    test.session.update();
+    await vi.waitFor(() => expect(wind.loads.filter(frame => frame === test.framesA[1]!.id).length).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
+    test.session.destroy();
   });
 });

@@ -579,7 +579,7 @@ export function createPreviewApp(): PreviewApp {
     forecastSession.dispose();
     lifecycle.abort();
     timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointFeature?.dispose();
-    windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); rasterScheduler.dispose();
+    windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); windScheduler.dispose(); rasterScheduler.dispose();
     map?.remove();
     timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = overlay = null; map = null;
   }

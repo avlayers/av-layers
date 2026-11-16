@@ -1,7 +1,7 @@
 import { normalizeLon } from '@av/contracts/geometry';
 import type { PinnedBuild } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
-import { type WindDataCache, WindDataSource } from '@av/client/wind';
+import { type WindDataCache, WindCapacityError, WindDataSource } from '@av/client/wind';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import type { MapBoundsPort, Bounds } from '../map/viewport-policy';
 import { cameraBounds, coversBounds, FOCUS_DWELL_MS, windBounds } from '../map/viewport-policy';
@@ -9,7 +9,7 @@ import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
 
-export interface WindSchedulerPort { fetch: typeof fetch; dispose(): void }
+export interface WindSchedulerPort { fetch: typeof fetch }
 export interface WindCachePort {
   isBuildUnavailable(buildId: string): boolean;
   readonly allocatedBytes: number;
@@ -65,10 +65,25 @@ export interface WindSession {
 export function createWindSession(options: WindSessionOptions): WindSession {
   const { map, publish, field, state } = options;
   let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
-  let windPrefetchBlocked = false, windDisplayed = false, windLoading = false, height: WindHeight = 'surface';
+  let windDisplayed = false, windLoading = false, height: WindHeight = 'surface';
   let fillTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
   let acquireStatus: WindStatus = 'unavailable';
   const windHeld = new Map<string, WindRequest>();
+  const failures = new Map<string, number>();
+  const isCapacity = (error: unknown): boolean => error instanceof WindCapacityError || (error instanceof RangeError && /byte budget/.test(error.message));
+  const failureKey = (build: PinnedBuild, frame: string): string => `${build.manifest.buildId}:${frame}`;
+  const cooling = (build: PinnedBuild, frame: string): boolean => (failures.get(failureKey(build, frame)) ?? 0) > Date.now();
+  function recordFailure(build: PinnedBuild, frame: string, capacity: boolean): void {
+    if (failures.size >= 256) failures.delete(failures.keys().next().value!);
+    failures.set(failureKey(build, frame), Date.now() + (capacity ? 1_000 : 30_000));
+  }
+  function evictHeld(): boolean {
+    for (const [frame, held] of windHeld) {
+      if (held === windView || held === installedWind || held === windRequest) continue;
+      windHeld.delete(frame); held.source.dispose(); return true;
+    }
+    return false;
+  }
   const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
 
   const hasWindData = (): boolean => Boolean(state().build?.manifest.mapData);
@@ -152,6 +167,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     cancelFill();
     for (const view of windHeld.values()) if (view !== windView && view !== windRequest) view.source.dispose();
     windHeld.clear();
+    failures.clear();
     releasePrefetch(); dropRetired(); cancelRequest();
     if (installedWind && installedWind !== windView) installedWind.source.dispose();
     windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
@@ -160,16 +176,16 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   }
 
   function scheduleFill(delay = FOCUS_DWELL_MS): void {
-    if (destroyed || fillTimer !== null || windPrefetch || windPrefetchBlocked || options.lowMemory) return;
+    if (destroyed || fillTimer !== null || windPrefetch || options.lowMemory) return;
     fillTimer = setTimeout(() => { fillTimer = null; ensurePrefetch(); }, delay);
   }
 
   function ensurePrefetch(): void {
     const { build, selectedFrame, visible, mapReady, expired, mapFailed } = state();
-    if (destroyed || windPrefetchBlocked || windPrefetch || options.lowMemory || !visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
+    if (destroyed || windPrefetch || options.lowMemory || !visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
     const frames = renderedFrames(build.manifest), index = frames.findIndex(frame => frame.id === selectedFrame);
     const frame = frames.map(item => item.id)
-      .filter(id => id !== selectedFrame && id !== windView?.frame && id !== windRequest?.frame && !windHeld.has(id))
+      .filter(id => id !== selectedFrame && id !== windView?.frame && id !== windRequest?.frame && !windHeld.has(id) && !cooling(build, id))
       .sort((a, b) => Math.abs(frames.findIndex(item => item.id === a) - index) - Math.abs(frames.findIndex(item => item.id === b) - index))[0];
     if (!frame) return;
     const bounds = windBounds(map, options.lowMemory);
@@ -186,12 +202,22 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (status === 'ready') {
         const admitted = request.source.admitted;
         if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
+        failures.delete(failureKey(request.build, request.frame));
         windHeld.set(request.frame, request); scheduleFill(0);
-      } else if (!retained(request)) request.source.dispose();
+      } else {
+        recordFailure(request.build, request.frame, false);
+        if (!retained(request)) request.source.dispose();
+        scheduleFill(FOCUS_DWELL_MS);
+      }
     }, error => {
-      if (error instanceof RangeError) windPrefetchBlocked = true;
+      if (!request.controller.signal.aborted) {
+        const capacity = isCapacity(error);
+        if (capacity) evictHeld();
+        recordFailure(request.build, request.frame, capacity);
+      }
       if (windPrefetch === request) windPrefetch = null;
       if (!retained(request)) request.source.dispose();
+      scheduleFill(FOCUS_DWELL_MS);
     });
   }
 
@@ -205,15 +231,13 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         let status: 'ready' | 'unavailable';
         try { status = await pending; }
         catch (error) {
-          if (!(error instanceof RangeError) || request.controller.signal.aborted) throw error;
+          if (!isCapacity(error) || request.controller.signal.aborted) throw error;
           releasePrefetch();
           if (!windView || retain()) throw error;
-          windPrefetchBlocked = true;
           for (const held of windHeld.values()) if (held !== windView) held.source.dispose();
           windHeld.clear();
           dropRetired(); windView.source.dispose(); windView = null; windDisplayed = false; installedWind = null; field.clear(); publish.displayed(false);
           status = await request.source.load({ ...request, signal: request.controller.signal });
-          if (status === 'ready') windPrefetchBlocked = false;
         }
         if (destroyed || windRequest !== request || request.controller.signal.aborted) return;
         if (status === 'ready') {
@@ -232,7 +256,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
           const keep = retain();
           acquireStatus = keep ? 'ready' : 'unavailable';
           setStatus(acquireStatus);
-          if (!keep) dropUnusable();
+          if (!keep) { recordFailure(request.build, request.frame, false); dropUnusable(); }
         }
         reconcile();
         if (status === 'ready') scheduleFill();
@@ -244,6 +268,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         if (windRequest === request) windRequest = null;
         if (!retained(request)) request.source.dispose();
         windLoading = false;
+        if (!destroyed && acquireStatus !== 'ready') scheduleFill(FOCUS_DWELL_MS);
         const next = queuedWindLoad; queuedWindLoad = null; next?.();
       }
     };
@@ -290,7 +315,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
 
   return {
     update, reconcile, clear,
-    setPlaying(playing: boolean) { windPrefetchBlocked = false; scheduleFill(playing ? 0 : FOCUS_DWELL_MS); },
+    setPlaying(playing: boolean) { scheduleFill(playing ? 0 : FOCUS_DWELL_MS); },
     heightChanged(previous) { if (windDisplayed && previous !== state().height) setField('replace'); },
     get displayed() { return windDisplayed; },
     get resident() { return Boolean(windView || windRequest || windPrefetch || windHeld.size || retiring.size); },
@@ -304,8 +329,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       retiring.clear();
       for (const view of owned) view.source.dispose();
       windHeld.clear();
+      failures.clear();
       windView = installedWind = windRequest = windPrefetch = null;
-      options.scheduler.dispose();
     }
   };
 
