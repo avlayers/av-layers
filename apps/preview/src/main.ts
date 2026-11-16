@@ -726,42 +726,51 @@ function startPreview(lifecycle: AbortController): void {
     locationMarker?.remove(); locationMarker = locationPoint = null;
   };
 
-  const showLocationStatus = (message: string): void => {
+  const showLocationStatus = (message: string, detail = ''): void => {
     locationStatus.hidden = message === '';
     locationStatus.textContent = message;
+    locationStatus.title = detail;
   };
   const finishLocate = (revision: number): void => {
     if (revision !== locationRevision) return;
     locateButton.disabled = false;
     locateButton.ariaBusy = 'false';
   };
+  const locateMessage = (error: GeolocationPositionError): string =>
+    error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable';
 
   locateButton.addEventListener('click', () => {
     if (locateButton.disabled || mapFailed) return;
     const revision = ++locationRevision;
     if (!navigator.geolocation) { showLocationStatus('Location unavailable'); return; }
     locateButton.disabled = true; locateButton.ariaBusy = 'true'; showLocationStatus('Locating…');
-    try {
-      navigator.geolocation.getCurrentPosition(position => {
-        if (revision !== locationRevision || lifecycle.signal.aborted) return;
+    // Chrome often reports position-unavailable for the request that showed the Allow prompt, then succeeds on the next precise request. A third try uses the network provider.
+    const accuracies = [true, true, false];
+    const requestLocate = (attempt: number): void => {
+      try {
+        navigator.geolocation.getCurrentPosition(position => {
+          if (revision !== locationRevision || lifecycle.signal.aborted) return;
+          finishLocate(revision);
+          showLocationStatus('');
+          clearLocationMarker();
+          const point: [number, number] = [position.coords.longitude, position.coords.latitude];
+          map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
+          const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
+          dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
+          element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
+          locationTimer = setTimeout(clearLocationMarker, 2000);
+        }, error => {
+          if (revision !== locationRevision || lifecycle.signal.aborted) return;
+          if (error.code === 2 && attempt < accuracies.length - 1) { requestLocate(attempt + 1); return; }
+          finishLocate(revision);
+          showLocationStatus(locateMessage(error), error.message);
+        }, { enableHighAccuracy: accuracies[attempt] ?? false, maximumAge: 300_000, timeout: 10_000 });
+      } catch {
         finishLocate(revision);
-        showLocationStatus('');
-        clearLocationMarker();
-        const point: [number, number] = [position.coords.longitude, position.coords.latitude];
-        map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
-        const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
-        dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
-        element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
-        locationTimer = setTimeout(clearLocationMarker, 2000);
-      }, error => {
-        if (revision !== locationRevision || lifecycle.signal.aborted) return;
-        finishLocate(revision);
-        showLocationStatus(error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable');
-      }, { enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 });
-    } catch {
-      finishLocate(revision);
-      showLocationStatus('Location unavailable');
-    }
+        showLocationStatus('Location unavailable');
+      }
+    };
+    requestLocate(0);
   });
 
   function displayDiagnostic(label: string, value: string): string {
