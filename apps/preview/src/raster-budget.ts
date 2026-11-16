@@ -2,7 +2,7 @@ import type { Map } from 'maplibre-gl';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { WIND_NUMERIC_BYTES } from '@av/client/wind';
 
-export const RASTER_CACHE_TILES = 16;
+export const RASTER_CACHE_TILES = 48;
 export const MAX_RASTER_SOURCES = 4;
 export const WIND_TRAIL_PIXELS = 2 * 1024 * 1024;
 export const WIND_CANVAS_PIXELS = 8 * 1024 * 1024;

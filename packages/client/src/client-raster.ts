@@ -101,6 +101,17 @@ export function createSourceRasterTileProtocol(baseUrl: string, options: RasterT
   };
 }
 
+const RASTER_BROWSER_CACHE = 'av-raster-v1';
+
+function browserCaches(): CacheStorage | undefined {
+  const storage = (globalThis as { caches?: CacheStorage }).caches;
+  return typeof storage?.open === 'function' ? storage : undefined;
+}
+
+function webpBytes(data: Uint8Array): boolean {
+  return data.length >= 12 && data[0] === 82 && data[1] === 73 && data[2] === 70 && data[3] === 70 && data[8] === 87 && data[9] === 69 && data[10] === 66 && data[11] === 80;
+}
+
 function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegistry?: SourceRegistry): RasterTileProtocol {
   const base = new URL(baseUrl), fetchImpl = options.fetchImpl ?? fetch;
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw new Error('Invalid raster API base');
@@ -159,6 +170,43 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     for (const [url, entry] of cache) if (build === undefined || entry.build === build) dropCache(url);
     for (const task of [...tasks.values()]) if (build === undefined || task.build === build) task.controller.abort(abortError());
     if (build === undefined) buildExpiry.clear();
+    forgetRaster(build);
+  }
+  function forgetRaster(build?: string): void {
+    const storage = browserCaches();
+    if (!storage) return;
+    void storage.open(RASTER_BROWSER_CACHE).then(async browser => {
+      const keys = await browser.keys();
+      await Promise.all(keys.map(request => {
+        const path = new URL(request.url).pathname;
+        if (build === undefined || path.includes(`/${build}/`)) return browser.delete(request);
+      }));
+    }).catch(() => {});
+  }
+  function rememberRaster(url: string, data: ArrayBuffer, cacheControl?: string, expires?: string): void {
+    const storage = browserCaches();
+    if (!storage) return;
+    const headers = new Headers({ 'content-type': 'image/webp' });
+    if (cacheControl) headers.set('cache-control', cacheControl);
+    if (expires) headers.set('expires', expires);
+    void storage.open(RASTER_BROWSER_CACHE).then(browser => browser.put(url, new Response(data.slice(0), { headers }))).catch(() => {});
+  }
+  async function recallRaster(url: string, build: string): Promise<(RasterTileResponse & { until: number }) | undefined> {
+    const storage = browserCaches();
+    if (!storage) return;
+    try {
+      const browser = await storage.open(RASTER_BROWSER_CACHE), hit = await browser.match(url);
+      if (!hit) return;
+      const bytes = new Uint8Array(await hit.arrayBuffer());
+      if (!webpBytes(bytes)) { await browser.delete(url); return; }
+      const cacheControl = hit.headers.get('cache-control') ?? undefined, expires = hit.headers.get('expires') ?? undefined;
+      const maxAge = Number(/(?:^|,)\s*max-age=(\d+)/i.exec(cacheControl ?? '')?.[1]);
+      const expiration = Date.parse(expires ?? '');
+      const freshness = maxAge >= 0 && !/(?:^|,)\s*(?:no-store|no-cache)(?:,|$)/i.test(cacheControl ?? '') ? Date.now() + maxAge * 1000 : Date.now();
+      const until = Math.min(freshness, Number.isFinite(expiration) ? expiration : Infinity, buildExpiry.get(build) ?? Infinity);
+      if (until <= Date.now()) { await browser.delete(url); return; }
+      return { data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), cacheControl, expires, until };
+    } catch { return; }
   }
   function pump(): void {
     while (!disposed && !dispatchSuspended && active.size < maxActive && queued.length) {
@@ -193,6 +241,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
         cache.set(task.url, { response: result, until, build: task.build, weight });
         cachedBytes += result.data.byteLength; retainedBytes += weight;
       }
+      rememberRaster(task.url, result.data, result.cacheControl, result.expires);
       finish(task, result);
     } catch (error) { finish(task, undefined, error); }
     finally { active.delete(task); pump(); }
@@ -265,6 +314,21 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       cacheHits++; cache.delete(url); cache.set(url, hit);
       return Promise.resolve({ ...hit.response, cacheControl: `public, max-age=${Math.max(0, Math.floor((hit.until - now) / 1000))}, immutable` });
     }
+    if (browserCaches()) return recallRaster(url, build).then(found => found ? retain(found) : enqueue());
+    return enqueue();
+    function retain(found: RasterTileResponse & { until: number }): RasterTileResponse {
+      cacheHits++;
+      const { until, ...result } = found;
+      const weight = result.data.byteLength + 256 + 2 * (url.length + build.length + (result.cacheControl?.length ?? 0) + (result.expires?.length ?? 0));
+      if (until > Date.now() && weight <= maxCacheBytes) {
+        pruneCache(); dropCache(url);
+        while (cache.size && retainedBytes + weight > maxCacheBytes) dropCache(cache.keys().next().value!);
+        cache.set(url, { response: result, until, build, weight });
+        cachedBytes += result.data.byteLength; retainedBytes += weight;
+      }
+      return { ...result, cacheControl: `public, max-age=${Math.max(0, Math.floor((until - Date.now()) / 1000))}, immutable` };
+    }
+    function enqueue(): Promise<RasterTileResponse> {
     if (isInteractive) {
       while (consumers >= maxActive + maxQueued || (active.size >= maxActive && queued.length >= maxQueued && !tasks.has(url))) {
         const background = queued.find(task => task.url !== url && !interactive(task));
@@ -308,6 +372,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       owned.consumers.add(consumer);
       signal?.addEventListener('abort', abort, { once: true }); pump();
     });
+    }
   }
   sourceRegistry?.connect({
     promote(source) {

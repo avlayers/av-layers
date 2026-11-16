@@ -117,7 +117,7 @@ class MapMock {
   getCenter(): { lng: number; lat: number } { return this.center; }
   getZoom(): number { return this.zoom; }
   project(): { x: number; y: number } { return { x: 320, y: 240 }; }
-  coveringTiles(): object[] { return Array.from({ length: 64 }, () => ({})); }
+  coveringTiles(): object[] { return Array.from({ length: 32 }, () => ({})); }
   getContainer(): { contains(target: unknown): boolean } { return { contains: () => false }; }
   fitBounds(bounds: [[number, number], [number, number]]): void {
     const [[west, south], [east, north]] = bounds;
@@ -212,6 +212,7 @@ vi.mock('@av/client', async importOriginal => {
 });
 vi.mock('./wind-overlay', () => ({ WindOverlay: class {
   setField(field: unknown) { windFields.push(field); }
+  setBlend() {}
   clear() { windFields.push(null); }
   setOptions() {}
   destroy() {}
@@ -308,7 +309,7 @@ it('starts discovery before the map loads and bounds retained tile caches', asyn
   await import('./main');
   expect(fetchMock).toHaveBeenCalled();
   expect(map().sources.size).toBe(0);
-  expect(map().options.maxTileCacheSize).toBe(16);
+  expect(map().options.maxTileCacheSize).toBe(48);
   map().emit('style.load');
   await vi.waitFor(() => expect(ui('ref-agl').disabled).toBe(false));
   expect(sourceId()).toBeDefined();
@@ -331,11 +332,12 @@ it('starts wind and raster at style readiness before basemap tiles finish', asyn
   expect(windLoads).toHaveLength(1);
 });
 
-it.each(['pagehide', 'gpu failure'])('shares the forecast scheduler and disposes it last on %s', async teardown => {
+it.each(['pagehide', 'gpu failure'])('shares separate wind and raster schedulers and disposes them last on %s', async teardown => {
   await start();
-  expect(schedulerFetches).toHaveLength(1);
-  expect(windFetches[0]).toBe(schedulerFetches[0]);
+  expect(schedulerFetches).toHaveLength(2);
   expect(rasterFetches[0]).toBe(schedulerFetches[0]);
+  expect(windFetches[0]).toBe(schedulerFetches[1]);
+  expect(windFetches[0]).not.toBe(rasterFetches[0]);
   page('pagehide', true);
   expect(disposalOrder).not.toContain('scheduler');
   page('pageshow', true);
@@ -353,20 +355,26 @@ it('keeps the neutral offline basemap for the synthetic fixture', async () => {
   expect(map().options.style?.sources).toEqual({});
 });
 
-it('clears stale wind immediately and ignores an overtaken frame request', async () => {
+it('keeps the displayed hour when a successor is aborted and ignores the late resolve', async () => {
   deferWind = true;
   await start();
-  const oldRequest = windLoads.at(-1)!;
-  const resolveOld = windResolve!;
-  await selectFrame(1);
-  expect(oldRequest.signal?.aborted).toBe(true);
-  expect(windFields.at(-1)).toBeNull();
-  resolveOld('ready');
+  windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  const installed = windFields.at(-1);
+  expect(installed).toMatchObject({ sample: expect.any(Function) });
+  await selectFrame(1);
+  const superseded = windLoads.at(-1)!;
+  const resolveSuperseded = windResolve!;
+  expect(windFields.at(-1)).toBe(installed);
+  await selectFrame(2);
+  expect(superseded.signal?.aborted).toBe(true);
+  resolveSuperseded('ready');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBe(installed);
   windResolve!('ready');
   await Promise.resolve();
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
+  expect(windFields.at(-1)).not.toBe(installed);
   const count = windLoads.length;
   windChange({ style: 'barbs', visible: true, paused: false, height: 2400 });
   ui('units-imperial').dispatchEvent(new Event('click'));
@@ -519,21 +527,21 @@ it('shows initial wind before raster loads and keeps later frames aligned with d
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
 
   await selectFrame(1);
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
   windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
   const failed = [...map().layers.keys()].find(id => id !== first)!;
   map().emit('error', { sourceId: failed });
   expect(ui('tile-error').textContent).toContain('Forecast replacement failed');
   expect(ui('frame-status').textContent).toContain('Showing');
   expect(ui('frame-status').textContent).toContain('Selected time unavailable');
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
 
   await selectFrame(2);
   windResolve!('ready');
   await Promise.resolve();
-  expect(windFields.at(-1)).toBeNull();
+  expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
   const replacement = [...map().layers.keys()].find(id => id !== first)!;
   map().emit('sourcedata', { sourceId: replacement, tile: {} }); map().emit('render'); map().emit('render');
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
@@ -652,7 +660,6 @@ it('selects cold and ready frames during slider input before the next map draw',
   map().emit('resize');
   await selectFrame(1);
   const readySource = sourceId();
-  await selectFrame(2);
   const { RasterOverlay } = await import('./raster-overlay');
   const select = vi.spyOn(RasterOverlay.prototype, 'select');
   const schedule = vi.spyOn(win, 'requestAnimationFrame');

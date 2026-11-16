@@ -16,6 +16,28 @@ function heldFetch() {
   }));
   return { fetchImpl, finish };
 }
+it('serves a heap miss from the browser cache and drops that build on eviction', async () => {
+  const stored = new Map<string, Response>();
+  const cache = {
+    match: async (url: string) => stored.get(url),
+    put: async (url: string, response: Response) => { stored.set(url, response.clone()); },
+    delete: async (request: string | Request) => { stored.delete(typeof request === 'string' ? request : request.url); },
+    keys: async () => [...stored.keys()].map(url => new Request(url))
+  };
+  vi.stubGlobal('caches', { open: async () => cache });
+  try {
+    const fetchImpl = vi.fn<typeof fetch>(async () => webp()), protocol = setup({ fetchImpl, maxCacheBytes: 0 });
+    const first = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(first.data.byteLength).toBe(12);
+    await vi.waitFor(() => expect(stored.size).toBe(1));
+    const second = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(second.cacheControl).toContain('max-age=');
+    protocol.evictBuild('build');
+    await vi.waitFor(() => expect(stored.size).toBe(0));
+  } finally { vi.unstubAllGlobals(); }
+});
 it('admits two active requests, drains queued tiles, and preserves cache metadata', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl, maxActive: 2 });
   const pending = Array.from({ length: 5 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));

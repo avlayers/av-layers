@@ -169,6 +169,47 @@ it('advects connected trails downwind and clears them on replacement', () => {
   f.overlay.destroy();
 });
 
+it('keeps particle trails when the hour swaps and samples the new field', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const f = fixture(), first = vi.fn(() => ({ status: 0, u: 10, v: 0 })), second = vi.fn(() => ({ status: 0, u: 0, v: 10 }));
+  f.overlay.setField({ sample: first }); f.tick(1000); f.tick(1100);
+  const context = f.canvases[0].context;
+  context.clearRect.mockClear(); context.lineTo.mockClear();
+  f.overlay.setField({ sample: second }, 'swap');
+  expect(context.clearRect).not.toHaveBeenCalled();
+  f.tick(1200);
+  expect(context.lineTo).toHaveBeenCalled();
+  expect(second).toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
+it('blends the previous hour into the next and holds an invalid successor until the blend ends', () => {
+  vi.spyOn(Math, 'random').mockReturnValue(0.5);
+  const now = vi.spyOn(performance, 'now');
+  now.mockReturnValue(0);
+  const f = fixture(), east: WindField = { sample: () => ({ status: 0, u: 10, v: 0 }) }, north: WindField = { sample: () => ({ status: 0, u: 0, v: 10 }) };
+  f.overlay.setField(east); f.overlay.setBlend(east, north, 0, 400); f.overlay.setField(north, 'swap');
+  f.tick(1000); f.tick(1100);
+  const context = f.canvases[0].context;
+  const eastStart = context.moveTo.mock.calls.at(-1) as unknown as number[], eastEnd = context.lineTo.mock.calls.at(-1) as unknown as number[];
+  expect(eastEnd[0]).toBeGreaterThan(eastStart[0]); expect(eastEnd[1]).toBeCloseTo(eastStart[1]);
+  now.mockReturnValue(200);
+  context.moveTo.mockClear(); context.lineTo.mockClear();
+  f.tick(1200);
+  const midStart = context.moveTo.mock.calls.at(-1) as unknown as number[], midEnd = context.lineTo.mock.calls.at(-1) as unknown as number[];
+  expect(midEnd[0]).toBeGreaterThan(midStart[0]); expect(midEnd[1]).toBeLessThan(midStart[1]);
+  const invalid: WindField = { sample: () => ({ status: 2, u: null, v: null }) };
+  now.mockReturnValue(0);
+  f.overlay.setBlend(east, invalid, 0, 400); f.overlay.setField(invalid, 'swap');
+  context.lineTo.mockClear(); f.tick(1300);
+  const holdStart = context.moveTo.mock.calls.at(-1) as unknown as number[], holdEnd = context.lineTo.mock.calls.at(-1) as unknown as number[];
+  expect(holdEnd[0]).toBeGreaterThan(holdStart[0]); expect(holdEnd[1]).toBeCloseTo(holdStart[1]);
+  now.mockReturnValue(400);
+  context.lineTo.mockClear(); f.tick(1400);
+  expect(context.lineTo).not.toHaveBeenCalled();
+  f.overlay.destroy();
+});
+
 it('advances trails on successive display frames without a 30 Hz cap', () => {
   vi.spyOn(Math, 'random').mockReturnValue(0.5);
   const f = fixture();

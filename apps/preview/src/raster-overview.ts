@@ -118,6 +118,8 @@ export class RasterOverview {
 
   hide(): void { if (this.map.getLayer(this.id)) this.map.setPaintProperty(this.id, 'raster-opacity', 0); }
 
+  intersects(): boolean { return this.covers(); }
+
   refresh(): void { if (this.context && this.context.build.expiresAtMs <= Date.now()) { this.clear(); this.onReady(); } }
 
   clear(): void {

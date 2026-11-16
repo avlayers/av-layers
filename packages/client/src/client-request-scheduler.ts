@@ -7,7 +7,7 @@ interface SchedulerOptions {
 export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxActive = options.maxActive ?? 6, maxQueued = options.maxQueued ?? 64;
-  if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 6
+  if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 8
     || !Number.isSafeInteger(maxQueued) || maxQueued < 0 || maxQueued > 64) throw new Error('Invalid forecast request limits');
 
   const queued: Array<{ start(): void; controller: AbortController; low: boolean }> = [], active = new Set<AbortController>();
