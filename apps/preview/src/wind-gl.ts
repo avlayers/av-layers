@@ -32,12 +32,12 @@ void main(){v_side=0.;int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corne
  vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
  vec2 pa=mercator(a.xy),pb=mercator(b.xy);vec4 ca=u_matrix*vec4(pa*u_world,0,1),cb=u_matrix*vec4(pb*u_world,0,1);
  vec2 na=ca.xy/ca.w,nb=cb.xy/cb.w,d=(na-nb)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
- float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(0.,1.),grow=dir*max(0.,1.2-len)*.5*px;
+ float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(0.,1.),grow=dir*max(0.,.45-len)*.5*px;
  na-=grow;nb+=grow;vec2 n=vec2(-dir.y,dir.x)*u_half*px;v_side=c==1||c==3?1.:-1.;vec4 clip=c>1?cb:ca;vec2 ndc=(c>1?nb:na)+(v_side>0.?n:-n);
  gl_Position=vec4(ndc*clip.w,clip.zw);}`;
 const WHITE = `#version 300 es
 precision mediump float;in float v_side;out vec4 o;
-void main(){o=abs(v_side)<.55?vec4(.95,.95,.95,.95):vec4(0,0,0,.45);}`;
+void main(){float a=.94*smoothstep(1.,.2,abs(v_side));o=vec4(vec3(a),a);}`;
 const BLIT = `#version 300 es
 precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
 void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
@@ -182,7 +182,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trails[trail]);
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset || jump ? 0 : sx, reset || jump ? 0 : sy);
-    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 2.4));
+    // Matches the canvas trail fade so the history buffer holds the streak.
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 0.9));
     draw(blit, gl.TRIANGLES, 3);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.CULL_FACE); gl.colorMask(true, true, true, true);
@@ -195,7 +196,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
     gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
     gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_half'), 1.8);
+    gl.uniform1f(gl.getUniformLocation(lines, 'u_half'), 1.05);
     draw(lines, gl.TRIANGLES, STATE * STATE * 6);
     index = 1 - index; trail = nextTrail; reset = 0;
     gl.colorMask(savedMask[0], savedMask[1], savedMask[2], savedMask[3]);
