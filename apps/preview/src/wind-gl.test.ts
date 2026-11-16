@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
-import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, sampleEncodedWindGrid } from './wind-gl';
+import { WIND_CANVAS_BYTES } from './raster-budget';
+import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
 
 const decode = (byte: number) => byte / 255 * 200 - 100;
 
@@ -61,4 +62,14 @@ it('samples wind texels with floor and rejects zero alpha before decoding', () =
   expect(WIND_PARTICLE_UPDATE).toContain('mix(a.xy,b.xy,u_mix)');
   expect(WIND_PARTICLE_UPDATE).toContain('vb?b.xy:a.xy');
   expect(WIND_PARTICLE_UPDATE).not.toMatch(/texture\(u_[ab]/);
+});
+
+it('keeps each trail target at the drawing-buffer size inside the canvas reserve', () => {
+  expect(trailTargetSize(3456, 2234)).toEqual({ width: 3456, height: 2234 });
+  expect(trailTargetSize(1920, 1080)).toEqual({ width: 1920, height: 1080 });
+  const full = trailTargetSize(4096, 4096);
+  expect(full).toEqual({ width: 4096, height: 4096 });
+  expect(full.width * full.height * 2).toBe(WIND_CANVAS_BYTES);
+  expect(trailTargetSize(8000, 1000)).toEqual({ width: 4096, height: 512 });
+  expect(trailTargetSize(0, -5)).toEqual({ width: 1, height: 1 });
 });

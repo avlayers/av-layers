@@ -1,12 +1,12 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
-import { WIND_CANVAS_PIXELS, WIND_TRAIL_WIDTH } from './raster-budget';
+import { WIND_TRAIL_WIDTH } from './raster-budget';
 import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
 
-const STATE = 64, GRID = 128, LAYER = 'av-wind-particles';
+const STATE = 64, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
 const FULL = `#version 300 es
 out vec2 v_uv;
 void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vec2 c=p*2.-1.;v_uv=c*.5+.5;gl_Position=vec4(c,0,1);}`;
@@ -39,17 +39,25 @@ void main(){v_len=0.;v_local=vec2(0.);int corner=gl_VertexID%6,id=gl_VertexID/6,
  vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
  vec2 pa=mercator(a.xy),pb=mercator(b.xy);vec4 ca=u_matrix*vec4(pa*u_world,0,1),cb=u_matrix*vec4(pb*u_world,0,1);
  vec2 na=ca.xy/ca.w,nb=cb.xy/cb.w,d=(na-nb)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
- float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(1.,0.);float side=c==1||c==3?1.:-1.;
- v_len=len;v_local=vec2((c>1?1.:-1.)*(len*.5+u_radius),side*u_radius);
- vec2 tip=(c>1?nb:na)+(c>1?-dir:dir)*u_radius*px,n=vec2(-dir.y,dir.x)*side*u_radius*px;vec4 clip=c>1?cb:ca;
+ float len=length(d),reach=u_radius+2.;vec2 px=2./u_view,dir=len>0.001?d/len:vec2(1.,0.);float side=c==1||c==3?1.:-1.;
+ v_len=len;v_local=vec2((c>1?1.:-1.)*(len*.5+reach),side*reach);
+ vec2 tip=(c>1?nb:na)+(c>1?-dir:dir)*reach*px,n=vec2(-dir.y,dir.x)*side*reach*px;vec4 clip=c>1?cb:ca;
  gl_Position=vec4((tip+n)*clip.w,clip.zw);}`;
 const WHITE = `#version 300 es
 precision highp float;flat in float v_len;in vec2 v_local;uniform float u_radius;out vec4 o;
-void main(){float dist=length(vec2(max(0.,abs(v_local.x)-v_len*.5),v_local.y));float edge=max(fwidth(dist),.5);
- float a=.95*(1.-smoothstep(u_radius-edge,u_radius+edge,dist));o=vec4(vec3(a),a);}`;
+void main(){float dist=length(vec2(max(0.,abs(v_local.x)-v_len*.5),v_local.y));float edge=clamp(fwidth(dist),.5,1.5);
+ float a=.95*(1.-smoothstep(u_radius-edge,u_radius+edge,dist));o=vec4(a);}`;
+/** Trail targets are R8, so coverage is red and the sampled alpha is 1. */
 const BLIT = `#version 300 es
 precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
-void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
+void main(){vec2 uv=v_uv-u_shift;float a=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?0.:texture(u_tex,uv).r*u_keep;o=vec4(a);}`;
+
+/** One-byte trail targets. Two copies of a 4096² buffer are the 32 MiB canvas reserve. */
+export function trailTargetSize(bufferWidth: number, bufferHeight: number, maxSide = TRAIL_SIDE): { width: number; height: number } {
+  const width = Math.max(1, Math.round(bufferWidth)), height = Math.max(1, Math.round(bufferHeight)), side = Math.max(1, Math.round(maxSide));
+  const scale = Math.min(1, side / width, side / height);
+  return { width: Math.max(1, Math.min(side, Math.round(width * scale))), height: Math.max(1, Math.min(side, Math.round(height * scale))) };
+}
 
 const valid = (s: { u: number | null; v: number | null; status: number }) => (s.status & STATUS_MASK) === STATUS_VALID && s.u !== null && s.v !== null;
 export const encodeWindByte = (v: number) => Math.max(0, Math.min(255, Math.round((v / 100 + 1) * 127.5)));
@@ -104,7 +112,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   let updateProg: WebGLProgram | null = null, lineProg: WebGLProgram | null = null, blitProg: WebGLProgram | null = null;
   let vao: WebGLVertexArrayObject | null = null, states: WebGLTexture[] = [], stateFbo: WebGLFramebuffer[] = [], winds: WebGLTexture[] = [], trails: WebGLTexture[] = [], trailFbo: WebGLFramebuffer[] = [];
   let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false;
-  let bounds = { west: -180, south: -85, east: 180, north: 85 }, trailW = 1, trailH = 1;
+  let bounds = { west: -180, south: -85, east: 180, north: 85 }, trailW = 1, trailH = 1, maxTrailSide = TRAIL_SIDE;
   const blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), pending = { a: blank, b: blank, dirty: false };
 
   function grid(field: WindSampleField | null): Uint8Array<ArrayBuffer> {
@@ -139,15 +147,13 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   function sizeTrail(): void {
     if (!gl) return;
     const canvas = map.getCanvas(), dpr = window.devicePixelRatio || 1;
-    const w = Math.max(1, canvas.width || Math.round(canvas.clientWidth * dpr)), h = Math.max(1, canvas.height || Math.round(canvas.clientHeight * dpr));
-    const scale = Math.min(1, Math.sqrt((WIND_CANVAS_PIXELS / 2 - 1) / (w * h)), 4096 / w, 4096 / h);
-    const tw = Math.max(1, Math.floor(w * scale)), th = Math.max(1, Math.floor(h * scale));
+    const { width: tw, height: th } = trailTargetSize(canvas.width || Math.round(canvas.clientWidth * dpr), canvas.height || Math.round(canvas.clientHeight * dpr), maxTrailSide);
     if (sized && tw === trailW && th === trailH) return;
     sized = true;
     trailW = tw; trailH = th;
     for (const texture of trails) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, tw, th, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tw, th, 0, gl.RED, gl.UNSIGNED_BYTE, null);
     }
     reset = 1;
   }
@@ -260,6 +266,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     onAdd(_map, context) {
       try { releaseGl(); } catch { gl = null; state.ready = false; }
       gl = context;
+      maxTrailSide = Math.min(TRAIL_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+      sized = false;
       if (state.destroyed) return;
       try {
         if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Wind float target unavailable');

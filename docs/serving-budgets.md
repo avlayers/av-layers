@@ -40,10 +40,11 @@ combined work across all grids selected by a request.
   offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
   forecast tile cache at 16 entries; other devices leave that cache at MapLibre's
   default. Preview's 120 MiB forecast envelope reserves 8 MiB for numeric wind,
-  32 MiB for wind canvases (up to 8,388,608 combined RGBA device pixels across
-  2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding wind shrinks both
-  canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping any warm
-  8 MiB numeric cache charged until cleared.
+  32 MiB for wind images, and 80 MiB for rasters. GPU trails keep two
+  single-channel drawing-buffer copies inside that 32 MiB and park the trail
+  canvas at 1×1. A barb canvas still draws from the 8,388,608-pixel budget.
+  Hiding wind shrinks both canvases to 1×1 and reclaims the canvas reserve
+  while keeping any warm 8 MiB numeric cache charged until cleared.
   Numeric wind skips outside tiles via `windMask`/`fineMask` before admission,
   aligns multi-tile span requests to canonical 8-tile stripes (`<= 1 MiB`), and
   falls back to overview data if a detail chunk is unavailable.
@@ -63,10 +64,9 @@ combined work across all grids selected by a request.
   Layer, build, resize, and expiry changes release decoded overviews. Unsupported
   browsers retain the raster-only path. Playback blends the previous numeric wind
   field for 700 ms. Preview draws those trails through the map WebGL context when
-  a float color target is available. Each GPU trail target uses the map drawing
-  buffer and is capped at half of the 8,388,608 canvas pixels. The 2D trail canvas
-  is 1×1 while those targets are allocated. The 2D canvas draws the trails when
-  that float target is absent.
+  a float color target is available. Each trail target matches the map drawing
+  buffer. The 2D trail canvas is 1×1 while those targets are allocated. The 2D
+  canvas draws the trails when that float target is absent.
   Speculative overview preparation stops after 1 MiB of returned compressed tile bytes
   per viewport context, including cache reuse. An in-flight pair may finish; explicit
   time selections remain eligible. The timeline reports partial readiness when limited.
