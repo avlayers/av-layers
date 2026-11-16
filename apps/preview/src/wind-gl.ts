@@ -1,6 +1,6 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
-import { WIND_TRAIL_PIXELS } from './raster-budget';
+import { WIND_CANVAS_PIXELS, WIND_TRAIL_WIDTH } from './raster-budget';
 import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
@@ -32,18 +32,21 @@ void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
  vec2 stepPx=(merc(vec2(lon,lat))-merc(s.xy))*u_world;if(dot(stepPx,stepPx)>900.){o=vec4(s.xy,0,s.w);return;}
  o=vec4(lon,lat,s.z-u_dt,s.w);}`;
 const LINES = `#version 300 es
-uniform sampler2D u_prev,u_curr;uniform mat4 u_matrix;uniform float u_world,u_max,u_half;uniform vec2 u_view;out float v_side;
+precision highp float;uniform sampler2D u_prev,u_curr;uniform mat4 u_matrix;uniform float u_world,u_max,u_radius;uniform vec2 u_view;
+flat out float v_len;out vec2 v_local;
 vec2 mercator(vec2 lonlat){float r=lonlat.y*.01745329251;return vec2((lonlat.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
-void main(){v_side=0.;int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corner:corner==3?2:corner==4?1:3;ivec2 p=ivec2(id&63,id>>6);
+void main(){v_len=0.;v_local=vec2(0.);int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corner:corner==3?2:corner==4?1:3;ivec2 p=ivec2(id&63,id>>6);
  vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
  vec2 pa=mercator(a.xy),pb=mercator(b.xy);vec4 ca=u_matrix*vec4(pa*u_world,0,1),cb=u_matrix*vec4(pb*u_world,0,1);
  vec2 na=ca.xy/ca.w,nb=cb.xy/cb.w,d=(na-nb)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
- float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(0.,1.),grow=dir*max(0.,.45-len)*.5*px;
- na-=grow;nb+=grow;vec2 n=vec2(-dir.y,dir.x)*u_half*px;v_side=c==1||c==3?1.:-1.;vec4 clip=c>1?cb:ca;vec2 ndc=(c>1?nb:na)+(v_side>0.?n:-n);
- gl_Position=vec4(ndc*clip.w,clip.zw);}`;
+ float len=length(d);vec2 px=2./u_view,dir=len>0.001?d/len:vec2(1.,0.);float side=c==1||c==3?1.:-1.;
+ v_len=len;v_local=vec2((c>1?1.:-1.)*(len*.5+u_radius),side*u_radius);
+ vec2 tip=(c>1?nb:na)+(c>1?-dir:dir)*u_radius*px,n=vec2(-dir.y,dir.x)*side*u_radius*px;vec4 clip=c>1?cb:ca;
+ gl_Position=vec4((tip+n)*clip.w,clip.zw);}`;
 const WHITE = `#version 300 es
-precision mediump float;in float v_side;out vec4 o;
-void main(){float a=.94*(1.-smoothstep(.2,1.,abs(v_side)));o=vec4(vec3(a),a);}`;
+precision highp float;flat in float v_len;in vec2 v_local;uniform float u_radius;out vec4 o;
+void main(){float dist=length(vec2(max(0.,abs(v_local.x)-v_len*.5),v_local.y));float edge=max(fwidth(dist),.5);
+ float a=.95*(1.-smoothstep(u_radius-edge,u_radius+edge,dist));o=vec4(vec3(a),a);}`;
 const BLIT = `#version 300 es
 precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
 void main(){vec2 uv=v_uv-u_shift;o=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?vec4(0):texture(u_tex,uv)*u_keep;}`;
@@ -135,8 +138,9 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   }
   function sizeTrail(): void {
     if (!gl) return;
-    const canvas = map.getCanvas(), w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
-    const scale = Math.min(1, Math.sqrt((WIND_TRAIL_PIXELS / 2 - 1) / (w * h)), 4096 / w, 4096 / h);
+    const canvas = map.getCanvas(), dpr = window.devicePixelRatio || 1;
+    const w = Math.max(1, canvas.width || Math.round(canvas.clientWidth * dpr)), h = Math.max(1, canvas.height || Math.round(canvas.clientHeight * dpr));
+    const scale = Math.min(1, Math.sqrt((WIND_CANVAS_PIXELS / 2 - 1) / (w * h)), 4096 / w, 4096 / h);
     const tw = Math.max(1, Math.floor(w * scale)), th = Math.max(1, Math.floor(h * scale));
     if (sized && tw === trailW && th === trailH) return;
     sized = true;
@@ -228,7 +232,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
     gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
     gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_half'), 1.05);
+    gl.uniform1f(gl.getUniformLocation(lines, 'u_radius'), WIND_TRAIL_WIDTH * 0.5 * trailW / Math.max(1, map.getCanvas().clientWidth));
     draw(lines, gl.TRIANGLES, STATE * STATE * 6);
     index = 1 - index; trail = nextTrail; reset = 0;
     gl.colorMask(savedMask[0], savedMask[1], savedMask[2], savedMask[3]);

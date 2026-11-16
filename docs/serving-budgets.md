@@ -63,7 +63,10 @@ combined work across all grids selected by a request.
   Layer, build, resize, and expiry changes release decoded overviews. Unsupported
   browsers retain the raster-only path. Playback blends the previous numeric wind
   field for 700 ms. Preview draws those trails through the map WebGL context when
-  a float color target is available. The 2D canvas draws them when that target is absent.
+  a float color target is available. Each GPU trail target uses the map drawing
+  buffer and is capped at half of the 8,388,608 canvas pixels. The 2D trail canvas
+  is 1×1 while those targets are allocated. The 2D canvas draws the trails when
+  that float target is absent.
   Speculative overview preparation stops after 1 MiB of returned compressed tile bytes
   per viewport context, including cache reuse. An in-flight pair may finish; explicit
   time selections remain eligible. The timeline reports partial readiness when limited.
