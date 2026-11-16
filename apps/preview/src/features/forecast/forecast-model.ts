@@ -49,10 +49,6 @@ export function activeLayer(build: PinnedBuild | null, reference: AltitudeRefere
   return build.templates[preferred] ? preferred : liftLayers(build)[0] ?? nonLiftLayers(build)[0] ?? null;
 }
 
-export function selectedFrameFor(build: PinnedBuild, requestedTime: string | null, now: number): string | null {
-  return committedFrame(build, requestedTime, now).id;
-}
-
 export function committedFrame(build: PinnedBuild, requestedTime: string | null, now: number): { id: string | null; validTime: string | null } {
   const frames = renderedFrames(build.manifest), frame = frames[frameIndexFor(frames, requestedTime, now)];
   return { id: frame?.id ?? null, validTime: frame?.validTime ?? null };

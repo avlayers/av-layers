@@ -21,6 +21,16 @@ The compact timeline and wind-controls DOM remain imperative islands mounted int
 stable Preact hosts. This preserves the folded-night gesture model and the
 wind-control preference record while the rest of the UI is Preact-owned.
 
+## Architecture completion pass
+
+- `app/startup.ts` owns URL/preference/default precedence and initial state construction.
+- `features/navigation/history-controller.ts` owns URL projection, push/replace, restoration generations and suppression.
+- `features/forecast/forecast-session.ts` owns manual/Auto discovery, request identity, frame/time commitment, expiry, suspension and resumption.
+- `features/map/map-controller.ts` now owns camera-derived clock, regional focus and scale.
+- `platform/browser-lifecycle.ts` owns visibility/focus/BFCache subscriptions.
+- `create-preview-app.ts` is 626 lines and is now construction, connections, commands and teardown; it still owns point presentation, wind commands and map event wiring.
+- Production minification uses Terser (`terser@5.51.2`) to keep both JavaScript budgets with real headroom. The baseline was built with esbuild, so compressed-size comparisons include this packaging change; worker JavaScript also shrinks for the same reason.
+
 ## Review fixes
 
 The adversarial review found and this branch fixes:
@@ -62,14 +72,14 @@ Environment: macOS arm64, pnpm 10.34.9, repository Node 22.23.4, Chromium via Pl
 | --- | --- |
 | `pnpm lint` | pass |
 | `pnpm typecheck` | pass (root, preview TSX, API) |
-| `pnpm test:frontend` | 33 files, 581 tests pass |
+| `pnpm test:frontend` | 36 files, 592 tests pass |
 | `pnpm verify` | pass |
 | `pnpm smoke:wind --fixture` | 12/12 checks pass, 0 page errors |
 | `pnpm bench:preview --scenario smoke` | pass, 0 stale-frame paints |
 | `git diff --check` | pass |
 
 Baseline frontend unit suite: 28 files, 639 tests, median 4.65 s (runs 5.80/4.62/4.65).
-Candidate: 33 files, 581 tests, median 4.27 s (runs 4.27/4.30/4.24).
+Candidate: 36 files, 592 tests, median 4.26 s (runs 4.32/4.26/4.23).
 
 ## Compressed assets
 
@@ -77,9 +87,9 @@ Measured with zlib gzip, matching the build checker.
 
 | Asset | Base | Candidate |
 | --- | ---: | ---: |
-| Startup JS | 391,946 B | 399,802 B |
-| Lazy JS (aggregate) | 27,336 B | 31,757 B |
-| Worker JS | 150,556 B | 150,556 B |
+| Startup JS | 391,946 B | 391,324 B |
+| Lazy JS (aggregate) | 27,336 B | 30,402 B |
+| Worker JS | 150,556 B | 146,638 B |
 | CSS | 14,641 B | 15,212 B |
 | Windy plugin | 97,775 B | 97,775 B |
 
@@ -87,16 +97,16 @@ The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 
 ## Source size
 
-Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,078 lines (+917).
-Authored preview tests: 5,145 → 3,615 lines (−1,530). `main.test.ts` was replaced by
+Authored preview runtime (TS/TSX/CSS, tests excluded): 4,161 → 5,291 lines (+1,130).
+Authored preview tests: 5,145 → 3,792 lines (−1,353). `main.test.ts` was replaced by
 focused store, URL, timeline-model and scheduler tests plus the real-browser smoke.
 
 ## Limitations
 
 - Runtime lines increased. The fewer-lines goal is not met.
-- Test count fell from 639 to 581. The removed bootstrap fake-DOM suite is replaced by focused controller/store tests plus the browser smoke; some composition-boundary transitions still lack direct coverage.
+- Test count fell from 639 to 592. The removed bootstrap fake-DOM suite is replaced by focused controller/store tests plus the browser smoke; some composition-boundary transitions still lack direct coverage.
 - The timeline and wind-controls DOM remain imperative; the plan's full TSX conversion for those two areas is not complete.
 - Only the transparency/smoke benchmark scenario was run after the migration. The paired 3× baseline/candidate 40-frame and 250 ms cold timing comparison was not run, so rendering-performance parity is unverified beyond the smoke result.
 - Physical iOS/Android devices and Firefox/WebKit were not tested. The existing smoke is Chromium-only.
-- The startup and lazy gates pass with limited headroom (about 198 B and 243 B respectively at the measured zlib sizes). Further startup additions need a matching removal.
-- `create-preview-app.ts` is 735 lines and still owns forecast discovery, history application and expiry. The extracted browser lifecycle and feature sessions reduce, but do not finish, that split.
+- The startup and lazy gates pass with comfortable headroom (about 8,676 B and 1,598 B at the measured zlib sizes) after switching production minification to Terser.
+- `create-preview-app.ts` is 626 lines. Forecast discovery, history and expiry now have owners; point presentation, wind commands and map event wiring still live in the root.

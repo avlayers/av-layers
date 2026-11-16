@@ -1,32 +1,29 @@
 import {
-  ApiClient, assertNotExpired, AUTO_MODEL_ID, createForecastRequestScheduler, formatBuildFreshness, formatPlaceTime,
-  longitudeOffsetHours, mapForecastHorizonNotice, resolveAutoBuild, watchBuildExpiry,
-  normalizePoint, PointSeriesController, type AutoForecastSelection, type PinnedBuild, type PointHorizon, type UnitSystem
+  ApiClient, AUTO_MODEL_ID, createForecastRequestScheduler, formatBuildFreshness, formatPlaceTime,
+  longitudeOffsetHours, mapForecastHorizonNotice, watchBuildExpiry,
+  normalizePoint, PointSeriesController, type PinnedBuild, type PointHorizon, type UnitSystem
 } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { displayedWindSpeed, windSpeedUnitLabel } from '@av/contracts/units';
 import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindDataCache } from '@av/client/wind';
-import { previewQuery, previewUrl } from '../features/navigation/url-state';
+import { createHistoryController } from '../features/navigation/history-controller';
+import { apiBaseUrl, createStartup, offlineFixture, safeStorage } from './startup';
 import type { PreviewCommands } from './preview-commands';
-import type { PreviewInitialState, PreviewStore } from '../stores/app-store';
-import { createPreviewStore, emptyOverlay } from '../stores/app-store';
-import { activeLayer, committedFrame, LIFT_LAYERS, layerOptions, resumeModelFor, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
-import { createMap, maplibregl } from '../features/map/map-controller';
+import type { PreviewStore } from '../stores/app-store';
+import { createPreviewStore } from '../stores/app-store';
+import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
+import { createForecastSession } from '../features/forecast/forecast-session';
+import { createMap, createMapCamera, maplibregl, type MapCamera } from '../features/map/map-controller';
 import { RasterOverlay } from '../features/raster/raster-overlay';
 import { CoverageSeam } from '../features/map/coverage-seam';
 import { createWindSession } from '../features/wind/wind-session';
 type WindControls = import('../features/wind/wind-controls').WindControls;
-import { parseWindPreferences, WIND_STOPS } from '../features/wind/wind-model';
 import { WindOverlay } from '../features/wind/wind-overlay';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
 type PointSession = ReturnType<typeof import('../features/point/point-session').createPointSession>;
 import { createLocationController } from '../features/location/location-controller';
 import { installBrowserLifecycle } from '../platform/browser-lifecycle';
-
-const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
-const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
-const fixtureModel = (import.meta.env.VITE_MODEL ?? 'gfs') as ModelId;
 
 export interface PreviewApp {
   readonly store: PreviewStore;
@@ -37,57 +34,29 @@ export interface PreviewApp {
 
 /** Builds the preview's state and commands. Map and renderer resources start on `start`. */
 export function createPreviewApp(): PreviewApp {
-  const startup = previewQuery(window.location.search, offlineFixture);
-  const storage = safeStorage();
-  const readPreference = (key: string): string | null => { try { return storage?.getItem(key) ?? null; } catch { return null; } };
-  const writePreference = (key: string, value: string): void => { try { storage?.setItem(key, value); } catch { /* ignore */ } };
-  const preferences = {
-    units(): UnitSystem | null { const value = readPreference('preview-units'); return value === 'imperial' ? 'imperial' : value === 'metric' ? 'metric' : null; },
-    opacity(): number | null { const raw = readPreference('preview-lift-opacity'), value = raw?.trim() ? Number(raw) : Number.NaN; return value >= 0 && value <= 1 ? value : null; },
-    wind() { return parseWindPreferences(readPreference('av.wind-controls.v1')); },
-    setUnits(units: UnitSystem) { writePreference('preview-units', units); },
-    setOpacity(opacity: number) { writePreference('preview-lift-opacity', String(opacity)); }
-  };
-  const storedWind = preferences.wind();
-  const initialModel = startup.model ?? (offlineFixture ? fixtureModel : AUTO_MODEL_ID);
-  const initialOpacity = startup.opacity ?? preferences.opacity() ?? 0.5;
-  const initialUnits: UnitSystem = startup.units ?? preferences.units() ?? 'metric';
-  const initialWindHeight = startup.windHeight ?? storedWind?.height ?? 'surface';
-  const initialFixedHeight = typeof initialWindHeight === 'number' ? initialWindHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
-  const browserOffsetMinutes = -new Date().getTimezoneOffset();
-  const initialOffset = startup.camera && Number.isFinite(startup.camera.center[1]) ? longitudeOffsetHours(startup.camera.center[0]) * 60 : browserOffsetMinutes;
-
-  const initial: PreviewInitialState = {
-    intent: {
-      model: initialModel, reference: startup.reference, customLayer: visibleCustomLayer(startup.layer), opacity: initialOpacity, units: initialUnits,
-      windStyle: startup.windStyle ?? storedWind?.style ?? 'trails', windVisible: startup.windVisible ?? storedWind?.visible ?? true,
-      windVisibleOverride: startup.windVisible, windPaused: false, windHeight: initialWindHeight, fixedWindHeight: initialFixedHeight,
-      pointHorizon: 'day', requestedTime: startup.validTime
-    },
-    forecast: {
-      build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-      offsetMinutes: initialOffset, mapCenter: startup.camera ? { lat: startup.camera.center[1], lng: startup.camera.center[0] } : null, playing: false
-    },
-    overlay: emptyOverlay,
-    wind: { status: 'unavailable', overview: false, displayed: false, supported: false },
-    point: { open: false, location: '', horizonSelectable: false, horizonLabel: '24 hours', busy: false, status: '', wind: '' },
-    location: { message: '', detail: '', busy: false },
-    notices: { error: '', tileError: '', horizon: '', freshness: 'Loading latest immutable build…', frameStatus: 'Loading forecast…', overviewReady: 0, overviewTotal: 0, overviewFailed: 0, scaleWidth: 1, scaleText: '' }
-  };
+  const startup = createStartup(window.location.search, safeStorage());
+  const { initial, preferences, initialOffset, browserOffsetMinutes } = startup;
   const store = createPreviewStore(initial);
   const { writer, view } = store;
+  const history = createHistoryController({
+    pathname: () => window.location.pathname,
+    search: () => window.location.search,
+    push: url => window.history.pushState(null, '', url),
+    replace: url => window.history.replaceState(null, '', url)
+  }, offlineFixture);
 
   const api = new ApiClient({ baseUrl: apiBaseUrl });
   const pointSeries = new PointSeriesController(api);
   const lifecycle = new AbortController();
 
-  preferences.setUnits(initialUnits);
+  preferences.setUnits(initial.intent.units);
   const lowMemory = ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? Number.POSITIVE_INFINITY) <= 4;
   const windCache = new WindDataCache(lowMemory ? WIND_NUMERIC_BYTES : WIND_WINDOW_BYTES, lowMemory ? 256 : WIND_WINDOW_ENTRIES);
   const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
   const windScheduler = createForecastRequestScheduler();
 
   let map: maplibregl.Map | null = null;
+  let camera: MapCamera | null = null;
   let overlay: RasterOverlay | null = null;
   let seam: CoverageSeam | null = null;
   let windOverlay: WindOverlay | null = null;
@@ -100,15 +69,13 @@ export function createPreviewApp(): PreviewApp {
   let ensurePointSession: () => Promise<void> = async () => {};
   let locationController: ReturnType<typeof createLocationController> | null = null;
 
-  let home = { lat: 0, lng: 0 };
-  let followsPlace = startup.camera !== null;
   let mapOffsetMinutes = initialOffset;
-  let urlReady = false, historyRevision = 0, applyingHistory: number | null = null, opacityCommitted = false;
+  let urlReady = false, opacityCommitted = false;
   let lastControlVisible = initial.intent.windVisible;
-  let expiryTimer: number | null = null, disposeExpiry = (): void => {};
-  let loadAbort: AbortController | null = null, autoAbort: AbortController | null = null, resumeModel: ModelId | null = null;
+  let expiryTimer: number | null = null, resumeModel: ModelId | null = null;
   let destroyed = false;
   let appRoot: HTMLElement | null = null;
+
 
   const intent = () => view.intent.value;
   const forecast = () => view.forecast.value;
@@ -125,6 +92,47 @@ export function createPreviewApp(): PreviewApp {
     const displayed = view.overlay.value.displayed;
     return displayed && displayed.build === build() ? displayed.frame : null;
   };
+
+  const forecastSession = createForecastSession({
+    api, writer, intent,
+    center: () => { const center = map!.getCenter(); return normalizePoint(center.lat, center.lng); },
+    mapFailed, aborted, now: () => Date.now(),
+    hooks: {
+      onLoading(model) {
+        windSession?.clear(); closePoint();
+        writer.notices({ tileError: '', horizon: '', error: '', frameStatus: 'Loading forecast…', freshness: `Loading ${model} latest immutable build…` });
+        updateTimeUi();
+      },
+      onBuild(next, frame, resolved) {
+        urlReady = true;
+        writer.forecast({ layers: layerOptions(next) });
+        const customLayer = validatedCustomLayer(next, intent().customLayer);
+        if (customLayer !== intent().customLayer) writer.intent({ customLayer });
+        syncWindSupport(); updateTimeUi(); updateOverlay(); updateFreshness();
+        if (resolved && frame) pointSession?.followMapFrame(frame);
+      },
+      onSameBuild(frame) {
+        timeline?.pause();
+        pointSession?.followMapFrame(frame);
+      },
+      onCleared(message) {
+        urlReady = true;
+        syncWindSupport(); syncLayers(); windSession?.clear(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
+        showError(message); writer.notices({ freshness: 'No viewable build' });
+      },
+      onExpired() {
+        writer.notices({ tileError: '', horizon: '' });
+        windCache.clear(); windSession?.clear(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
+        writer.notices({ freshness: 'Expired immutable build' });
+        showError('This build has expired. Reload to discover the latest retained build.');
+      },
+      onUrl(mode) { writeUrl(mode); },
+      watchExpiry(next, expire) { return watchBuildExpiry(next.expiresAtMs, expire, [document, window]); },
+      startTimer() { if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000); },
+      stopTimer() { if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; } }
+    }
+  });
+
 
   const showError = (message: string): void => { writer.notices({ error: message }); };
   const clearError = (): void => { writer.notices({ error: '' }); };
@@ -153,11 +161,9 @@ export function createPreviewApp(): PreviewApp {
   }
 
   function updateScale(): void {
-    if (!map) return;
-    const metres = 80 * 2 * Math.PI * 6371000 * Math.cos(Math.min(85, Math.abs(map.getCenter().lat)) * Math.PI / 180) / (512 * 2 ** map.getZoom());
-    const distance = metres / (intent().units === 'metric' ? 1000 : 1609.344);
-    const magnitude = 10 ** Math.floor(Math.log10(distance)), value = ([10, 5, 2, 1].find(candidate => candidate * magnitude <= distance) ?? 1) * magnitude;
-    writer.notices({ scaleWidth: Math.max(1, 80 * value / distance), scaleText: `${Number(value.toPrecision(2))} ${intent().units === 'metric' ? 'km' : 'mi'}` });
+    if (!camera) return;
+    const scale = camera.scale(intent().units);
+    writer.notices({ scaleWidth: scale.width, scaleText: scale.text });
   }
 
   function updateOverlayStatus(): void {
@@ -193,7 +199,7 @@ export function createPreviewApp(): PreviewApp {
     const current = build();
     if (!current || forecast().expired) return;
     const now = Date.now();
-    if (current.expiresAtMs <= now) { expireView(); return; }
+    if (current.expiresAtMs <= now) { forecastSession.expire(); return; }
     paintMapHorizon(now);
     writer.notices({ freshness: (intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now) });
   }
@@ -203,28 +209,10 @@ export function createPreviewApp(): PreviewApp {
     timeline?.update(frames, selectedFrame(), !build() || forecast().expired || forecast().mapFailed);
   }
 
-  function ensureLive(): boolean {
-    const current = build();
-    if (!current || forecast().mapFailed) return false;
-    try { assertNotExpired(current.manifest.expiresAt, Date.now()); return true; }
-    catch { expireView(); return false; }
-  }
-
-  function expireView(): void {
-    if (forecast().expired || destroyed) return;
-    writer.forecast({ expired: true });
-    writer.notices({ tileError: '', horizon: '' });
-    if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
-    loadAbort?.abort(); windCache.clear(); windSession?.clear(); closePoint(); disposeExpiry(); overlay?.clear(); seam?.sync(null, null);
-    updateTimeUi();
-    writer.notices({ freshness: 'Expired immutable build' });
-    showError('This build has expired. Reload to discover the latest retained build.');
-    if (intent().model === AUTO_MODEL_ID) void loadAuto();
-  }
 
   function updateOverlay(): void {
     const layer = activeLayer(build(), intent().reference, intent().customLayer);
-    if (!mapReady() || !build() || !selectedFrame() || !layer || !ensureLive()) return;
+    if (!mapReady() || !build() || !selectedFrame() || !layer || !forecastSession.ensureLive()) return;
     clearError(); selectingOverlay = true;
     try { overlay!.select(build()!, layer, selectedFrame()!); refreshSeam(); }
     catch (error) { showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }
@@ -257,18 +245,15 @@ export function createPreviewApp(): PreviewApp {
   }
 
   function writeUrl(mode: 'push' | 'replace'): void {
-    if (applyingHistory !== null || !mapReady() || !urlReady || forecast().pendingModel) return;
-    if (!map) return;
+    if (!map || !mapReady() || !urlReady || forecast().pendingModel) return;
     const camera = map.getCenter(), current = build();
     const validTime = intent().model === AUTO_MODEL_ID ? intent().requestedTime ?? undefined : current?.manifest.frames.find(frame => frame.id === selectedFrame())?.validTime;
-    const next = previewUrl(window.location.pathname, {
+    history.write({
       model: intent().model, reference: intent().reference, layer: intent().customLayer, opacity: intent().opacity,
       lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime,
       ...(intent().windVisibleOverride !== null ? { windVisible: intent().windVisible } : {}),
       windStyle: intent().windStyle, windHeight: intent().windHeight, units: intent().units
-    });
-    if (next === `${window.location.pathname}${window.location.search}`) return;
-    (mode === 'push' ? window.history.pushState : window.history.replaceState).call(window.history, null, '', next);
+    }, mode, true);
   }
 
   function closePoint(): void {
@@ -281,102 +266,20 @@ export function createPreviewApp(): PreviewApp {
     const current = build();
     const frame = current ? renderedFrames(current.manifest)[index] : undefined;
     if (!frame) return;
-    if (intent().model === AUTO_MODEL_ID && intent().requestedTime !== frame.validTime) autoAbort?.abort();
-    writer.forecast({ selectedFrame: frame.id });
-    writer.intent({ requestedTime: frame.validTime });
+    if (intent().model === AUTO_MODEL_ID && intent().requestedTime !== frame.validTime) forecastSession.cancelAuto();
+    forecastSession.commitFrame(frame.id, frame.validTime);
     updateTimeUi(); pointSession?.followMapFrame(frame.id); updateOverlay(); updatePointSelection();
-    if (history !== 'none') { writeUrl(history); if (intent().model === AUTO_MODEL_ID) void loadAuto(); }
+    if (history !== 'none') { writeUrl(history); if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto(); }
   }
 
-  async function loadAuto(): Promise<void> {
-    if (intent().model !== AUTO_MODEL_ID || mapFailed() || aborted() || !map) return;
-    autoAbort?.abort();
-    const request = new AbortController(); autoAbort = request;
-    const { lat, lng } = map.getCenter(), time = Date.parse(intent().requestedTime ?? '');
-    const custom = intent().customLayer;
-    const layers = custom ? [custom, ...LIFT_LAYERS] : intent().reference === 'agl' ? [...LIFT_LAYERS] : [...LIFT_LAYERS].reverse();
-    if (!build()) writer.notices({ freshness: 'Finding a forecast for this location…' });
-    try {
-      const next = await resolveAutoBuild(api, { ...normalizePoint(lat, lng), layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
-      if (destroyed || request.signal.aborted || autoAbort !== request || intent().model !== AUTO_MODEL_ID) return;
-      if (next) {
-        const current = build();
-        if (current?.manifest.model === next.build.manifest.model && current.manifest.buildId === next.build.manifest.buildId) {
-          if (selectedFrame() !== null && selectedFrame() !== next.frame.id) timeline?.pause();
-          writer.forecast({ selectedFrame: next.frame.id });
-          pointSession?.followMapFrame(next.frame.id);
-          updateTimeUi(); updateOverlay(); updateFreshness();
-          if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
-          writeUrl('replace');
-        } else await loadModel(AUTO_MODEL_ID, next);
-        return;
-      }
-      disposeExpiry();
-      if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
-      writer.forecast({ build: null, selectedFrame: null });
-      syncWindSupport(); syncLayers();
-      windSession?.clear(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
-      showError('No forecast covers this location and time.');
-      writer.notices({ freshness: 'No viewable build' });
-      urlReady = true; writeUrl('replace');
-    } catch (error) {
-      if (!request.signal.aborted) showError(error instanceof Error ? error.message : String(error));
-    } finally { if (autoAbort === request) autoAbort = null; }
-  }
-
-  async function loadModel(model: ModelId, resolved?: AutoForecastSelection): Promise<void> {
-    if (mapFailed() || !map || destroyed) return;
-    resumeModel = null;
-    windSession?.clear();
-    if (model === AUTO_MODEL_ID && !resolved) {
-      loadAbort?.abort(); loadAbort = null;
-      writer.forecast({ pendingModel: null });
-      writer.intent({ model });
-      await loadAuto(); return;
-    }
-    if (model !== AUTO_MODEL_ID) autoAbort?.abort();
-    const replaceUrl = applyingHistory === null, revision = historyRevision;
-    disposeExpiry();
-    if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
-    loadAbort?.abort();
-    const requestAbort = new AbortController(); loadAbort = requestAbort;
-    writer.intent({ model });
-    writer.forecast({ pendingModel: model, expired: false, build: null, selectedFrame: null, layers: [] });
-    writer.notices({ tileError: '', horizon: '', error: '', frameStatus: 'Loading forecast…', freshness: `Loading ${model} latest immutable build…` });
-    syncWindSupport(); closePoint(); updateTimeUi();
-    try {
-      const next = resolved?.build ?? await api.latest(model, { signal: requestAbort.signal });
-      if (destroyed || requestAbort.signal.aborted || loadAbort !== requestAbort) return;
-      writer.forecast({ build: next });
-      syncWindSupport(); syncLayers();
-      const committed = resolved ? { id: resolved.frame.id, validTime: resolved.frame.validTime } : committedFrame(next, intent().requestedTime, Date.now());
-      writer.forecast({ selectedFrame: committed.id });
-      if (!resolved && committed.validTime) writer.intent({ requestedTime: committed.validTime });
-      updateTimeUi(); updateOverlay(); updateFreshness();
-      disposeExpiry = watchBuildExpiry(next.expiresAtMs, expireView, [document, window]);
-      if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
-      writer.forecast({ pendingModel: null });
-      urlReady = true;
-      if (replaceUrl && revision === historyRevision) writeUrl('replace');
-    } catch (error) {
-      if (requestAbort.signal.aborted || loadAbort !== requestAbort || (error instanceof DOMException && error.name === 'AbortError')) return;
-      showError(error instanceof Error ? error.message : String(error));
-      writer.notices({ freshness: 'No viewable build' });
-    } finally {
-      if (loadAbort === requestAbort) { loadAbort = null; writer.forecast({ pendingModel: null }); updateOverlayStatus(); }
-    }
-  }
 
   function focusRegion(model: ModelId): void {
-    if (!map) return;
-    const bounds = MODEL_OPTIONS.find(choice => choice.modelId === model)?.bounds;
-    if (bounds && bounds[2] - bounds[0] < 360) map.fitBounds([[bounds[0], bounds[1]], [bounds[0] <= bounds[2] ? bounds[2] : bounds[2] + 360, bounds[3]]], { padding: 32, duration: 0 });
+    camera?.focusRegion(MODEL_OPTIONS.find(choice => choice.modelId === model)?.bounds);
   }
 
   async function applyHistory(): Promise<void> {
     if (aborted()) return;
-    const state = previewQuery(window.location.search, offlineFixture), change = ++historyRevision;
-    applyingHistory = change;
+    const state = history.read(window.location.search), change = history.beginRestore();
     try {
       const requestedLayer = visibleCustomLayer(state.layer);
       writer.intent({ reference: state.reference, customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)) });
@@ -394,35 +297,28 @@ export function createPreviewApp(): PreviewApp {
       if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); overlay?.setOpacity(state.opacity); }
       if (state.camera) map?.jumpTo(state.camera, { previewHistory: true });
       writer.intent({ requestedTime: state.validTime });
-      if (state.model && state.model !== intent().model) { await loadModel(state.model as ModelId); return; }
-      if (intent().model === AUTO_MODEL_ID) { await loadAuto(); return; }
+      if (state.model && state.model !== intent().model) { await forecastSession.load(state.model as ModelId); return; }
+      if (intent().model === AUTO_MODEL_ID) { await forecastSession.loadAuto(); return; }
       if (build()) {
         const previous = selectedFrame();
         const committed = committedFrame(build()!, state.validTime, Date.now());
-        if (committed.id !== previous) { timeline?.pause(); writer.forecast({ selectedFrame: committed.id }); pointSession?.followMapFrame(committed.id); }
-        if (committed.validTime) writer.intent({ requestedTime: committed.validTime });
+        if (committed.id !== previous) { timeline?.pause(); pointSession?.followMapFrame(committed.id); }
+        if (committed.id && committed.validTime) forecastSession.commitFrame(committed.id, committed.validTime);
         updateTimeUi(); updateOverlay();
       }
-    } finally { if (applyingHistory === change) applyingHistory = null; }
+    } finally { history.endRestore(change); }
   }
 
   function syncMapClock(): void {
-    if (!map) return;
-    const center = map.getCenter();
-    if (!followsPlace) {
-      const moved = Math.abs(center.lat - home.lat) > 1e-4 || Math.abs(((center.lng - home.lng + 540) % 360) - 180) > 1e-4;
-      if (!moved) return;
-      followsPlace = true;
-    }
-    if (Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
-      writer.forecast({ mapCenter: { lat: center.lat, lng: center.lng } });
-      timeline?.setMapCenter(center.lat, center.lng);
-    }
-    const next = Number.isFinite(center.lng) ? longitudeOffsetHours(center.lng) * 60 : mapOffsetMinutes;
-    if (next === mapOffsetMinutes) return;
-    mapOffsetMinutes = next;
-    writer.forecast({ offsetMinutes: next });
-    timeline?.setOffsetMinutes(next);
+    if (!map || !camera) return;
+    const next = camera.sync();
+    if (!Number.isFinite(next.center.lat) || !Number.isFinite(next.center.lng)) return;
+    writer.forecast({ mapCenter: next.center });
+    timeline?.setMapCenter(next.center.lat, next.center.lng);
+    if (!next.changed) return;
+    mapOffsetMinutes = camera.offsetMinutes();
+    writer.forecast({ offsetMinutes: mapOffsetMinutes });
+    timeline?.setOffsetMinutes(mapOffsetMinutes);
     updateTimeUi(); updateOverlayStatus(); paintMapHorizon(); updatePointSelection();
   }
 
@@ -438,7 +334,7 @@ export function createPreviewApp(): PreviewApp {
     preferences.setUnits(units);
     windControls?.setUnits(units);
     windOverlay?.setOptions({ units });
-    updateScale(); updatePointSelection(); updatePointWind();
+    updateScale(); updatePointSelection();
     writeUrl('replace');
   }
 
@@ -452,25 +348,25 @@ export function createPreviewApp(): PreviewApp {
     syncWindReservation();
     windOverlay?.setOptions({ ...state, units: intent().units });
     windSession?.heightChanged(previousHeight);
-    updateWind(); updatePointWind(); writeUrl('replace');
+    updateWind(); writeUrl('replace');
   }
 
   const commands: PreviewCommands = {
     selectModel(model) {
       if (forecast().mapFailed) return;
-      if (intent().model === AUTO_MODEL_ID) applyingHistory = null;
-      void loadModel(model);
+      if (intent().model === AUTO_MODEL_ID) history.cancelRestore();
+      void forecastSession.load(model);
       focusRegion(model);
     },
     selectReference(reference) {
       writer.intent({ reference, customLayer: null });
       updateOverlay(); writeUrl('push');
-      if (intent().model === AUTO_MODEL_ID) void loadAuto();
+      if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
     },
     selectLayer(layer) {
       writer.intent({ customLayer: layer === 'lift' ? null : layer });
       updateOverlay(); writeUrl('push');
-      if (intent().model === AUTO_MODEL_ID) void loadAuto();
+      if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
     },
     prepareLayer,
     setOpacity(value) {
@@ -505,9 +401,14 @@ export function createPreviewApp(): PreviewApp {
     appRoot = root;
     const container = rootQuery<HTMLElement>('#map', root);
     if (!container) throw new Error('Missing element #map');
-    map = createMap({ container, offlineFixture, camera: startup.camera, deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory });
+    map = createMap({ container, offlineFixture, camera: startup.query.camera, deviceMemory: (navigator as Navigator & { deviceMemory?: number }).deviceMemory });
     const openedAt = map.getCenter();
-    home = { lat: openedAt.lat, lng: openedAt.lng };
+    camera = createMapCamera(map, {
+      home: { lat: openedAt.lat, lng: openedAt.lng },
+      followsPlace: startup.query.camera !== null,
+      initialOffset,
+      browserOffset: browserOffsetMinutes
+    });
 
     overlay = new RasterOverlay(map, apiBaseUrl, intent().opacity, state => {
       writer.overlay(state);
@@ -539,7 +440,7 @@ export function createPreviewApp(): PreviewApp {
     if (!timelineHost) throw new Error('Missing element #compact-timeline');
     timeline = createCompactTimeline(timelineHost, {
       offsetMinutes: mapOffsetMinutes,
-      ...(followsPlace && Number.isFinite(home.lat) && Number.isFinite(home.lng) ? { latitude: home.lat, longitude: home.lng } : {}),
+      ...(camera?.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, history = 'push') => selectIndex(index, history),
       onPlayback: playing => commands.setPlaying(playing)
     });
@@ -550,7 +451,7 @@ export function createPreviewApp(): PreviewApp {
         const { createPointSession } = await import('../features/lazy');
         if (destroyed) return;
         pointSession = createPointSession({
-        api, series: pointSeries,
+        series: pointSeries,
         body: () => rootQuery<HTMLElement>('#point-body', root),
         getBuild: build,
         getSelectedFrame: selectedFrame,
@@ -558,7 +459,7 @@ export function createPreviewApp(): PreviewApp {
         getHorizon: () => intent().pointHorizon,
         getMapOffset: () => mapOffsetMinutes,
         getDisplayedFrame: displayedPointFrame,
-        ensureLive,
+        ensureLive: () => forecastSession.ensureLive(),
         pauseTimeline: () => timeline?.pause(),
         selectFrameById: id => {
           const current = build();
@@ -613,7 +514,7 @@ export function createPreviewApp(): PreviewApp {
     const globalListener = { signal: lifecycle.signal };
     document.addEventListener('keydown', event => {
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button')) return;
-      if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build() || !ensureLive()) return;
+      if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build() || !forecastSession.ensureLive()) return;
       event.preventDefault();
       const frames = renderedFrames(build()!.manifest), index = frames.findIndex(frame => frame.id === selectedFrame());
       timeline?.pause();
@@ -631,7 +532,7 @@ export function createPreviewApp(): PreviewApp {
     const timeInput = rootQuery<HTMLInputElement>('#time', root);
     if (timeInput) {
       timeInput.addEventListener('input', () => { timeline?.pause(); selectIndex(Number(timeInput.value), 'none'); }, globalListener);
-      timeInput.addEventListener('change', () => { writeUrl('replace'); if (intent().model === AUTO_MODEL_ID) void loadAuto(); }, globalListener);
+      timeInput.addEventListener('change', () => { writeUrl('replace'); if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto(); }, globalListener);
     }
 
     map.on('click', event => {
@@ -640,13 +541,13 @@ export function createPreviewApp(): PreviewApp {
       void (async () => { await ensurePointSession(); await pointSession?.open(point); })();
     });
     map.on('move', syncMapClock);
-    map.on('movestart', event => { if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event)) { applyingHistory = null; autoAbort?.abort(); } });
+    map.on('movestart', event => { if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event)) { history.cancelRestore(); forecastSession.cancelAuto(); } });
     map.on('moveend', () => {
       syncMapClock(); updateScale();
       if (intent().model !== AUTO_MODEL_ID) updateWind();
       if (build() && !forecast().expired) updateTimeUi();
-      if (intent().model === AUTO_MODEL_ID && applyingHistory === null) void loadAuto();
-      if (urlReady && applyingHistory === null) writeUrl('push');
+      if (intent().model === AUTO_MODEL_ID && !history.restoring()) void forecastSession.loadAuto();
+      if (urlReady && !history.restoring()) writeUrl('push');
       refreshSeam();
     });
     map.on('error', (event: { error?: unknown }) => {
@@ -665,22 +566,20 @@ export function createPreviewApp(): PreviewApp {
     syncWindSupport(); syncLayers(); updateScale();
     map.once('style.load', () => {
       if (aborted() || mapFailed()) return;
-      if (!startup.camera) focusRegion(intent().model);
+      if (!startup.query.camera) focusRegion(intent().model);
       writer.forecast({ mapReady: true });
       seam!.markReady(); updateOverlay(); refreshSeam(); writeUrl('replace');
     });
-    void loadModel(initialModel);
+    void forecastSession.load(initial.intent.model);
 
     function pageHide(event: PageTransitionEvent): void {
       windCache.clear(); windSession?.clear(); locationController?.reset();
-      resumeModel = event.persisted ? resumeModelFor(forecast().pendingModel, intent().model) : null;
-      loadAbort?.abort(); autoAbort?.abort();
+      resumeModel = event.persisted ? forecastSession.suspend() : null;
       const pointInterrupted = event.persisted && pointSession?.pending;
       if (pointInterrupted) {
         pointSession?.suspend();
         writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' });
       } else if (!event.persisted) pointSession?.close();
-      if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
       overlay?.clear(true);
       if (event.persisted) return;
       disposePermanently();
@@ -688,16 +587,15 @@ export function createPreviewApp(): PreviewApp {
 
     function pageShow(event: PageTransitionEvent): void {
       if (!event.persisted) return;
-      if (resumeModel !== null) { const model = resumeModel; resumeModel = null; void loadModel(model); return; }
-      if (build() && ensureLive()) {
+      if (resumeModel !== null) { const model = resumeModel; resumeModel = null; forecastSession.resume(model); return; }
+      if (build() && forecastSession.ensureLive()) {
         updateTimeUi(); updateOverlay(); refreshSeam(); updateFreshness();
-        if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
       }
     }
   }
 
   function showMapFailure(error: unknown): void {
-    lifecycle.abort(); autoAbort?.abort(); loadAbort?.abort(); loadAbort = null;
+    lifecycle.abort(); forecastSession.dispose();
     writer.forecast({ mapFailed: true, pendingModel: null });
     writer.notices({
       error: error instanceof maplibregl.GPUInitializationError
@@ -705,18 +603,15 @@ export function createPreviewApp(): PreviewApp {
         : `Map initialization failed: ${error instanceof Error ? error.message : String(error)}`,
       freshness: ''
     });
-    closePoint(); disposeExpiry(); windSession?.clear(); locationController?.reset();
-    if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
+    closePoint(); windSession?.clear(); locationController?.reset();
     disposePermanently();
   }
 
   function disposePermanently(): void {
     if (destroyed) return;
     destroyed = true;
-    loadAbort?.abort(); autoAbort?.abort();
+    forecastSession.dispose();
     lifecycle.abort();
-    disposeExpiry();
-    if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
     timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointSession?.dispose();
     windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); rasterScheduler.dispose();
     map?.remove();
@@ -728,8 +623,4 @@ export function createPreviewApp(): PreviewApp {
 
 function rootQuery<T extends Element>(selector: string, root: ParentNode = document): T | null {
   return root.querySelector<T>(selector);
-}
-
-function safeStorage(): Storage | null {
-  try { return window.localStorage; } catch { return null; }
 }

@@ -26,7 +26,7 @@ function harness() {
     }
   };
   const options: PointSessionOptions = {
-    api: {} as PointSessionOptions['api'], series: series as never,
+    series: series as never,
     body: () => ({ replaceChildren: vi.fn(), tabIndex: 0 }) as unknown as HTMLElement,
     getBuild: () => build, getSelectedFrame: () => 'f024', getUnits: () => 'metric', getHorizon: () => 'day',
     getMapOffset: () => 0, getDisplayedFrame: () => 'f024', ensureLive: () => true,
@@ -46,10 +46,11 @@ describe('point session selection beyond the map horizon', () => {
     await test.session.open({ lat: 40, lon: -100 });
     const options = render.mock.calls.at(-1)?.[3];
     expect(options).toBeDefined();
+    vi.mocked(test.options.publish.changed).mockClear();
     options!.onFrame('f027');
     expect(test.series.frameId).toBe('f027');
     expect(test.options.selectFrameById).toHaveBeenCalledWith('f027');
     expect(update).toHaveBeenLastCalledWith('f027', 'metric', 'f024', undefined, 0);
-    expect(test.options.publish.changed).toHaveBeenCalled();
+    expect(test.options.publish.changed).toHaveBeenCalledTimes(1);
   });
 });

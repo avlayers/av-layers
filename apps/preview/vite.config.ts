@@ -25,6 +25,7 @@ export default defineConfig({
     }
   }],
   build: {
+    minify: 'terser',
     target: 'es2022',
     sourcemap: true,
     outDir: 'dist'

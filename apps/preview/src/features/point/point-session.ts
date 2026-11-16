@@ -1,13 +1,11 @@
 import {
   pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
 } from '@av/client';
-import type { ApiClient } from '@av/client';
 import { renderBuildDetails } from './build-details';
 
 type PointWindgram = typeof import('@av/windgram');
 
 export interface PointSessionOptions {
-  readonly api: ApiClient;
   readonly series: PointSeriesController;
   readonly body: () => HTMLElement | null;
   readonly getBuild: () => PinnedBuild | null;
