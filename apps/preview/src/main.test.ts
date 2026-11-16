@@ -644,7 +644,8 @@ it('leaves the map unchanged when location is denied', async () => {
 
 it('shows a timeout without moving the map and accepts another locate', async () => {
   let fail!: PositionErrorCallback;
-  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback) => { fail = error; } } });
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, error: PositionErrorCallback) => { locate = success; fail = error; } } });
   await start();
   const before = map().getCenter();
   ui('locate').dispatchEvent(new Event('click'));
@@ -653,6 +654,13 @@ it('shows a timeout without moving the map and accepts another locate', async ()
   expect(ui('location-status').hidden).toBe(false);
   expect(ui('locate').ariaBusy).toBe('false');
   expect(map().getCenter()).toEqual(before);
+  expect(ui('locate').disabled).toBe(false);
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('locate').disabled).toBe(true);
+  expect(ui('location-status').textContent).toBe('Locating…');
+  locate({ coords: { latitude: 42.36, longitude: -71.06 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 42.36, lng: -71.06 });
+  expect(ui('location-status').hidden).toBe(true);
   expect(ui('locate').disabled).toBe(false);
 });
 

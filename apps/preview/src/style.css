@@ -56,11 +56,14 @@ html, body, #app { margin: 0; height: 100%; }
 @keyframes location-ring { to { transform: scale(1.7); opacity: 0; } }
 @keyframes location-search { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .location-pulse::after, #locate[aria-busy="true"] svg { animation: none; } }
-body:has(#location-status:not([hidden])) .toast {
+body:has(#location-status:not([hidden])):not(:has(#model-picker[open])) .toast {
   max-width: min(420px, calc(100% - 252px)); /* 12px inset + 8px gap + 220px status + 12px inset */
 }
 body:has(#wind-controls-popup:not([hidden])) #location-status:not([hidden]) {
   opacity: 0;
+}
+@media (max-width: 540px) {
+  body:has(#model-picker[open]) #location-status:not([hidden]) { opacity: 0; }
 }
 #location-status:not([hidden]) {
   position: absolute;
