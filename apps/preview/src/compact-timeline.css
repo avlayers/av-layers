@@ -31,7 +31,7 @@
 .ct-days::-webkit-scrollbar { display: none; }
 
 .compact-timeline .ct-day {
-  flex: 0 0 auto;
+  flex: 1 0 auto;
   min-width: 44px;
   height: 16px;
   margin: 0;
@@ -76,6 +76,7 @@
   flex: 0 1 auto;
   align-self: center;
   min-width: 0;
+  max-width: 42%;
   overflow: hidden;
   color: #1c2430;
   font-size: 11px;
@@ -87,8 +88,9 @@
 
 .ct-track {
   position: relative;
+  container-type: inline-size;
   flex: 1 1 auto;
-  min-width: 96px;
+  min-width: min(120px, 38%);
   overflow: hidden;
   border-radius: 4px;
   background: #e7edf2;
@@ -106,24 +108,29 @@
   bottom: 0;
   background: repeating-linear-gradient(-45deg, #d5dde3, #d5dde3 3px, #eef2f5 3px, #eef2f5 6px);
 }
-.ct-ticks {
-  z-index: 2;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 2px;
-  pointer-events: none;
-}
+.ct-ticks { z-index: 2; inset: 1px 2px auto; height: 11px; pointer-events: none; }
 .ct-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
   color: #16324f;
   font-size: 9px;
+  line-height: 11px;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 2px #fff, 0 0 2px #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 1px 0 #fff, 0 -1px 0 #fff;
 }
+.ct-tick:first-child { transform: none; }
+.ct-tick:last-child { transform: translateX(-100%); }
+@container (max-width: 220px) {
+  .ct-tick:nth-child(even) { display: none; }
+}
+@container (max-width: 140px) {
+  .ct-tick:nth-child(3),
+  .ct-tick:nth-child(7) { display: none; }
+}
 .ct-playhead {
   z-index: 3;
-  top: 0;
+  top: 12px;
   bottom: 0;
   width: 2px;
   margin-left: -1px;
@@ -135,7 +142,7 @@
   content: '';
   position: absolute;
   left: 50%;
-  top: 50%;
+  top: 64%;
   width: 7px;
   height: 7px;
   border: 1.5px solid #16324f;

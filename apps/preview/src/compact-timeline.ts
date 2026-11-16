@@ -210,7 +210,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   for (const node of [ribbon, hatches, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
   playhead.setAttribute('hidden', '');
   track.tabIndex = -1;
-  ticks.append(...TICKS.map(label => el('span', 'ct-tick', label)));
+  ticks.append(...TICKS.map((label, index) => {
+    const tick = el('span', 'ct-tick', label);
+    tick.style.left = `${(index / (TICKS.length - 1)) * 100}%`;
+    return tick;
+  }));
   track.append(ribbon, hatches, ticks, playhead);
   controls.append(play, timeLabel, track);
   root.append(daysRow, controls);

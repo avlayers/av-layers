@@ -177,7 +177,7 @@ a { color: #1c6b8a; }
 
 @media (max-width: 720px) {
   #map-controls { flex-wrap: wrap; justify-content: flex-start; }
-  .ribbon { flex-basis: 248px; }
+  .ribbon { flex: 1 1 248px; width: auto; max-width: 100%; }
   #map-controls > #map-dock { flex-wrap: wrap; width: 100%; }
   #timebar { flex: 1 0 100%; max-width: none; height: 50px; }
   #legend:not([hidden]) ~ #timebar #frame-status { bottom: calc(100% + 66px); }
