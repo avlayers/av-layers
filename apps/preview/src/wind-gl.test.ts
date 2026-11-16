@@ -42,7 +42,9 @@ it('interpolates two valid wind texels and rejects an empty neighborhood', () =>
 it('uses the one reconstructed field during a frame blend', () => {
   const from = { u: 10, v: 0 }, to = { u: 2, v: 6 };
   expect(mixWindVectors(from, to, 0.25)).toEqual({ u: 8, v: 1.5 });
+  expect(mixWindVectors(from, to, 1)).toEqual(to);
   expect(mixWindVectors(from, null, 0.25)).toEqual(from);
+  expect(mixWindVectors(from, null, 1)).toBeNull();
   expect(mixWindVectors(null, to, 0.25)).toEqual(to);
   expect(mixWindVectors(null, null, 1)).toBeNull();
 });
@@ -55,6 +57,7 @@ it('samples wind texels with floor and rejects zero alpha before decoding', () =
   expect(WIND_PARTICLE_UPDATE).toContain('floor');
   expect(WIND_PARTICLE_UPDATE).toContain('uv*float(128)-0.5');
   expect(WIND_PARTICLE_UPDATE).toContain('ivec2(127)');
+  expect(WIND_PARTICLE_UPDATE).toContain('u_mix>=1.0?b.xy');
   expect(WIND_PARTICLE_UPDATE).toContain('mix(a.xy,b.xy,u_mix)');
   expect(WIND_PARTICLE_UPDATE).toContain('vb?b.xy:a.xy');
   expect(WIND_PARTICLE_UPDATE).not.toMatch(/texture\(u_[ab]/);

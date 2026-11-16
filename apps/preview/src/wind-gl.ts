@@ -23,8 +23,9 @@ void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
   o=vec4(mix(u_bounds.x,u_bounds.z,n),mix(u_bounds.y,u_bounds.w,m),1.5+n*2.5,s.w+1.);return;}
  vec2 uv=vec2((s.x-u_bounds.x)/(u_bounds.z-u_bounds.x),(s.y-u_bounds.y)/(u_bounds.w-u_bounds.y));
  vec3 a=windAt(u_a,uv),b=windAt(u_b,uv);bool va=a.z>0.5,vb=b.z>0.5;
- if(!va&&!vb||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.){o=vec4(s.xy,0,s.w);return;}
- vec2 w=va&&vb?mix(a.xy,b.xy,u_mix):(vb?b.xy:a.xy);
+ bool alive=u_mix>=1.0?vb:(va||vb);
+ if(!alive||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.){o=vec4(s.xy,0,s.w);return;}
+ vec2 w=u_mix>=1.0?b.xy:(va&&vb?mix(a.xy,b.xy,u_mix):(vb?b.xy:a.xy));
  float speed=length(w),boost=speed>0.&&speed<4.?sqrt(4./speed):1.,c=cos(s.y*.01745329251);
  float sec=u_dt*600.*exp2(9.-u_zoom)*c*boost,lat=s.y+w.y*sec/6371000./.01745329251,lon=s.x+w.x*sec/(6371000.*c)/.01745329251;
  if(abs(lat)>85.){o=vec4(s.xy,0,s.w);return;}
@@ -69,8 +70,9 @@ export function sampleEncodedWindGrid(data: Uint8Array, uvX: number, uvY: number
   return weight > 0 ? { u: u / weight, v: v / weight } : null;
 }
 
-/** Mix two reconstructed fields. A missing side stays out of the blend. */
+/** Mix two reconstructed fields. At t >= 1 only `to` remains, so a finished blend cannot carry the previous frame into a hole. */
 export function mixWindVectors(from: EncodedWind | null, to: EncodedWind | null, t: number): EncodedWind | null {
+  if (t >= 1) return to;
   if (from && to) return { u: from.u * (1 - t) + to.u * t, v: from.v * (1 - t) + to.v * t };
   return to ?? from;
 }
