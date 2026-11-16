@@ -114,3 +114,33 @@ baseline source   76cd925e94b1d25a6e3b2a403cd63cf404734182f9e62e13d39049b9bf3fbe
 changed source    d563826b5ca8e13d0034c985f72ad6bb5988172d1928093c39f879fb37ecb922
 harness           4f28d58096d7342253c68b608488c8f2f23606fc31f57a5c970f884d2c620ff3
 ```
+
+
+## Viewport preparation
+
+The 16 November 2026 change adds a native-pixel crop for small views, prepared
+wind lattices and a shared request-admission policy. It does not change the
+measured 13 November captures above.
+
+- A conservative camera rectangle of at most **800 km²** starts full-timeline
+  preparation; the intent is retained until the rectangle exceeds **1000 km²**.
+  Dateline and full-world rectangles keep their coherent longitude span.
+- Small raster views ask MapLibre `coveringTiles` for the canonical source zoom,
+  then retain `visible × 1.2 + 2 px` per axis. The Armenia fixture is
+  391 × 221 px and 15.8223 MiB across 48 frames, replacing the earlier
+  1280 × 1024 mosaic at 5 MiB per frame.
+- A warmed wind frame uploads a prepared 128×128 RGBA lattice from its admitted
+  extent. Selection and the following GL prerender do not reconstruct the native
+  grid. The lattice is cached per source, height and extent; point sampling keeps
+  the exact native sampler.
+- Numeric wind retries transient 502/503/504 responses three times inside the
+  request deadline, then records a 30 s per-resource cooldown and advances to the
+  next promised time. Capacity is a typed outcome and evicts one retained frame
+  before the next attempt; a playback toggle is not required.
+- Physical request admission counts headers and live bodies until settlement.
+  Unknown, malformed and compressed lengths keep the 1 MiB header reserve.
+
+Browser evidence for these paths is not yet captured. The required
+`viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and
+constrained-device budget remain unverified; the draft PR records them as
+blocking release gates rather than reporting measured conclusions.

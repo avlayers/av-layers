@@ -27,7 +27,7 @@ it('warms the full rendered axis only while the viewport stays small', async () 
   wind.loads.length = 0;
   const build = fixtureBuild({ buildId: `20260101T000000Z-${'a'.repeat(36)}` });
   (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
-  let bounds = WIDE, frame = build.manifest.frames[0]!.id;
+  let bounds = WIDE; const frame = build.manifest.frames[0]!.id;
   const session = createWindSession({
     apiBaseUrl: 'https://api.test', lowMemory: false,
     map: { getZoom: () => 5, getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north }) },

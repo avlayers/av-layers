@@ -415,7 +415,7 @@ it('releases a streaming body once across repeated cancellation', async () => {
 it('promotes queued speculative work without a duplicate fetch', async () => {
   let finishFirst!: () => void;
   let index = 0;
-  const fetchImpl = vi.fn((input: RequestInfo | URL) => {
+  const fetchImpl = vi.fn((_input: RequestInfo | URL) => {
     index++;
     if (index === 1) return new Promise<Response>(resolve => { finishFirst = () => resolve(new Response(null)); });
     return Promise.resolve(new Response(null));
