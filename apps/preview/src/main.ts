@@ -151,21 +151,22 @@ function startPreview(lifecycle: AbortController): void {
   };
   const compactTimeline = createCompactTimeline(element('compact-timeline'), {
     offsetMinutes: mapOffsetMinutes,
-    onSelect: index => selectIndex(index, 'push')
+    ...(followsPlace && Number.isFinite(home.lat) && Number.isFinite(home.lng) ? { latitude: home.lat, longitude: home.lng } : {}),
+    onSelect: (index, history = 'push') => selectIndex(index, history)
   });
   syncWindSupport();
   windControls.setUnits(pointUnitSystem);
   windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
 
   function syncMapClock(): void {
+    const center = map.getCenter();
     if (!followsPlace) {
-      const center = map.getCenter();
       const moved = Math.abs(center.lat - home.lat) > 1e-4 || Math.abs(normalizeLon(center.lng) - normalizeLon(home.lng)) > 1e-4;
       if (!moved) return;
       followsPlace = true;
     }
-    const lng = map.getCenter().lng;
-    const next = Number.isFinite(lng) ? longitudeOffsetHours(lng) * 60 : mapOffsetMinutes;
+    if (Number.isFinite(center.lat) && Number.isFinite(center.lng)) compactTimeline.setMapCenter(center.lat, center.lng);
+    const next = Number.isFinite(center.lng) ? longitudeOffsetHours(center.lng) * 60 : mapOffsetMinutes;
     if (next === mapOffsetMinutes) return;
     mapOffsetMinutes = next;
     compactTimeline.setOffsetMinutes(next);
@@ -540,6 +541,7 @@ function startPreview(lifecycle: AbortController): void {
       if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
+          if (selectedFrame !== null && selectedFrame !== next.frame.id) compactTimeline.pause();
           selectedFrame = next.frame.id; followMapFrame(); updateTimeUi(); updateOverlay(); updateFreshness();
           if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
           writeUrl('replace');
@@ -614,6 +616,7 @@ function startPreview(lifecycle: AbortController): void {
       point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), mapOffsetMinutes, unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
+        compactTimeline.pause();
         const index = renderedFrames(context.build.manifest).findIndex(f => f.id === id);
         if (index >= 0) selectIndex(index, 'push'); else updatePointSelection();
       }
@@ -676,7 +679,7 @@ function startPreview(lifecycle: AbortController): void {
       if (build) {
         const previousFrame = selectedFrame;
         chooseFrame(build);
-        if (selectedFrame !== previousFrame) followMapFrame();
+        if (selectedFrame !== previousFrame) { compactTimeline.pause(); followMapFrame(); }
         updateTimeUi(); updateOverlay();
       }
     } finally { if (applyingHistory === change) applyingHistory = null; }
@@ -706,7 +709,7 @@ function startPreview(lifecycle: AbortController): void {
     writeUrl(opacityCommitted ? 'replace' : 'push'); opacityCommitted = true;
   });
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
-  timeInput.addEventListener('input', () => selectIndex(Number(timeInput.value), 'none'));
+  timeInput.addEventListener('input', () => { compactTimeline.pause(); selectIndex(Number(timeInput.value), 'none'); });
   timeInput.addEventListener('change', () => { writeUrl('replace'); if (currentModel === AUTO_MODEL_ID) void loadAuto(); });
   setUnits(pointUnitSystem);
   metricButton.addEventListener('click', () => setUnits('metric', true));
@@ -771,6 +774,7 @@ function startPreview(lifecycle: AbortController): void {
     if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build || !ensureLive()) return;
     event.preventDefault();
     const frames = renderedFrames(build.manifest), index = frames.findIndex(f => f.id === selectedFrame);
+    compactTimeline.pause();
     selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
   }, globalListener);
 

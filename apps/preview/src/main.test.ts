@@ -230,9 +230,10 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
   };
 } }));
 let timelineSelect: (index: number) => void;
+let timelinePauses = 0;
 vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
   timelineSelect = options.onSelect;
-  return { update() {}, setOffsetMinutes() {}, destroy() {} };
+  return { update() {}, setOffsetMinutes() {}, setMapCenter() {}, pause() { timelinePauses += 1; }, destroy() {} };
 } }));
 
 const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
@@ -284,7 +285,7 @@ beforeEach(() => {
   windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
   markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true;
   deferWindCancellation = false; windCancel = null;
-  windSample = { status: 'valid', u: 3, v: 4 };
+  windSample = { status: 'valid', u: 3, v: 4 }; timelinePauses = 0;
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
   vi.stubEnv('AV_API_BASE', 'https://api.test');
   vi.useFakeTimers();
@@ -700,6 +701,15 @@ it('wires compact timeline selections to history and retains the scale while scr
   expect(push).toHaveBeenCalledOnce();
   expect(ui('time').value).toBe('0');
   expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[0].validTime);
+  timelinePauses = 0;
+  const earlier = new URL(win.href);
+  earlier.searchParams.set('t', manifest.frames[2].validTime);
+  win.href = earlier.href;
+  win.dispatchEvent(new Event('popstate'));
+  expect(ui('time').value).toBe('2');
+  expect(timelinePauses).toBe(1);
+  win.dispatchEvent(new Event('popstate'));
+  expect(timelinePauses).toBe(1);
   ui('ref-msl').dispatchEvent(new Event('click'));
   await Promise.resolve();
   expect(ui('legend-body').children[0]).not.toBe(scale);
@@ -1259,6 +1269,29 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
   expect(new URL(win.href).searchParams.get('t')).toBe(autoTime(36));
 });
 
+it('pauses playback when Auto keeps the same build and changes the frame', async () => {
+  const build = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [18, 36]);
+  const models = [autoCatalogRow(build.manifest, 1000)];
+  fetchMock.mockImplementation(async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return sample(input, build.manifest);
+  });
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(autoTime(18))}`;
+  await import('./main');
+  map().emit('style.load');
+  await vi.waitFor(() => expect(tile()).toContain('/f018/'));
+  timelinePauses = 0;
+  const next = new URL(win.href);
+  next.searchParams.set('t', autoTime(36));
+  win.href = next.href;
+  win.dispatchEvent(new Event('popstate'));
+  await vi.waitFor(() => expect(tile()).toContain('/f036/'));
+  expect(timelinePauses).toBe(1);
+});
+
 it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto history restore', async action => {
   const regionA = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [18, 36]);
   const regionB = autoBuild('wrf-region-b-3km', REGION_B_BOUNDS, [18, 36]);
@@ -1439,7 +1472,9 @@ it('pages the full native point forecast while later point times keep the raster
   const series = ui('point-body').children[0], nodes = visit(series);
   const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
   expect(dayTabs.children.length).toBeGreaterThan(1);
+  const pauses = timelinePauses;
   dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+  expect(timelinePauses).toBe(pauses + 1);
   await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-wind').textContent).toBe('');
   expect(raster()).toBe(mapUrl); expect(ui('time').value).toBe(mapTime);
