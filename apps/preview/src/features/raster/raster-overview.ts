@@ -4,16 +4,19 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
+import { boundsAreaKm2, createViewportWarmth } from '../map/viewport-policy';
+import { planRasterCrop, requiredSourceZoom } from './raster-crop';
 
 const DECODE_CAP = 768 * 1024 * 1024;
 const MAX_TILES = 64;
 const MAX_EDGE = 4096;
 const LATITUDE_LIMIT = 85.0511287798066;
 interface Window { west: number; east: number; top: number; bottom: number }
-interface Tile { x: number; y: number; z: number }
+interface Tile { x: number; y: number; z: number; canonicalX: number; drawX: number; drawY: number }
 interface Box { left: number; right: number; top: number; bottom: number; z: number }
 interface Geometry extends Window { tiles: Tile[]; width: number; height: number; zoom: number; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
-interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; frames: string[] }
+interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; requiredZoom: number; frames: string[] }
+const warmth = createViewportWarmth();
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 interface Job { context: Context; frame: string; controller: AbortController }
@@ -68,7 +71,10 @@ function fits(box: Box, frames: number): boolean {
 
 function toGeometry(box: Box): Geometry {
   const count = 2 ** box.z, tiles: Tile[] = [];
-  for (let y = box.top; y <= box.bottom; y++) for (let x = box.left; x <= box.right; x++) tiles.push({ x, y, z: box.z });
+  const originX = box.left * RASTER_TILE_SIZE, originY = box.top * RASTER_TILE_SIZE;
+  for (let y = box.top; y <= box.bottom; y++) for (let x = box.left; x <= box.right; x++) tiles.push({
+    x, y, z: box.z, canonicalX: ((x % count) + count) % count, drawX: x * RASTER_TILE_SIZE - originX, drawY: y * RASTER_TILE_SIZE - originY
+  });
   const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / count))) * 180 / Math.PI;
   let west = box.left / count * 360 - 180, east = (box.right + 1) / count * 360 - 180;
   const shift = Math.floor(((west + east) / 2 + 180) / 360) * 360;
@@ -82,8 +88,35 @@ function toGeometry(box: Box): Geometry {
   };
 }
 
+function requiredZoom(map: Map, maxzoom: number): number {
+  const covering = typeof map.coveringTiles === 'function'
+    ? map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true })
+      .map(tile => ({ z: tile?.canonical?.z ?? tile?.overscaledZ })).filter(tile => Number.isFinite(tile.z))
+    : null;
+  const zoom = covering ? requiredSourceZoom(covering) : null;
+  return zoom ?? Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
+}
+
+/** Native-pixel crop for small views; the mosaic remains the wide-view fallback. */
+function cropGeometry(map: Map, maxzoom: number, frames: number): Geometry | null {
+  const window = viewport(map), bounds = map.getBounds();
+  if (!window || window.bottom <= window.top) return null;
+  const west = bounds.getWest(), east = bounds.getEast(), south = bounds.getSouth(), north = bounds.getNorth();
+  const area = boundsAreaKm2([west, south, east, north]);
+  if (!warmth.update(area)) return null;
+  const zoom = requiredZoom(map, maxzoom);
+  const crop = planRasterCrop([west, south, east, north], zoom);
+  if (!crop || frames * crop.bytes > DECODE_CAP) return null;
+  return {
+    west: window.west, east: window.east, top: window.top, bottom: window.bottom,
+    tiles: crop.tiles, width: crop.width, height: crop.height, zoom, coordinates: crop.coordinates
+  };
+}
+
 /** Padded tile mosaic for a rested camera. Shrink the margin before dropping zoom. */
 function geometry(map: Map, maxzoom: number, frames: number): Geometry | null {
+  const crop = cropGeometry(map, maxzoom, frames);
+  if (crop) return crop;
   const window = viewport(map);
   if (!window || window.bottom <= window.top || !Number.isFinite(map.getZoom())) return null;
   const target = Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
@@ -136,13 +169,14 @@ export class RasterOverview {
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (!this.supported || this.disposed) return;
     if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !renderedFrames(build.manifest).some(value => value.id === frame)) { this.clear(); return; }
-    if (this.context?.build !== build || this.context.layer !== layer || !this.covers()) {
+    const required = requiredZoom(this.map, layerMaxZoom(build.manifest, layer));
+    if (this.context?.build !== build || this.context.layer !== layer || this.context.requiredZoom !== required || !this.covers()) {
       this.clear();
       const frames = renderedFrames(build.manifest);
       const area = geometry(this.map, layerMaxZoom(build.manifest, layer), frames.length);
       if (!area) return;
       this.canvas!.width = area.width; this.canvas!.height = area.height;
-      this.context = { build, layer, geometry: area, frames: [] };
+      this.context = { build, layer, geometry: area, requiredZoom: required, frames: [] };
       this.protocol.setBuildExpiry(build.manifest.buildId, build.expiresAtMs);
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
     }
@@ -272,11 +306,9 @@ export class RasterOverview {
     const context = this.canvas!.getContext('2d')!, area = job.context.geometry;
     context.clearRect(0, 0, area.width, area.height);
     const template = frameTileUrl(job.context.build.templates[job.context.layer], job.frame);
-    const originX = Math.min(...area.tiles.map(tile => tile.x)), originY = Math.min(...area.tiles.map(tile => tile.y));
     for (let offset = 0; offset < area.tiles.length; offset += 2) {
       const results = await Promise.allSettled(area.tiles.slice(offset, offset + 2).map(async tile => {
-        const count = 2 ** tile.z, x = ((tile.x % count) + count) % count;
-        const url = template.replaceAll('{z}', String(tile.z)).replaceAll('{x}', String(x)).replaceAll('{y}', String(tile.y));
+        const url = template.replaceAll('{z}', String(tile.z)).replaceAll('{x}', String(tile.canonicalX)).replaceAll('{y}', String(tile.y));
         const response = await this.protocol.load({ url: this.transport!.url(url) }, job.controller);
         if (!this.current(job)) throw new Error('Overview cancelled');
         const image = await createImageBitmap(new Blob([response.data], { type: 'image/webp' }));
@@ -287,7 +319,7 @@ export class RasterOverview {
         if (!this.current(job) || results.some(result => result.status === 'rejected')) throw new Error('Incomplete overview');
         for (const result of results) if (result.status === 'fulfilled') {
           const { tile, image } = result.value;
-          context.drawImage(image, (tile.x - originX) * RASTER_TILE_SIZE, (tile.y - originY) * RASTER_TILE_SIZE, RASTER_TILE_SIZE, RASTER_TILE_SIZE);
+          context.drawImage(image, tile.drawX, tile.drawY, RASTER_TILE_SIZE, RASTER_TILE_SIZE);
         }
       } finally {
         for (const result of results) if (result.status === 'fulfilled') result.value.image.close();
