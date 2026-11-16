@@ -39,7 +39,10 @@ combined work across all grids selected by a request.
   [viewport memory admission](../apps/preview/src/raster-budget.ts), charging 48
   offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
   forecast tile cache at 16 entries; other devices leave that cache at MapLibre's
-  default. Preview's 120 MiB forecast envelope reserves 8 MiB for numeric wind,
+  default. A rested view keeps every map frame of numeric wind in a 128 MiB,
+  4,096-entry cache. Devices that report at most 4 GiB keep the 8 MiB, 256-entry
+  cache, and one view's detail admission stays inside that 8 MiB reserve.
+  Preview's 120 MiB forecast envelope reserves 8 MiB for numeric wind,
   32 MiB for wind canvases (up to 8,388,608 combined RGBA device pixels across
   2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding wind shrinks both
   canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping any warm
@@ -51,8 +54,12 @@ combined work across all grids selected by a request.
   large viewports shrink the prepared window.
   The displayed/replacement pair can exceed that estimate when required for a switch.
   With viewport overviews, one transport handle loads up to two coarse tiles at once.
-  Up to 40 decoded 256² images share a 24 MiB reservation within the raster allowance;
-  one image source uploads the selected overview. Fine-source admission can shrink to one.
+  A rested camera keeps one decoded image per map frame for the active layer,
+  padded by half the shorter view and at least one tile, within 768 MiB and a
+  4096 px edge. Devices that report at most 4 GiB keep the selected frame and
+  its two neighbors. One image source uploads the selected frame. The 24 MiB
+  overview reservation still limits how many fine sources stay mounted.
+  Fine-source admission can shrink to one.
   Overview retention stops when one fine source and that reservation cannot fit.
   A complete overview remains visible if detailed tiles fail. Time changes with an
   admitted overview window defer cold detail for 100 ms; prepared detail switches immediately.
@@ -60,13 +67,13 @@ combined work across all grids selected by a request.
   700 ms step, then resumes fine tiles 100 ms after playback stops.
   The overview queue replaces speculative high-resolution byte prefetch and prepares
   the selected layer before additional fine sources. A pan keeps a covering overview.
-  Layer, build, resize, and expiry changes release decoded overviews. Unsupported
-  browsers retain the raster-only path. Playback blends the previous numeric wind
-  field for 700 ms. Preview draws those trails through the map WebGL context when
-  a float color target is available. The 2D canvas draws them when that target is absent.
-  Speculative overview preparation stops after 1 MiB of returned compressed tile bytes
-  per viewport context, including cache reuse. An in-flight pair may finish; explicit
-  time selections remain eligible. The timeline reports partial readiness when limited.
+  A camera rest outside the padded view waits 400 ms before replacing it.
+  Movement during that wait keeps the previous images. Layer, build, and expiry
+  changes release decoded overviews. Unsupported browsers retain the raster-only
+  path. Playback blends the previous numeric wind field for 700 ms. Preview
+  draws those trails through the map WebGL context when a float color target is
+  available. The 2D canvas draws them when that target is absent.
+  The timeline reports how many rested frames are decoded.
   MapLibre's texture pool and browser allocations are separate; the
   [input benchmark](preview-performance.md) records retained texture storage.
   Prepared-source loading shares the two-request prefetch limit. Cold selections

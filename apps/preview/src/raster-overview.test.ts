@@ -20,6 +20,8 @@ class Canvas {
   transferToImageBitmap() { return new Bitmap('overview'); }
 }
 const decode = vi.fn<(...args: unknown[]) => Promise<Bitmap>>();
+const LOCAL = { west: -78.5, east: -78.2, south: 38.6, north: 38.9 };
+const FOCUSED = { west: -78.6, east: -78.2, south: 38.7, north: 39.0 };
 function build(count = 1) {
   const original = fixtureBuild(), first = original.manifest.frames[0];
   const frames = Array.from({ length: count }, (_, index) => {
@@ -65,17 +67,27 @@ afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals()
 it('waits for every viewport tile while admitting at most two reads at once', async () => {
   const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
   try {
-    f.overview.select(b, 'usable-lift-agl', frame);
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+    const ready = () => f.overview.ready(b, 'usable-lift-agl', frame);
     expect(f.requests).toHaveLength(2);
-    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
+    expect(ready()).toBe(false);
     f.finish(0); await Promise.resolve();
     expect(f.requests).toHaveLength(2);
-    f.finish(1); await vi.waitFor(() => expect(f.requests).toHaveLength(4));
-    f.finish(2); await Promise.resolve();
-    expect(f.overview.state.ready).toBe(0);
-    f.finish(3); await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+    let done = 1;
+    while (!ready()) {
+      if (f.requests.length === done) {
+        await vi.waitFor(() => expect(ready() || f.requests.length > done).toBe(true));
+        if (ready()) break;
+      }
+      const batch = f.requests.length;
+      expect(batch - done).toBeLessThanOrEqual(2);
+      for (let index = done; index < batch; index++) f.finish(index);
+      done = batch;
+    }
+    expect(f.requests).toHaveLength(9);
     expect(f.overview.state).toEqual({ ready: 1, total: 1, failed: 0 });
-    expect(canvases[0].context.drawImage).toHaveBeenCalledTimes(4);
+    expect(canvases[0]).toMatchObject({ width: 768, height: 768 });
+    expect(canvases[0].context.drawImage).toHaveBeenCalledTimes(9);
     expect(bitmaps.filter(image => image.kind === 'tile').every(image => image.close.mock.calls.length === 1)).toBe(true);
     expect(f.protocol.createSource).toHaveBeenCalledWith(false);
   } finally { f.overview.destroy(); }
@@ -119,47 +131,61 @@ it.each([
   { west: -170, east: 170, south: -2, north: 2 },
   { west: -2, east: 2, south: -90, north: 90 },
   { west: -540, east: 540, south: -85, north: 85 }
-])('covers the whole canonical Mercator viewport with at most four tiles: %j', async bounds => {
+])('covers the canonical Mercator viewport within the mosaic limits: %j', async bounds => {
   const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
   try {
     f.view(bounds, 10); f.overview.select(b, 'usable-lift-agl', frame);
     await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
-    expect(f.requests.length).toBeGreaterThan(0); expect(f.requests.length).toBeLessThanOrEqual(4);
+    expect(f.requests.length).toBeGreaterThan(0); expect(f.requests.length).toBeLessThanOrEqual(64);
+    const zooms = new Set<string>();
     for (const { url } of f.requests) {
       const [, z, x, y] = /\/(\d+)\/(\d+)\/(\d+)\.webp$/.exec(url)!;
+      zooms.add(z);
+      expect(Number(z)).toBeLessThanOrEqual(9);
       expect(Number(x)).toBeGreaterThanOrEqual(0); expect(Number(x)).toBeLessThan(2 ** Number(z));
       expect(Number(y)).toBeGreaterThanOrEqual(0); expect(Number(y)).toBeLessThan(2 ** Number(z));
     }
+    expect(zooms.size).toBe(1);
     f.overview.show(b, 'usable-lift-agl', frame, 0.7);
     const coordinates = f.sources.get(f.overview.id)!.coordinates;
-    const middle = (coordinates[0][0] + coordinates[1][0]) / 2;
+    const west = coordinates[0][0], east = coordinates[1][0], north = coordinates[0][1], south = coordinates[2][1];
+    const middle = (west + east) / 2;
     expect(middle).toBeGreaterThanOrEqual(-180); expect(middle).toBeLessThan(180);
-    expect(coordinates[1][0] - coordinates[0][0]).toBeCloseTo(Math.min(360, bounds.east - bounds.west));
-    expect(coordinates[0][1]).toBeCloseTo(Math.min(85.0511287798066, bounds.north));
-    expect(coordinates[2][1]).toBeCloseTo(Math.max(-85.0511287798066, bounds.south));
+    const viewWest = bounds.west; let viewEast = bounds.east;
+    if (viewEast <= viewWest) viewEast += 360;
+    const span = Math.min(360, viewEast - viewWest), center = (viewWest + viewEast) / 2;
+    const shift = Math.floor((center + 180) / 360) * 360;
+    expect(east - west).toBeGreaterThanOrEqual(span - 1e-6);
+    if (east - west < 360 - 1e-6) {
+      expect(center - shift).toBeGreaterThanOrEqual(west - 1e-4);
+      expect(center - shift).toBeLessThanOrEqual(east + 1e-4);
+    }
+    const limit = 85.0511287798066;
+    expect(north).toBeGreaterThanOrEqual(Math.min(limit, bounds.north) - 1e-4);
+    expect(south).toBeLessThanOrEqual(Math.max(-limit, bounds.south) + 1e-4);
     const boxes = canvases[0].context.drawImage.mock.calls.map(call => call.slice(1) as number[]);
     expect(Math.min(...boxes.map(box => box[0]))).toBeLessThanOrEqual(0);
     expect(Math.min(...boxes.map(box => box[1]))).toBeLessThanOrEqual(0);
-    expect(Math.max(...boxes.map(box => box[0] + box[2]))).toBeGreaterThanOrEqual(256);
-    expect(Math.max(...boxes.map(box => box[1] + box[3]))).toBeGreaterThanOrEqual(256);
+    expect(Math.max(...boxes.map(box => box[0] + box[2]))).toBeGreaterThanOrEqual(canvases[0].width);
+    expect(Math.max(...boxes.map(box => box[1] + box[3]))).toBeGreaterThanOrEqual(canvases[0].height);
   } finally { f.overview.destroy(); }
 });
 
-it.each([
-  { bounds: { west: -100, east: -80, south: 10, north: 40 }, tiles: 2, zoom: 3 },
-  { bounds: { west: -10, east: 10, south: -10, north: 10 }, tiles: 4, zoom: 4 }
-])('uses $tiles tiles at zoom $zoom while coarsening at most one level', async ({ bounds, tiles, zoom }) => {
+it('keeps a local zoom-9 view on native tiles and covers a fidget inside it', async () => {
   const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
   try {
-    f.view(bounds, 6); f.overview.select(b, 'usable-lift-agl', frame);
+    f.view(FOCUSED, 9.45); f.overview.select(b, 'usable-lift-agl', frame);
     await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
-    expect(f.requests).toHaveLength(tiles);
-    for (const request of f.requests) expect(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1]).toBe(String(zoom));
+    expect(f.requests).toHaveLength(12);
+    for (const request of f.requests) expect(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1]).toBe('9');
+    expect(canvases[0]).toMatchObject({ width: 768, height: 1024 });
     f.overview.show(b, 'usable-lift-agl', frame, 0.7);
-    expect(f.sources.get(f.overview.id)!.coordinates).toEqual([
-      [bounds.west, expect.closeTo(bounds.north)], [bounds.east, expect.closeTo(bounds.north)],
-      [bounds.east, expect.closeTo(bounds.south)], [bounds.west, expect.closeTo(bounds.south)]
-    ]);
+    const count = f.requests.length;
+    f.view({ west: -78.55, east: -78.25, south: 38.75, north: 38.95 }, 9.45);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true);
+    expect(f.requests).toHaveLength(count);
+    f.view({ west: -70, east: -69.6, south: 38.7, north: 39 }, 9.45);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
   } finally { f.overview.destroy(); }
 });
 
@@ -199,29 +225,39 @@ it('closes late decoded images before allocating work for a new context', async 
   } finally { f.overview.destroy(); }
 });
 
-it('bounds a long timeline to forty bitmaps while preserving the displayed image', async () => {
+it('retains every map frame and the displayed image', async () => {
   const f = fixture(), b = build(60), frames = b.manifest.frames;
   try {
-    f.overview.select(b, 'usable-lift-agl', frames[59].id);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 40, total: 40, failed: 0 }));
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frames[59].id);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 60, total: 60, failed: 0 }));
     f.overview.show(b, 'usable-lift-agl', frames[59].id, 0.7);
     const shown = f.sources.get(f.overview.id)!.updateImage.mock.calls[0][0].image as Bitmap;
     f.overview.select(b, 'usable-lift-agl', frames[0].id);
     expect(shown.close).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frames[0].id)).toBe(true));
     f.overview.show(b, 'usable-lift-agl', frames[0].id, 0.7);
-    expect(shown.close).not.toHaveBeenCalled();
-    // The owner can restore the last painted frame before superseding this staged image.
     expect(f.overview.show(b, 'usable-lift-agl', frames[59].id, 0.7)).toBe(true);
-    f.overview.select(b, 'usable-lift-agl', frames[1].id);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frames[1].id)).toBe(true));
-    f.overview.show(b, 'usable-lift-agl', frames[1].id, 0.7);
-    f.overview.select(b, 'usable-lift-agl', frames[2].id);
-    expect(shown.close).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(40));
-    expect(bitmaps.filter(image => image.kind === 'overview' && !image.close.mock.calls.length)).toHaveLength(40);
+    expect(shown.close).not.toHaveBeenCalled();
+    expect(bitmaps.filter(image => image.kind === 'overview' && !image.close.mock.calls.length)).toHaveLength(60);
     expect(canvases).toHaveLength(1);
   } finally { f.overview.destroy(); }
+});
+
+it('keeps the selected frame and two neighbors when the device reports 4 GiB', async () => {
+  Object.defineProperty(navigator, 'deviceMemory', { configurable: true, value: 4 });
+  const f = fixture(), b = build(60), frames = b.manifest.frames;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frames[30].id);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 5, total: 5, failed: 0 }));
+    f.overview.show(b, 'usable-lift-agl', frames[30].id, 0.7);
+    f.overview.select(b, 'usable-lift-agl', frames[0].id);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 4, total: 4, failed: 0 }));
+    expect(f.overview.ready(b, 'usable-lift-agl', frames[30].id)).toBe(true);
+    expect(f.overview.ready(b, 'usable-lift-agl', frames[29].id)).toBe(false);
+  } finally {
+    f.overview.destroy();
+    delete (navigator as { deviceMemory?: number }).deviceMemory;
+  }
 });
 
 it('rejects an uncovered viewport and disposes resident images on expiry', async () => {
@@ -241,50 +277,59 @@ it('rejects an uncovered viewport and disposes resident images on expiry', async
   } finally { f.overview.destroy(); }
 });
 
-it('caps speculative returned bytes per context while allowing explicit frame selections', async () => {
+it('decodes every map frame of a rested context', async () => {
   const f = fixture(false, 128 * 1024), b = build(4), frames = b.manifest.frames;
   try {
-    f.overview.select(b, 'usable-lift-agl', frames[0].id);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 2, total: 4, failed: 2 }));
-    expect(f.requests).toHaveLength(8);
-    expect(f.overview.ready(b, 'usable-lift-agl', frames[3].id)).toBe(false);
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frames[0].id);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 4, total: 4, failed: 0 }));
+    expect(f.requests).toHaveLength(36);
     f.overview.select(b, 'usable-lift-agl', frames[3].id);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frames[3].id)).toBe(true));
-    expect(f.requests).toHaveLength(12);
-    expect(f.overview.state).toEqual({ ready: 3, total: 4, failed: 1 });
+    expect(f.requests).toHaveLength(36);
+    expect(f.overview.ready(b, 'usable-lift-agl', frames[3].id)).toBe(true);
     f.overview.select(b, 'usable-lift-msl', frames[0].id);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 2, total: 4, failed: 2 }));
-    expect(f.requests).toHaveLength(20);
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 4, total: 4, failed: 0 }));
+    expect(f.requests).toHaveLength(72);
   } finally { f.overview.destroy(); }
 });
 
-it('finishes the in-flight pair and stops before a further speculative tile batch', async () => {
-  const f = fixture(true), b = build(3), frame = b.manifest.frames[0].id;
+it('keeps pairing after a full-size tile', async () => {
+  const f = fixture(true), b = build(2), frames = b.manifest.frames;
   try {
-    f.overview.select(b, 'usable-lift-agl', frame);
-    f.finish(0); f.finish(1); await vi.waitFor(() => expect(f.requests).toHaveLength(4));
-    f.finish(2); f.finish(3); await vi.waitFor(() => expect(f.requests).toHaveLength(6));
-    f.finish(4, MAX_TILE_BYTES); f.finish(5, MAX_TILE_BYTES);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 1, total: 3, failed: 2 }));
-    expect(f.requests).toHaveLength(6);
-    expect(bitmaps.filter(image => image.kind === 'overview' && !image.close.mock.calls.length)).toHaveLength(1);
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frames[0].id);
+    let done = 0;
+    while (f.overview.state.ready < 2) {
+      if (f.requests.length === done) {
+        await vi.waitFor(() => expect(f.overview.state.ready === 2 || f.requests.length > done).toBe(true));
+        if (f.overview.state.ready === 2) break;
+      }
+      const batch = f.requests.length;
+      expect(batch - done).toBeLessThanOrEqual(2);
+      for (let index = done; index < batch; index++) f.finish(index, index < 2 ? MAX_TILE_BYTES : 12);
+      done = batch;
+    }
+    expect(f.overview.state).toEqual({ ready: 2, total: 2, failed: 0 });
+    expect(bitmaps.filter(image => image.kind === 'overview' && !image.close.mock.calls.length)).toHaveLength(2);
   } finally { f.overview.destroy(); }
 });
 
-it('excludes late aborted responses from the new context prefill budget', async () => {
-  const f = fixture(true, 128 * 1024, false), b = build(3), frame = b.manifest.frames[0].id;
+it('excludes aborted responses from the next context', async () => {
+  const f = fixture(true, 128 * 1024, false), b = build(2), frame = b.manifest.frames[0].id;
   try {
+    f.view(LOCAL, 4);
     f.overview.select(b, 'usable-lift-agl', frame);
     f.overview.clear(); f.overview.select(b, 'usable-lift-msl', frame);
     expect(f.requests).toHaveLength(2);
     f.finish(0, MAX_TILE_BYTES); f.finish(1, MAX_TILE_BYTES);
-    await vi.waitFor(() => expect(f.requests).toHaveLength(4));
-    f.finish(2); f.finish(3); await vi.waitFor(() => expect(f.requests).toHaveLength(6));
-    f.finish(4); f.finish(5); await vi.waitFor(() => expect(f.requests).toHaveLength(8));
-    f.finish(6); f.finish(7); await vi.waitFor(() => expect(f.requests).toHaveLength(10));
-    f.finish(8); f.finish(9);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 2, total: 3, failed: 1 }));
-    expect(f.requests).toHaveLength(10);
+    let index = 2;
+    while (f.overview.state.ready < 2) {
+      if (f.requests.length === index) {
+        await vi.waitFor(() => expect(f.overview.state.ready === 2 || f.requests.length > index).toBe(true));
+        if (f.overview.state.ready === 2) break;
+      }
+      while (index < f.requests.length) f.finish(index++);
+    }
+    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 2, total: 2, failed: 0 }));
+    expect(f.requests).toHaveLength(2 + 9 * 2);
     expect(f.overview.ready(b, 'usable-lift-msl', frame)).toBe(true);
     expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
   } finally { f.overview.destroy(); }
@@ -293,14 +338,14 @@ it('excludes late aborted responses from the new context prefill budget', async 
 it('releases the canvas backing on clear and reallocates only for an admitted context', async () => {
   const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
   expect(canvases[0]).toMatchObject({ width: 0, height: 0 });
-  f.overview.select(b, 'usable-lift-agl', frame);
-  expect(canvases[0]).toMatchObject({ width: 256, height: 256 });
+  f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+  expect(canvases[0]).toMatchObject({ width: 768, height: 768 });
   await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
   f.overview.clear();
   expect(canvases[0]).toMatchObject({ width: 0, height: 0 });
   expect(bitmaps.every(image => image.close.mock.calls.length === 1)).toBe(true);
   f.overview.select(b, 'usable-lift-msl', frame);
-  expect(canvases[0]).toMatchObject({ width: 256, height: 256 });
+  expect(canvases[0]).toMatchObject({ width: 768, height: 768 });
   await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
   f.overview.destroy();
   expect(canvases[0]).toMatchObject({ width: 0, height: 0 });

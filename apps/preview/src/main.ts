@@ -13,10 +13,11 @@ import {
   normalizePoint, PointSeriesController, resolveAutoBuild, watchBuildExpiry,
   type AutoForecastSelection, type GeoPoint, type PinnedBuild, type PointSeries, type PointSeriesContext, type PointHorizon, type UnitSystem
 } from '@av/client';
-import { WindDataCache, WindDataSource } from '@av/client/wind';
+import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindDataCache, WindDataSource } from '@av/client/wind';
 import './style.css';
 import { CoverageSeam } from './coverage-seam';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
+import { FOCUS_DWELL_MS } from './raster-overview';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
 import { frameIndexFor, PLAYBACK_STEP_MS } from './timeline';
@@ -78,7 +79,7 @@ opacityReadout.textContent = `${Math.round(initialOpacity * 100)}%`;
 const modelButtons: HTMLButtonElement[] = [];
 
 interface WindView { zoom: number; build: PinnedBuild; frame: string; bounds: [number, number, number, number]; source: WindDataSource }
-interface WindRequest extends WindView { controller: AbortController; key: string; settled?: 'ready' | 'unavailable'; failed?: unknown; done?: Promise<'ready' | 'unavailable'> }
+interface WindRequest extends WindView { controller: AbortController; key: string; core?: [number, number, number, number]; settled?: 'ready' | 'unavailable'; failed?: unknown; done?: Promise<'ready' | 'unavailable'> }
 
 function startPreview(lifecycle: AbortController): void {
   modelBar.replaceChildren(); modelButtons.length = 0;
@@ -100,7 +101,8 @@ function startPreview(lifecycle: AbortController): void {
   let expired = false, mapFailed = false, mapReady = false, selectingOverlay = false;
   let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
   const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
-  const windScheduler = createForecastRequestScheduler(), windCache = new WindDataCache();
+  const lowMemory = deviceMemory !== undefined && deviceMemory <= 4;
+  const windScheduler = createForecastRequestScheduler(), windCache = new WindDataCache(lowMemory ? WIND_NUMERIC_BYTES : WIND_WINDOW_BYTES, lowMemory ? 256 : WIND_WINDOW_ENTRIES);
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => { overlayState = state; reconcileWind(); updateOverlayStatus(); }, rasterScheduler.fetch);
   const seam = new CoverageSeam(map);
   const refreshSeam = (): void => { seam.sync(build, activeLayer()); };
@@ -119,6 +121,8 @@ function startPreview(lifecycle: AbortController): void {
   let windVisibleOverride: boolean | null = startup.windVisible;
   let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
   let windPlaying = false, windPrefetchBlocked = false;
+  const windHeld = new Map<string, WindRequest>();
+  let fillTimer: ReturnType<typeof setTimeout> | null = null;
   const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
   let windLoadStatus: WindStatus = 'unavailable', windDisplayed = false, windLoading = false, windHeight: 'surface' | number | 'lift' = 'surface';
   let queuedWindLoad: (() => void) | null = null;
@@ -163,8 +167,8 @@ function startPreview(lifecycle: AbortController): void {
     onSelect: (index, history = 'push') => selectIndex(index, history),
     onPlayback: playing => {
       windPlaying = playing; overlay.setPlayback(playing);
-      if (playing) { windPrefetchBlocked = false; ensurePrefetch(); }
-      else releasePrefetch();
+      if (playing) windPrefetchBlocked = false;
+      scheduleWindFill(playing ? 0 : FOCUS_DWELL_MS);
     }
   });
   syncWindSupport();
@@ -189,9 +193,23 @@ function startPreview(lifecycle: AbortController): void {
     updatePointSelection();
   }
 
-  function windBounds(): [number, number, number, number] {
+  function cameraBounds(): [number, number, number, number] {
     const bounds = map.getBounds(), west = bounds.getWest(), east = bounds.getEast();
     return [east - west >= 360 ? -180 : normalizeLon(west), Math.max(-90, bounds.getSouth()), east - west >= 360 ? 180 : normalizeLon(east), Math.min(90, bounds.getNorth())];
+  }
+
+  function windBounds(): [number, number, number, number] {
+    const [west, south, east, north] = cameraBounds();
+    if (east - west >= 360 || lowMemory) return [west, south, east, north];
+    const lat = Math.min(85, Math.max(-85, (south + north) / 2));
+    const height = north - south, width = east >= west ? east - west : east + 360 - west;
+    const meters = Math.PI * 6_371_000 / 180, lonScale = Math.max(0.2, Math.cos(lat * Math.PI / 180));
+    const pad = Math.min(height * meters, width * meters * lonScale) / 2;
+    return [Math.max(-180, west - pad / (meters * lonScale)), Math.max(-90, south - pad / meters), Math.min(180, east + pad / (meters * lonScale)), Math.min(90, north + pad / meters)];
+  }
+
+  function windRetained(view: WindView): boolean {
+    return windView === view || windRequest === view || windPrefetch === view || retiring.has(view) || [...windHeld.values()].includes(view as WindRequest);
   }
 
   function dropRetired(): void {
@@ -203,7 +221,7 @@ function startPreview(lifecycle: AbortController): void {
     if (retiring.has(view)) return;
     retiring.set(view, setTimeout(() => {
       retiring.delete(view);
-      if (windView !== view && windPrefetch !== view) view.source.dispose();
+      if (!windRetained(view)) view.source.dispose();
     }, PLAYBACK_STEP_MS + 50));
   }
 
@@ -212,7 +230,7 @@ function startPreview(lifecycle: AbortController): void {
     windPrefetch = null;
     if (!prefetch) return;
     prefetch.controller.abort();
-    if (windView !== prefetch && windRequest !== prefetch && !retiring.has(prefetch)) prefetch.source.dispose();
+    if (!windRetained(prefetch)) prefetch.source.dispose();
   }
 
   function setWindField(mode: 'replace' | 'swap'): void {
@@ -251,10 +269,13 @@ function startPreview(lifecycle: AbortController): void {
     const request = windRequest;
     windRequest = null; queuedWindLoad = null;
     request?.controller.abort();
-    if (request && request !== windView && request !== windPrefetch && !retiring.has(request)) request.source.dispose();
+    if (request && !windRetained(request)) request.source.dispose();
   }
 
   function clearWind(): void {
+    cancelFill();
+    for (const view of windHeld.values()) if (view !== windView && view !== windRequest) view.source.dispose();
+    windHeld.clear();
     releasePrefetch(); dropRetired(); cancelWindRequest();
     if (installedWind && installedWind !== windView) installedWind.source.dispose();
     windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
@@ -282,10 +303,18 @@ function startPreview(lifecycle: AbortController): void {
     if (!windControls.state.visible || !hasWindData()) { cancelWindRequest(); releasePrefetch(); syncWindReservation(); return; }
     if (!mapReady || !build || !selectedFrame || expired || mapFailed || lifecycle.signal.aborted) return;
     if (windCache.isBuildUnavailable(build.manifest.buildId)) { clearWind(); return; }
-    const view = windBounds(), identity = windView;
-    const covered = (candidate: WindView) => (candidate.source.isOverview === false || map.getZoom() <= candidate.zoom) && coversBounds(candidate.bounds, view);
+    const camera = cameraBounds(), view = windBounds(), identity = windView;
+    const covered = (candidate: WindView) => (candidate.source.isOverview === false || map.getZoom() <= candidate.zoom) && coversBounds(candidate.bounds, camera);
+    for (const [frame, held] of windHeld) if (held.build !== build || !covered(held)) { windHeld.delete(frame); if (!windRetained(held)) held.source.dispose(); }
     if (identity && identity.build === build && identity.frame === selectedFrame && covered(identity)) {
-      cancelWindRequest(); setWindStatus('ready'); reconcileWind(); if (windPlaying) ensurePrefetch(); return;
+      cancelWindRequest(); setWindStatus('ready'); reconcileWind(); scheduleWindFill(); return;
+    }
+    cancelFill();
+    if (windPrefetch && !covered(windPrefetch)) releasePrefetch();
+    const held = windHeld.get(selectedFrame);
+    if (held && held.build === build && covered(held) && held.done) {
+      windHeld.delete(selectedFrame); cancelWindRequest();
+      watch(held, held.settled ? Promise.resolve(held.settled) : held.done); return;
     }
     const prefetch = windPrefetch;
     if (prefetch && prefetch.build === build && prefetch.frame === selectedFrame && covered(prefetch) && prefetch.done) {
@@ -298,20 +327,31 @@ function startPreview(lifecycle: AbortController): void {
     else cancelWindRequest();
     setWindStatus('loading');
     const request: WindRequest = {
-      zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, key, controller: new AbortController(),
+      zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, core: camera, key, controller: new AbortController(),
       source: new WindDataSource(apiBaseUrl, { fetchImpl: windScheduler.fetch, cache: windCache, coalesceSpans: true })
     };
     watch(request);
-    if (windPlaying) ensurePrefetch();
+  }
+
+  function cancelFill(): void {
+    if (fillTimer !== null) { clearTimeout(fillTimer); fillTimer = null; }
+  }
+
+  function scheduleWindFill(delay = FOCUS_DWELL_MS): void {
+    if (fillTimer !== null || windPrefetch || windPrefetchBlocked || lowMemory) return;
+    fillTimer = setTimeout(() => { fillTimer = null; ensurePrefetch(); }, delay);
   }
 
   function ensurePrefetch(): void {
-    if (!windPlaying || windPrefetchBlocked || windPrefetch || !windControls.state.visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
-    const frames = renderedFrames(build.manifest), index = frames.findIndex(frame => frame.id === selectedFrame), frame = frames[index + 1]?.id;
-    if (!frame || windView?.frame === frame || windRequest?.frame === frame) return;
+    if (windPrefetchBlocked || windPrefetch || lowMemory || !windControls.state.visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed) return;
+    const frames = renderedFrames(build.manifest), index = frames.findIndex(frame => frame.id === selectedFrame);
+    const frame = frames.map(item => item.id)
+      .filter(id => id !== selectedFrame && id !== windView?.frame && id !== windRequest?.frame && !windHeld.has(id))
+      .sort((a, b) => Math.abs(frames.findIndex(item => item.id === a) - index) - Math.abs(frames.findIndex(item => item.id === b) - index))[0];
+    if (!frame) return;
     const view = windBounds();
     const request: WindRequest = {
-      zoom: map.getZoom(), build, frame, bounds: view, key: `prefetch:${frame}`, controller: new AbortController(),
+      zoom: map.getZoom(), build, frame, bounds: view, core: cameraBounds(), key: `prefetch:${frame}`, controller: new AbortController(),
       source: new WindDataSource(apiBaseUrl, { fetchImpl: windScheduler.fetch, cache: windCache, coalesceSpans: true })
     };
     windPrefetch = request;
@@ -319,11 +359,17 @@ function startPreview(lifecycle: AbortController): void {
     request.done = done;
     void done.then(status => {
       if (windPrefetch !== request) return;
-      if (status !== 'ready') { windPrefetch = null; if (windView !== request && windRequest !== request) request.source.dispose(); }
+      windPrefetch = null;
+      if (status === 'ready') {
+        const admitted = request.source.admitted;
+        if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
+        windHeld.set(request.frame, request); scheduleWindFill(0);
+      }
+      else if (!windRetained(request)) request.source.dispose();
     }, error => {
       if (error instanceof RangeError) windPrefetchBlocked = true;
       if (windPrefetch === request) windPrefetch = null;
-      if (windView !== request && windRequest !== request && !retiring.has(request)) request.source.dispose();
+      if (!windRetained(request)) request.source.dispose();
     });
   }
 
@@ -347,20 +393,24 @@ function startPreview(lifecycle: AbortController): void {
         if (windRequest !== request || request.controller.signal.aborted || !ensureLive()) return;
         if (status === 'ready') {
           const previous = windView;
+          const admitted = request.source.admitted;
+          if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
           windView = request;
-          if (previous && previous !== request && (previous !== installedWind || !(windDisplayed && previous.build === request.build))) {
+          windHeld.set(request.frame, request);
+          if (previous && previous !== request && previous.frame !== request.frame && previous.build === request.build) windHeld.set(previous.frame, previous as WindRequest);
+          else if (previous && previous !== request && (previous !== installedWind || !(windDisplayed && previous.build === request.build))) {
             if (previous === installedWind) installedWind = null;
-            previous.source.dispose();
+            if (!windRetained(previous)) previous.source.dispose();
           }
           setWindStatus('ready');
         } else setWindStatus(retain() ? 'ready' : status);
         reconcileWind();
-        if (windPlaying) ensurePrefetch();
+        if (status === 'ready') scheduleWindFill();
       } catch {
         if (windRequest === request && !request.controller.signal.aborted) { setWindStatus(retain() ? 'ready' : 'unavailable'); reconcileWind(); }
       } finally {
         if (windRequest === request) windRequest = null;
-        if (windView !== request && windPrefetch !== request && !retiring.has(request)) request.source.dispose();
+        if (!windRetained(request)) request.source.dispose();
         windLoading = false;
         const next = queuedWindLoad; queuedWindLoad = null; next?.();
       }
@@ -899,7 +949,7 @@ function startPreview(lifecycle: AbortController): void {
 
   map.on('click', event => { if (!mapFailed) void openPoint(normalizePoint(event.lngLat.lat, event.lngLat.lng)); });
   map.on('move', syncMapClock);
-  map.on('movestart', event => { if (currentModel === AUTO_MODEL_ID && !('previewHistory' in event)) { applyingHistory = null; autoAbort?.abort(); } });
+  map.on('movestart', event => { cancelFill(); if (currentModel === AUTO_MODEL_ID && !('previewHistory' in event)) { applyingHistory = null; autoAbort?.abort(); } });
   map.on('moveend', () => {
     syncMapClock();
     updateScale();

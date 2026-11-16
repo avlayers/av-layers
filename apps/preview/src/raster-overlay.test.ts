@@ -6,12 +6,12 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 const build = () => fixtureBuild();
-function fixture(coveringCount = 64) {
+function fixture(coveringCount = 64, overview = false) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
   const loaded = new Set<string>();
-  let moving = false;
+  let moving = false, zoom = 0, bounds = { west: -118, east: -117, south: 32, north: 33 };
   let painted: string | undefined;
   const map = {
     on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
@@ -25,10 +25,11 @@ function fixture(coveringCount = 64) {
     setPaintProperty: (id: string, _property: string, value: number) => opacity.set(id, value),
     isSourceLoaded: (id: string) => loaded.has(id),
     isMoving: () => moving,
-    getZoom: () => 0,
+    getZoom: () => zoom,
     getCenter: () => ({ lng: -117, lat: 32 }),
     coveringTiles: () => Array.from({ length: coveringCount }),
-    getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
+    getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north }),
+    ...(overview ? { getCanvas: () => ({}) } : {})
   };
   const states: OverlayState[] = [];
   const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
@@ -41,7 +42,7 @@ function fixture(coveringCount = 64) {
   const stage = () => [...sources.keys()].find(id => opacity.get(id) === 0)!;
   const displayed = () => [...sources.keys()].find(id => opacity.get(id)! > 0)!;
   const complete = async (sourceId = stage()) => { loaded.add(sourceId); emit('sourcedata', { sourceId, tile: {} }); emit('render'); emit('render'); await Promise.resolve(); };
-  return { overlay, map, loaded, painted: () => painted, setCoveringCount: (value: number) => { coveringCount = value; }, setMoving: (value: boolean) => { moving = value; }, emit, complete, stage, displayed, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
+  return { overlay, map, loaded, painted: () => painted, setCoveringCount: (value: number) => { coveringCount = value; }, setMoving: (value: boolean) => { moving = value; }, setZoom: (value: number) => { zoom = value; }, setBounds: (value: typeof bounds) => { bounds = value; }, emit, complete, stage, displayed, opacity, sources, states, markLoaded: (id: string) => loaded.add(id) };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z'));
@@ -711,5 +712,39 @@ it('reuses the displayed source after an active viewport tile leaves without an 
     expect(f.overlay.isPrepared(b, 'usable-lift-agl', frame)).toBe(true);
     f.overlay.select(b, 'usable-lift-agl', frame);
     expect(f.displayed()).toBe(active);
+  } finally { f.overlay.destroy(); }
+});
+
+it('replaces a rested overview only after the camera stays outside it', async () => {
+  class Canvas {
+    context = { clearRect() {}, drawImage() {} };
+    constructor(public width: number, public height: number) {}
+    getContext() { return this.context; }
+    transferToImageBitmap() { return { close() {} }; }
+  }
+  vi.stubGlobal('OffscreenCanvas', Canvas);
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 256, height: 256, close() {} })));
+  vi.stubGlobal('fetch', vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new DOMException('Cancelled', 'AbortError')), { once: true });
+  })));
+  const f = fixture(64, true), b = build();
+  try {
+    f.setZoom(4);
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    f.setBounds({ west: 0, east: 1, south: 32, north: 33 });
+    f.emit('movestart'); f.emit('moveend');
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(399);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    f.emit('movestart'); f.emit('moveend');
+    await vi.advanceTimersByTimeAsync(399);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    f.setBounds({ west: 0.2, east: 0.8, south: 32.2, north: 32.8 });
+    f.emit('movestart'); f.emit('moveend');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(fetch).toHaveBeenCalledTimes(4);
   } finally { f.overlay.destroy(); }
 });

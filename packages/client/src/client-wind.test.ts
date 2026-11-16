@@ -4,7 +4,7 @@ import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID } from '@av/contracts/laye
 import { planSample } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, windTargetHeight } from '@av/forecast/wind';
 import { fixtureBuild } from '../../../tests/forecast-fixture.ts';
-import { WIND_NUMERIC_BYTES, WindDataCache, WindDataSource } from './client-wind.ts';
+import { WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, WindDataCache, WindDataSource } from './client-wind.ts';
 
 const bounds = [-1, -1, 2, 2] as const;
 function build() {
@@ -83,6 +83,34 @@ it('charges active and in-flight buffers to the shared numeric memory budget', (
   expect(() => cache.take('0', chunkBytes, expires)).toThrow('byte budget');
   cache.release(fresh);
   for (const entry of pinned.slice(1)) cache.release(entry);
+  cache.clear();
+});
+
+it('keeps detail on the camera when a padded view exceeds one admission', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  const grid = { kind: 'regular-latlon' as const, width: 144, height: 128, lon0: 0, lat0: 0, dx: 1, dy: 1, earthRadiusM: 6371000, wrapLongitude: false };
+  for (const surface of pinned.manifest.surfaces) surface.grid = grid;
+  pinned.manifest.descriptors.bounds = [0, 0, 144, 80];
+  const metadata = JSON.parse(descriptor(frame));
+  const layout = windOverviewLayout(grid, 8);
+  metadata.overview = [{ stride: 8, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: layout.count, bytes: layout.count * layout.chunkBytes }] }];
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(JSON.stringify(metadata), { headers: { 'content-type': 'application/json' } })
+    : reply(String(url).includes('/wind/') ? wind : fine));
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  const core = [1, 1, 3, 3] as const;
+  expect(await source.load({ build: pinned, frame, bounds: [-180, -10, 180, 10], core })).toBe('ready');
+  expect(source.admitted).toEqual([...core]);
+  const requests = fetcher.mock.calls.slice(1).map(([url]) => String(url));
+  expect(requests.some(url => url.includes('/wind/'))).toBe(true);
+  expect(requests.some(url => url.includes('/overview-'))).toBe(false);
+  source.dispose();
+});
+
+it('retains a rested timeline beyond one view admission', () => {
+  const cache = new WindDataCache(WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES), chunkBytes = 1024 * 1024, expires = Date.now() + 60_000;
+  for (let index = 0; index < 16; index++) cache.take(String(index), chunkBytes, expires);
+  expect(cache.allocatedBytes).toBe(16 * chunkBytes);
   cache.clear();
 });
 

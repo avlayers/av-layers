@@ -446,7 +446,11 @@ it('allocates only the latest wind viewport after retired load cancellation sett
   expect(windLoads).toHaveLength(1);
   windCancel!();
   await vi.waitFor(() => expect(windLoads).toHaveLength(2));
-  expect(windLoads[1].bounds).toEqual([-110, 32, -109, 33]);
+  const lonScale = Math.cos(32.5 * Math.PI / 180);
+  expect(windLoads[1].bounds).toEqual([
+    expect.closeTo(-110.5, 5), expect.closeTo(32 - lonScale / 2, 5),
+    expect.closeTo(-108.5, 5), expect.closeTo(33 + lonScale / 2, 5)
+  ]);
   windResolve!('ready');
   await Promise.resolve();
   expect(windFields.at(-1)).toMatchObject({ sample: expect.any(Function) });
@@ -476,7 +480,7 @@ it('retains wind during a pan and while loading uncovered bounds', async () => {
   map().emit('moveend');
   expect(windLoads).toHaveLength(count);
   expect(windFields.at(-1)).toBe(field);
-  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().bounds = { west: -115, east: -114, south: 32, north: 33 };
   map().emit('moveend');
   expect(windLoads).toHaveLength(count + 1);
   expect(windFields.at(-1)).toBe(field);
@@ -505,7 +509,7 @@ it('preserves unavailability after an uncovered pan and restores resident wind o
   windResolve!('ready');
   await Promise.resolve();
   const original = { ...map().bounds };
-  map().bounds = { west: -117.5, east: -116.5, south: 32, north: 33 };
+  map().bounds = { west: -115, east: -114, south: 32, north: 33 };
   map().emit('moveend');
   expect(windStatuses.at(-1)).toBe('loading');
   map().emit('render');

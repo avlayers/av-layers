@@ -10,6 +10,8 @@ export interface WindSample { status: WindStatus; u: number | null; v: number | 
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
+export const WIND_WINDOW_BYTES = 128 * 1024 * 1024;
+export const WIND_WINDOW_ENTRIES = 4096;
 const MAX_CHUNKS = 64, DETAIL_MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, SINGLE_VIEW_MAX_BYTES = WIND_NUMERIC_BYTES - WIND_FRAME_LIMIT;
 const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8, UNAVAILABLE_BUILD_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
@@ -33,6 +35,11 @@ export class WindDataCache {
   private readonly unavailableBuilds = new Map<string, number>();
   private bytes = 0;
   private spanFailures = 0;
+
+  constructor(private readonly budgetBytes = WIND_NUMERIC_BYTES, private readonly entryLimit = 256) {
+    if (!Number.isSafeInteger(budgetBytes) || budgetBytes < WIND_FRAME_LIMIT || budgetBytes > WIND_WINDOW_BYTES
+      || !Number.isSafeInteger(entryLimit) || entryLimit < 1 || entryLimit > WIND_WINDOW_ENTRIES) throw new RangeError('Invalid wind cache budget');
+  }
 
   get allocatedBytes(): number {
     return this.bytes;
@@ -79,10 +86,10 @@ export class WindDataCache {
       return e;
     }
     for (const e of this.entries) {
-      if (this.bytes + limit <= WIND_NUMERIC_BYTES && this.entries.size < 256) break;
+      if (this.bytes + limit <= this.budgetBytes && this.entries.size < this.entryLimit) break;
       if (!e.references) this.remove(e);
     }
-    if (this.bytes + limit > WIND_NUMERIC_BYTES || this.entries.size >= 256) throw new RangeError('Wind cache exceeds byte budget');
+    if (this.bytes + limit > this.budgetBytes || this.entries.size >= this.entryLimit) throw new RangeError('Wind cache exceeds byte budget');
     const entry: CachedBytes = { url, bytes: new Uint8Array(limit), used: null, references: 1, expiresAt };
     this.entries.add(entry); this.bytes += limit;
     return entry;
@@ -281,8 +288,11 @@ export class WindDataSource {
     return entry;
   }
 
-  async load({ build, frame, bounds, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
-    this.controller?.abort(); this.current = undefined; this.generation++;
+  /** Bounds actually loaded. A padded request keeps the camera rectangle when the pad exceeds one view. */
+  admitted: GeographicBounds | null = null;
+
+  async load({ build, frame, bounds, core, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; core?: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
+    this.controller?.abort(); this.current = undefined; this.admitted = null; this.generation++;
     if (this.disposed) throw new Error('Wind source is disposed');
     const controller = new AbortController(); this.controller = controller;
     const previous = this.pending;
@@ -301,7 +311,7 @@ export class WindDataSource {
       waiting.throwIfAborted();
       this.release();
       this.active = controller;
-      return await this.loadView(build, frame, bounds, controller, signal);
+      return await this.loadView(build, frame, bounds, controller, signal, core);
     } finally {
       if (this.active === controller) {
         this.active = undefined;
@@ -311,7 +321,7 @@ export class WindDataSource {
     }
   }
 
-  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal): Promise<'ready' | 'unavailable'> {
+  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal, core?: GeographicBounds): Promise<'ready' | 'unavailable'> {
     if (build.expiresAtMs <= Date.now() || Date.parse(build.manifest.expiresAt) !== build.expiresAtMs) return 'unavailable';
     if (this.cache.isBuildUnavailable(build.manifest.buildId)) return 'unavailable';
     if (!build.manifest.frames.slice(0, build.manifest.mapFrameCount ?? build.manifest.frames.length).some(item => item.id === frame)) return 'unavailable';
@@ -370,14 +380,15 @@ export class WindDataSource {
     const fineTotal = windLayout(fine.grid.width, fine.grid.height, descriptor.fineTileSize);
     const windMask = decodeTileMask(descriptor.windMask, windTotal.count) ?? undefined;
     const fineMask = decodeTileMask(descriptor.fineMask, fineTotal.count) ?? undefined;
-    const winds = tilesForBounds(native.grid, bounds, descriptor.tileSize, 2, windMask);
-    const fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize, 2, fineMask);
+    let box = bounds;
+    let winds = tilesForBounds(native.grid, bounds, descriptor.tileSize, 2, windMask);
+    let fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize, 2, fineMask);
     const windBytes = windTotal.chunkBytes, fineBytes = fineTotal.chunkBytes;
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
 
     const selectOverview = () => {
       for (const level of descriptor.overview ?? []) {
-        const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, bounds, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
+        const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, box, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
         if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
         return {
           overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
@@ -443,7 +454,15 @@ export class WindDataSource {
 
     let overview: Overview | undefined;
     const detailBudget = descriptor.overview?.length ? DETAIL_MAX_BYTES : SINGLE_VIEW_MAX_BYTES;
-    if (winds && fines && winds.length + fines.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT && winds.length * windBytes + fines.length * fineBytes <= detailBudget) {
+    const admits = (windTiles: number[] | null, fineTiles: number[] | null) => !!windTiles && !!fineTiles
+      && windTiles.length + fineTiles.length <= MAX_CHUNKS && windBytes <= WIND_CHUNK_LIMIT
+      && windTiles.length * windBytes + fineTiles.length * fineBytes <= detailBudget;
+    if (!admits(winds, fines) && core?.every(Number.isFinite) && core[1] >= -90 && core[3] <= 90 && core[1] <= core[3] && core[0] >= -180 && core[0] <= 180 && core[2] >= -180 && core[2] <= 180) {
+      const coreWinds = tilesForBounds(native.grid, core, descriptor.tileSize, 2, windMask);
+      const coreFines = tilesForBounds(fine.grid, core, descriptor.fineTileSize, 2, fineMask);
+      if (admits(coreWinds, coreFines)) { box = core; winds = coreWinds; fines = coreFines; }
+    }
+    if (winds && fines && admits(winds, fines)) {
       const detailTasks = [...winds.map(tile => ({ kind: 'wind', tile, bytes: windBytes })), ...fines.map(tile => ({ kind: 'fine', tile, bytes: fineBytes }))];
       try {
         await fetchTasks(detailTasks);
@@ -465,7 +484,8 @@ export class WindDataSource {
     baseSignal.throwIfAborted();
     if (this.controller !== controller || build.expiresAtMs <= Date.now()) return 'unavailable';
     this.generation++;
-    this.current = { build, bounds, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, windMask, fineMask, overview };
+    this.admitted = box;
+    this.current = { build, bounds: box, tileSize: descriptor.tileSize, fineTileSize: descriptor.fineTileSize, native: native.grid, fineGrid: fine.grid, nativeGeometry: prepareGridGeometry(native.grid), fineGeometry: prepareGridGeometry(fine.grid), wind, fine: fineData, windMask, fineMask, overview };
     return 'ready';
   }
 

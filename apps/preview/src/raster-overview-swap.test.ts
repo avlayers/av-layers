@@ -27,6 +27,8 @@ vi.mock('./raster-overview', () => ({ RasterOverview: class {
     this.transport = protocol.createSource(false); overviews.push(this);
   }
   get state() { return { ready: this.frames.size, total: this.build ? renderedFrames(this.build.manifest).length : 0, failed: 0 }; }
+  hasExtent() { return this.build !== null; }
+  coversView() { return this.build !== null; }
   select(build: PinnedBuild, layer: LayerId) {
     if (this.build !== build || this.layer !== layer) { this.clear(); this.build = build; this.layer = layer; }
   }
@@ -179,8 +181,8 @@ it.each(['movestart', 'resize'] as const)('cancels deferred refinement on %s and
       expect(f.fine(second.id)).toBeUndefined();
       f.emit('moveend'); vi.advanceTimersByTime(100);
     } else {
-      expect(f.painted()).toEqual([]);
-      expect(f.state()).toMatchObject({ displayed: null, quality: null });
+      expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
+      expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'overview' });
       expect(afterResize).toBeDefined(); expect(f.fine(second.id)).toBe(afterResize);
     }
     const detail = f.fine(second.id)!; expect(detail).toBeDefined();

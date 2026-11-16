@@ -83,11 +83,9 @@ transparent. Two daytime views added 36,100/41,980 overview bytes to
 this build and viewport and exclude headers/TLS. The final geometry keeps this
 Alpine tile plan unchanged.
 
-[Overview preparation](../apps/preview/src/raster-overview.ts) stops speculative
-work after **1 MiB of returned compressed bytes per viewport context**, including
-cache reuse. An in-flight pair may finish; explicit selections remain eligible.
-The timeline exposes partial readiness when the limit is reached.
-[Serving budgets](serving-budgets.md) own admission and transport limits.
+The figures above record that 40-frame window. A rested camera now keeps every
+map frame of the active layer, padded by half the shorter view, within the
+decode cap in [serving budgets](serving-budgets.md).
 
 After forced GC, retained GPU textures plus tracked native pixels measured
 **42.67 → 42.50 MiB**. Changed storage comprised 32.25 MiB of textures, 10 MiB of
