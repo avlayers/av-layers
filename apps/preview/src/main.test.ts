@@ -21,6 +21,7 @@ class Element extends EventTarget {
   removed = false;
   remove(): void { this.removed = true; }
   ariaBusy = '';
+  title = '';
   ariaPressed = '';
   open = false;
   disabled = false;
@@ -608,7 +609,7 @@ it('briefly marks the located position without a success message', async () => {
   expect(ui('location-status').className.includes('sr-only')).toBe(false);
   vi.useFakeTimers();
   ui('locate').dispatchEvent(new Event('click'));
-  expect(request).toEqual({ enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 });
+  expect(request).toEqual({ enableHighAccuracy: true, maximumAge: 300_000, timeout: 10_000 });
   expect(ui('location-status').textContent).toBe('Locating…');
   expect(ui('location-status').hidden).toBe(false);
   locate({ coords: { latitude: 40.45, longitude: 44.3 } } as GeolocationPosition);
@@ -686,14 +687,39 @@ it('reports a missing location provider without disabling locate', async () => {
   expect(ui('locate').ariaBusy).toBe('');
 });
 
+it('asks again after Allow when the first precise fix is unavailable', async () => {
+  const calls: { success: PositionCallback; error: PositionErrorCallback; options?: PositionOptions }[] = [];
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) => { calls.push({ success, error, options }); } } });
+  await start();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(calls[0]?.options).toMatchObject({ enableHighAccuracy: true });
+  calls[0]!.error({ code: 2, message: 'Position unavailable', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('locate').disabled).toBe(true);
+  expect(ui('location-status').textContent).toBe('Locating…');
+  expect(calls[1]?.options).toMatchObject({ enableHighAccuracy: true });
+  calls[1]!.success({ coords: { latitude: 38.53, longitude: -78.28 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 38.53, lng: -78.28 });
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+});
+
 it('reports an unavailable position without moving the map', async () => {
-  let fail!: PositionErrorCallback;
-  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback) => { fail = error; } } });
+  const calls: { error: PositionErrorCallback; options?: PositionOptions }[] = [];
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) => { calls.push({ error, options }); } } });
   await start();
   const before = map().getCenter();
+  const unavailable: GeolocationPositionError = { code: 2, message: 'Network location provider returned 403', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
   ui('locate').dispatchEvent(new Event('click'));
-  fail({ code: 2, message: 'unavailable', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true]);
+  calls[0]!.error(unavailable);
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true, true]);
+  expect(ui('locate').disabled).toBe(true);
+  calls[1]!.error(unavailable);
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true, true, false]);
+  calls[2]!.error(unavailable);
   expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').title).toBe('Network location provider returned 403');
   expect(ui('location-status').hidden).toBe(false);
   expect(ui('locate').disabled).toBe(false);
   expect(ui('locate').ariaBusy).toBe('false');
