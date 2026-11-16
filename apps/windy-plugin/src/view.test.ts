@@ -241,9 +241,8 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   horizon.value = 'forecast'; horizon.dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(pointPanel.ariaBusy).toBe('false'));
   nodes = visit(panel.root as unknown as FakeElement);
-  const dayTabs = nodes.find(element => element.className === 'av-windgram-days')!;
-  expect(dayTabs.children.length).toBeGreaterThan(1);
-  dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+  const host = nodes.find(element => element.className === 'av-windgram-host')!;
+  host.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));
   expect(handlers.onPointFrame).toHaveBeenCalled();
   const chosenId = handlers.onPointFrame.mock.calls.at(-1)![0] as string;
   const chosenFrame = m.frames.find(f => f.id === chosenId)!;
@@ -287,8 +286,7 @@ it('navigates forecast hours via windgram keyboard controls', async () => {
   expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f007', build);
   host.dispatchEvent(key('Home'));
   expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f001', build);
-  const steps = nodes.filter(node => node.className === 'av-windgram-step');
-  for (let count = 0; count < 4; count++) steps[1].dispatchEvent(new Event('click'));
+  for (let count = 0; count < 4; count++) host.dispatchEvent(key('ArrowRight'));
   expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f013', build);
 });
 
@@ -445,8 +443,8 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     const units = nodes.find(node => node.id === 'av-units')!;
     units.value = 'imperial'; units.dispatchEvent(new Event('change'));
     expect(summary.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
-    const dayTabs = nodes.find(node => node.className === 'av-windgram-days')!;
-    dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+    const host = nodes.find(node => node.className === 'av-windgram-host')!;
+    host.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowLeft' }));
     expect(summary.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
     expect(incomplete.hidden).toBe(false);
     return;

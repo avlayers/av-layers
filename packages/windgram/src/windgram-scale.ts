@@ -59,8 +59,8 @@ export function visibleHeightAnchors(
 }
 
 /**
- * Builds the piecewise-linear vertical height/pressure scale and cropped anchors
- * for either full-profile or focused soaring-band views.
+ * Builds the vertical height scale and anchors for a full profile or a soaring band.
+ * Screen position follows elevation, so equal height steps stay equal on the axis.
  */
 export function buildWindgramVerticalScale(
   profile: SiteForecast,
@@ -86,7 +86,7 @@ export function buildWindgramVerticalScale(
   const referenceHeights = [...grounds, ...fineTerrain, ...heights, ...liftTops];
   // Add room around an isolated ceiling so its marker fits inside the plot.
   const floorM = referenceHeights.length ? Math.min(...referenceHeights, ...liftTops.map(height => height - 50)) : 0;
-  const focused = compact && options.heightRange !== 'full';
+  const focused = options.heightRange === 'soaring' || (compact && options.heightRange !== 'full');
   const grouped = new Map<number, number[]>();
 
   if (profile.model === 'icon-eu') {
@@ -131,26 +131,16 @@ export function buildWindgramVerticalScale(
   const topM = focused && (liftTops.length || calmDay) ? Math.min(fullTopM, focusedTopM) : fullTopM;
 
   const modelGround = grounds.length ? Math.min(...grounds) : null;
-  const baseAnchors = [
-    { pressureHpa: null, heightM: floorM },
-    ...(modelGround !== null && modelGround > floorM ? [{ pressureHpa: null, heightM: modelGround }] : []),
-    ...levelAnchors.filter(anchor => anchor.heightM > (modelGround ?? floorM) + 5)
-  ];
-  // A short headroom segment leaves the top native wind barb inside the frame.
-  const span = Math.max(1, baseAnchors.length - 1) + 0.35;
-  const fullAnchors: HeightAnchor[] = baseAnchors.map((a, i) => ({ ...a, y: bottom - (plotHeight * i) / span }));
-  fullAnchors.push({ pressureHpa: null, heightM: fullTopM, y: top });
-
-  const fullScale: WindgramScale = { anchors: fullAnchors, floorM, topM: fullTopM, top, bottom };
-  const croppedTopY = heightToY(fullScale, topM);
-  const croppedBottomY = heightToY(fullScale, floorM);
+  const spanM = Math.max(1, topM - floorM);
+  const yAt = (heightM: number) => bottom - ((heightM - floorM) / spanM) * plotHeight;
   const anchors: HeightAnchor[] = [
     { pressureHpa: null, heightM: floorM, y: bottom },
-    ...fullAnchors
-      .filter(a => a.heightM > floorM && a.heightM < topM)
-      .map(a => ({ ...a, y: bottom - ((croppedBottomY - a.y) * plotHeight) / (croppedBottomY - croppedTopY) })),
+    ...(modelGround !== null && modelGround > floorM && modelGround < topM ? [{ pressureHpa: null, heightM: modelGround, y: yAt(modelGround) }] : []),
+    ...levelAnchors
+      .filter(anchor => anchor.heightM > (modelGround ?? floorM) + 5 && anchor.heightM < topM)
+      .map(anchor => ({ ...anchor, y: yAt(anchor.heightM) })),
+    { pressureHpa: null, heightM: topM, y: top },
   ];
-  anchors.push({ pressureHpa: null, heightM: topM, y: top });
 
   return { floorM, topM, anchors };
 }

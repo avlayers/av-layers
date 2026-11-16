@@ -98,9 +98,11 @@
   touch-action: none;
 }
 .ct-track[aria-disabled="true"] { cursor: default; }
-.ct-ribbon, .ct-hatches, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
+.ct-ribbon, .ct-hatches, .ct-marks, .ct-ticks, .ct-playhead { position: absolute; pointer-events: none; }
 .ct-ribbon { inset: 0; z-index: 0; }
-.ct-hatches { inset: 0; z-index: 1; }
+.ct-hatches, .ct-marks { inset: 0; z-index: 1; }
+.ct-coarse { position: absolute; top: 0; bottom: 0; background: rgba(22, 50, 79, 0.14); }
+.ct-coarse-bar { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #16324f; }
 .ct-hatch {
   position: absolute;
   z-index: 1;

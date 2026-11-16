@@ -43,7 +43,7 @@ const legend = element<HTMLElement>('legend'), legendBody = element<HTMLDivEleme
 const tileErrorBox = element<HTMLParagraphElement>('tile-error'), errorBox = element<HTMLParagraphElement>('error'), freshness = element<HTMLParagraphElement>('freshness');
 const pointCard = element<HTMLElement>('point-card'), pointClose = element<HTMLButtonElement>('point-close'), pointSettings = element<HTMLDetailsElement>('point-settings');
 const pointBuildDetails = element<HTMLDetailsElement>('point-build-details'), pointLocation = element<HTMLParagraphElement>('point-location'), pointWind = element<HTMLParagraphElement>('point-wind');
-const pointStatus = element<HTMLParagraphElement>('point-status'), pointBody = element<HTMLDivElement>('point-body'), pointUnits = element<HTMLSelectElement>('point-units');
+const pointStatus = element<HTMLParagraphElement>('point-status'), pointBody = element<HTMLDivElement>('point-body');
 const windControlsHost = element<HTMLElement>('wind-controls');
 const pointHorizonSelect = element<HTMLSelectElement>('point-horizon'), pointHorizonLabel = element<HTMLLabelElement>('point-horizon-label'), meta = element<HTMLDListElement>('meta');
 
@@ -381,7 +381,6 @@ function startPreview(lifecycle: AbortController): void {
     pointUnitSystem = choice;
     store('preview-units', choice);
     for (const [b, key] of [[metricButton, 'metric'], [imperialButton, 'imperial']] as const) b.ariaPressed = String(choice === key);
-    pointUnits.value = choice;
     if (!overlayState.displayed || isLiftLayer(overlayState.displayed.layer)) element('lift-units').textContent = pointUnitSystem === 'metric' ? 'Lift m' : 'Lift ft';
     windControls.setUnits(pointUnitSystem); windOverlay.setOptions({ units: pointUnitSystem });
     ribbon = null;
@@ -802,7 +801,6 @@ function startPreview(lifecycle: AbortController): void {
   setUnits(pointUnitSystem);
   metricButton.addEventListener('click', () => setUnits('metric', true));
   imperialButton.addEventListener('click', () => setUnits('imperial', true));
-  pointUnits.addEventListener('change', () => setUnits(pointUnits.value === 'imperial' ? 'imperial' : 'metric', true));
 
   const positionLocationMarker = (): void => {
     if (!locationMarker || !locationPoint) return;

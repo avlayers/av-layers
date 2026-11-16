@@ -30,7 +30,7 @@ export interface PlacedTemperatureLabel {
 }
 
 /**
- * Computes non-overlapping label placements for each connected temperature contour component.
+ * Computes one non-overlapping label for each displayed temperature.
  */
 function placeTemperatureLabels(
   view: Pick<
@@ -49,11 +49,13 @@ function placeTemperatureLabels(
   ];
   const winds = barbs.map(b => windBarbGlyph(b, presentation, system).bounds);
   const placed: PlacedTemperatureLabel[] = [];
+  const usedValues = new Set<string>();
   const displayTemp = (f: number) => convertQuantity(fahrenheitToCelsius(f), 'temperature', system)!;
 
   for (const contour of view.contours as readonly TemperatureContour[]) {
     for (const component of contour.components) {
       const valueText = `${Math.round(displayTemp(contour.temperatureF))}°`;
+      if (usedValues.has(valueText)) continue;
       // Arial's tabular digits plus the degree mark and 3px horizontal padding.
       const width = Math.ceil([...valueText].reduce((sum, c) => sum + (c === '°' ? 0.4 : /[-−]/.test(c) ? 0.333 : 0.556), 0) * presentation.fonts.primary + 6);
       const height = presentation.fonts.primary + 6;
@@ -98,6 +100,7 @@ function placeTemperatureLabels(
           return cost(candidate) < cost(best) ? candidate : best;
         });
       occupied.push(box);
+      usedValues.add(valueText);
       placed.push({
         temperatureF: contour.temperatureF,
         valueText,
