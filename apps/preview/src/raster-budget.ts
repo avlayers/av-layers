@@ -7,8 +7,17 @@ export const RASTER_PAN_TILES = 48;
 export const MAX_RASTER_SOURCES = 4;
 export const WIND_TRAIL_PIXELS = 2 * 1024 * 1024;
 /** Short soft streaks. Fade keeps 0.94 of the trail at 60 fps. Gain and bias are the on-map composite. */
-export const WIND_TRAIL_WIDTH = 1.6;
 export const WIND_TRAIL_FADE = 4;
+/** Streak count for a viewport. Density is `1 / (50 * 1.6^(zoom-2))`, capped at 15,000. */
+export function windParticleCount(width: number, height: number, zoom: number): number {
+  const cells = 50 * 1.6 ** (Math.round(zoom) - 2);
+  return Math.min(15_000, Math.max(1, Math.round(Math.max(0, width) * Math.max(0, height) / cells)));
+}
+const TRAIL_WIDTH = [0.6, 0.6, 0.6, 1, 1.2, 1.6, 1.8, 2, 2.2, 2.4, 2.4, 2.4, 2.4, 2.6, 2.8, 3];
+/** Stroke diameter in CSS pixels at an integer zoom. */
+export function windTrailWidth(zoom: number): number {
+  return Math.max(1, (TRAIL_WIDTH[Math.max(0, Math.min(TRAIL_WIDTH.length - 1, Math.round(zoom)))] ?? 3) * 1.3);
+}
 export const WIND_TRAIL_GAIN = 1;
 export const WIND_TRAIL_BIAS = 0.04;
 export const WIND_CANVAS_PIXELS = 8 * 1024 * 1024;

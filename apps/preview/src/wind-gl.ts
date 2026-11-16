@@ -1,18 +1,18 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
-import { WIND_TRAIL_BIAS, WIND_TRAIL_FADE, WIND_TRAIL_GAIN, WIND_TRAIL_WIDTH } from './raster-budget';
+import { WIND_TRAIL_BIAS, WIND_TRAIL_FADE, WIND_TRAIL_GAIN, windParticleCount, windTrailWidth } from './raster-budget';
 import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
 
-const STATE = 64, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
+const STATE = 128, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
 const FULL = `#version 300 es
 out vec2 v_uv;
 void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vec2 c=p*2.-1.;v_uv=c*.5+.5;gl_Position=vec4(c,0,1);}`;
 /** Particle advection. `windAt` transcribes `sampleEncodedWindGrid`: texel centers, then skip alpha 0 before `* 200`. */
 export const WIND_PARTICLE_UPDATE = `#version 300 es
-precision highp float;uniform sampler2D u_state,u_a,u_b;uniform vec4 u_bounds;uniform float u_dt,u_zoom,u_mix,u_reset,u_world;out vec4 o;
+precision highp float;uniform sampler2D u_state,u_a,u_b;uniform vec4 u_bounds,u_spawn;uniform float u_dt,u_zoom,u_mix,u_reset,u_world;out vec4 o;
 vec2 merc(vec2 p){float r=p.y*.01745329251;return vec2((p.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
 vec3 windAt(sampler2D tex,vec2 uv){vec2 p=uv*float(${GRID})-0.5;vec2 f=fract(p);ivec2 o=ivec2(floor(p));vec2 acc=vec2(0.0);float wsum=0.0;
  for(int dy=0;dy<2;dy++)for(int dx=0;dx<2;dx++){float w=(dx==0?1.0-f.x:f.x)*(dy==0?1.0-f.y:f.y);if(w==0.0)continue;
@@ -20,11 +20,11 @@ vec3 windAt(sampler2D tex,vec2 uv){vec2 p=uv*float(${GRID})-0.5;vec2 f=fract(p);
  return wsum>0.0?vec3(acc/wsum,1.0):vec3(0.0);}
 void main(){ivec2 p=ivec2(gl_FragCoord.xy);vec4 s=texelFetch(u_state,p,0);
  if(u_reset>0.||s.z<=0.){float n=fract(sin(dot(vec2(p)+s.w,vec2(12.9898,78.233)))*43758.5453);float m=fract(n*91.7);
-  o=vec4(mix(u_bounds.x,u_bounds.z,n),mix(u_bounds.y,u_bounds.w,m),1.5+n*2.5,s.w+1.);return;}
+  o=vec4(mix(u_spawn.x,u_spawn.z,n),mix(u_spawn.y,u_spawn.w,m),1.5+n*2.5,s.w+1.);return;}
  vec2 uv=vec2((s.x-u_bounds.x)/(u_bounds.z-u_bounds.x),(s.y-u_bounds.y)/(u_bounds.w-u_bounds.y));
  vec3 a=windAt(u_a,uv),b=windAt(u_b,uv);bool va=a.z>0.5,vb=b.z>0.5;
  bool alive=u_mix>=1.0?vb:(va||vb);
- if(!alive||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.){o=vec4(s.xy,0,s.w);return;}
+ if(!alive||uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.||s.x<u_spawn.x||s.y<u_spawn.y||s.x>u_spawn.z||s.y>u_spawn.w){o=vec4(s.xy,0,s.w);return;}
  vec2 w=u_mix>=1.0?b.xy:(va&&vb?mix(a.xy,b.xy,u_mix):(vb?b.xy:a.xy));
  float speed=length(w),boost=speed>0.&&speed<4.?sqrt(4./speed):1.,c=cos(s.y*.01745329251);
  float sec=u_dt*600.*exp2(9.-u_zoom)*c*boost,lat=s.y+w.y*sec/6371000./.01745329251,lon=s.x+w.x*sec/(6371000.*c)/.01745329251;
@@ -138,6 +138,15 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     const dx = Math.max(1, east - west) * 0.15, dy = Math.max(1, north - south) * 0.15;
     return { west: west - dx, east: east + dx, south: Math.max(-85, south - dy), north: Math.min(85, north + dy) };
   }
+  function screenBounds(): typeof bounds | null {
+    const box = map.getBounds?.();
+    if (!box) return null;
+    let west = box.getWest(), east = box.getEast();
+    const south = box.getSouth(), north = box.getNorth();
+    if (![west, east, south, north].every(Number.isFinite)) return null;
+    if (east - west >= 360 || east <= west) { west = -180; east = 180; }
+    return { west, east, south: Math.max(-85, south), north: Math.min(85, north) };
+  }
   function inside(): boolean {
     const next = viewBounds();
     if (!next) return true;
@@ -206,6 +215,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform1i(gl.getUniformLocation(update, 'u_a'), 1);
     gl.uniform1i(gl.getUniformLocation(update, 'u_b'), 2);
     gl.uniform4f(gl.getUniformLocation(update, 'u_bounds'), bounds.west, bounds.south, bounds.east, bounds.north);
+    const spawn = screenBounds() ?? bounds;
+    gl.uniform4f(gl.getUniformLocation(update, 'u_spawn'), spawn.west, spawn.south, spawn.east, spawn.north);
     gl.uniform1f(gl.getUniformLocation(update, 'u_dt'), state.paused ? 0 : dt);
     gl.uniform1f(gl.getUniformLocation(update, 'u_zoom'), nextZoom);
     gl.uniform1f(gl.getUniformLocation(update, 'u_world'), 512 * 2 ** nextZoom);
@@ -238,8 +249,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
     gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
     gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_radius'), WIND_TRAIL_WIDTH * 0.5 * trailW / Math.max(1, map.getCanvas().clientWidth));
-    draw(lines, gl.TRIANGLES, STATE * STATE * 6);
+    gl.uniform1f(gl.getUniformLocation(lines, 'u_radius'), windTrailWidth(nextZoom) * 0.5 * trailW / width);
+    draw(lines, gl.TRIANGLES, Math.min(STATE * STATE, windParticleCount(width, height, nextZoom)) * 6);
     index = 1 - index; trail = nextTrail; reset = 0;
     gl.colorMask(savedMask[0], savedMask[1], savedMask[2], savedMask[3]);
     if (savedCull) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);

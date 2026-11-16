@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
 import { barbGeometry } from '../../../packages/windgram/src/wind-barb';
-import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS } from './raster-budget';
+import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS, windParticleCount } from './raster-budget';
 import { WindOverlay, type WindField } from './wind-overlay';
 
 class Canvas extends EventTarget {
@@ -196,7 +196,7 @@ it('reuses each validated destination on the next animation step', () => {
   vi.spyOn(Math, 'random').mockReturnValue(0.5);
   const f = fixture(), sample = vi.fn(() => ({ status: 0, u: 10, v: 0 }));
   f.overlay.setField({ sample }); f.tick(1000); f.tick(1100);
-  const count = Math.ceil(256 * 256 / 3000);
+  const count = Math.min(600, windParticleCount(256, 256, 0));
   const firstSamples = sample.mock.calls.length;
   expect(firstSamples).toBeGreaterThan(count);
   expect(f.canvases[0].context.moveTo).toHaveBeenCalledTimes(count);

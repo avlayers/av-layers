@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import type { Map } from 'maplibre-gl';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { WIND_NUMERIC_BYTES } from '@av/client/wind';
-import { canRetainRasterOverview, rasterSourceLimit, RASTER_PAN_TILES, VIEWPORT_BYTES, WIND_CANVAS_BYTES, WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS } from './raster-budget';
+import { canRetainRasterOverview, rasterSourceLimit, RASTER_PAN_TILES, VIEWPORT_BYTES, WIND_CANVAS_BYTES, WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, windParticleCount, windTrailWidth } from './raster-budget';
 
 const map = (count: number) => ({ coveringTiles: () => ({ length: count }) }) as unknown as Pick<Map, 'coveringTiles'>;
 
@@ -31,4 +31,14 @@ it('reserves Retina wind canvases and numeric cache within the viewport envelope
   expect(rasterSourceLimit(map(warmHiddenMax + 1), 12, false, false, false)).toBe(1);
   expect(canRetainRasterOverview(map((raster - 24 * 1024 * 1024) / tile - RASTER_PAN_TILES + 1), 12, false)).toBe(true);
   expect(rasterSourceLimit({} as Pick<Map, 'coveringTiles'>, 12)).toBe(0);
+});
+
+it('counts and widens wind streaks the way the viewport zoom does', () => {
+  expect(windParticleCount(1920, 1080, 7)).toBe(3955);
+  expect(windParticleCount(1920, 1080, 7.6)).toBe(2472);
+  expect(windParticleCount(1920, 1080, 9)).toBe(1545);
+  expect(windParticleCount(1920, 1080, 4)).toBe(15_000);
+  expect(windTrailWidth(7)).toBeCloseTo(2.6, 5);
+  expect(windTrailWidth(8)).toBeCloseTo(2.86, 5);
+  expect(windTrailWidth(9)).toBeCloseTo(3.12, 5);
 });
