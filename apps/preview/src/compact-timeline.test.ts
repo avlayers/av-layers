@@ -523,8 +523,7 @@ it('keeps the folded scale when the app echoes the scrubbed frame', () => {
   }));
   doc = new Document();
   const host = doc.createElement('div');
-  let timeline!: ReturnType<typeof createCompactTimeline>;
-  timeline = createCompactTimeline(host as unknown as HTMLElement, {
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, {
     onSelect(index) { timeline.update(hourly, hourly[index]!.id); },
     offsetMinutes,
     latitude: 37.54,

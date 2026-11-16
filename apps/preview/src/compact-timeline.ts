@@ -185,11 +185,12 @@ export function buildDayScale(width: number, bounds: NightBounds | null, selecte
   if (!bounds) return linearScale(width);
   const sunrise = bounds.sunrise < 1 ? 0 : bounds.sunrise;
   const sunset = bounds.sunset > DAY_MINUTES - 1 ? DAY_MINUTES : bounds.sunset;
-  const parts: ScaleSegment[] = [
+  const candidates: ScaleSegment[] = [
     { kind: 'morning', start: 0, end: sunrise, folded: false, x0: 0, x1: 0 },
     { kind: 'day', start: sunrise, end: sunset, folded: false, x0: 0, x1: 0 },
     { kind: 'evening', start: sunset, end: DAY_MINUTES, folded: false, x0: 0, x1: 0 },
-  ].filter(part => part.end - part.start >= 1);
+  ];
+  const parts = candidates.filter(part => part.end - part.start >= 1);
   for (const part of parts) {
     const selected = selectedMinute !== null && selectedMinute >= part.start && selectedMinute < part.end;
     part.folded = part.kind !== 'day' && !selected;
