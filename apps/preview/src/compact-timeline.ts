@@ -31,7 +31,6 @@ const DAYLIGHT = '#f6e27a';
 const DUSK = '#d4652f';
 const NEUTRAL = '#e7edf2';
 const SHOULDER_PERCENT = 45 / 14.4;
-const FRAME_REACH_MINUTES = 30;
 const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
 
@@ -72,14 +71,7 @@ function localMinutes(frames: readonly TimelineFrame[], indices: readonly number
 export function frameIndexForDayFraction(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, fraction: number): number {
   if (!Number.isFinite(fraction)) return -1;
   const minute = Math.round(Math.min(1, Math.max(0, fraction)) * 1440);
-  const index = nearestFrameIndexForDay(frames, indices, offsetMinutes, Math.floor(minute / 60), minute % 60);
-  if (index < 0) return -1;
-  const local = localTimeFromMs(Date.parse(frames[index]!.validTime), offsetMinutes);
-  if (!local) return -1;
-  if (Math.abs(local.hour * 60 + local.minute - minute) <= FRAME_REACH_MINUTES) return index;
-  const minutes = localMinutes(frames, indices, offsetMinutes);
-  const first = minutes[0], last = minutes[minutes.length - 1];
-  return first !== undefined && last !== undefined && (minute <= first || minute >= last) ? index : -1;
+  return nearestFrameIndexForDay(frames, indices, offsetMinutes, Math.floor(minute / 60), minute % 60);
 }
 
 export function dayHatchFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number }[] {
@@ -88,12 +80,18 @@ export function dayHatchFractions(frames: readonly TimelineFrame[], indices: rea
   const segments: { start: number; end: number }[] = [];
   const push = (from: number, to: number) => { if (to > from) segments.push({ start: from, end: to }); };
   push(0, minutes[0]! / 1440);
-  for (let i = 1; i < minutes.length; i++) {
-    const previous = minutes[i - 1]!, next = minutes[i]!;
-    if (next - previous > 60) push((previous + FRAME_REACH_MINUTES) / 1440, (next - FRAME_REACH_MINUTES) / 1440);
-  }
   push(minutes[minutes.length - 1]! / 1440, 1);
   return segments;
+}
+
+export function coarseSpanFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number }[] {
+  const minutes = localMinutes(frames, indices, offsetMinutes);
+  const spans: { start: number; end: number }[] = [];
+  for (let i = 1; i < minutes.length; i++) {
+    const previous = minutes[i - 1]!, next = minutes[i]!;
+    if (next - previous > 60) spans.push({ start: previous / 1440, end: next / 1440 });
+  }
+  return spans;
 }
 
 function monotonicStops(stops: readonly RibbonStop[]): readonly RibbonStop[] {
@@ -207,9 +205,10 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   track.setAttribute('aria-valuemin', '0');
   const ribbon = el('div', 'ct-ribbon');
   const hatches = el('div', 'ct-hatches');
+  const marks = el('div', 'ct-marks');
   const playhead = el('div', 'ct-playhead');
   const ticks = el('div', 'ct-ticks');
-  for (const node of [ribbon, hatches, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
+  for (const node of [ribbon, hatches, marks, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
   playhead.setAttribute('hidden', '');
   track.tabIndex = -1;
   ticks.append(...TICKS.map((label, index) => {
@@ -217,7 +216,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     tick.style.left = `${(index / (TICKS.length - 1)) * 100}%`;
     return tick;
   }));
-  track.append(ribbon, hatches, ticks, playhead);
+  track.append(ribbon, hatches, marks, ticks, playhead);
   controls.append(play, timeLabel, track);
   root.append(daysRow, controls);
   host.append(root);
@@ -253,6 +252,24 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       hatch.style.width = percent(segment.end - segment.start);
       return hatch;
     }));
+  }
+
+  function paintCoarse(spans: readonly { start: number; end: number }[]): void {
+    const bars = new Set<number>();
+    for (const span of spans) { bars.add(span.start); bars.add(span.end); }
+    marks.replaceChildren(
+      ...spans.map(span => {
+        const shade = el('div', 'ct-coarse');
+        shade.style.left = percent(span.start);
+        shade.style.width = percent(span.end - span.start);
+        return shade;
+      }),
+      ...[...bars].map(at => {
+        const bar = el('div', 'ct-coarse-bar');
+        bar.style.left = percent(at);
+        return bar;
+      })
+    );
   }
 
   function reveal(button: HTMLButtonElement): void {
@@ -322,6 +339,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const group = selectedGroup();
     ribbon.style.background = group ? ribbonCss(group.day) : NEUTRAL;
     paintHatches(group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
+    paintCoarse(group ? coarseSpanFractions(frames, group.indices, offsetMinutes) : []);
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
     track.setAttribute('aria-valuemax', String(Math.max(0, frames.length - 1)));

@@ -12,7 +12,7 @@ import { formatWindgramReading } from './windgram-readout.ts';
 import { barbGeometry, displayedBarbSpeed, quantizedBarbSpeed } from './wind-barb.ts';
 import { windBarbGlyph } from './windgram-glyphs.ts';
 import { resolveWindgramPresentation } from './windgram-presentation.ts';
-import { mpsToKnots } from './windgram-format.ts';
+import { elevationTickMeters, mpsToKnots, roundedElevationLabel } from './windgram-format.ts';
 import { hourSampling, sampleHeight } from './windgram-sampling.ts';
 
 it('mirrors the pennant and feathers south of the equator without reversing the staff', () => {
@@ -156,6 +156,39 @@ function visit(element: FakeElement): FakeElement[] {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+it('labels heights on a regular step instead of each model level', () => {
+  expect(roundedElevationLabel(1258, 'metric')).toBe('1,300');
+  expect(elevationTickMeters(1500, 2500, 'metric', 420).map(height => roundedElevationLabel(height, 'metric'))).toEqual([
+    '1,600', '1,700', '1,800', '1,900', '2,000', '2,100', '2,200', '2,300', '2,400'
+  ]);
+  const { profile, sample, forecast } = fixture([14, 15, 16, 17, 18, 19, 20]);
+  const frames = profile.frames.map((frame, index) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[index].layers } }));
+  const site = forecast(frames);
+  const svg = renderWindgramSvg(buildWindgramView(site, {
+    unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: site.site.timeZone, hours: site.hours, widthPx: 620,
+  }));
+  const heights = [...svg.matchAll(/y="([^"]+)"[^>]*class="wg-axis-feet"/g)].map(match => Number(match[1]));
+  const gaps = heights.slice(1).map((y, index) => Math.abs(y - heights[index]));
+  expect(svg).toContain('>1,600<');
+  expect(svg).toContain('>2,000<');
+  expect(svg).not.toContain('1,258');
+  expect(gaps.length).toBeGreaterThan(3);
+  expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThan(0.5);
+  expect([...svg.matchAll(/class="wg-temperature[^"]*">([^<]*)</g)].map(match => match[1]).filter(value => value === '10°')).toHaveLength(1);
+});
+
+it('crops a wide soaring chart to the same height band as the phone', () => {
+  const { profile, sample, forecast } = fixture([20]);
+  const frames = profile.frames.map((frame, index) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[index].layers } }));
+  const site = forecast(frames);
+  const options = { unitSystem: 'metric' as const, timeZone: site.site.timeZone, hours: site.hours };
+  const full = buildWindgramView(site, { ...options, compact: false });
+  const wide = buildWindgramView(site, { ...options, compact: false, heightRange: 'soaring' });
+  const phone = buildWindgramView(site, { ...options, compact: true });
+  expect(wide.topM).toBe(phone.topM);
+  expect(wide.topM).toBeLessThan(full.topM);
+});
 
 describe('Windgram data', () => {
   it.each([false, true])('shows the sampled ceiling below native ground (compact=%s)', compact => {
@@ -361,7 +394,7 @@ describe('Windgram data', () => {
     });
 
     // Appending later-day frames keeps Day 1's mounted SVG untouched.
-    renderPointWindgram(container, { frames }, build, {
+    const update = renderPointWindgram(container, { frames }, build, {
       point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
     });
     expect(htmlSpy).not.toHaveBeenCalled();
@@ -379,14 +412,15 @@ describe('Windgram data', () => {
     expect(htmlSpy).toHaveBeenCalledOnce();
     expect(host.innerHTML).toContain('viewBox="0 0 640');
 
-    const laterDay = visit(root).filter(el => el.className === 'av-windgram-day').at(-1)!;
-    laterDay.dispatchEvent(new Event('click'));
-    expect(onFrame).toHaveBeenCalledExactlyOnceWith('f038');
-    renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 2, loading: false, onFrame
-    });
-    laterDay.dispatchEvent(new Event('click'));
-    expect(onFrame).toHaveBeenCalledTimes(1);
+    const press = (key: string) => host.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key }));
+    let frameId = 'f014';
+    for (let count = 0; count < 6 && frameId !== 'f038'; count++) {
+      onFrame.mockClear();
+      press('ArrowRight');
+      frameId = String(onFrame.mock.calls.at(-1)?.[0] ?? frameId);
+      update(frameId);
+    }
+    expect(frameId).toBe('f038');
 
     disposePointWindgram(container);
     expect(disconnected).toHaveBeenCalledOnce();

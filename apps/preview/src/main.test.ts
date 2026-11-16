@@ -589,12 +589,10 @@ it('uses URL opacity before saved opacity and shares display units', async () =>
   await start();
   expect(ui('opacity').value).toBe('0.65');
   expect(ui('units-imperial').ariaPressed).toBe('true');
-  expect(ui('point-units').value).toBe('imperial');
   expect(ui('lift-units').textContent).toBe('Lift ft');
   expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (ft AGL)')).toBe(true);
   ui('units-metric').dispatchEvent(new Event('click'));
   expect(win.localStorage.getItem('preview-units')).toBe('metric');
-  expect(ui('point-units').value).toBe('metric');
   expect(visit(ui('legend-body')).some(node => node.textContent === 'Lift above ground (m AGL)')).toBe(true);
 });
 
@@ -1492,7 +1490,7 @@ it('reuses one pinned point series for chart clicks, keyboard scrubbing and unit
   chart.children[0].dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));
   await vi.advanceTimersByTimeAsync(16);
   expect((map().getSource(sourceId()) as { tiles: string[] }).tiles[0]).toContain(`/${manifest.frames[1].id}/`);
-  ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
+  ui('units-imperial').dispatchEvent(new Event('click'));
   await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-body').children[0]).toBe(series);
   expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -1518,8 +1516,7 @@ it('keeps point selection current while skipping redraws for unchanged overlay s
   map().emit('error', { sourceId: sourceId(), tile });
   map().emit('sourcedata', { sourceId: sourceId(), tile });
   expect(update).not.toHaveBeenCalled();
-  ui('point-units').value = 'imperial';
-  ui('point-units').dispatchEvent(new Event('change'));
+  ui('units-imperial').dispatchEvent(new Event('click'));
   expect(update).toHaveBeenCalledOnce();
   expect(update.mock.calls[0][1]).toBe('imperial');
   await selectFrame(1);
@@ -1613,10 +1610,9 @@ it('pages the full native point forecast while later point times keep the raster
   await vi.waitFor(() => expect(ui('point-card').ariaBusy).toBe('false'));
   expect(ui('point-status').hidden).toBe(true);
   const series = ui('point-body').children[0], nodes = visit(series);
-  const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
-  expect(dayTabs.children.length).toBeGreaterThan(1);
+  const host = nodes.find(child => child.className === 'av-windgram-host')!;
   const pauses = timelinePauses;
-  dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+  host.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowRight' }));
   expect(timelinePauses).toBe(pauses + 1);
   await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-wind').textContent).toBe('');
@@ -1699,16 +1695,16 @@ it.each([[false, false], [true, false], [true, true]])('keeps 40-frame progress 
     expect(ui('point-status').hidden).toBe(false);
     expect(ui('point-status').textContent).toBe('Late page failed');
     const nodes = visit(ui('point-body').children[0]);
-    const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
+    const host = nodes.find(child => child.className === 'av-windgram-host')!;
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(child => child.className === 'av-windgram-profile-status')?.hidden).toBe(keepKnown);
     const incomplete = nodes.find(child => child.className === 'av-point-incomplete')!;
     expect(incomplete.hidden).toBe(false); expect((incomplete as unknown as HTMLElement).role).toBe('status');
     expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
     expect(nodes.find(child => child.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(published.frames[keepKnown ? 39 : 38]!.validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
-    ui('point-units').value = 'imperial'; ui('point-units').dispatchEvent(new Event('change'));
+    ui('units-imperial').dispatchEvent(new Event('click'));
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
-    dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+    host.dispatchEvent(Object.assign(new Event('keydown', { cancelable: true }), { key: 'ArrowLeft' }));
     expect(nodes.find(child => child.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
     expect(incomplete.hidden).toBe(false);
     return;
@@ -1779,7 +1775,6 @@ it('hides precip-rate in preview while keeping future non-lift layers and km/mi 
 
   ui('units-imperial').dispatchEvent(new Event('click'));
   expect(ui('units-imperial').ariaPressed).toBe('true');
-  expect(ui('point-units').value).toBe('imperial');
   expect(new URL(win.href).searchParams.get('units')).toBe('imperial');
   map().emit('click', { lngLat: { lat: 32.9, lng: -117.25 } });
   await Promise.resolve();

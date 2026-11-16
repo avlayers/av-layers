@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   createCompactTimeline,
+  coarseSpanFractions,
   dayHatchFractions,
   frameIndexForDayFraction,
   nearestFrameIndexForDay,
@@ -145,39 +146,29 @@ it('chooses the nearest frame on a target day and keeps ties stable', () => {
   ];
   expect(nearestFrameIndexForDay(tied, [0, 1], 0, 12, 0)).toBe(0);
   expect(frameIndexForDayFraction(frames, [0, 1, 2], 0, 0.9)).toBe(1);
-  expect(frameIndexForDayFraction(frames, [0, 1, 2], 0, 0.05)).toBe(-1);
+  expect(frameIndexForDayFraction(frames, [0, 1, 2], 0, 0.05)).toBe(2);
   expect(frameIndexForDayFraction(frames, [], 0, 0.5)).toBe(-1);
   expect(frameIndexForDayFraction(frames, [0], 0, Number.NaN)).toBe(-1);
 });
 
-it('keeps each hour one hour wide and leaves wider gaps unselectable', () => {
+it('snaps a coarse gap to the nearest frame and marks the span', () => {
   const hourly: TimelineFrame[] = [12, 13, 14, 15, 18, 21].map(hour => ({
     id: `h${hour}`, validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z`
   }));
   const indices = hourly.map((_, index) => index);
   expect(frameIndexForDayFraction(hourly, indices, 0, (13 + 20 / 60) / 24)).toBe(1);
-  expect(frameIndexForDayFraction(hourly, indices, 0, 16.5 / 24)).toBe(-1);
+  expect(frameIndexForDayFraction(hourly, indices, 0, 16.5 / 24)).toBe(3);
   expect(frameIndexForDayFraction(hourly, indices, 0, 17.75 / 24)).toBe(4);
-  expect(frameIndexForDayFraction(hourly, indices, 0, 10 / 24)).toBe(0);
-  expect(frameIndexForDayFraction(hourly, indices, 0, 23 / 24)).toBe(5);
-  expect(dayHatchFractions(frames, [0, 1], 0)).toEqual([
-    { start: 0, end: 18 / 24 },
-    { start: (18 * 60 + 30) / 1440, end: (21 * 60 - 30) / 1440 },
+  expect(coarseSpanFractions(hourly, indices, 0)).toEqual([
+    { start: 15 / 24, end: 18 / 24 },
+    { start: 18 / 24, end: 21 / 24 }
+  ]);
+  expect(dayHatchFractions(hourly, indices, 0)).toEqual([
+    { start: 0, end: 12 / 24 },
     { start: 21 / 24, end: 1 }
   ]);
-  expect(dayHatchFractions(hourly, indices, 0).map(segment => [segment.start, segment.end])).toEqual([
-    [0, 12 / 24],
-    [(15 * 60 + 30) / 1440, (18 * 60 - 30) / 1440],
-    [(18 * 60 + 30) / 1440, (21 * 60 - 30) / 1440],
-    [21 / 24, 1]
-  ]);
+  expect(coarseSpanFractions(frames, [0, 1], 0)).toEqual([{ start: 18 / 24, end: 21 / 24 }]);
   expect(dayHatchFractions(frames, [], 0)).toEqual([]);
-  const tight: TimelineFrame[] = [
-    { id: 'noon', validTime: '2026-11-14T12:00:00Z' },
-    { id: 'later', validTime: '2026-11-14T13:05:00Z' }
-  ];
-  expect(dayHatchFractions(tight, [0, 1], 0)).toContainEqual({ start: 750 / 1440, end: 755 / 1440 });
-  expect(frameIndexForDayFraction(tight, [0, 1], 0, 752 / 1440)).toBe(-1);
 });
 
 it('places a morning color stop for a map-center local day', () => {
@@ -298,14 +289,14 @@ it('hatches a gap day and the hours outside a partial day', () => {
   const hatches = named(root, 'ct-hatch');
   expect(hatches.map(hatch => [hatch.style.left, hatch.style.width])).toEqual([
     ['0%', '50%'],
-    ['52.1%', '20.8%'],
     ['75%', '25%']
   ]);
+  expect(named(root, 'ct-coarse').map(shade => [shade.style.left, shade.style.width])).toEqual([['50%', '25%']]);
   const track = byClass(root, 'ct-track');
   track.offsetLeft = 0;
   track.offsetWidth = 240;
   pointer(track, 'pointerdown', 15 * 10);
-  expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
   pointer(track, 'pointerup', 15 * 10);
   timeline.destroy();
 });

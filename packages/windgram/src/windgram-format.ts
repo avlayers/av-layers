@@ -44,6 +44,35 @@ export function convertQuantity(value: number | null | undefined, kind: Quantity
   return value * scale + offset;
 }
 
+const ELEVATION_STEPS = [100, 200, 500, 1000, 2000, 5000] as const;
+const ELEVATION_LABEL_GAP = 28;
+
+/** Axis altitude, in display units, on the nearest hundred. */
+export function roundedElevationLabel(meters: number, system: UnitSystem): string {
+  const value = convertQuantity(meters, 'elevation', system);
+  if (value === null) return '';
+  return (Math.round(value / 100) * 100).toLocaleString('en-US');
+}
+
+/** Regular height steps that fit the plot, in metres. */
+export function elevationTickMeters(floorM: number, topM: number, system: UnitSystem, plotHeight: number): number[] {
+  const floor = convertQuantity(floorM, 'elevation', system);
+  const top = convertQuantity(topM, 'elevation', system);
+  if (floor === null || top === null || !(top > floor) || !(plotHeight > 0)) return [];
+  const room = Math.max(2, Math.floor(plotHeight / ELEVATION_LABEL_GAP));
+  const raw = (top - floor) / room;
+  const step = ELEVATION_STEPS.find(candidate => candidate >= raw) ?? ELEVATION_STEPS[ELEVATION_STEPS.length - 1];
+  const scale = quantityDefinitions.elevation[system][0];
+  const first = Math.ceil(floor / step) * step;
+  const last = Math.floor(top / step) * step;
+  const ticks: number[] = [];
+  for (let index = 0; index <= Math.round((last - first) / step); index++) {
+    const value = first + index * step;
+    if (value > floor && value < top) ticks.push(value / scale);
+  }
+  return ticks;
+}
+
 export function formatQuantity(value: number | null | undefined, kind: QuantityKind, digits: number | undefined, system: UnitSystem): string {
   const converted = convertQuantity(value, kind, system);
   if (converted === null) return '—';

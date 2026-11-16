@@ -3,6 +3,8 @@ import {
   fahrenheitToCelsius,
   formatQuantity,
   knotsToMps,
+  elevationTickMeters,
+  roundedElevationLabel,
   svgNumber as fmt,
   unitLabel,
   type UnitSystem,
@@ -50,24 +52,24 @@ function heightAxisHeader(view: WindgramView, system: UnitSystem) {
     text(x, 42, unitLabel('lift', system), 'text-anchor="end" class="wg-axis-unit"');
 }
 
+function elevationTicks(view: WindgramView, system: UnitSystem): { y: number; label: string }[] {
+  return elevationTickMeters(view.floorM, view.topM, system, view.plotHeight)
+    .map(heightM => ({ y: heightToY(view, heightM), label: roundedElevationLabel(heightM, system) }))
+    .filter(tick => tick.label !== '' && tick.y > view.top + 18 && tick.y < view.bottom - 6);
+}
+
 function heightAxisLabels(view: WindgramView, system: UnitSystem) {
-  return visibleHeightAnchors(view)
-    .map((anchor) => {
-      const tick = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>`;
-      return (
-        tick +
-        (view.compact
-          ? text(view.left - 9, anchor.y + 4, altitude(anchor.heightM, system), 'text-anchor="end" class="wg-axis-feet"')
-          : text(
-              view.left - 10,
-              anchor.y - 3,
-              anchor.pressureHpa === null ? '' : formatQuantity(anchor.pressureHpa, 'pressure', undefined, system),
-              'text-anchor="end" class="wg-axis"',
-            ) +
-            text(view.left - 10, anchor.y + 12, `${altitude(anchor.heightM, system)} ${unitLabel('elevation', system)}`, 'text-anchor="end" class="wg-axis"'))
-      );
-    })
-    .join('');
+  const altitudes = elevationTicks(view, system).map(tick => {
+    const mark = `<path d="M${view.left - 5} ${fmt(tick.y)}h5" stroke="#fff" stroke-width="1"/>`;
+    const label = view.compact ? tick.label : `${tick.label} ${unitLabel('elevation', system)}`;
+    return mark + text(view.left - (view.compact ? 9 : 10), tick.y + (view.compact ? 4 : 12), label, `text-anchor="end" class="${view.compact ? 'wg-axis-feet' : 'wg-axis'}"`);
+  }).join('');
+  if (view.compact) return altitudes;
+  const pressures = visibleHeightAnchors(view).map(anchor => {
+    const mark = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>`;
+    return mark + text(view.left - 10, anchor.y - 3, anchor.pressureHpa === null ? '' : formatQuantity(anchor.pressureHpa, 'pressure', undefined, system), 'text-anchor="end" class="wg-axis"');
+  }).join('');
+  return pressures + altitudes;
 }
 
 export function renderWindgramSvg(
@@ -119,7 +121,9 @@ export function renderWindgramSvg(
     );
   }
   for (const hour of view.timeAxis) parts.push(`<line x1="${fmt(hour.x)}" x2="${fmt(hour.x)}" y1="${view.top}" y2="${fmt(view.bottom)}" class="wg-hourline"/>`);
-  for (const anchor of view.anchors) parts.push(`<line x1="${view.left}" x2="${fmt(right)}" y1="${fmt(anchor.y)}" y2="${fmt(anchor.y)}" class="wg-grid"/>`);
+  for (const tick of elevationTicks(view, system)) {
+    parts.push(`<line x1="${view.left}" x2="${fmt(right)}" y1="${fmt(tick.y)}" y2="${fmt(tick.y)}" class="wg-grid"/>`);
+  }
   for (const series of view.series) {
     if (series.path) {
       parts.push(
@@ -169,9 +173,9 @@ export function renderWindgramSvg(
   parts.push(`<rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}" fill="none" stroke="#eeebff" stroke-width="1"/>`);
   parts.push(heightAxisLabels(view, system));
   if (!view.compact) {
-    for (const anchor of visibleHeightAnchors(view)) {
-      parts.push(`<path d="M${fmt(right)} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>`);
-      parts.push(text(right + 10, anchor.y + 4, altitude(anchor.heightM, system), 'class="wg-axis-feet"'));
+    for (const tick of elevationTicks(view, system)) {
+      parts.push(`<path d="M${fmt(right)} ${fmt(tick.y)}h5" stroke="#fff" stroke-width="1"/>`);
+      parts.push(text(right + 10, tick.y + 4, tick.label, 'class="wg-axis-feet"'));
     }
   }
   for (const [axisIndex, tick] of view.timeAxis.entries()) {

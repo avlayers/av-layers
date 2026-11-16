@@ -39,8 +39,8 @@ The Windgram loads in a separate chunk on the first map click.
 (`32,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
-chart loads and in its selected hour readout. Open forecast settings to change
-units or horizon, or open Chart details for height inspection and the legend.
+chart loads and in its selected hour readout. The km/mi control sets units.
+Forecast settings change the horizon. Chart details hold height inspection and the legend.
 A failed profile page leaves available lift visible.
 
 Chart times within the map horizon select raster frames. Later point times keep

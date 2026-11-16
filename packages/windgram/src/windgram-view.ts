@@ -6,8 +6,8 @@ import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast }
 import type { WindgramLayout, WindgramHour as PublicHour, WindgramOptions } from './scene-types.ts';
 import {
   celsiusToFahrenheit,
-  convertQuantity,
   finiteScalar,
+  roundedElevationLabel,
   gustNoun,
   mpsToKnots,
   type UnitSystem,
@@ -102,7 +102,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
   const altitudeLabels = hours.flatMap(hour => [hour.modelTerrainM, hour.mapLift.terrainM, hour.mapLift.mslM,
     ...hour.levels.map(level => level.heightM),
   ]).filter((height): height is number => typeof height === 'number' && Number.isFinite(height))
-    .map(height => `${Math.round(convertQuantity(height, 'elevation', system)!).toLocaleString('en-US')}${compact ? '' : system === 'metric' ? ' m' : ' ft'}`);
+    .map(height => `${roundedElevationLabel(height, system)}${compact ? '' : system === 'metric' ? ' m' : ' ft'}`);
   const presentation = resolveWindgramPresentation({ compact, widthPx: options.widthPx, heightPx: options.heightPx, altitudeLabels });
   const { left, right, top, columnWidth, plotWidth, xAt, emptyTimes } = buildWindgramTimeLayout(profile, selection, presentation);
   const plotHeight = presentation.plotHeight;

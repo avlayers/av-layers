@@ -5,7 +5,6 @@ import { renderPointSeries } from './scalar-point.ts';
 import { localDateKey } from './internal-meteo.ts';
 import { buildWindgramView, createPointForecast, type SiteForecast, type WindgramView } from './model.ts';
 import { renderWindgramKey } from './svg.ts';
-import { daylightForDate } from './windgram-time-axis.ts';
 
 const STYLE_ID = 'av-windgram-document-style';
 
@@ -125,15 +124,6 @@ function createPointWindgram(
   profileStatus.role = 'status';
   const incomplete = node('p', 'av-point-incomplete', 'Forecast incomplete. Some hours could not be loaded.');
   incomplete.role = 'status';
-  const controls = node('div', 'av-windgram-controls');
-  const hourSteps = node('div', 'av-windgram-hours');
-  const hourBack = node('button', 'av-windgram-step', '‹');
-  const hourForward = node('button', 'av-windgram-step', '›');
-  hourBack.type = 'button'; hourForward.type = 'button';
-  hourBack.ariaLabel = 'Previous point hour'; hourForward.ariaLabel = 'Next point hour';
-  hourSteps.append(hourBack, hourForward);
-  const dayTabs = node('div', 'av-windgram-days');
-  controls.append(hourSteps, dayTabs);
   const chartHost = node('div', 'av-windgram-host');
   const details = node('details', 'av-windgram-details');
   details.append(node('summary', undefined, 'Chart details'));
@@ -148,7 +138,7 @@ function createPointWindgram(
   inspection.append(inspectLabel, readout);
   const keyHost = node('div', 'av-windgram-key');
   details.append(inspection, keyHost);
-  section.append(controls, chartHost, liftSummary, time, profileStatus, incomplete, details);
+  section.append(chartHost, liftSummary, time, profileStatus, incomplete, details);
   container.replaceChildren(section);
 
   let units: UnitSystem = options.unitSystem;
@@ -161,14 +151,11 @@ function createPointWindgram(
   let keyUnits: UnitSystem | null = null;
   let activeWidth = 0;
   let activeHeight: number | undefined;
-  let daySignature: string | null = null;
   let viewCache: { key: string; frames: readonly (PointFrame | undefined)[]; daylight: WindgramView; full?: WindgramView } | null = null;
   let mountedView: WindgramView | null = null;
   let mounted: WindgramMount | null = null;
   let disposed = false;
-  const dayButtons = new Map<string, HTMLButtonElement>();
 
-  const dayLabel = new Intl.DateTimeFormat('en-US', { timeZone: data.forecast.site.timeZone, weekday: 'short', day: 'numeric' });
   const chartHeight = () => {
     const cap = browser?.getComputedStyle(chartHost).maxHeight;
     const pixels = cap?.endsWith('px') ? Number(cap.slice(0, -2)) : NaN;
@@ -180,45 +167,13 @@ function createPointWindgram(
     const key = `${dayKey}|${units}|${widthPx}|${heightPx}|${hours.length}`;
     if (viewCache?.key !== key || viewCache.frames.some((frame, i) => frame !== frames[i])) {
       const timeZone = data.forecast.site.timeZone;
+      // Compact soaring drawing at every width, so desktop matches the phone.
       const daylight = buildWindgramView(data.forecast, {
-        unitSystem: units, timeZone, widthPx, heightPx, compact: widthPx < 520, heightRange: 'soaring', hours: { timeZone, dateKey: dayKey }
+        unitSystem: units, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: { timeZone, dateKey: dayKey }
       });
       viewCache = { key, frames, daylight };
     }
     return viewCache;
-  };
-
-  const selectDay = (dayKey: string) => {
-    if (disposed) return;
-    const hours = data.days.get(dayKey);
-    if (!hours?.length) return;
-    const daylight = mounted ? daylightForDate(data.forecast, dayKey, data.forecast.site.timeZone) : null;
-    const visible = daylight && hours.find(hour => {
-      const time = Date.parse(hour.validAt);
-      return time >= daylight.sunrise && time <= daylight.sunset && data.loaded.has(hour.id);
-    });
-    onFrame((visible || hours.find(hour => data.loaded.has(hour.id)) || hours[0]).id);
-  };
-
-  const syncDayButtons = () => {
-    const keys = [...data.days.keys()];
-    const signature = keys.join('|');
-    if (signature === daySignature) return;
-    daySignature = signature;
-    dayButtons.clear();
-    dayTabs.replaceChildren(...keys.map(dayKey => {
-      const date = new Date(data.days.get(dayKey)![0].validAt);
-      const parts = dayLabel.formatToParts(date);
-      const shortDay = `${parts.find(part => part.type === 'weekday')!.value} ${parts.find(part => part.type === 'day')!.value}`;
-      const button = node('button', 'av-windgram-day', shortDay);
-      button.type = 'button';
-      button.value = dayKey;
-      button.ariaLabel = dayKey;
-      button.addEventListener('click', () => selectDay(dayKey));
-      dayButtons.set(dayKey, button);
-      return button;
-    }));
-    dayTabs.hidden = keys.length <= 1;
   };
 
   const step = (delta: -1 | 1) => {
@@ -227,8 +182,6 @@ function createPointWindgram(
     const target = data.frames[Math.max(0, Math.min(data.frames.length - 1, index + delta))];
     if (target.id !== selectedFrameId) onFrame(target.id);
   };
-  hourBack.addEventListener('click', () => step(-1));
-  hourForward.addEventListener('click', () => step(1));
 
   inspectCheckbox.addEventListener('change', () => {
     if (disposed) return;
@@ -256,10 +209,6 @@ function createPointWindgram(
     );
     time.hidden = !pointFrame || pointFrame.id === mapFrameId;
 
-    const index = data.frames.findIndex(frame => frame.id === selectedFrameId);
-    hourBack.disabled = index <= 0;
-    hourForward.disabled = index < 0 || index >= data.frames.length - 1;
-
     const pendingLift = loading && frameId !== null && mapFrames.has(frameId) && liftLayers.some(layer => !loadedFrame?.layers[layer]);
     const lift = pointMapLift(loadedFrame, build);
     liftSummary.textContent = pendingLift ? 'Loading map lift…' : `MSL ${formatMapLiftCell(lift.msl, units)} · AGL ${formatMapLiftCell(lift.agl, units)}`;
@@ -270,20 +219,13 @@ function createPointWindgram(
     const selectedValidAt = pointFrame?.validTime ?? null;
     const selectedDay = selectedValidAt && localDateKey(selectedValidAt, timeZone);
     const targetDayKey = selectedDay && data.days.has(selectedDay) ? selectedDay : data.days.keys().next().value;
-    for (const [dayKey, button] of dayButtons) {
-      const isSelected = dayKey === targetDayKey;
-      button.ariaPressed = String(isSelected);
-      button.className = isSelected ? 'av-windgram-day is-selected' : 'av-windgram-day';
-    }
     const dayHours = targetDayKey === undefined ? undefined : data.days.get(targetDayKey);
     const showChart = dayHours !== undefined && (data.hasSounding || (!loading && data.hasValues));
     chartHost.hidden = details.hidden = !showChart;
-    controls.hidden = data.frames.length <= 1;
     liftSummary.hidden = liftLayers.length === 0 || (showChart && lift.mslM !== null);
     if (!showChart || targetDayKey === undefined) return;
 
     const widthPx = chartHost.clientWidth > 0 ? chartHost.clientWidth : 420;
-    const compact = widthPx < 520;
     const heightPx = chartHeight();
     activeWidth = widthPx;
     activeHeight = heightPx;
@@ -292,7 +234,7 @@ function createPointWindgram(
     const selectedInDaylight = selectedValidAt === null || visibleDayHours.some(hour => hour.validAt === selectedValidAt);
     const useDaylightCrop = selectedInDaylight && visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
     const view = useDaylightCrop ? daylightView : (views.full ??= buildWindgramView(data.forecast, {
-      unitSystem: units, timeZone, widthPx, heightPx, compact, heightRange: 'soaring', hours: dayHours
+      unitSystem: units, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours
     }));
 
     if (!mounted) {
@@ -317,11 +259,9 @@ function createPointWindgram(
     data = derive(nextInput, nextOptions);
     onFrame = nextOptions.onFrame;
     if (typeof nextOptions.mapOffsetMinutes === 'number') mapOffsetMinutes = nextOptions.mapOffsetMinutes;
-    syncDayButtons();
     update(nextOptions.frameId, nextOptions.unitSystem, nextOptions.mapFrameId, nextOptions.loading, mapOffsetMinutes);
   };
 
-  syncDayButtons();
   update(selectedFrameId, units, mapFrameId, loading);
 
   const resize = () => {
