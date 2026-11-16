@@ -6,7 +6,7 @@ import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 const build = () => fixtureBuild();
-function fixture(coveringCount = 64) {
+function fixture(coveringCount = 32) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>();
   const opacity = new globalThis.Map<string, number>();
@@ -260,8 +260,8 @@ it.each(['movestart', 'resize'] as const)('invalidates an unpainted replacement 
     expect(f.painted()).toBe(original);
     if (event === 'movestart') {
       f.emit('moveend');
-      expect(f.sources.has(replacement)).toBe(false);
-      await f.complete(sourceFor(f, 'usable-lift-msl', frame)!);
+      expect(f.sources.has(replacement)).toBe(true);
+      f.emit('render');
     } else f.emit('render');
     expect(f.states.at(-1)?.displayed?.layer).toBe('usable-lift-msl');
     expect(f.painted()).not.toBe(original);
@@ -524,8 +524,8 @@ async function completeWindow(f: ReturnType<typeof fixture>): Promise<void> {
   }
 }
 
-it('prepares the most likely viewport before filling a four-source window', async () => {
-  const f = fixture(24), b = build(), frame = b.manifest.frames[2].id;
+it('prepares the sibling viewport before filling the admitted window', async () => {
+  const f = fixture(5), b = build(), frame = b.manifest.frames[2].id;
   try {
     f.overlay.select(b, 'usable-lift-agl', frame); await f.complete();
     expect(f.sources.size).toBe(2);
@@ -536,15 +536,15 @@ it('prepares the most likely viewport before filling a four-source window', asyn
     expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(true);
     const next = sourceFor(f, 'usable-lift-agl', b.manifest.frames[3].id)!;
     await f.complete(next);
-    expect(f.sources.size).toBe(4);
+    expect(f.sources.size).toBe(3);
     await completeWindow(f);
-    expect(f.sources.size).toBe(4);
+    expect(f.sources.size).toBe(3);
     expect(f.displayed()).not.toBe(sibling);
   } finally { f.overlay.destroy(); }
 });
 
 it('takes two ready forward steps while retaining overlapping in-flight preparation', async () => {
-  const f = fixture(24), b = build(), frames = b.manifest.frames;
+  const f = fixture(5), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.overlay.select(b, 'usable-lift-agl', frames[2].id); await f.complete();
@@ -562,9 +562,9 @@ it('takes two ready forward steps while retaining overlapping in-flight preparat
     expect(f.displayed()).toBe(second);
     expect(sourceFor(f, 'usable-lift-agl', frames[5].id)).toBe(warming);
     expect(f.sources.has(previous)).toBe(false);
-    expect(f.sources.size).toBeLessThanOrEqual(4);
+    expect(f.sources.size).toBeLessThanOrEqual(3);
     f.overlay.select(b, 'usable-lift-agl', frames[3].id);
-    expect(f.displayed()).toBe(first);
+    expect(sourceFor(f, 'usable-lift-agl', frames[3].id)).toBeDefined();
   } finally { f.overlay.destroy(); }
 });
 
@@ -606,13 +606,13 @@ it('releases unfinished background sources before a cold timeline selection', as
 });
 
 it('shrinks the prepared window on resize and admits no speculative sources over budget', async () => {
-  const f = fixture(24), b = build(), frame = b.manifest.frames[2].id;
+  const f = fixture(5), b = build(), frame = b.manifest.frames[2].id;
   try {
     f.overlay.select(b, 'usable-lift-agl', frame); await completeWindow(f);
-    expect(f.sources.size).toBe(4);
-    f.setCoveringCount(64); f.emit('resize'); await completeWindow(f);
+    expect(f.sources.size).toBe(3);
+    f.setCoveringCount(24); f.emit('resize'); await completeWindow(f);
     expect(f.sources.size).toBe(2);
-    f.setCoveringCount(140); f.emit('resize');
+    f.setCoveringCount(64); f.emit('resize');
     expect(f.sources.size).toBe(1);
     expect(f.overlay.isPrepared(b, 'usable-lift-msl', frame)).toBe(false);
     f.overlay.select(b, 'usable-lift-msl', frame);
@@ -636,10 +636,10 @@ it('does not admit a raster when even one source exceeds the viewport budget', (
 });
 
 it.each(['resize', 'move'] as const)('prunes sources as the viewport grows on %s and recovers later', async event => {
-  const f = fixture(24), b = build(), frames = b.manifest.frames;
+  const f = fixture(5), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[0].id); await completeWindow(f);
-    expect(f.sources.size).toBe(4);
+    expect(f.sources.size).toBe(3);
     if (event === 'move') f.emit('movestart');
     f.setCoveringCount(256); f.emit(event);
     expect(f.sources.size).toBe(0);
@@ -676,7 +676,7 @@ it('recomputes memory admission after selection during camera movement', async (
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.emit('movestart');
     f.overlay.select(b, 'usable-lift-agl', frames[2].id);
-    f.setCoveringCount(64);
+    f.setCoveringCount(32);
     f.emit('moveend'); await completeWindow(f);
     expect(f.sources.size).toBe(2);
     expect(f.states.at(-1)?.displayed?.frame).toBe(frames[2].id);
@@ -685,7 +685,7 @@ it('recomputes memory admission after selection during camera movement', async (
 
 
 it('warms remaining same-day bytes after the ready forward window', async () => {
-  const f = fixture(24), b = build(), frames = b.manifest.frames;
+  const f = fixture(5), b = build(), frames = b.manifest.frames;
   try {
     f.overlay.select(b, 'usable-lift-agl', frames[1].id); await f.complete();
     f.overlay.select(b, 'usable-lift-agl', frames[2].id); await completeWindow(f);
@@ -694,7 +694,7 @@ it('warms remaining same-day bytes after the ready forward window', async () => 
     expect(urls[0]).toContain(`/usable-lift-agl/${frames[5].id}/`);
     expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[3].id}/`))).toBe(false);
     expect(urls.some(url => url.includes(`/usable-lift-agl/${frames[4].id}/`))).toBe(false);
-    expect(f.sources.size).toBe(4);
+    expect(f.sources.size).toBe(3);
   } finally { f.overlay.destroy(); }
 });
 

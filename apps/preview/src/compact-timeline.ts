@@ -2,7 +2,7 @@ import { formatPlaceTime, placeDateKey } from '@av/client';
 import './compact-timeline.css';
 
 export interface TimelineFrame { readonly id: string; readonly validTime: string }
-export interface CompactTimelineOptions { onSelect(index: number): void; offsetMinutes?: number }
+export interface CompactTimelineOptions { onSelect(index: number): void; offsetMinutes?: number; onPlayback?(playing: boolean): void }
 export interface CompactTimeline { update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void; setOffsetMinutes(offsetMinutes: number): void; destroy(): void }
 
 interface LocalTime { day: string; hour: number; minute: number }
@@ -150,7 +150,10 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (notify) options.onSelect(index);
   }
 
-  const stopPlayback = () => { if (timer !== null) { clearInterval(timer); timer = null; } if (!destroyed) render(); };
+  const stopPlayback = () => {
+    if (timer !== null) { clearInterval(timer); timer = null; options.onPlayback?.(false); }
+    if (!destroyed) render();
+  };
   const moveDay = (dir: number) => {
     const pos = dayPosition(), target = pos >= 0 ? days[pos + dir] : undefined, cur = frames[selectedIndex];
     const local = cur ? localTimeFromMs(Date.parse(cur.validTime), offsetMinutes) : null;
@@ -164,6 +167,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (controlsDisabled()) return;
     if (frames.length <= 1) { if (selectedIndex < 0) select(0, true, false); render(); return; }
     if (selectedIndex < 0 || selectedIndex >= frames.length - 1) select(0, true, false);
+    options.onPlayback?.(true);
     timer = setInterval(() => {
       if (selectedIndex >= frames.length - 1) { stopPlayback(); return; }
       select(selectedIndex + 1, true, false);

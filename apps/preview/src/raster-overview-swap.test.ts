@@ -42,6 +42,7 @@ vi.mock('./raster-overview', () => ({ RasterOverview: class {
     return true;
   }
   hide() { if (this.map.getLayer(this.id)) this.map.setPaintProperty(this.id, 'raster-opacity', 0); }
+  intersects() { return true; }
   clear() {
     this.frames.clear(); this.build = null; this.layer = null;
     if (this.map.getLayer(this.id)) this.map.removeLayer(this.id);
@@ -166,21 +167,53 @@ it('restores the painted overview when a pending fine swap is superseded', async
   } finally { f.overlay.destroy(); }
 });
 
-it.each(['movestart', 'resize'] as const)('cancels deferred refinement on %s and resumes detail for the settled viewport', async event => {
+it('keeps a warm overview painted across movestart and resumes detail after the viewport settles', async () => {
   const f = fixture();
   try {
     const b = await f.initial(), [, second] = b.manifest.frames;
     f.overview().warm(second.id); f.overlay.select(b, 'usable-lift-agl', second.id); f.emit('render');
-    f.emit(event); f.emit('render');
+    f.emit('movestart'); f.emit('render');
+    expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
+    expect(f.fine(second.id)).toBeUndefined();
+    vi.advanceTimersByTime(200);
+    expect(f.fine(second.id)).toBeUndefined();
+    f.emit('moveend'); vi.advanceTimersByTime(100);
+    const detail = f.fine(second.id)!; expect(detail).toBeDefined();
+    await f.complete(detail);
+    expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'detail' });
+  } finally { f.overlay.destroy(); }
+});
+
+it('clears the overview on resize and resumes detail for the settled viewport', async () => {
+  const f = fixture();
+  try {
+    const b = await f.initial(), [, second] = b.manifest.frames;
+    f.overview().warm(second.id); f.overlay.select(b, 'usable-lift-agl', second.id); f.emit('render');
+    f.emit('resize'); f.emit('render');
     expect(f.painted()).toEqual([]);
     expect(f.state()).toMatchObject({ displayed: null, quality: null });
     const afterResize = f.fine(second.id);
     vi.advanceTimersByTime(200);
-    if (event === 'movestart') { expect(f.fine(second.id)).toBeUndefined(); f.emit('moveend'); vi.advanceTimersByTime(100); }
-    else { expect(afterResize).toBeDefined(); expect(f.fine(second.id)).toBe(afterResize); }
-    const detail = f.fine(second.id)!; expect(detail).toBeDefined();
-    await f.complete(detail);
+    expect(afterResize).toBeDefined();
+    expect(f.fine(second.id)).toBe(afterResize);
+    await f.complete(afterResize!);
     expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'detail' });
+  } finally { f.overlay.destroy(); }
+});
+
+it('defers fine tiles during playback and loads them when playback pauses', async () => {
+  const f = fixture();
+  try {
+    const b = await f.initial(), [, second] = b.manifest.frames;
+    f.overview().warm(second.id);
+    f.overlay.setPlayback(true);
+    f.overlay.select(b, 'usable-lift-agl', second.id); f.emit('render');
+    vi.advanceTimersByTime(200);
+    expect(f.fine(second.id)).toBeUndefined();
+    expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
+    f.overlay.setPlayback(false);
+    vi.advanceTimersByTime(100);
+    expect(f.fine(second.id)).toBeDefined();
   } finally { f.overlay.destroy(); }
 });
 
@@ -271,7 +304,7 @@ it.each(['clear', 'expire', 'build', 'layer'] as const)('invalidates an unpainte
 });
 
 it('disables overview residency when one visible fine source consumes its reserved budget', async () => {
-  const f = fixture(128);
+  const f = fixture(65);
   try {
     const b = await f.initial(), [, second] = b.manifest.frames;
     expect(f.state()).toMatchObject({ overviewReady: 0, overviewTotal: 0 });
@@ -286,18 +319,18 @@ it('disables overview residency when one visible fine source consumes its reserv
   } finally { f.overlay.destroy(); }
 });
 
-it('retains at most three fine source handles alongside the reserved overview handle', async () => {
+it('retains at most two fine source handles alongside the reserved overview handle', async () => {
   const f = fixture();
   try {
     const b = await f.initial(); f.overview().warmAll();
     for (let round = 0; round < 5; round++) {
       for (const [id, source] of [...f.sources]) if (source.type === 'raster' && !f.loaded.has(id)) await f.complete(id);
     }
-    expect([...f.sources.values()].filter(source => source.type === 'raster')).toHaveLength(3);
+    expect([...f.sources.values()].filter(source => source.type === 'raster')).toHaveLength(2);
     for (const frame of b.manifest.frames.slice(2, 6)) {
       f.overlay.select(b, 'usable-lift-agl', frame.id); f.emit('render'); vi.advanceTimersByTime(100);
       await f.complete(f.fine(frame.id)!);
-      expect([...f.sources.values()].filter(source => source.type === 'raster').length).toBeLessThanOrEqual(3);
+      expect([...f.sources.values()].filter(source => source.type === 'raster').length).toBeLessThanOrEqual(2);
       expect(f.state().replacementFailed).toBe(false);
     }
     expect(f.paints.every(paint => paint.length <= 1)).toBe(true);

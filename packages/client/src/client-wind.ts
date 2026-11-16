@@ -1,6 +1,7 @@
 import { normalizeLon, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
 import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, decodeTileMask, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
+import { browserCaches } from './browser-cache';
 import { nearerContributor, type SamplePlan } from '@av/forecast/sampler';
 import { decodePackedWindChunk, encodeWindColumns, samplePackedWindColumns, type PackedWindChunk } from '@av/forecast/wind';
 import type { PinnedBuild } from './client-types.ts';
@@ -14,6 +15,37 @@ const MAX_CHUNKS = 64, DETAIL_MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LI
 const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8, UNAVAILABLE_BUILD_TTL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 15_000, MAX_LOAD_TIMEOUT_MS = 240_000, FIELD_SLOTS = 8192;
 const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
+const WIND_BROWSER_CACHE = 'av-wind-v1';
+
+function forgetWind(buildId?: string): void {
+  const storage = browserCaches();
+  if (!storage) return;
+  void storage.open(WIND_BROWSER_CACHE).then(async cache => {
+    const keys = await cache.keys();
+    await Promise.all(keys.map(request => {
+      const path = new URL(request.url).pathname;
+      if (buildId === undefined || path.includes(`/runs/${buildId}/`)) return cache.delete(request);
+    }));
+  }).catch(() => {});
+}
+
+function rememberWind(url: string, bytes: Uint8Array): void {
+  const copy = bytes.slice(), storage = browserCaches();
+  if (!storage) return;
+  void storage.open(WIND_BROWSER_CACHE).then(cache => cache.put(url, new Response(copy, { status: 200, headers: { 'content-type': 'application/octet-stream' } }))).catch(() => {});
+}
+
+async function recallWind(url: string, limit: number): Promise<Uint8Array | undefined> {
+  const storage = browserCaches();
+  if (!storage) return;
+  try {
+    const cache = await storage.open(WIND_BROWSER_CACHE), hit = await cache.match(url);
+    if (!hit || hit.status !== 200) return;
+    const bytes = new Uint8Array(await hit.arrayBuffer());
+    if (bytes.byteLength !== limit) return;
+    return bytes;
+  } catch { return; }
+}
 const plans: SamplePlan[] = Array.from({ length: 2 }, () => ({ contributors: Array.from({ length: 4 }, () => ({ index: 0, row: 0, column: 0, weight: 0 })), byteRange: { offset: 0, length: 0 } }));
 const planContributors = plans.map(plan => [...plan.contributors]);
 const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], values = new Float64Array(4), flags = new Uint8Array(4);
@@ -64,6 +96,7 @@ export class WindDataCache {
     }
     this.unavailableBuilds.delete(buildId);
     this.unavailableBuilds.set(buildId, now + UNAVAILABLE_BUILD_TTL_MS);
+    forgetWind(buildId);
   }
 
   hasReady(url: string, limit: number, now = Date.now()): boolean {
@@ -96,6 +129,7 @@ export class WindDataCache {
     this.unavailableBuilds.clear();
     this.spanFailures = 0;
     for (const e of this.entries) { e.expiresAt = 0; if (!e.references) this.remove(e); }
+    forgetWind();
   }
 
   private remove(entry: CachedBytes): void {
@@ -324,6 +358,15 @@ export class WindDataSource {
     const readStream = async (url: string, type: string, targets: CachedBytes[], attemptSignal = baseSignal): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {
       attemptSignal.throwIfAborted();
       const limit = targets.reduce((sum, item) => sum + item.bytes.length, 0);
+      if (targets.every(item => item.used === null)) {
+        const remembered = await recallWind(url, limit);
+        if (remembered) {
+          attemptSignal.throwIfAborted();
+          let offset = 0;
+          for (const target of targets) { target.bytes.set(remembered.subarray(offset, offset + target.bytes.length)); offset += target.bytes.length; }
+          return limit;
+        }
+      }
       const reqCtrl = new AbortController(), timer = setTimeout(() => reqCtrl.abort(new DOMException('Numeric request timed out', 'TimeoutError')), REQUEST_TIMEOUT_MS);
       const reqSig = AbortSignal.any([attemptSignal, reqCtrl.signal]);
       try {
@@ -355,6 +398,15 @@ export class WindDataSource {
           }
         } finally { reqSig.removeEventListener('abort', abort); await reader.cancel().catch(() => {}); reader.releaseLock(); }
         if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
+        if (used === limit) {
+          if (targets.length === 1) rememberWind(url, targets[0]!.bytes);
+          else {
+            const joined = new Uint8Array(limit);
+            let offset = 0;
+            for (const target of targets) { joined.set(target.bytes, offset); offset += target.bytes.length; }
+            rememberWind(url, joined);
+          }
+        }
         return used;
       } finally { clearTimeout(timer); }
     };
@@ -414,7 +466,7 @@ export class WindDataSource {
         if (used !== expected) throw new Error('Numeric chunk length mismatch');
       };
       let next = 0;
-      const settled = await Promise.allSettled(Array.from({ length: Math.min(4, batches.length) }, async () => {
+      const settled = await Promise.allSettled(Array.from({ length: Math.min(6, batches.length) }, async () => {
         try {
           while (next < batches.length) {
             const b = batches[next++]!, entries = b.tiles.map(t => this.hold(this.cache.take(`${root}/${b.kind}/${t}`, b.bytes, build.expiresAtMs)));
@@ -541,6 +593,7 @@ export class WindDataSource {
   }
 
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true; this.controller?.abort(); this.current = undefined; this.generation++;
     if (!this.active) this.release();
   }

@@ -201,6 +201,6 @@ it('evicts a queued speculative request to admit foreground work when the queue 
   scheduler.dispose();
 });
 
-it.each([{ maxActive: 0 }, { maxActive: 7 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }])('rejects invalid limits: %j', options => {
+it.each([{ maxActive: 0 }, { maxActive: 9 }, { maxActive: 1.5 }, { maxQueued: -1 }, { maxQueued: 65 }])('rejects invalid limits: %j', options => {
   expect(() => createForecastRequestScheduler(options)).toThrow('Invalid forecast request limits');
 });

@@ -35,6 +35,7 @@ export class RasterOverlay {
   private lastState: OverlayState | null = null;
   private retryEmpty = false;
   private moving = false;
+  private playing = false;
   private disposed = false;
   private prefetchJobs = new globalThis.Map<string, AbortController>();
   private prefetched = false;
@@ -96,12 +97,25 @@ export class RasterOverlay {
     this.armExpiry(); this.emit();
   };
   private readonly move = (): void => {
-    this.cancelPaint(); this.cancelRefinement(); this.clearOverview();
+    this.cancelPaint(); this.cancelRefinement();
     this.moving = true; this.preferred = null; this.warmFailed = []; this.sourceLimits.clear(); this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.armExpiry(); this.emit();
   };
-  private readonly viewChanged = (): void => { this.sourceLimits.clear(); this.enforceBudget(); };
+  private readonly viewChanged = (): void => {
+    this.sourceLimits.clear(); this.enforceBudget();
+    const overview = this.overview;
+    if (!overview?.supported) return;
+    if (!overview.intersects()) {
+      if (this.coarse) {
+        overview.hide();
+        if (this.active) this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity);
+      }
+      return;
+    }
+    const coarse = this.coarse;
+    if (coarse && matches(coarse, this.requested)) overview.show(coarse.build, coarse.layer, coarse.frame, this.opacity);
+  };
   private readonly resized = (): void => {
     this.cancelPaint(); this.cancelRefinement(); this.clearOverview();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
@@ -116,12 +130,17 @@ export class RasterOverlay {
   private readonly settled = (): boolean => {
     if (!this.moving || this.map.isMoving?.()) return false;
     this.moving = false; this.sourceLimits.clear(); this.enforceBudget();
-    const sel = this.requested, pending = this.slots.find(s => s !== this.active && matches(s, sel));
+    const sel = this.requested;
+    if (sel && this.overview?.supported && !this.overview.intersects()) this.clearOverview();
     if (sel) this.prepareOverview(sel);
-    if ((!pending && !this.retryEmpty && matches(this.active, sel)) || !sel || sel.build.expiresAtMs <= Date.now()) {
-      this.prepareNext(); this.emit(); return false;
+    const pending = this.slots.find(s => s !== this.active && matches(s, sel));
+    if (pending && (pending.pending.size > 0 || (pending.successful && !this.problem(pending) && this.tilesSettled(pending)))) {
+      this.update(); this.prepareNext(); this.emit(); return false;
     }
     if (pending) this.drop(pending);
+    if ((!this.retryEmpty && matches(this.active, sel)) || !sel || sel.build.expiresAtMs <= Date.now()) {
+      this.prepareNext(); this.emit(); return false;
+    }
     try { this.select(sel.build, sel.layer, sel.frame); } catch { /* reported */ }
     return true;
   };
@@ -178,17 +197,31 @@ export class RasterOverlay {
     if (target) { target.transport.setInteractive(true); this.cancelPrefetch(); this.emit(); this.update(); return; }
     this.cancelPrefetch(this.requested); this.emit();
     this.stageOverview();
+    this.armDetail(this.requested);
+  }
+
+  setPlayback(playing: boolean): void {
+    if (this.disposed || this.playing === playing) return;
+    this.playing = playing;
+    if (playing) { this.cancelRefinement(); this.cancelPrefetch(); return; }
+    const sel = this.requested;
+    if (sel && !this.moving && sel.build.expiresAtMs > Date.now()) this.armDetail(sel);
+    this.prepareNext();
+  }
+
+  private armDetail(sel: Selection): void {
+    if (this.playing && this.overview?.supported) return;
+    if (this.slots.some(slot => matches(slot, sel))) return;
     if (this.overview?.state.total) {
-      const sel = this.requested;
       this.refineTimer = setTimeout(() => {
         this.refineTimer = null;
-        if (matches(sel, this.requested) && !this.moving && sel.build.expiresAtMs > Date.now()) {
+        if (matches(sel, this.requested) && !this.playing && !this.moving && sel.build.expiresAtMs > Date.now()) {
           try { this.loadDetail(sel); } catch { /* reported */ }
         }
       }, 100);
       return;
     }
-    this.loadDetail(this.requested);
+    this.loadDetail(sel);
   }
 
   private loadDetail(sel: Selection): void {
@@ -409,7 +442,9 @@ export class RasterOverlay {
   }
   private prepareNext(): void {
     if (this.disposed || this.pendingPaint || this.pendingOverview || this.moving || this.map.isMoving?.() || !this.active || !matches(this.active, this.requested) || this.active.build.expiresAtMs <= Date.now()) return;
-    if (this.overview?.supported && this.overview.state.ready + this.overview.state.failed < this.overview.state.total) return;
+    if (this.playing) return;
+    if (this.overview?.supported && !this.overview.ready(this.active.build, this.active.layer, this.active.frame)) return;
+    if (this.overview?.supported && this.overview.state.ready + this.overview.state.failed < this.overview.state.total) { this.prefetchBytes(); return; }
     const candidates = this.predicted(), limit = Math.min(this.slotLimit(this.active), ...candidates.map(v => this.slotLimit(v)));
     if (!limit) { this.enforceBudget(); return; }
     const desired = candidates.slice(0, limit - 1);
@@ -427,7 +462,7 @@ export class RasterOverlay {
       catch { const failed = this.slots.find(s => matches(s, next)); if (failed) this.abandon(failed); else this.warmFailed.push(next); }
       return;
     }
-    if (!this.overview?.supported) this.prefetchBytes();
+    this.prefetchBytes();
   }
   private timelineFrames(slot: Slot): string[] {
     const frames = renderedFrames(slot.build.manifest), index = frames.findIndex(f => f.id === slot.frame);

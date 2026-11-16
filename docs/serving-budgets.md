@@ -22,17 +22,23 @@ combined work across all grids selected by a request.
   the remaining pointer freshness and live build deadlines. Browsers revalidate;
   the Cache API stores bounded bodies under the existing response pool.
 - **Client forecast transport:** preview routes numeric wind and raster fetches
-  through one [scheduler](../packages/client/src/client-request-scheduler.ts),
-  with six active requests including body consumption and cancellation, plus
-  64 queued requests. Selected foreground work takes priority over queued
-  speculation and evicts a queued low-priority prefetch if all 64 queue slots
-  are occupied. Preview and Windy share the
-  [raster scheduler](../packages/client/src/client-raster.ts).
-  It keeps 16 requests active and queues 64. Background work starts while fewer
+  through separate [schedulers](../packages/client/src/client-request-scheduler.ts).
+  Wind keeps six active requests, including body consumption and cancellation, and
+  raster keeps eight. Each scheduler queues 64 requests. The raster scheduler is
+  the socket cap for tile reads. Selected foreground work
+  takes priority over queued speculation and evicts a queued low-priority prefetch
+  if all 64 queue slots are occupied. Preview and Windy share the
+  [raster protocol](../packages/client/src/client-raster.ts).
+  It still admits 16 tasks and queues 64. Background work starts while fewer
   than 2 background reads are active; admitted reads finish after demotion. The
-  compressed tile cache is 48 MiB including entry overhead. Preview retains up to
-  four source handles using [viewport memory admission](../apps/preview/src/raster-budget.ts),
-  with 16 offscreen tiles per source. Preview's 120 MiB forecast envelope reserves
+  compressed tile cache is 48 MiB including entry overhead. A browser Cache API
+  store (`av-raster-v1`, `av-wind-v1`) keeps immutable bodies after the heap LRU
+  drops them when `caches` exists. Preview admits source handles with
+  [viewport memory admission](../apps/preview/src/raster-budget.ts),
+  with 48 offscreen tiles per source. One charged tile is `256² × 4 × 2` bytes.
+  With wind on, the 80 MiB raster budget holds 160 of those tiles, so 48 extra
+  tiles admit three sources at five covering tiles, two at 32, and one through 112.
+  Preview's 120 MiB forecast envelope reserves
   8 MiB for numeric wind, 32 MiB for wind canvases (up to 8,388,608 combined RGBA
   device pixels across 2× Retina barbs and 1× trails) and 80 MiB for rasters; hiding
   wind shrinks both canvases to 1×1 and reclaims the 32 MiB canvas reserve while keeping
