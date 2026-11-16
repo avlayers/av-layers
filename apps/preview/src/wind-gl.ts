@@ -1,6 +1,6 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
-import { WIND_TRAIL_WIDTH } from './raster-budget';
+import { WIND_TRAIL_BIAS, WIND_TRAIL_FADE, WIND_TRAIL_GAIN, WIND_TRAIL_WIDTH } from './raster-budget';
 import { PLAYBACK_STEP_MS } from './timeline';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
@@ -35,7 +35,7 @@ const LINES = `#version 300 es
 precision highp float;uniform sampler2D u_prev,u_curr;uniform mat4 u_matrix;uniform float u_world,u_max,u_radius;uniform vec2 u_view;
 flat out float v_len;out vec2 v_local;
 vec2 mercator(vec2 lonlat){float r=lonlat.y*.01745329251;return vec2((lonlat.x+180.)/360.,.5-log(tan(.78539816339+r*.5))/6.28318530718);}
-void main(){v_len=0.;v_local=vec2(0.);int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corner:corner==3?2:corner==4?1:3;ivec2 p=ivec2(id&63,id>>6);
+void main(){v_len=0.;v_local=vec2(0.);int corner=gl_VertexID%6,id=gl_VertexID/6,c=corner<3?corner:corner==3?2:corner==4?1:3;ivec2 p=ivec2(id&${STATE - 1},id>>${Math.round(Math.log2(STATE))});
  vec4 a=texelFetch(u_prev,p,0),b=texelFetch(u_curr,p,0);if(a.z<=0.||b.z<=0.){gl_Position=vec4(2,2,0,1);return;}
  vec2 pa=mercator(a.xy),pb=mercator(b.xy);vec4 ca=u_matrix*vec4(pa*u_world,0,1),cb=u_matrix*vec4(pb*u_world,0,1);
  vec2 na=ca.xy/ca.w,nb=cb.xy/cb.w,d=(na-nb)*u_view*.5;if(dot(d,d)>u_max*u_max){gl_Position=vec4(2,2,0,1);return;}
@@ -49,8 +49,8 @@ void main(){float dist=length(vec2(max(0.,abs(v_local.x)-v_len*.5),v_local.y));f
  float a=.95*(1.-smoothstep(u_radius-edge,u_radius+edge,dist));o=vec4(a);}`;
 /** Trail targets are R8, so coverage is red and the sampled alpha is 1. */
 const BLIT = `#version 300 es
-precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_keep;in vec2 v_uv;out vec4 o;
-void main(){vec2 uv=v_uv-u_shift;float a=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?0.:texture(u_tex,uv).r*u_keep;o=vec4(a);}`;
+precision mediump float;uniform sampler2D u_tex;uniform vec2 u_shift;uniform float u_gain,u_bias;in vec2 v_uv;out vec4 o;
+void main(){vec2 uv=v_uv-u_shift;float t=uv.x<0.||uv.y<0.||uv.x>1.||uv.y>1.?0.:texture(u_tex,uv).r;o=vec4(max(0.,t*u_gain-u_bias));}`;
 
 /** One-byte trail targets. Two copies of a 4096² buffer are the 32 MiB canvas reserve. */
 export function trailTargetSize(bufferWidth: number, bufferHeight: number, maxSide = TRAIL_SIDE): { width: number; height: number } {
@@ -224,8 +224,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trails[trail]);
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset || jump ? 0 : sx, reset || jump ? 0 : sy);
-    // Same coefficient as the canvas trail fade.
-    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 0.9));
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_gain'), reset || jump ? 0 : Math.exp(-dt * WIND_TRAIL_FADE));
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_bias'), 0);
     draw(blit, gl.TRIANGLES, 3);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.CULL_FACE);
@@ -256,7 +256,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, trails[trail]);
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), 0, 0);
-    gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), 1);
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_gain'), WIND_TRAIL_GAIN);
+    gl.uniform1f(gl.getUniformLocation(blit, 'u_bias'), WIND_TRAIL_BIAS);
     draw(blit, gl.TRIANGLES, 3);
     gl.useProgram(savedProgram); gl.bindVertexArray(savedVao); gl.bindTexture(gl.TEXTURE_2D, null);
     if (!state.paused && document.visibilityState !== 'hidden') map.triggerRepaint();

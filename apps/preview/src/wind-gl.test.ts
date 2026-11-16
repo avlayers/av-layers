@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { WIND_CANVAS_BYTES } from './raster-budget';
+import { WIND_CANVAS_BYTES, WIND_TRAIL_BIAS, WIND_TRAIL_FADE, WIND_TRAIL_GAIN } from './raster-budget';
 import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
 
 const decode = (byte: number) => byte / 255 * 200 - 100;
@@ -62,6 +62,11 @@ it('samples wind texels with floor and rejects zero alpha before decoding', () =
   expect(WIND_PARTICLE_UPDATE).toContain('mix(a.xy,b.xy,u_mix)');
   expect(WIND_PARTICLE_UPDATE).toContain('vb?b.xy:a.xy');
   expect(WIND_PARTICLE_UPDATE).not.toMatch(/texture\(u_[ab]/);
+});
+
+it('keeps a wind streak short and soft', () => {
+  expect(Math.exp(-WIND_TRAIL_FADE / 60)).toBeCloseTo(0.94, 2);
+  expect(WIND_TRAIL_GAIN - WIND_TRAIL_BIAS).toBeCloseTo(0.96, 2);
 });
 
 it('keeps each trail target at the drawing-buffer size inside the canvas reserve', () => {

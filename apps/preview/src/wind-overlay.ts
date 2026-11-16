@@ -1,7 +1,7 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import type { Map } from 'maplibre-gl';
-import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from './raster-budget';
+import { WIND_CANVAS_PIXELS, WIND_TRAIL_BIAS, WIND_TRAIL_FADE, WIND_TRAIL_GAIN, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from './raster-budget';
 import { PLAYBACK_STEP_MS } from './timeline';
 import { attachWindGl, type WindGl } from './wind-gl';
 
@@ -173,10 +173,10 @@ export class WindOverlay {
   private advance(elapsed: number): void {
     const ctx = this.trailCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = `rgba(0,0,0,${1 - Math.exp(-elapsed * 0.9)})`;
+    ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = `rgba(0,0,0,${1 - Math.exp(-elapsed * WIND_TRAIL_FADE)})`;
     ctx.fillRect(0, 0, this.trails.width, this.trails.height);
     ctx.globalCompositeOperation = 'source-over'; ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = WIND_TRAIL_WIDTH; ctx.lineCap = 'round'; ctx.beginPath();
+    ctx.strokeStyle = `rgba(255,255,255,${Math.max(0, WIND_TRAIL_GAIN - WIND_TRAIL_BIAS)})`; ctx.lineWidth = WIND_TRAIL_WIDTH; ctx.lineCap = 'round'; ctx.beginPath();
     const count = Math.min(MAX_PARTICLES, Math.ceil(this.width * this.height / 3000));
     while (this.particles.length < count) {
       const loc = this.map.unproject([Math.random() * this.width, Math.random() * this.height]);
