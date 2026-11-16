@@ -1829,6 +1829,20 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
   expect(windStatuses.at(-1)).toBe('ready');
 });
 
+it('draws a coverage parallel that meets the view and removes it when the view leaves', async () => {
+  await start();
+  expect(map().sources.has('av-seam')).toBe(false);
+  map().bounds = { west: -10, east: 10, south: 60, north: 70 };
+  map().emit('moveend');
+  const source = map().sources.get('av-seam') as { data: { features: { geometry: { coordinates: number[][] } }[] } };
+  expect(source.data.features.some(feature => feature.geometry.coordinates.some(([, latitude]) => latitude === 65))).toBe(true);
+  expect(map().layers.has('av-seam-line')).toBe(true);
+  expect(map().layers.has('av-seam-label')).toBe(false);
+  map().bounds = { west: -118, east: -117, south: 32, north: 33 };
+  map().emit('moveend');
+  expect(map().sources.has('av-seam')).toBe(false);
+});
+
 it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point wind at the clicked longitude', async () => {
   deferWind = true;
   win.href = 'http://localhost:5173/?model=gfs&lat=40.18&lon=44.51&z=9';

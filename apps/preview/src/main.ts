@@ -15,6 +15,7 @@ import {
 } from '@av/client';
 import { WindDataCache, WindDataSource } from '@av/client/wind';
 import './style.css';
+import { CoverageSeam } from './coverage-seam';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
@@ -98,6 +99,8 @@ function startPreview(lifecycle: AbortController): void {
   let overlayState: OverlayState = { displayed: null, requested: null, quality: null, viewLoading: false, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, incomplete: false, replacementFailed: false };
   const scheduler = createForecastRequestScheduler(), windCache = new WindDataCache();
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => { overlayState = state; reconcileWind(); updateOverlayStatus(); }, scheduler.fetch);
+  const seam = new CoverageSeam(map);
+  const refreshSeam = (): void => { seam.sync(build, activeLayer()); };
 
   let ribbon: { build: PinnedBuild; layer: LayerId } | null = null, layerButtons: HTMLButtonElement[] = [], layerMenuSignature = '';
   let pendingModel: ModelId | null = null, resumeModel: ModelId | null = null;
@@ -489,7 +492,7 @@ function startPreview(lifecycle: AbortController): void {
     expired = true;
     tileErrorBox.hidden = horizonNotice.hidden = true; tileErrorBox.textContent = horizonNotice.textContent = '';
     if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
-    loadAbort?.abort(); windCache.clear(); clearWind(); closePoint(); disposeExpiry(); overlay.clear();
+    loadAbort?.abort(); windCache.clear(); clearWind(); closePoint(); disposeExpiry(); overlay.clear(); seam.sync(null, null);
     setControlsEnabled(false);
     timestamp.textContent = 'Build expired — overlay removed'; freshness.textContent = 'Expired immutable build';
     showError('This build has expired. Reload to discover the latest retained build.');
@@ -505,7 +508,7 @@ function startPreview(lifecycle: AbortController): void {
     const layer = activeLayer();
     if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
     clearError(); selectingOverlay = true;
-    try { overlay.select(build, layer, selectedFrame); }
+    try { overlay.select(build, layer, selectedFrame); refreshSeam(); }
     catch (error) { showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { selectingOverlay = false; updatePointSelection(); }
     updateWind();
@@ -551,7 +554,7 @@ function startPreview(lifecycle: AbortController): void {
       disposeExpiry();
       if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
       build = selectedFrame = null; syncModels(); syncWindSupport();
-      clearWind(); closePoint(); overlay.clear(); updateTimeUi(); setControlsEnabled(false);
+      clearWind(); closePoint(); overlay.clear(); seam.sync(null, null); updateTimeUi(); setControlsEnabled(false);
       showError('No forecast covers this location and time.'); freshness.textContent = 'No viewable build';
       urlReady = true; writeUrl('replace');
     } catch (error) {
@@ -821,11 +824,12 @@ function startPreview(lifecycle: AbortController): void {
     if (build && !expired) updateTimeUi();
     if (currentModel === AUTO_MODEL_ID && !applyingHistory) void loadAuto();
     if (urlReady && !applyingHistory) writeUrl('push');
+    refreshSeam();
   });
 
   const teardownAll = () => {
     windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
-    overlay.destroy(); scheduler.dispose(); map.remove();
+    seam.destroy(); overlay.destroy(); scheduler.dispose(); map.remove();
   };
 
   map.on('error', (event: { error?: unknown }) => {
@@ -861,7 +865,7 @@ function startPreview(lifecycle: AbortController): void {
     if (!event.persisted) return;
     if (resumeModel !== null) { const m = resumeModel; resumeModel = null; void loadModel(m); return; }
     if (build && ensureLive()) {
-      updateTimeUi(); updateOverlay(); setControlsEnabled(true); updateFreshness();
+      updateTimeUi(); updateOverlay(); refreshSeam(); setControlsEnabled(true); updateFreshness();
       if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
     }
   }, globalListener);
@@ -873,7 +877,7 @@ function startPreview(lifecycle: AbortController): void {
   map.once('style.load', () => {
     if (lifecycle.signal.aborted || mapFailed) return;
     if (!startup.camera) focusRegion(currentModel);
-    mapReady = true; updateOverlay(); writeUrl('replace');
+    mapReady = true; seam.markReady(); updateOverlay(); refreshSeam(); writeUrl('replace');
   });
   void loadModel(initialModel);
 }

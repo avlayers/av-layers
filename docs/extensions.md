@@ -89,7 +89,7 @@ the candidate Worker. See the [reader cutover checks](hardening-plan.md#gate-rea
 
 [geometry.ts](../packages/contracts/src/geometry.ts) implements `regular-latlon`
 and spherical `lambert-conformal` projections; test new projections against PROJ
-control points. [support.ts](../packages/forecast/src/support.ts) resolves
+control points. A new model’s coverage seam and Auto admission both come from that grid and its coverage bounds. [support.ts](../packages/forecast/src/support.ts) resolves
 neighboring cells for stencil operations, and
 [coverage.ts](../apps/batch/src/coverage.ts) separates public output cells from
 halo cells. Finish with `pnpm docs:generate` and `pnpm verify`.

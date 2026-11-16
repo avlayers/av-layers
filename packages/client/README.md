@@ -23,6 +23,8 @@ descriptors. [`@av/windgram`](../windgram/README.md) owns point presentation.
 - [`@av/client/wind`](src/client-wind.ts) loads one bounded wind viewport and
   samples Surface, AGL or Top-of-lift vectors. Dispose it when its view closes.
 
+The coverage seam follows the cell-center edge of the displayed layer grid, or the coverage parallels when that grid wraps longitude. Auto ranks models by native spacing and keeps a candidate when `locateSampleCell` hits that grid and the sample is `valid` or `no-usable-lift`.
+
 Point requests default to the first published frame. Select frame pages for complete
 timelines within the [serving budgets](../../docs/serving-budgets.md).
 The [point series loader](src/client-point.ts) fetches samples and profiles
