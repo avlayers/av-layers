@@ -1,5 +1,5 @@
 import type { Map, MapSourceDataEvent, ErrorEvent } from 'maplibre-gl';
-import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
+import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, seamInsertBefore, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
@@ -332,7 +332,7 @@ export class RasterOverlay {
     source.tiles = source.tiles.map(url => transport.url(url));
     this.map.addSource(id, source);
     const layer = previewRasterLayer(0);
-    this.map.addLayer({ ...layer, id, source: id, paint: { ...layer.paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } });
+    this.map.addLayer({ ...layer, id, source: id, paint: { ...layer.paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
   }
 
   private problem(slot: Slot | null): boolean { return !!slot && (slot.sourceFailed || slot.failed.size > 0); }

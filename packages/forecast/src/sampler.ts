@@ -1,7 +1,7 @@
 import { CELL_BYTES } from '@av/contracts/format';
 import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type LayerId, type LayerSpec } from '@av/contracts/layers';
 type ReductionSpec = Pick<LayerSpec, 'supportsNoLift' | 'supportsLiftFlags' | 'noLiftSampleValue' | 'zeroOnNoLiftInterpolation'>;
-import { isValidGridGeometry, LAMBERT_GRID_FIELDS, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
+import { isValidGridGeometry, LAMBERT_GRID_FIELDS, locateSampleCell, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
 import { getBit, isCovered, type CoverageMask } from '@av/contracts/coverage-query';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
 
@@ -176,26 +176,6 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   out.value = value; out.status = noLift ? STATUS_NO_LIFT : STATUS_VALID;
 }
 
-interface LocatedCell { column: number; row: number; fractionX: number; fractionY: number }
-function locate(grid: Grid, geometry: GridGeometry | null, lat: number, lon: number): LocatedCell | null {
-  let x: number, y: number;
-  if (grid.kind === 'regular-latlon') {
-    if (![grid.lon0, grid.lat0, grid.dx, grid.dy].every(Number.isFinite) || grid.dx === 0 || grid.dy === 0 || lat < -90 || lat > 90) return null;
-    x = snap((lon - grid.lon0) / grid.dx);
-    y = snap((lat - grid.lat0) / grid.dy);
-    if (grid.wrapLongitude) x = snap(((x % grid.width) + grid.width) % grid.width);
-  } else {
-    if (!geometry) return null;
-    const point = geometry.geographicToGrid(lat, lon);
-    if (!point) return null;
-    ({ x, y } = point);
-  }
-  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  if ((!grid.wrapLongitude && (x < 0 || x > grid.width - 1)) || y < 0 || y > grid.height - 1) return null;
-  const column = Math.floor(x), row = Math.floor(y);
-  return { column, row, fractionX: x - column, fractionY: y - row };
-}
-
 const lambertGeometries = /* @__PURE__ */ new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
 function lambertGeometry(grid: Grid): GridGeometry | null {
   if (grid.kind !== 'lambert-conformal') return null;
@@ -208,10 +188,9 @@ function lambertGeometry(grid: Grid): GridGeometry | null {
 }
 
 export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | null {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
   let geometry: GridGeometry | null;
   try { geometry = lambertGeometry(grid); } catch { return null; }
-  const located = locate(grid, geometry, lat, lon);
+  const located = locateSampleCell(grid, lat, lon, geometry);
   if (!located) return null;
   const { column: x0, row: y0, fractionX: fx, fractionY: fy } = located;
   const contributors: Contributor[] = [];
@@ -269,7 +248,7 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
   let geometry: GridGeometry | null;
   try { geometry = lambertGeometry(mask.grid); } catch { return false; }
-  const located = locate(mask.grid, geometry, lat, lon);
+  const located = locateSampleCell(mask.grid, lat, lon, geometry);
   if (!located) return false;
   const { column, row, fractionX: fx, fractionY: fy } = located;
   const next = mask.grid.wrapLongitude ? (column + 1) % mask.grid.width : column + 1;
@@ -477,7 +456,7 @@ function prepareLocatedSample(
   contributorSet: Set<number>,
   cache: ReturnType<typeof locatedSampleCache>
 ): void {
-  const located = locate(grid, geometry, lat, lon);
+  const located = locateSampleCell(grid, lat, lon, geometry);
   if (!located) return;
   recordLocatedSample(grid, mask, located.column, located.row, located.fractionX, located.fractionY, index, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
 }

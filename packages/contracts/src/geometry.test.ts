@@ -3,8 +3,9 @@ import { NORTHERN_LAMBERT, SOUTHERN_LAMBERT } from '../../../tests/lambert-fixtu
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { gridSchema } from './grid-schema.js';
-import { earthVectorToGrid, geographicToGrid, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import { earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
 import { isCovered, type CoverageMask } from './index.js';
+import { getProduct } from './products.js';
 
 const grid = gridSchema.parse(fixture.grid) as LambertConformalGrid;
 
@@ -120,5 +121,42 @@ describe('native spherical grid geometry', () => {
     expect(withinGeographicBounds(0, -179, [170, -10, -170, 10])).toBe(true);
     expect(withinGeographicBounds(0, 0, [170, -10, -170, 10])).toBe(false);
     expect(withinGeographicBounds(0, 180, [-180, -10, -170, 10])).toBe(true);
+  });
+
+  it('traces cell-center corners and bows a Lambert edge past its corners', () => {
+    const icon = getProduct('icon-eu')!.grid;
+    const [ring] = gridOutline(icon);
+    expect(gridOutline(icon)).toHaveLength(1);
+    expect(ring![0]).toEqual({ lat: 70.5, lon: -23.5 });
+    expect(ring!.at(-2)).toEqual(gridToGeographic(icon, 0, icon.height - 1));
+    expect(ring!.at(-1)).toEqual(ring![0]);
+    expect(ring!.some(point => point.lon === 62.5 && point.lat === 29.5)).toBe(true);
+    const rrfs = getProduct('rrfs')!.grid;
+    if (rrfs.kind !== 'lambert-conformal') throw new Error('rrfs grid');
+    const top = rrfs.height - 1, right = rrfs.width - 1;
+    const corners = Math.max(gridToGeographic(rrfs, 0, top)!.lat, gridToGeographic(rrfs, right, top)!.lat);
+    const outline = gridOutline(rrfs);
+    expect(Math.max(...outline.flat().map(point => point.lat))).toBeGreaterThan(corners + 1);
+    const polar = { ...NORTHERN_LAMBERT, width: 80, height: 40, x0M: -120_000, y0M: 7_418_672.785397771, dxM: 3_000, dyM: 3_000 };
+    const poleEnds = [gridToGeographic(polar, 31, 39)!, gridToGeographic(polar, 47, 39)!];
+    expect(gridToGeographic(polar, 40, 39)).toBeNull();
+    expect(Math.abs(poleEnds[0]!.lon - poleEnds[1]!.lon)).toBeLessThanOrEqual(180);
+    expect(gridOutline(polar).flat()).toEqual(expect.arrayContaining(poleEnds));
+    expect(gridOutline(polar).some(line => line.some((point, index) => index > 0 && point.lon === poleEnds[1]!.lon && line[index - 1]!.lon === poleEnds[0]!.lon))).toBe(false);
+    const split = gridOutline({ ...rrfs, centralMeridianDeg: 179 });
+    expect(split.length).toBeGreaterThan(1);
+    for (const line of [...outline, ...split]) {
+      for (let index = 1; index < line.length; index += 1) expect(Math.abs(line[index]!.lon - line[index - 1]!.lon)).toBeLessThanOrEqual(180);
+    }
+    const pacific = { kind: 'regular-latlon' as const, width: 4, height: 4, earthRadiusM: 6_371_229, lon0: 178, lat0: 10, dx: 1, dy: -1, wrapLongitude: false };
+    const pacificRing = gridOutline(pacific);
+    expect(pacificRing).toHaveLength(1);
+    expect(pacificRing[0]!.at(-1)).toEqual(pacificRing[0]![0]);
+    expect(pacificRing[0]!.some(point => point.lon === 181)).toBe(true);
+    const wide = gridOutline({ ...pacific, width: 3, height: 2, lon0: 0, lat0: 1, dx: 90.5 });
+    expect(wide.flat().some(point => point.lon === 181)).toBe(true);
+    expect(wide.some(line => line.some((point, index) => index > 0 && Math.min(point.lon, line[index - 1]!.lon) < 1 && Math.max(point.lon, line[index - 1]!.lon) > 180))).toBe(false);
+    expect(gridOutline(getProduct('gfs')!.grid)).toEqual([]);
+    expect(gridOutline({ ...INDEXED_GRID, width: 0 })).toEqual([]);
   });
 });

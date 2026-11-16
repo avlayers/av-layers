@@ -15,6 +15,7 @@ import {
 } from '@av/client';
 import { WindDataCache, WindDataSource } from '@av/client/wind';
 import './style.css';
+import { CoverageSeam } from './coverage-seam';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 import { RASTER_CACHE_TILES } from './raster-budget';
 import { previewQuery, previewUrl, type AltitudeReference } from './url-state';
@@ -101,6 +102,8 @@ function startPreview(lifecycle: AbortController): void {
   const rasterScheduler = createForecastRequestScheduler({ maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
   const windScheduler = createForecastRequestScheduler(), windCache = new WindDataCache();
   const overlay = new RasterOverlay(map, apiBaseUrl, opacity, state => { overlayState = state; reconcileWind(); updateOverlayStatus(); }, rasterScheduler.fetch);
+  const seam = new CoverageSeam(map);
+  const refreshSeam = (): void => { seam.sync(build, activeLayer()); };
 
   let ribbon: { build: PinnedBuild; layer: LayerId } | null = null, layerButtons: HTMLButtonElement[] = [], layerMenuSignature = '';
   let pendingModel: ModelId | null = null, resumeModel: ModelId | null = null;
@@ -156,7 +159,8 @@ function startPreview(lifecycle: AbortController): void {
   };
   const compactTimeline = createCompactTimeline(element('compact-timeline'), {
     offsetMinutes: mapOffsetMinutes,
-    onSelect: index => selectIndex(index, 'push'),
+    ...(followsPlace && Number.isFinite(home.lat) && Number.isFinite(home.lng) ? { latitude: home.lat, longitude: home.lng } : {}),
+    onSelect: (index, history = 'push') => selectIndex(index, history),
     onPlayback: playing => {
       windPlaying = playing; overlay.setPlayback(playing);
       if (playing) { windPrefetchBlocked = false; ensurePrefetch(); }
@@ -168,14 +172,14 @@ function startPreview(lifecycle: AbortController): void {
   windOverlay.setOptions({ ...windControls.state, units: pointUnitSystem });
 
   function syncMapClock(): void {
+    const center = map.getCenter();
     if (!followsPlace) {
-      const center = map.getCenter();
       const moved = Math.abs(center.lat - home.lat) > 1e-4 || Math.abs(normalizeLon(center.lng) - normalizeLon(home.lng)) > 1e-4;
       if (!moved) return;
       followsPlace = true;
     }
-    const lng = map.getCenter().lng;
-    const next = Number.isFinite(lng) ? longitudeOffsetHours(lng) * 60 : mapOffsetMinutes;
+    if (Number.isFinite(center.lat) && Number.isFinite(center.lng)) compactTimeline.setMapCenter(center.lat, center.lng);
+    const next = Number.isFinite(center.lng) ? longitudeOffsetHours(center.lng) * 60 : mapOffsetMinutes;
     if (next === mapOffsetMinutes) return;
     mapOffsetMinutes = next;
     compactTimeline.setOffsetMinutes(next);
@@ -574,7 +578,7 @@ function startPreview(lifecycle: AbortController): void {
     expired = true;
     tileErrorBox.hidden = horizonNotice.hidden = true; tileErrorBox.textContent = horizonNotice.textContent = '';
     if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
-    loadAbort?.abort(); windCache.clear(); clearWind(); closePoint(); disposeExpiry(); overlay.clear();
+    loadAbort?.abort(); windCache.clear(); clearWind(); closePoint(); disposeExpiry(); overlay.clear(); seam.sync(null, null);
     setControlsEnabled(false);
     timestamp.textContent = 'Build expired — overlay removed'; freshness.textContent = 'Expired immutable build';
     showError('This build has expired. Reload to discover the latest retained build.');
@@ -590,7 +594,7 @@ function startPreview(lifecycle: AbortController): void {
     const layer = activeLayer();
     if (!mapReady || !build || !selectedFrame || !layer || !ensureLive()) return;
     clearError(); selectingOverlay = true;
-    try { overlay.select(build, layer, selectedFrame); }
+    try { overlay.select(build, layer, selectedFrame); refreshSeam(); }
     catch (error) { showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { selectingOverlay = false; updatePointSelection(); }
     updateWind();
@@ -625,6 +629,7 @@ function startPreview(lifecycle: AbortController): void {
       if (request.signal.aborted || autoAbort !== request || currentModel !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
+          if (selectedFrame !== null && selectedFrame !== next.frame.id) compactTimeline.pause();
           selectedFrame = next.frame.id; followMapFrame(); updateTimeUi(); updateOverlay(); updateFreshness();
           if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
           writeUrl('replace');
@@ -634,7 +639,7 @@ function startPreview(lifecycle: AbortController): void {
       disposeExpiry();
       if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
       build = selectedFrame = null; syncModels(); syncWindSupport();
-      clearWind(); closePoint(); overlay.clear(); updateTimeUi(); setControlsEnabled(false);
+      clearWind(); closePoint(); overlay.clear(); seam.sync(null, null); updateTimeUi(); setControlsEnabled(false);
       showError('No forecast covers this location and time.'); freshness.textContent = 'No viewable build';
       urlReady = true; writeUrl('replace');
     } catch (error) {
@@ -699,6 +704,7 @@ function startPreview(lifecycle: AbortController): void {
       point: context.point, frameId: pointSeries.frameId, mapFrameId: displayedPointFrame(), mapOffsetMinutes, unitSystem: pointUnitSystem, totalFrames, loading,
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
+        compactTimeline.pause();
         const index = renderedFrames(context.build.manifest).findIndex(f => f.id === id);
         if (index >= 0) selectIndex(index, 'push'); else updatePointSelection();
       }
@@ -761,7 +767,7 @@ function startPreview(lifecycle: AbortController): void {
       if (build) {
         const previousFrame = selectedFrame;
         chooseFrame(build);
-        if (selectedFrame !== previousFrame) followMapFrame();
+        if (selectedFrame !== previousFrame) { compactTimeline.pause(); followMapFrame(); }
         updateTimeUi(); updateOverlay();
       }
     } finally { if (applyingHistory === change) applyingHistory = null; }
@@ -791,7 +797,7 @@ function startPreview(lifecycle: AbortController): void {
     writeUrl(opacityCommitted ? 'replace' : 'push'); opacityCommitted = true;
   });
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
-  timeInput.addEventListener('input', () => selectIndex(Number(timeInput.value), 'none'));
+  timeInput.addEventListener('input', () => { compactTimeline.pause(); selectIndex(Number(timeInput.value), 'none'); });
   timeInput.addEventListener('change', () => { writeUrl('replace'); if (currentModel === AUTO_MODEL_ID) void loadAuto(); });
   setUnits(pointUnitSystem);
   metricButton.addEventListener('click', () => setUnits('metric', true));
@@ -808,26 +814,51 @@ function startPreview(lifecycle: AbortController): void {
     locationMarker?.remove(); locationMarker = locationPoint = null;
   };
 
+  const showLocationStatus = (message: string, detail = ''): void => {
+    locationStatus.hidden = message === '';
+    locationStatus.textContent = message;
+    locationStatus.title = detail;
+  };
+  const finishLocate = (revision: number): void => {
+    if (revision !== locationRevision) return;
+    locateButton.disabled = false;
+    locateButton.ariaBusy = 'false';
+  };
+  const locateMessage = (error: GeolocationPositionError): string =>
+    error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable';
+
   locateButton.addEventListener('click', () => {
     if (locateButton.disabled || mapFailed) return;
     const revision = ++locationRevision;
-    if (!navigator.geolocation) { locationStatus.textContent = 'Location unavailable'; return; }
-    locateButton.disabled = true; locateButton.ariaBusy = 'true'; locationStatus.textContent = 'Locating…';
-    navigator.geolocation.getCurrentPosition(position => {
-      if (revision !== locationRevision || lifecycle.signal.aborted) return;
-      locateButton.disabled = false; locateButton.ariaBusy = 'false'; locationStatus.textContent = '';
-      clearLocationMarker();
-      const point: [number, number] = [position.coords.longitude, position.coords.latitude];
-      map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
-      const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
-      dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
-      element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
-      locationTimer = setTimeout(clearLocationMarker, 2000);
-    }, error => {
-      if (revision !== locationRevision || lifecycle.signal.aborted) return;
-      locateButton.disabled = false; locateButton.ariaBusy = 'false';
-      locationStatus.textContent = error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable';
-    }, { timeout: 10_000 });
+    if (!navigator.geolocation) { showLocationStatus('Location unavailable'); return; }
+    locateButton.disabled = true; locateButton.ariaBusy = 'true'; showLocationStatus('Locating…');
+    // Chrome often reports position-unavailable for the request that showed the Allow prompt, then succeeds on the next precise request. A third try uses the network provider.
+    const accuracies = [true, true, false];
+    const requestLocate = (attempt: number): void => {
+      try {
+        navigator.geolocation.getCurrentPosition(position => {
+          if (revision !== locationRevision || lifecycle.signal.aborted) return;
+          finishLocate(revision);
+          showLocationStatus('');
+          clearLocationMarker();
+          const point: [number, number] = [position.coords.longitude, position.coords.latitude];
+          map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
+          const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
+          dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
+          element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
+          locationTimer = setTimeout(clearLocationMarker, 2000);
+        }, error => {
+          if (revision !== locationRevision || lifecycle.signal.aborted) return;
+          if (error.code === 2 && attempt < accuracies.length - 1) { requestLocate(attempt + 1); return; }
+          finishLocate(revision);
+          showLocationStatus(locateMessage(error), error.message);
+        }, { enableHighAccuracy: accuracies[attempt] ?? false, maximumAge: 300_000, timeout: 10_000 });
+      } catch {
+        finishLocate(revision);
+        showLocationStatus('Location unavailable');
+      }
+    };
+    requestLocate(0);
   });
 
   function displayDiagnostic(label: string, value: string): string {
@@ -856,6 +887,7 @@ function startPreview(lifecycle: AbortController): void {
     if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build || !ensureLive()) return;
     event.preventDefault();
     const frames = renderedFrames(build.manifest), index = frames.findIndex(f => f.id === selectedFrame);
+    compactTimeline.pause();
     selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
   }, globalListener);
 
@@ -877,17 +909,19 @@ function startPreview(lifecycle: AbortController): void {
     if (build && !expired) updateTimeUi();
     if (currentModel === AUTO_MODEL_ID && !applyingHistory) void loadAuto();
     if (urlReady && !applyingHistory) writeUrl('push');
+    refreshSeam();
   });
 
   const teardownAll = () => {
     windOverlay.destroy(); windControls.destroy(); compactTimeline.destroy();
-    overlay.destroy(); windScheduler.dispose(); rasterScheduler.dispose(); map.remove();
+    seam.destroy(); overlay.destroy(); windScheduler.dispose(); rasterScheduler.dispose(); map.remove();
   };
 
   map.on('error', (event: { error?: unknown }) => {
     if (mapFailed || !(event.error instanceof maplibregl.GPUInitializationError)) return;
     mapFailed = true; lifecycle.abort(); autoAbort?.abort(); loadAbort?.abort(); loadAbort = pendingModel = resumeModel = null;
     closePoint(); disposeExpiry(); windCache.clear(); clearWind(); locationRevision++; clearLocationMarker();
+    locateButton.disabled = false; locateButton.ariaBusy = 'false'; showLocationStatus('');
     if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
     teardownAll(); showMapFailure(event.error);
   });
@@ -895,7 +929,7 @@ function startPreview(lifecycle: AbortController): void {
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
     windCache.clear(); clearWind(); locationRevision++; clearLocationMarker();
-    locateButton.disabled = false; locateButton.ariaBusy = 'false';
+    locateButton.disabled = false; locateButton.ariaBusy = 'false'; showLocationStatus('');
     resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
     loadAbort?.abort(); autoAbort?.abort();
     const pointInterrupted = event.persisted && pointSeries.pending;
@@ -916,7 +950,7 @@ function startPreview(lifecycle: AbortController): void {
     if (!event.persisted) return;
     if (resumeModel !== null) { const m = resumeModel; resumeModel = null; void loadModel(m); return; }
     if (build && ensureLive()) {
-      updateTimeUi(); updateOverlay(); setControlsEnabled(true); updateFreshness();
+      updateTimeUi(); updateOverlay(); refreshSeam(); setControlsEnabled(true); updateFreshness();
       if (expiryTimer === null) expiryTimer = window.setInterval(updateFreshness, 5000);
     }
   }, globalListener);
@@ -928,7 +962,7 @@ function startPreview(lifecycle: AbortController): void {
   map.once('style.load', () => {
     if (lifecycle.signal.aborted || mapFailed) return;
     if (!startup.camera) focusRegion(currentModel);
-    mapReady = true; updateOverlay(); writeUrl('replace');
+    mapReady = true; seam.markReady(); updateOverlay(); refreshSeam(); writeUrl('replace');
   });
   void loadModel(initialModel);
 }

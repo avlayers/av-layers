@@ -13,6 +13,34 @@ const wrapRadians = (value: number) => ((value + Math.PI) % (2 * Math.PI) + 2 * 
 const wrapDegrees = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
 export const snapGridCoordinate = (value: number): number => Math.abs(value - Math.round(value)) <= 1e-10 ? Math.round(value) : value;
 
+export interface LocatedSampleCell { column: number; row: number; fractionX: number; fractionY: number }
+
+/** Index of the cell that `planSample` would read. A miss is outside that grid. */
+export function locateSampleCell(grid: Grid, lat: number, lon: number, geometry?: GridGeometry | null): LocatedSampleCell | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isSafeInteger(grid.width) || !Number.isSafeInteger(grid.height) || grid.width <= 0 || grid.height <= 0) return null;
+  let x: number, y: number;
+  if (grid.kind === 'regular-latlon') {
+    if (![grid.lon0, grid.lat0, grid.dx, grid.dy].every(Number.isFinite) || grid.dx === 0 || grid.dy === 0 || lat < -90 || lat > 90) return null;
+    x = snapGridCoordinate((lon - grid.lon0) / grid.dx);
+    y = snapGridCoordinate((lat - grid.lat0) / grid.dy);
+    if (grid.wrapLongitude) x = snapGridCoordinate(((x % grid.width) + grid.width) % grid.width);
+  } else {
+    const projected = geometry === undefined ? sampleGeometry(grid) : geometry;
+    if (!projected) return null;
+    const point = projected.geographicToGrid(lat, lon);
+    if (!point) return null;
+    ({ x, y } = point);
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  if ((!grid.wrapLongitude && (x < 0 || x > grid.width - 1)) || y < 0 || y > grid.height - 1) return null;
+  const column = Math.floor(x), row = Math.floor(y);
+  return { column, row, fractionX: x - column, fractionY: y - row };
+}
+
+function sampleGeometry(grid: Grid): GridGeometry | null {
+  try { return prepareGridGeometry(grid); } catch { return null; }
+}
+
 /** Bounds are a coarse geographic admission filter. west > east crosses the dateline. */
 export function withinGeographicBounds(lat: number, lon: number, bounds?: GeographicBounds): boolean {
   if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) return false;
@@ -152,4 +180,49 @@ export function normalizeLon(lon: number): number {
   if (!Number.isFinite(lon)) return lon;
   const wrapped = ((((lon + 180) % 360) + 360) % 360) - 180;
   return wrapped === -180 && lon > 0 ? 180 : Object.is(wrapped, -0) ? 0 : wrapped;
+}
+
+/** Cell-center ring of a non-wrapping grid. A wrapping grid has no drawable edge here. */
+export function gridOutline(grid: Grid): GeographicPoint[][] {
+  if (!isValidGridGeometry(grid) || grid.wrapLongitude) return [];
+  const geometry = prepareGridGeometry(grid);
+  const width = grid.width - 1, height = grid.height - 1;
+  // Lambert visits every cell. A coarser step can cross a null cell and still look continuous.
+  const step = grid.kind === 'lambert-conformal' ? 1 : Math.max(width, height, 1);
+  const lines: GeographicPoint[][] = [];
+  let current: GeographicPoint[] = [], broke = false;
+  const commit = (split: boolean) => {
+    if (split) broke = true;
+    if (current.length >= 2) lines.push(current);
+    current = [];
+  };
+  const add = (x: number, y: number) => {
+    const point = geometry.gridToGeographic(x, y);
+    // Unwrapped longitude keeps a short antimeridian crossing in one segment.
+    if (point && grid.kind === 'regular-latlon') point.lon = grid.lon0 + x * grid.dx;
+    if (!point) { commit(true); return; }
+    const previous = current.at(-1);
+    if (previous && Math.abs(point.lon - previous.lon) > 180) commit(true);
+    const last = current.at(-1);
+    if (last && last.lat === point.lat && last.lon === point.lon) return;
+    current.push(point);
+  };
+  const span = (from: number, to: number) => {
+    if (from === to) return [from];
+    const sign = to > from ? 1 : -1, delta = step * sign, values: number[] = [];
+    for (let value = from; sign > 0 ? value < to : value > to; value += delta) values.push(value);
+    values.push(to);
+    return values;
+  };
+  const east = span(0, width), north = span(0, height), west = span(width, 0), south = span(height, 0);
+  for (const x of east) add(x, 0);
+  for (const y of north.slice(1)) add(width, y);
+  for (const x of west.slice(1)) add(x, height);
+  for (const y of south.slice(1)) add(0, y);
+  if (!broke && current.length >= 2) {
+    const first = current[0]!, last = current.at(-1)!;
+    if ((first.lat !== last.lat || first.lon !== last.lon) && Math.abs(first.lon - last.lon) <= 180) current.push({ ...first });
+  }
+  if (current.length >= 2) lines.push(current);
+  return lines;
 }

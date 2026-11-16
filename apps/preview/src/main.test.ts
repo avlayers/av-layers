@@ -21,6 +21,7 @@ class Element extends EventTarget {
   removed = false;
   remove(): void { this.removed = true; }
   ariaBusy = '';
+  title = '';
   ariaPressed = '';
   open = false;
   disabled = false;
@@ -49,7 +50,14 @@ class Document extends EventTarget {
   constructor() {
     super();
     const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-    for (const [, tag, id] of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) this.elements.set(id!, new Element(tag!));
+    for (const [, tag, attrs] of html.matchAll(/<(\w+)\b([^>]*)>/g)) {
+      const id = /\bid="([^"]+)"/.exec(attrs)?.[1];
+      if (!id || this.elements.has(id)) continue;
+      const element = new Element(tag!);
+      const className = /\bclass="([^"]*)"/.exec(attrs)?.[1];
+      if (className) element.className = className;
+      this.elements.set(id, element);
+    }
     for (const [, id, options] of html.matchAll(/<select[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
       for (const [, value, text] of options.matchAll(/<option\s+value="([^"]+)"[^>]*>([^<]*)<\/option>/g)) this.elements.get(id)!.add(new OptionElement(text, value));
     }
@@ -230,9 +238,10 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
   };
 } }));
 let timelineSelect: (index: number) => void;
+let timelinePauses = 0;
 vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
   timelineSelect = options.onSelect;
-  return { update() {}, setOffsetMinutes() {}, destroy() {} };
+  return { update() {}, setOffsetMinutes() {}, setMapCenter() {}, pause() { timelinePauses += 1; }, destroy() {} };
 } }));
 
 const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;
@@ -284,7 +293,7 @@ beforeEach(() => {
   windLoads.length = 0; windFields.length = 0; windStatuses.length = 0; windResolve = null; deferWind = false; rejectWind = false;
   markBuildUnavailable = false; failOnceBudget = false; preferredWindVisible = true;
   deferWindCancellation = false; windCancel = null;
-  windSample = { status: 'valid', u: 3, v: 4 };
+  windSample = { status: 'valid', u: 3, v: 4 }; timelinePauses = 0;
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
   vi.stubEnv('AV_API_BASE', 'https://api.test');
   vi.useFakeTimers();
@@ -604,13 +613,22 @@ it('reports an unavailable forecast when the viewport exceeds raster memory admi
 
 it('briefly marks the located position without a success message', async () => {
   let locate!: PositionCallback;
-  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  let request: PositionOptions | undefined;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => { request = options; locate = success; } } });
   await start();
+  expect(ui('location-status').className.includes('sr-only')).toBe(false);
   vi.useFakeTimers();
   ui('locate').dispatchEvent(new Event('click'));
+  expect(request).toEqual({ enableHighAccuracy: true, maximumAge: 300_000, timeout: 10_000 });
+  expect(ui('location-status').textContent).toBe('Locating…');
+  expect(ui('location-status').hidden).toBe(false);
   locate({ coords: { latitude: 40.45, longitude: 44.3 } } as GeolocationPosition);
   expect(map().getCenter()).toEqual({ lat: 40.45, lng: 44.3 });
+  expect(map().getZoom()).toBeGreaterThanOrEqual(10);
   expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
   const dot = ui('map').children.at(-1)!;
   expect(dot.className).toBe('location-pulse');
   expect(dot.style).toMatchObject({ left: '320px', top: '240px' });
@@ -629,8 +647,124 @@ it('leaves the map unchanged when location is denied', async () => {
   expect(ui('locate').disabled).toBe(true);
   fail({ code: 1, message: 'denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
   expect(ui('location-status').textContent).toBe('Location permission denied');
+  expect(ui('location-status').hidden).toBe(false);
   expect(map().getCenter()).toEqual(before);
   expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+});
+
+it('shows a timeout without moving the map and accepts another locate', async () => {
+  let fail!: PositionErrorCallback;
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, error: PositionErrorCallback) => { locate = success; fail = error; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  fail({ code: 3, message: 'timed out', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('location-status').textContent).toBe('Location timed out');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+  expect(ui('locate').disabled).toBe(false);
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('locate').disabled).toBe(true);
+  expect(ui('location-status').textContent).toBe('Locating…');
+  locate({ coords: { latitude: 42.36, longitude: -71.06 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 42.36, lng: -71.06 });
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+});
+
+it('re-enables locate when the geolocation call throws', async () => {
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: () => { throw new Error('blocked'); } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('reports a missing location provider without disabling locate', async () => {
+  vi.stubGlobal('navigator', {});
+  await start();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('');
+});
+
+it('asks again after Allow when the first precise fix is unavailable', async () => {
+  const calls: { success: PositionCallback; error: PositionErrorCallback; options?: PositionOptions }[] = [];
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) => { calls.push({ success, error, options }); } } });
+  await start();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(calls[0]?.options).toMatchObject({ enableHighAccuracy: true });
+  calls[0]!.error({ code: 2, message: 'Position unavailable', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('locate').disabled).toBe(true);
+  expect(ui('location-status').textContent).toBe('Locating…');
+  expect(calls[1]?.options).toMatchObject({ enableHighAccuracy: true });
+  calls[1]!.success({ coords: { latitude: 38.53, longitude: -78.28 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual({ lat: 38.53, lng: -78.28 });
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+});
+
+it('reports an unavailable position without moving the map', async () => {
+  const calls: { error: PositionErrorCallback; options?: PositionOptions }[] = [];
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback, options?: PositionOptions) => { calls.push({ error, options }); } } });
+  await start();
+  const before = map().getCenter();
+  const unavailable: GeolocationPositionError = { code: 2, message: 'Network location provider returned 403', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 };
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true]);
+  calls[0]!.error(unavailable);
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true, true]);
+  expect(ui('locate').disabled).toBe(true);
+  calls[1]!.error(unavailable);
+  expect(calls.map(call => call.options?.enableHighAccuracy)).toEqual([true, true, false]);
+  calls[2]!.error(unavailable);
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').title).toBe('Network location provider returned 403');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('clears a locating request when graphics fail', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Locating…');
+  map().emit('error', { error: new GPUInitializationError('WebGL2 unavailable') });
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  locate({ coords: { latitude: 1, longitude: 2 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('drops a late locate when the page hides during the request', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Locating…');
+  page('pagehide', true);
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  locate({ coords: { latitude: 1, longitude: 2 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual(before);
 });
 
 it.each([LIFT_STEP_RENDER_STYLE, LIFT_RENDER_STYLE, 'transparent-no-lift-v2', undefined])('explains the displayed MSL render style %s and cutoff', async style => {
@@ -710,6 +844,15 @@ it('wires compact timeline selections to history and retains the scale while scr
   expect(push).toHaveBeenCalledOnce();
   expect(ui('time').value).toBe('0');
   expect(new URL(win.href).searchParams.get('t')).toBe(manifest.frames[0].validTime);
+  timelinePauses = 0;
+  const earlier = new URL(win.href);
+  earlier.searchParams.set('t', manifest.frames[2].validTime);
+  win.href = earlier.href;
+  win.dispatchEvent(new Event('popstate'));
+  expect(ui('time').value).toBe('2');
+  expect(timelinePauses).toBe(1);
+  win.dispatchEvent(new Event('popstate'));
+  expect(timelinePauses).toBe(1);
   ui('ref-msl').dispatchEvent(new Event('click'));
   await Promise.resolve();
   expect(ui('legend-body').children[0]).not.toBe(scale);
@@ -1269,6 +1412,29 @@ it('keeps a held Auto timeline change when a prior map lookup finishes', async (
   expect(new URL(win.href).searchParams.get('t')).toBe(autoTime(36));
 });
 
+it('pauses playback when Auto keeps the same build and changes the frame', async () => {
+  const build = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [18, 36]);
+  const models = [autoCatalogRow(build.manifest, 1000)];
+  fetchMock.mockImplementation(async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return sample(input, build.manifest);
+  });
+  const tile = () => (map().getSource(sourceId()) as { tiles: string[] }).tiles[0];
+  win.href = `http://localhost:5173/?model=auto&lat=${REGION_A_POINT.lat}&lon=${REGION_A_POINT.lon}&z=9&t=${encodeURIComponent(autoTime(18))}`;
+  await import('./main');
+  map().emit('style.load');
+  await vi.waitFor(() => expect(tile()).toContain('/f018/'));
+  timelinePauses = 0;
+  const next = new URL(win.href);
+  next.searchParams.set('t', autoTime(36));
+  win.href = next.href;
+  win.dispatchEvent(new Event('popstate'));
+  await vi.waitFor(() => expect(tile()).toContain('/f036/'));
+  expect(timelinePauses).toBe(1);
+});
+
 it.each(['map movement', 'explicit selection'])('lets %s overtake a pending Auto history restore', async action => {
   const regionA = autoBuild('wrf-region-a-1km', REGION_A_BOUNDS, [18, 36]);
   const regionB = autoBuild('wrf-region-b-3km', REGION_B_BOUNDS, [18, 36]);
@@ -1449,7 +1615,9 @@ it('pages the full native point forecast while later point times keep the raster
   const series = ui('point-body').children[0], nodes = visit(series);
   const dayTabs = nodes.find(child => child.className === 'av-windgram-days')!;
   expect(dayTabs.children.length).toBeGreaterThan(1);
+  const pauses = timelinePauses;
   dayTabs.children.at(-1)!.dispatchEvent(new Event('click'));
+  expect(timelinePauses).toBe(pauses + 1);
   await vi.advanceTimersByTimeAsync(16);
   expect(ui('point-wind').textContent).toBe('');
   expect(raster()).toBe(mapUrl); expect(ui('time').value).toBe(mapTime);
@@ -1669,6 +1837,20 @@ it('caches 409 builds per buildId, gates wind on manifest.mapData, and retries u
   windResolve!('ready');
   await Promise.resolve();
   expect(windStatuses.at(-1)).toBe('ready');
+});
+
+it('draws a coverage parallel that meets the view and removes it when the view leaves', async () => {
+  await start();
+  expect(map().sources.has('av-seam')).toBe(false);
+  map().bounds = { west: -10, east: 10, south: 60, north: 70 };
+  map().emit('moveend');
+  const source = map().sources.get('av-seam') as { data: { features: { geometry: { coordinates: number[][] } }[] } };
+  expect(source.data.features.some(feature => feature.geometry.coordinates.some(([, latitude]) => latitude === 65))).toBe(true);
+  expect(map().layers.has('av-seam-line')).toBe(true);
+  expect(map().layers.has('av-seam-label')).toBe(false);
+  map().bounds = { west: -118, east: -117, south: 32, north: 33 };
+  map().emit('moveend');
+  expect(map().sources.has('av-seam')).toBe(false);
 });
 
 it('persists wind URL param only as an explicit override, preserves stored hidden preference on popstate, and formats point wind at the clicked longitude', async () => {

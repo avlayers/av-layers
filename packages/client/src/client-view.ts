@@ -251,6 +251,34 @@ export function viewportTiles(bounds: { west: number; south: number; east: numbe
   return tiles;
 }
 
+/** True when a drawn edge meets the viewport, including another world copy of that edge. */
+export function outlineMeetsView(lines: readonly { lat: number; lon: number }[][], bounds: { west: number; south: number; east: number; north: number }): boolean {
+  if (![bounds.west, bounds.south, bounds.east, bounds.north].every(Number.isFinite) || !(bounds.north > bounds.south)) return false;
+  const east = bounds.east < bounds.west ? bounds.east + 360 : bounds.east;
+  if (!(east > bounds.west)) return false;
+  const viewMid = (bounds.west + east) / 2;
+  for (const line of lines) for (let index = 1; index < line.length; index += 1) {
+    const start = line[index - 1]!, end = line[index]!;
+    if (![start.lat, start.lon, end.lat, end.lon].every(Number.isFinite)) continue;
+    const shift = 360 * Math.round((viewMid - (start.lon + end.lon) / 2) / 360);
+    if (segmentMeets(start.lon + shift, start.lat, end.lon + shift, end.lat, bounds.west, bounds.south, east, bounds.north)) return true;
+  }
+  return false;
+}
+
+function segmentMeets(x1: number, y1: number, x2: number, y2: number, left: number, bottom: number, right: number, top: number): boolean {
+  const inside = (x: number, y: number) => x >= left && x <= right && y >= bottom && y <= top;
+  if (inside(x1, y1) || inside(x2, y2)) return true;
+  if ((x1 < left && x2 < left) || (x1 > right && x2 > right) || (y1 < bottom && y2 < bottom) || (y1 > top && y2 > top)) return false;
+  const crosses = (ax: number, ay: number, bx: number, by: number) => {
+    const abx = x2 - x1, aby = y2 - y1, cdx = bx - ax, cdy = by - ay, den = abx * cdy - aby * cdx;
+    if (den === 0) return false;
+    const t = ((ax - x1) * cdy - (ay - y1) * cdx) / den, u = ((ax - x1) * aby - (ay - y1) * abx) / den;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+  };
+  return crosses(left, bottom, right, bottom) || crosses(right, bottom, right, top) || crosses(right, top, left, top) || crosses(left, top, left, bottom);
+}
+
 /** Warm one preferred viewport before neighboring frames and pan tiles. */
 export function planViewportPrefetch(options: {
   build: PinnedBuild;

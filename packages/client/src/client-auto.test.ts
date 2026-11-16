@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
-import { ApiClient, resolveAutoBuild, selectBestCatalogModel } from './index.js';
+import { ApiClient, resolveAutoBuild, selectAutoFrame, selectBestCatalogModel } from './index.js';
 import { REGION_A_BOUNDS, REGION_B_POINT, REGION_B_BOUNDS, REGION_A_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures.js';
 import { fixtureLatest } from '../../../tests/forecast-fixture.js';
 import { fixturePointSample } from '../../../tests/client-point-fixture.js';
@@ -49,6 +49,31 @@ it.each(['outside-domain', 'unavailable'] as const)('skips a rendered time hole 
   expect(paths).toEqual(['/v1/catalog', `/v1/models/${hole.manifest.model}/latest`, `/v1/models/${regionA.manifest.model}/latest`,
     `/v1/models/${regionA.manifest.model}/runs/${regionA.manifest.buildId}/sample`, '/v1/models/icon-eu/latest',
     `/v1/models/icon-eu/runs/${regional.manifest.buildId}/sample`]);
+});
+
+it('skips a finer model whose layer grid misses the center and keeps the previous frame across a tail gap', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(autoTime(0)));
+  const missed = autoBuild(fine.manifest.model, REGION_A_BOUNDS, [1, 18, 36]);
+  const grid = { kind: 'regular-latlon' as const, width: 2, height: 2, earthRadiusM: 6_371_229, lon0: 0, lat0: 0, dx: 1, dy: 1, wrapLongitude: false };
+  for (const surface of missed.manifest.surfaces) surface.grid = grid;
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input)), model = url.pathname.split('/')[3];
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models: [autoCatalogRow(missed.manifest, 1000), autoCatalogRow(regionA.manifest, 3000)] });
+    const build = model === missed.manifest.model ? missed : regionA;
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return Response.json(fixturePointSample(build, String(input)));
+  });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
+  const selection = await resolveAutoBuild(api, { ...REGION_A_POINT, layers: ['usable-lift-agl'],
+    validTimeMs: Date.parse(autoTime(18)), signal: new AbortController().signal });
+  expect(selection?.build.manifest.model).toBe(regionA.manifest.model);
+  const paths = fetchImpl.mock.calls.map(([input]) => new URL(String(input)).pathname);
+  expect(paths.some(path => path.includes(`/${missed.manifest.model}/`) && path.endsWith('/sample'))).toBe(false);
+  const gap = autoBuild('gfs', [-180, -55, 180, 65], [24, 27]).manifest.frames;
+  expect(selectAutoFrame(gap, Date.parse(autoTime(25)))?.id).toBe('f024');
+  expect(selectAutoFrame(gap, Date.parse(autoTime(26)))?.id).toBe('f027');
+  expect(selectAutoFrame(gap, Date.parse(autoTime(22)))).toBeNull();
+  expect(selectAutoFrame(gap, Date.parse(autoTime(28)))).toBeNull();
 });
 
 it('accepts older catalog rows through generated bounds and checks the pinned build', async () => {
