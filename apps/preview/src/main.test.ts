@@ -49,7 +49,14 @@ class Document extends EventTarget {
   constructor() {
     super();
     const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-    for (const [, tag, id] of html.matchAll(/<(\w+)[^>]*\bid="([^"]+)"/g)) this.elements.set(id!, new Element(tag!));
+    for (const [, tag, attrs] of html.matchAll(/<(\w+)\b([^>]*)>/g)) {
+      const id = /\bid="([^"]+)"/.exec(attrs)?.[1];
+      if (!id || this.elements.has(id)) continue;
+      const element = new Element(tag!);
+      const className = /\bclass="([^"]*)"/.exec(attrs)?.[1];
+      if (className) element.className = className;
+      this.elements.set(id, element);
+    }
     for (const [, id, options] of html.matchAll(/<select[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/select>/g)) {
       for (const [, value, text] of options.matchAll(/<option\s+value="([^"]+)"[^>]*>([^<]*)<\/option>/g)) this.elements.get(id)!.add(new OptionElement(text, value));
     }
@@ -595,13 +602,22 @@ it('reports an unavailable forecast when the viewport exceeds raster memory admi
 
 it('briefly marks the located position without a success message', async () => {
   let locate!: PositionCallback;
-  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  let request: PositionOptions | undefined;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback, _error?: PositionErrorCallback, options?: PositionOptions) => { request = options; locate = success; } } });
   await start();
+  expect(ui('location-status').className.includes('sr-only')).toBe(false);
   vi.useFakeTimers();
   ui('locate').dispatchEvent(new Event('click'));
+  expect(request).toEqual({ enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 });
+  expect(ui('location-status').textContent).toBe('Locating…');
+  expect(ui('location-status').hidden).toBe(false);
   locate({ coords: { latitude: 40.45, longitude: 44.3 } } as GeolocationPosition);
   expect(map().getCenter()).toEqual({ lat: 40.45, lng: 44.3 });
+  expect(map().getZoom()).toBeGreaterThanOrEqual(10);
   expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
   const dot = ui('map').children.at(-1)!;
   expect(dot.className).toBe('location-pulse');
   expect(dot.style).toMatchObject({ left: '320px', top: '240px' });
@@ -620,8 +636,91 @@ it('leaves the map unchanged when location is denied', async () => {
   expect(ui('locate').disabled).toBe(true);
   fail({ code: 1, message: 'denied', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
   expect(ui('location-status').textContent).toBe('Location permission denied');
+  expect(ui('location-status').hidden).toBe(false);
   expect(map().getCenter()).toEqual(before);
   expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+});
+
+it('shows a timeout without moving the map and accepts another locate', async () => {
+  let fail!: PositionErrorCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback) => { fail = error; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  fail({ code: 3, message: 'timed out', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('location-status').textContent).toBe('Location timed out');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+  expect(ui('locate').disabled).toBe(false);
+});
+
+it('re-enables locate when the geolocation call throws', async () => {
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: () => { throw new Error('blocked'); } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('reports a missing location provider without disabling locate', async () => {
+  vi.stubGlobal('navigator', {});
+  await start();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('');
+});
+
+it('reports an unavailable position without moving the map', async () => {
+  let fail!: PositionErrorCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (_success: PositionCallback, error: PositionErrorCallback) => { fail = error; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  fail({ code: 2, message: 'unavailable', PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3 });
+  expect(ui('location-status').textContent).toBe('Location unavailable');
+  expect(ui('location-status').hidden).toBe(false);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('clears a locating request when graphics fail', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Locating…');
+  map().emit('error', { error: new GPUInitializationError('WebGL2 unavailable') });
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  expect(ui('locate').ariaBusy).toBe('false');
+  locate({ coords: { latitude: 1, longitude: 2 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual(before);
+});
+
+it('drops a late locate when the page hides during the request', async () => {
+  let locate!: PositionCallback;
+  vi.stubGlobal('navigator', { geolocation: { getCurrentPosition: (success: PositionCallback) => { locate = success; } } });
+  await start();
+  const before = map().getCenter();
+  ui('locate').dispatchEvent(new Event('click'));
+  expect(ui('location-status').textContent).toBe('Locating…');
+  page('pagehide', true);
+  expect(ui('location-status').textContent).toBe('');
+  expect(ui('location-status').hidden).toBe(true);
+  expect(ui('locate').disabled).toBe(false);
+  locate({ coords: { latitude: 1, longitude: 2 } } as GeolocationPosition);
+  expect(map().getCenter()).toEqual(before);
 });
 
 it.each([LIFT_STEP_RENDER_STYLE, LIFT_RENDER_STYLE, 'transparent-no-lift-v2', undefined])('explains the displayed MSL render style %s and cutoff', async style => {

@@ -726,26 +726,42 @@ function startPreview(lifecycle: AbortController): void {
     locationMarker?.remove(); locationMarker = locationPoint = null;
   };
 
+  const showLocationStatus = (message: string): void => {
+    locationStatus.hidden = message === '';
+    locationStatus.textContent = message;
+  };
+  const finishLocate = (revision: number): void => {
+    if (revision !== locationRevision) return;
+    locateButton.disabled = false;
+    locateButton.ariaBusy = 'false';
+  };
+
   locateButton.addEventListener('click', () => {
     if (locateButton.disabled || mapFailed) return;
     const revision = ++locationRevision;
-    if (!navigator.geolocation) { locationStatus.textContent = 'Location unavailable'; return; }
-    locateButton.disabled = true; locateButton.ariaBusy = 'true'; locationStatus.textContent = 'Locating…';
-    navigator.geolocation.getCurrentPosition(position => {
-      if (revision !== locationRevision || lifecycle.signal.aborted) return;
-      locateButton.disabled = false; locateButton.ariaBusy = 'false'; locationStatus.textContent = '';
-      clearLocationMarker();
-      const point: [number, number] = [position.coords.longitude, position.coords.latitude];
-      map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
-      const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
-      dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
-      element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
-      locationTimer = setTimeout(clearLocationMarker, 2000);
-    }, error => {
-      if (revision !== locationRevision || lifecycle.signal.aborted) return;
-      locateButton.disabled = false; locateButton.ariaBusy = 'false';
-      locationStatus.textContent = error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable';
-    }, { timeout: 10_000 });
+    if (!navigator.geolocation) { showLocationStatus('Location unavailable'); return; }
+    locateButton.disabled = true; locateButton.ariaBusy = 'true'; showLocationStatus('Locating…');
+    try {
+      navigator.geolocation.getCurrentPosition(position => {
+        if (revision !== locationRevision || lifecycle.signal.aborted) return;
+        finishLocate(revision);
+        showLocationStatus('');
+        clearLocationMarker();
+        const point: [number, number] = [position.coords.longitude, position.coords.latitude];
+        map.jumpTo({ center: point, zoom: Math.max(map.getZoom(), 10) });
+        const dot = Object.assign(document.createElement('div'), { className: 'location-pulse' });
+        dot.setAttribute('aria-hidden', 'true'); locationMarker = dot; locationPoint = point;
+        element('map').append(dot); positionLocationMarker(); map.on('move', positionLocationMarker);
+        locationTimer = setTimeout(clearLocationMarker, 2000);
+      }, error => {
+        if (revision !== locationRevision || lifecycle.signal.aborted) return;
+        finishLocate(revision);
+        showLocationStatus(error.code === 1 ? 'Location permission denied' : error.code === 3 ? 'Location timed out' : 'Location unavailable');
+      }, { enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 });
+    } catch {
+      finishLocate(revision);
+      showLocationStatus('Location unavailable');
+    }
   });
 
   function displayDiagnostic(label: string, value: string): string {
@@ -807,6 +823,7 @@ function startPreview(lifecycle: AbortController): void {
     if (mapFailed || !(event.error instanceof maplibregl.GPUInitializationError)) return;
     mapFailed = true; lifecycle.abort(); autoAbort?.abort(); loadAbort?.abort(); loadAbort = pendingModel = resumeModel = null;
     closePoint(); disposeExpiry(); windCache.clear(); clearWind(); locationRevision++; clearLocationMarker();
+    locateButton.disabled = false; locateButton.ariaBusy = 'false'; showLocationStatus('');
     if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; }
     teardownAll(); showMapFailure(event.error);
   });
@@ -814,7 +831,7 @@ function startPreview(lifecycle: AbortController): void {
   window.addEventListener('popstate', applyHistory, globalListener);
   window.addEventListener('pagehide', (event: PageTransitionEvent) => {
     windCache.clear(); clearWind(); locationRevision++; clearLocationMarker();
-    locateButton.disabled = false; locateButton.ariaBusy = 'false';
+    locateButton.disabled = false; locateButton.ariaBusy = 'false'; showLocationStatus('');
     resumeModel = event.persisted ? (pendingModel ?? (currentModel === AUTO_MODEL_ID ? AUTO_MODEL_ID : null)) : null;
     loadAbort?.abort(); autoAbort?.abort();
     const pointInterrupted = event.persisted && pointSeries.pending;
