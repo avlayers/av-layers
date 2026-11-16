@@ -232,7 +232,7 @@ vi.mock('./wind-controls', () => ({ createWindControls: (_host: unknown, options
 let timelineSelect: (index: number) => void;
 vi.mock('./compact-timeline', () => ({ createCompactTimeline: (_host: unknown, options: { onSelect: typeof timelineSelect }) => {
   timelineSelect = options.onSelect;
-  return { update() {}, setOffsetMinutes() {}, setMapCenter() {}, destroy() {} };
+  return { update() {}, setOffsetMinutes() {}, setMapCenter() {}, pause() {}, destroy() {} };
 } }));
 
 const MAP_DATA = { sha256: 'a'.repeat(64), bytes: 64 } as const;

@@ -378,6 +378,18 @@ it('pauses playback when the user scrubs, picks a day, or uses arrow keys', () =
   timeline.destroy();
 });
 
+it('pause stops playback without selecting another frame', () => {
+  vi.useFakeTimers();
+  const { host, onSelect, timeline } = setup();
+  timeline.update(frames, 'a');
+  click(byClass(host.children[0]!, 'ct-play'));
+  timeline.pause();
+  expect(byClass(host.children[0]!, 'ct-play').getAttribute('aria-pressed')).toBe('false');
+  vi.advanceTimersByTime(2100);
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
 it('does not record a scrub when the timeline is disabled before release', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, 'a');

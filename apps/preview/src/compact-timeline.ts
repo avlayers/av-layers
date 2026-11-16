@@ -13,6 +13,7 @@ export interface CompactTimeline {
   update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void;
   setOffsetMinutes(offsetMinutes: number): void;
   setMapCenter(latitude: number, longitude: number): void;
+  pause(): void;
   destroy(): void;
 }
 export interface RibbonStop { readonly at: number; readonly color: string }
@@ -419,6 +420,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       ribbonCache.clear();
       syncDays();
       render();
+    },
+    pause() {
+      if (!destroyed && timer !== null) stopPlayback();
     },
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !Number.isFinite(nextLatitude) || !Number.isFinite(nextLongitude) || Math.abs(nextLatitude) > 90) return;

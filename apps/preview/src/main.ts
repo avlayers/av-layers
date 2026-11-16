@@ -616,7 +616,7 @@ function startPreview(lifecycle: AbortController): void {
       onFrame(id) {
         if (build !== context.build || !ensureLive() || !pointSeries.selectFrame(context, id)) return;
         const index = renderedFrames(context.build.manifest).findIndex(f => f.id === id);
-        if (index >= 0) selectIndex(index, 'push'); else updatePointSelection();
+        if (index >= 0) { compactTimeline.pause(); selectIndex(index, 'push'); } else updatePointSelection();
       }
     });
     pointBody.tabIndex = 0; pointCard.ariaBusy = String(loading);
@@ -707,7 +707,7 @@ function startPreview(lifecycle: AbortController): void {
     writeUrl(opacityCommitted ? 'replace' : 'push'); opacityCommitted = true;
   });
   opacityInput.addEventListener('change', () => { opacityCommitted = false; });
-  timeInput.addEventListener('input', () => selectIndex(Number(timeInput.value), 'none'));
+  timeInput.addEventListener('input', () => { compactTimeline.pause(); selectIndex(Number(timeInput.value), 'none'); });
   timeInput.addEventListener('change', () => { writeUrl('replace'); if (currentModel === AUTO_MODEL_ID) void loadAuto(); });
   setUnits(pointUnitSystem);
   metricButton.addEventListener('click', () => setUnits('metric', true));
@@ -772,6 +772,7 @@ function startPreview(lifecycle: AbortController): void {
     if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build || !ensureLive()) return;
     event.preventDefault();
     const frames = renderedFrames(build.manifest), index = frames.findIndex(f => f.id === selectedFrame);
+    compactTimeline.pause();
     selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
   }, globalListener);
 
