@@ -1,10 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import {
+  buildDayScale,
   createCompactTimeline,
   coarseSpanFractions,
   dayHatchFractions,
   frameIndexForDayFraction,
   nearestFrameIndexForDay,
+  solarMinuteBounds,
   solarRibbonStops,
   type TimelineFrame
 } from './compact-timeline';
@@ -28,7 +30,14 @@ class Element extends EventTarget {
   readonly attributes = new Map<string, string>();
   parentNode: Element | null = null;
   className = '';
-  textContent = '';
+  #text = '';
+  get textContent(): string {
+    return this.children.length ? this.children.map(child => child.textContent).join('') : this.#text;
+  }
+  set textContent(value: string) {
+    this.#text = value;
+    this.children = [];
+  }
   type = '';
   tabIndex = -1;
   disabled = false;
@@ -171,6 +180,25 @@ it('snaps a coarse gap to the nearest frame and marks the span', () => {
   expect(dayHatchFractions(frames, [], 0)).toEqual([]);
 });
 
+function luminance(hex: string): number {
+  const channel = (index: number) => Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16);
+  return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
+}
+
+it('brightens the ribbon at midday and keeps the sunrise and sunset limbs dim', () => {
+  const offsetMinutes = -300;
+  const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
+  const stops = solarRibbonStops(38.7, -78.4, start, start + 86_400_000);
+  expect(stops).toBeTruthy();
+  const bright = stops!.reduce((best, stop) => luminance(stop.color) > luminance(best.color) ? stop : best);
+  expect(bright.at).toBeGreaterThan(45);
+  expect(bright.at).toBeLessThan(58);
+  expect(bright.color).toBe('#fff7d6');
+  const limb = (from: number, to: number) => Math.max(...stops!.filter(stop => stop.at >= from && stop.at <= to).map(stop => luminance(stop.color)));
+  expect(limb(26, 34)).toBeLessThan(luminance(bright.color) * 0.55);
+  expect(limb(68, 76)).toBeLessThan(luminance(bright.color) * 0.55);
+});
+
 it('places a morning color stop for a map-center local day', () => {
   const offsetMinutes = -300;
   const start = Date.parse('2026-11-13T00:00:00Z') - offsetMinutes * 60_000;
@@ -207,7 +235,7 @@ it('keeps the neutral ribbon until a map center arrives and ignores a small pan'
   const ribbon = byClass(host.children[0]!, 'ct-ribbon');
   expect(ribbon.style.background).toBe('#e7edf2');
   timeline.setMapCenter(37.54, -77.46);
-  expect(ribbon.style.background).toContain('#e8893a');
+  expect(ribbon.style.background).toContain('#fff7d6');
   const painted = ribbon.style.background;
   timeline.setMapCenter(37.541, -77.464);
   expect(ribbon.style.background).toBe(painted);
@@ -398,6 +426,62 @@ it('pauses playback when the user scrubs, picks a day, or uses arrow keys', () =
   click(named(root, 'ct-day')[1]!);
   expect(play.getAttribute('aria-pressed')).toBe('false');
   expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.destroy();
+});
+
+it('folds both nights during daylight and opens only the night that contains the selection', () => {
+  const bounds = { sunrise: 7 * 60, sunset: 17 * 60 };
+  const folded = buildDayScale(400, bounds, 16 * 60);
+  expect(folded.linear).toBe(false);
+  expect(folded.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning', 'evening']);
+  expect(folded.segments[0]!.x1 - folded.segments[0]!.x0).toBe(28);
+  const evening = buildDayScale(400, bounds, 19 * 60);
+  expect(evening.segments.filter(segment => segment.folded).map(segment => segment.kind)).toEqual(['morning']);
+  expect(evening.segments.find(segment => segment.kind === 'evening')!.x1).toBeGreaterThan(evening.segments.find(segment => segment.kind === 'day')!.x1);
+  expect(buildDayScale(400, null, 16 * 60).linear).toBe(true);
+
+  const offsetMinutes = -300;
+  const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
+  const place = solarMinuteBounds(37.54, -77.46, '2026-11-16', offsetMinutes);
+  expect(place && place.sunset).toBeGreaterThan(16 * 60);
+  expect(place && place.sunrise).toBeLessThan(16 * 60);
+  const hourly: TimelineFrame[] = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`,
+    validTime: new Date(start + hour * 3_600_000).toISOString()
+  }));
+  const { host, onSelect, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const root = host.children[0]!;
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 480;
+  timeline.update(hourly, 'h16');
+  const labels = named(root, 'ct-tick').map(tick => tick.textContent);
+  expect(named(root, 'ct-moon')).toHaveLength(2);
+  expect(labels).not.toContain('00');
+  expect(labels).not.toContain('03');
+  expect(labels).not.toContain('21');
+  expect(labels).toContain('12');
+  expect(labels.every(label => Number(label) * 60 >= place!.sunrise && Number(label) * 60 <= place!.sunset)).toBe(true);
+
+  timeline.update(hourly, 'h21');
+  expect(named(root, 'ct-moon')).toHaveLength(1);
+  expect(named(root, 'ct-tick').map(tick => tick.textContent)).not.toContain('21');
+
+  timeline.update(hourly, 'h16');
+  pointer(track, 'pointerdown', 10);
+  const selected = onSelect.mock.calls.at(-1)?.[0] as number;
+  expect(selected).toBeGreaterThanOrEqual(0);
+  expect(selected).toBeLessThan(place!.sunrise / 60);
+  timeline.destroy();
+});
+
+it('keeps a polar day on the linear hour scale', () => {
+  expect(solarMinuteBounds(78, 15, '2025-12-21', 0)).toBeNull();
+  const { host, timeline } = setup(0, { latitude: 78, longitude: 15 });
+  const root = host.children[0]!;
+  byClass(root, 'ct-track').offsetWidth = 480;
+  timeline.update([{ id: 'noon', validTime: '2025-12-21T12:00:00Z' }], 'noon');
+  expect(named(root, 'ct-moon')).toHaveLength(0);
+  expect(named(root, 'ct-tick').map(tick => tick.textContent)).toEqual(['00', '03', '06', '09', '12', '15', '18', '21', '24']);
   timeline.destroy();
 });
 
