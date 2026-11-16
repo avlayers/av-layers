@@ -183,11 +183,13 @@ fixture frames, a 250 ms response floor and unrestricted bandwidth:
 
 | Run | Baseline first-correct p50 | Candidate first-correct p50 | Loaded workspace files | Loaded hash prefix |
 | --- | --- | --- | --- | --- |
-| 48-frame cold wide view (z7.15, > 800 km²) | 2414.3 ms | 2457.7 ms | 73 / 74 | `299107ef19` / `26712f4499` |
+| 48-frame cold wide view (z7.15, > 800 km²) | 2431.5 ms | 2413.4 ms | 73 / 74 | `299107ef19` / `41196288b0` |
 
 Probes resolved `@av/client`, `@av/client/dom`, `@av/client/wind`,
 `@av/contracts`, `@av/contracts/wind-data`, `@av/forecast/wind` and
-`@av/soaring` inside each variant's own tree. The view is outside full-horizon
+`@av/soaring` inside each variant's own tree. Source hashes were
+`d0c0b8f82ac3…` / `3201e62961c9…`; loaded-module hashes
+`299107ef19…` / `41196288b0…`. The view is outside full-horizon
 eligibility, so this run checks source isolation and foreground cold latency
 (G01/G07), not automatic full-timeline preparation. The `viewport-warm` profile,
 eligible-area calibration, warm sweep, DPR 2, constrained memory, faults and
