@@ -14,9 +14,12 @@
     "@av/contracts": "workspace:*",
     "@av/solar": "workspace:*",
     "@av/windgram": "workspace:*",
-    "maplibre-gl": "6.16.0"
+    "@preact/signals": "2.11.4",
+    "maplibre-gl": "6.16.0",
+    "preact": "11.2.0"
   },
   "devDependencies": {
+    "@preact/preset-vite": "2.10.6",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

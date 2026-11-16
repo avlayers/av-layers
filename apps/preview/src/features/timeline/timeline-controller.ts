@@ -1,9 +1,9 @@
 import { formatPlaceTime, placeDateKey } from '@av/client';
 import { solarFluxFactor, sunriseSunsetInRange } from '@av/solar';
 import './compact-timeline.css';
-import { PLAYBACK_STEP_MS } from './timeline';
+import { PLAYBACK_STEP_MS, type TimelineFrame } from './timeline-model';
 
-export interface TimelineFrame { readonly id: string; readonly validTime: string }
+export type { TimelineFrame } from './timeline-model';
 export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
   onPlayback?(playing: boolean): void;

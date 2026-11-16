@@ -13,7 +13,9 @@ To run, test, smoke-check, or build `@av/preview`:
 
 ```sh
 AV_API_BASE=http://127.0.0.1:8787 pnpm --filter @av/preview dev
-pnpm test apps/preview
+pnpm test:frontend
+pnpm exec vitest run --project unit apps/preview/src/features/timeline/timeline-controller.test.ts
+pnpm check:frontend
 pnpm smoke:wind --fixture
 pnpm --filter @av/preview build
 ```
@@ -52,17 +54,30 @@ prefix offer a 24-hour point view.
 
 ## Source layout
 
-- [src/main.ts](src/main.ts): map, forecast and point-card lifecycle.
-- [src/basemap.ts](src/basemap.ts): XC Skies Natural terrain, roads, and labels.
-- [src/wind-overlay.ts](src/wind-overlay.ts): numeric wind loading, trails and barbs.
-- [src/url-state.ts](src/url-state.ts) reads and writes shared map URLs.
-- [src/raster-overlay.ts](src/raster-overlay.ts): raster replacement and prefetch.
-- [src/raster-overview.ts](src/raster-overview.ts): bounded decoded viewport images across forecast times.
+- [src/index.tsx](src/index.tsx): the only production bootstrap.
+- [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
+- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): construction, commands, map/forecast/history wiring and shutdown.
+- [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
+- [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
+- [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
+- [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
+- [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session, controls, trails and barbs.
+- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
+- [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
+- [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.
+- [src/features/navigation/url-state.ts](src/features/navigation/url-state.ts): shared map URL parsing and serialization.
 - [index.html](index.html): application shell.
 - [package.json](package.json): Vite scripts.
 
-Shared client helpers live in [`@av/client`](../../packages/client/README.md).
-See [the data guide](../../docs/data.md) for units and coverage.
+Ordinary UI is Preact/TSX. MapLibre owns `#map` descendants; the compact
+timeline and wind controls are imperative islands mounted into stable hosts.
+Controllers own async work and resources; components receive readonly store
+values and typed commands. URL/history behavior is tested through
+`url-state.test.ts`; controller policy is tested in Node without a browser.
+
+To change a control, update its store intent, command and component; leave the
+graphics engine alone. To add a behavior, use the existing client/contracts
+types and publish through the owning feature controller.
 
 ## Layer benchmark
 

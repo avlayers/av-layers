@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
-import { PLAYBACK_STEP_MS } from './timeline';
+import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import { WindOverlay } from './wind-overlay';
 
 const gl = vi.hoisted(() => ({ setFields: vi.fn(), setMotion: vi.fn(), destroy: vi.fn() }));

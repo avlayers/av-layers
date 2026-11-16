@@ -1,7 +1,7 @@
 import { availableParallelism } from 'node:os';
 import { configDefaults, defineConfig } from 'vitest/config';
 
-const include = ['{packages,apps,scripts,tests}/**/*.test.ts'];
+const include = ['{packages,apps,scripts,tests}/**/*.test.{ts,tsx}'];
 const integration = [
   '**/*.integration.test.ts',
   'apps/api/test/runtime.test.ts',

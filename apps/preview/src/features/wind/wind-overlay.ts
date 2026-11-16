@@ -1,8 +1,8 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import type { Map } from 'maplibre-gl';
-import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from './raster-budget';
-import { PLAYBACK_STEP_MS } from './timeline';
+import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from '../raster/raster-budget';
+import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import { attachWindGl, type WindGl } from './wind-gl';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }

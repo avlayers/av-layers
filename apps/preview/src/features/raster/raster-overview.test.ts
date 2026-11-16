@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
 import type { RasterTileResponse, RasterTileSourceProtocol } from '@av/client';
 import { MAX_TILE_BYTES } from '@av/contracts/format';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
+import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import { RasterOverview } from './raster-overview';
 
 class Bitmap {

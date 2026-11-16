@@ -3,7 +3,7 @@ import type { Map } from 'maplibre-gl';
 import type { PinnedBuild, RasterTileSourceProtocol, RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
-import { fixtureBuild } from '../../../tests/forecast-fixture';
+import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import { RasterOverlay, type OverlayState } from './raster-overlay';
 
 interface Selection { build: PinnedBuild; layer: LayerId; frame: string }

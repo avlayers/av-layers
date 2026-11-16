@@ -36,7 +36,7 @@ combined work across all grids selected by a request.
   tile that has returned HTTP 200 is stored in the compressed cache when its
   caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using
-  [viewport memory admission](../apps/preview/src/raster-budget.ts), charging 48
+  [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 48
   offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
   forecast tile cache at 16 entries; other devices leave that cache at MapLibre's
   default. A rested view keeps every map frame of numeric wind in a 128 MiB,

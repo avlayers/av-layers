@@ -3,12 +3,11 @@ import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInser
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
-import { PLAYBACK_STEP_MS } from './timeline';
+import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 
 const DECODE_CAP = 768 * 1024 * 1024;
 const MAX_TILES = 64;
 const MAX_EDGE = 4096;
-const FOCUS_DWELL_MS = 400;
 const LATITUDE_LIMIT = 85.0511287798066;
 interface Window { west: number; east: number; top: number; bottom: number }
 interface Tile { x: number; y: number; z: number }
@@ -16,7 +15,7 @@ interface Box { left: number; right: number; top: number; bottom: number; z: num
 interface Geometry extends Window { tiles: Tile[]; width: number; height: number; zoom: number; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
 interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; frames: string[] }
 
-export { FOCUS_DWELL_MS };
+export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 interface Job { context: Context; frame: string; controller: AbortController }
 export interface RasterOverviewState { ready: number; total: number; failed: number }
 
