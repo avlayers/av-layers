@@ -2,51 +2,124 @@ interface SchedulerOptions {
   fetchImpl?: typeof fetch;
   maxActive?: number;
   maxQueued?: number;
-  /** When set, the concurrency slot frees at headers. Each request reserves 1 MiB until content-length arrives. */
+  /** When set, each request reserves bytes until its body settles. */
   maxInFlightBytes?: number;
+  /** Maximum simultaneous speculative bodies. */
+  maxBackgroundActive?: number;
+  /** Maximum speculative body reservations. */
+  maxBackgroundBytes?: number;
+}
+
+export type RequestPriority = 'foreground' | 'background';
+
+export interface ForecastRequestSpec {
+  url: string;
+  priority: RequestPriority;
+  kind: 'raster' | 'wind' | 'json';
+  maxResponseBytes: number;
+  expectedResponseBytes?: number;
+}
+
+export interface ForecastRequestHandle {
+  /** One physical owner's body. */
+  response: Promise<Response>;
+  /** Resolves after cleanup on success, failure or cancellation. */
+  settled: Promise<void>;
+  /** Monotonic and idempotent. */
+  promote(): void;
+  cancel(reason?: unknown): void;
 }
 
 const HEADER_RESERVE_BYTES = 1024 * 1024;
 const MAX_IN_FLIGHT_BYTES = 4 * 1024 * 1024;
+const BACKGROUND_BYTES = 2 * 1024 * 1024;
+const FOREGROUND_RESERVE_ACTIVE = 2;
+const FOREGROUND_RESERVE_BYTES = 2 * 1024 * 1024;
+
+export type CapacityCode = 'capacity' | 'configuration';
+
+export class ForecastCapacityError extends Error {
+  constructor(readonly code: CapacityCode, message: string) {
+    super(message);
+    this.name = 'ForecastCapacityError';
+  }
+}
 
 export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxActive = options.maxActive ?? 6, maxQueued = options.maxQueued ?? 64, maxInFlightBytes = options.maxInFlightBytes;
+  const maxBackgroundActive = options.maxBackgroundActive ?? Math.min(6, maxActive);
+  const maxBackgroundBytes = options.maxBackgroundBytes ?? BACKGROUND_BYTES;
   if (!Number.isSafeInteger(maxActive) || maxActive < 1 || maxActive > 12
     || !Number.isSafeInteger(maxQueued) || maxQueued < 0 || maxQueued > 64
-    || (maxInFlightBytes !== undefined && (!Number.isSafeInteger(maxInFlightBytes) || maxInFlightBytes < 1024 || maxInFlightBytes > MAX_IN_FLIGHT_BYTES))) throw new Error('Invalid forecast request limits');
+    || (maxInFlightBytes !== undefined && (!Number.isSafeInteger(maxInFlightBytes) || maxInFlightBytes < 1024 || maxInFlightBytes > MAX_IN_FLIGHT_BYTES))
+    || !Number.isSafeInteger(maxBackgroundActive) || maxBackgroundActive < 1 || maxBackgroundActive > maxActive
+    || !Number.isSafeInteger(maxBackgroundBytes) || maxBackgroundBytes < 1024 || maxBackgroundBytes > (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES)) throw new Error('Invalid forecast request limits');
 
-  const queued: Array<{ start(): void; controller: AbortController; low: boolean }> = [], active = new Set<AbortController>(), live = new Set<AbortController>();
-  let disposed = false, bodyBytes = 0;
+  const reserveActive = Math.min(FOREGROUND_RESERVE_ACTIVE, Math.max(0, maxActive - 1));
+  const reserveBytes = maxInFlightBytes === undefined ? 0 : Math.min(FOREGROUND_RESERVE_BYTES, maxInFlightBytes);
+
+  interface Task {
+    start(): void;
+    controller: AbortController;
+    isForeground(): boolean;
+    reserve(): number;
+    promote(): void;
+  }
+  const queued: Task[] = [], active = new Set<AbortController>(), live = new Set<AbortController>();
+  let disposed = false, bodyBytes = 0, backgroundBytes = 0, backgroundActive = 0;
   const abortError = () => new DOMException('Forecast request cancelled', 'AbortError');
-  const fits = () => maxInFlightBytes === undefined || bodyBytes + HEADER_RESERVE_BYTES <= maxInFlightBytes;
+
+  function admits(foreground: boolean, reserve: number): boolean {
+    if (active.size >= maxActive) return false;
+    if (maxInFlightBytes !== undefined && bodyBytes + reserve > maxInFlightBytes) return false;
+    if (foreground) return true;
+    return backgroundActive < maxBackgroundActive
+      && active.size < maxActive - reserveActive
+      && backgroundBytes + reserve <= maxBackgroundBytes
+      && (maxInFlightBytes === undefined || bodyBytes + reserve + reserveBytes <= maxInFlightBytes);
+  }
 
   function pump() {
-    while (!disposed && active.size < maxActive && queued.length && fits()) {
-      const foreground = queued.findIndex(task => !task.low);
-      queued.splice(foreground < 0 ? 0 : foreground, 1)[0].start();
+    while (!disposed && queued.length) {
+      let picked = -1;
+      for (let index = 0; index < queued.length && picked < 0; index++) {
+        const task = queued[index]!;
+        if (task.isForeground() && admits(true, task.reserve())) picked = index;
+      }
+      for (let index = 0; index < queued.length && picked < 0; index++) {
+        const task = queued[index]!;
+        if (admits(false, task.reserve())) picked = index;
+      }
+      if (picked < 0) return;
+      queued.splice(picked, 1)[0]!.start();
     }
   }
 
-  const scheduledFetch: typeof fetch = (input, init) => new Promise<Response>((resolve, reject) => {
+  function schedule(input: RequestInfo | URL, init: RequestInit | undefined, spec?: { foreground: boolean; maxResponseBytes: number; expectedResponseBytes?: number }): ForecastRequestHandle {
     const signal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
-    if (disposed) { reject(abortError()); return; }
-    if (signal?.aborted) { reject(signal.reason); return; }
-    const low = (init as RequestInit & { priority?: string } | undefined)?.priority === 'low';
-    if (!(active.size < maxActive && fits()) && queued.length >= maxQueued) {
-      const evict = !low ? queued.findIndex(item => item.low) : -1;
-      if (evict < 0) { reject(new Error('Forecast request queue is full')); return; }
-      queued[evict]!.controller.abort(abortError());
-    }
-
+    let settleResponse!: () => void, resolveResponse!: (value: Response) => void, rejectResponse!: (reason: unknown) => void;
+    const settled = new Promise<void>(resolve => { settleResponse = resolve; });
+    const response = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
     const controller = new AbortController();
-    const task = { start, controller, low };
-    let started = false, finished = false, delivered = false, heldBytes = 0;
+    const taskReserve = spec?.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : HEADER_RESERVE_BYTES;
+    let foreground = spec?.foreground ?? (init as RequestInit & { priority?: string } | undefined)?.priority !== 'low';
+    let started = false, finished = false, delivered = false, heldBytes = 0, chargedBackground = false;
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let cancellation: Promise<void> | undefined;
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const charge = (next: number) => { bodyBytes += next - heldBytes; heldBytes = next; };
-    const releaseCharge = () => { bodyBytes -= heldBytes; heldBytes = 0; };
+
+    const charge = (next: number) => {
+      const delta = next - heldBytes;
+      bodyBytes += delta;
+      if (chargedBackground) backgroundBytes += delta;
+      heldBytes = next;
+    };
+    const releaseCharge = () => {
+      bodyBytes -= heldBytes;
+      if (chargedBackground) backgroundBytes -= heldBytes;
+      heldBytes = 0; chargedBackground = false;
+    };
     function finish() {
       if (finished) return;
       finished = true;
@@ -54,11 +127,14 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
       signal?.removeEventListener('abort', externalAbort);
       controller.signal.removeEventListener('abort', abort);
       live.delete(controller);
-      if (started) active.delete(controller);
-      else {
+      if (started) {
+        active.delete(controller);
+        if (!foreground) backgroundActive--;
+      } else {
         const index = queued.indexOf(task);
         if (index >= 0) queued.splice(index, 1);
       }
+      settleResponse();
       pump();
     }
     function cancelReader(reason: unknown): Promise<void> {
@@ -68,39 +144,51 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     function abort() {
       const reason = controller.signal.reason;
       if (delivered) streamController?.error(reason);
-      else reject(reason);
-      // A body-gated request keeps its slot until the fetch or body settles. A byte-budget
-      // request releases its reserve here so a cancel does not keep the cap full.
-      if (reader) void cancelReader(reason);
-      else if (!started || maxInFlightBytes !== undefined) finish();
+      else rejectResponse(reason);
+      if (!started) finish();
+      else if (reader) void cancelReader(reason);
     }
     function externalAbort() { controller.abort(signal?.reason); }
-    controller.signal.addEventListener('abort', abort, { once: true });
-    signal?.addEventListener('abort', externalAbort, { once: true });
+    function promote() {
+      if (foreground) return;
+      foreground = true;
+      if (started) {
+        backgroundActive--;
+        if (chargedBackground) backgroundBytes -= heldBytes;
+        chargedBackground = false;
+      }
+      pump();
+    }
+    const task: Task = { controller, start, promote, isForeground: () => foreground, reserve: () => taskReserve };
+
     function start() {
       started = true;
       active.add(controller);
       live.add(controller);
+      if (!foreground) { backgroundActive++; chargedBackground = true; }
+      charge(taskReserve);
       void (async () => {
-        if (maxInFlightBytes !== undefined) charge(HEADER_RESERVE_BYTES);
         try {
-          const response = await fetchImpl(input, { ...init, signal: controller.signal });
+          const fetched = await fetchImpl(input, { ...init, signal: controller.signal });
           if (controller.signal.aborted) {
-            await response.body?.cancel(controller.signal.reason).catch(() => {});
+            await fetched.body?.cancel(controller.signal.reason).catch(() => {});
             finish(); return;
           }
-          if (maxInFlightBytes !== undefined) {
-            const declared = Number(response.headers.get('content-length'));
-            charge(Number.isFinite(declared) && declared >= 0 ? declared : heldBytes);
-            active.delete(controller);
-            pump();
+          const declared = fetched.headers.get('content-length');
+          const length = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
+          if (length !== null && spec && length > spec.maxResponseBytes) {
+            await fetched.body?.cancel(controller.signal.reason).catch(() => {});
+            throw new ForecastCapacityError('capacity', 'Response exceeds its admitted size');
           }
+          const encoding = fetched.headers.get('content-encoding');
+          if (length !== null && (encoding === null || encoding === 'identity')) charge(length);
+          pump();
           if (controller.signal.aborted) {
-            await response.body?.cancel(controller.signal.reason).catch(() => {});
+            await fetched.body?.cancel(controller.signal.reason).catch(() => {});
             finish(); return;
           }
-          if (!response.body) { finish(); resolve(response); return; }
-          reader = response.body.getReader();
+          if (!fetched.body) { finish(); resolveResponse(fetched); return; }
+          reader = fetched.body.getReader();
           const body = new ReadableStream<Uint8Array>({
             start(value) { streamController = value; },
             async pull(value) {
@@ -113,32 +201,65 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
                 if (!finished && !cancellation) { reader!.releaseLock(); finish(); value.error(error); }
               }
             },
-            cancel(reason) {
-              return cancelReader(reason);
-            }
+            cancel(reason) { return cancelReader(reason); }
           }, { highWaterMark: 0 });
-          const wrapped = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+          const wrapped = new Response(body, { status: fetched.status, statusText: fetched.statusText, headers: fetched.headers });
           Object.defineProperties(wrapped, {
-            url: { value: response.url }, redirected: { value: response.redirected }, type: { value: response.type }
+            url: { value: fetched.url }, redirected: { value: fetched.redirected }, type: { value: fetched.type }
           });
           delivered = true;
-          resolve(wrapped);
+          resolveResponse(wrapped);
         } catch (error) {
           if (!finished) {
             if (reader) await cancelReader(error);
             else finish();
-            reject(error);
+            rejectResponse(error);
           }
         }
       })();
     }
+
+    controller.signal.addEventListener('abort', abort, { once: true });
+    signal?.addEventListener('abort', externalAbort, { once: true });
+    if (disposed || signal?.aborted) {
+      const reason = disposed ? abortError() : signal!.reason;
+      rejectResponse(reason);
+      settleResponse();
+      return { response, settled, promote() {}, cancel() {} };
+    }
+    if (!admits(foreground, taskReserve) && queued.length >= maxQueued) {
+      const evict = foreground ? queued.findIndex(item => !item.isForeground()) : -1;
+      if (evict < 0) {
+        const error = new Error('Forecast request queue is full');
+        rejectResponse(error); settleResponse();
+        return { response, settled, promote() {}, cancel() {} };
+      }
+      queued[evict]!.controller.abort(abortError());
+    }
     queued.push(task);
     pump();
-  });
+    return {
+      response, settled, promote,
+      cancel(reason) { controller.abort(reason ?? abortError()); }
+    };
+  }
+
+  const scheduledFetch: typeof fetch = (input, init) => schedule(input, init).response;
 
   return {
     fetch: scheduledFetch,
+    request(spec: ForecastRequestSpec): ForecastRequestHandle {
+      if (!Number.isSafeInteger(spec.maxResponseBytes) || spec.maxResponseBytes <= 0
+        || (spec.expectedResponseBytes !== undefined && (!Number.isSafeInteger(spec.expectedResponseBytes) || spec.expectedResponseBytes < 0 || spec.expectedResponseBytes > spec.maxResponseBytes))) {
+        throw new ForecastCapacityError('configuration', 'Invalid forecast request size');
+      }
+      const bound = spec.priority === 'foreground' ? (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES) : Math.min(maxBackgroundBytes, maxInFlightBytes ?? maxBackgroundBytes);
+      if (spec.maxResponseBytes > bound) throw new ForecastCapacityError('capacity', 'Forecast request exceeds its class bound');
+      return schedule(spec.url, { priority: spec.priority === 'background' ? 'low' : 'high' } as RequestInit,
+        { foreground: spec.priority === 'foreground', maxResponseBytes: spec.maxResponseBytes, expectedResponseBytes: spec.expectedResponseBytes });
+    },
     stats: () => ({ active: active.size, queued: queued.length }),
+    detail: () => ({ active: active.size, queued: queued.length, live: live.size, bodyBytes, backgroundBytes, backgroundActive }),
     dispose() {
       if (disposed) return;
       disposed = true;

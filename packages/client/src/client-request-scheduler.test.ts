@@ -107,7 +107,9 @@ it('prioritizes visible raster work over queued raster prefetch while numeric bo
   const visible = protocol.load({ url: protocol.url(tile(2)) }, new AbortController());
   expect(scheduler.stats()).toEqual({ active: 6, queued: 2 });
   await active[0].body!.cancel();
-  await Promise.all([visible, prefetch]);
+  await visible;
+  await Promise.all(active.slice(1).map(response => response.body!.cancel()));
+  await prefetch;
   expect(fetchImpl.mock.calls.slice(6).map(call => call[0])).toEqual([tile(2), tile(1)]);
   protocol.dispose();
   scheduler.dispose();
@@ -233,7 +235,7 @@ it('holds further raster requests once declared bodies reach 4 MiB', async () =>
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
   await Promise.resolve();
   expect(fetchImpl).toHaveBeenCalledTimes(4);
-  expect(scheduler.stats()).toEqual({ active: 0, queued: 2 });
+  expect(scheduler.stats()).toEqual({ active: 4, queued: 2 });
   streams.slice(0, 4).forEach(item => item.stream.close());
   await Promise.all(requests.slice(0, 4).map(async request => (await request).arrayBuffer()));
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(6));
@@ -242,13 +244,13 @@ it('holds further raster requests once declared bodies reach 4 MiB', async () =>
   scheduler.dispose();
 });
 
-it('aborts a raster body after its concurrency slot is released', async () => {
+it('retains the slot until an aborted raster body settles', async () => {
   let stream!: ReadableStreamDefaultController<Uint8Array>;
   const cancel = vi.fn();
   const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; }, cancel }), { headers: { 'content-length': '12' } }));
   const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
   const response = await scheduler.fetch('https://example.test/tile');
-  expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
+  expect(scheduler.stats()).toEqual({ active: 1, queued: 0 });
   const rejected = expect(response.arrayBuffer()).rejects.toMatchObject({ name: 'AbortError' });
   scheduler.dispose();
   await rejected;
@@ -272,7 +274,7 @@ it('bounds the queue when byte pressure stops dispatch below the concurrency lim
   const requests = streams.map((_, i) => scheduler.fetch(`https://example.test/${i}`).catch(() => undefined));
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4));
   await Promise.resolve();
-  expect(scheduler.stats()).toEqual({ active: 0, queued: 64 });
+  expect(scheduler.stats()).toEqual({ active: 4, queued: 64 });
   scheduler.dispose();
   await Promise.all(requests);
 });
@@ -280,7 +282,155 @@ it('bounds the queue when byte pressure stops dispatch below the concurrency lim
 it('still dispatches an immediately admissible request with zero queue capacity', async () => {
   const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new Uint8Array(4)));
   const scheduler = createForecastRequestScheduler({ fetchImpl, maxQueued: 0, maxInFlightBytes: 4 * 1024 * 1024 });
-  await expect(scheduler.fetch('https://example.test/now')).resolves.toBeInstanceOf(Response);
+  const response = await scheduler.fetch('https://example.test/now');
+  expect(response).toBeInstanceOf(Response);
+  await response.arrayBuffer();
   expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
   scheduler.dispose();
+});
+
+it('keeps eight live bodies while headers arrive immediately', async () => {
+  const streams = Array.from({ length: 10 }, () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-length': '12' } });
+    return { response, stream };
+  });
+  let index = 0;
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => streams[index++]!.response), maxActive: 8 });
+  const requests = streams.map((_, i) => scheduler.fetch(`https://example.test/${i}`).catch(() => null));
+  await vi.waitFor(() => expect(scheduler.detail().live).toBe(8));
+  expect(scheduler.stats()).toEqual({ active: 8, queued: 2 });
+  const first = (await requests[0])!;
+  awaits: {
+    const reader = first.body!.getReader();
+    streams[0].stream.enqueue(new Uint8Array([1]));
+    streams[0].stream.close();
+    await reader.read();
+    await reader.read();
+    break awaits;
+  }
+  await vi.waitFor(() => expect(scheduler.detail().live).toBe(8));
+  expect(scheduler.stats()).toEqual({ active: 8, queued: 1 });
+  for (const stream of streams) { try { stream.stream.close(); } catch { /* already closed */ } }
+  scheduler.dispose();
+});
+
+it('keeps speculative count and byte headroom while a full background queue admits the selected frame', async () => {
+  const streams = Array.from({ length: 70 }, () => {
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }));
+    return { response, stream };
+  });
+  let index = 0;
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => streams[index++]!.response), maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxQueued: 64 });
+  const background = Array.from({ length: 68 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: 2 * 1024 * 1024 }).response.catch(() => null));
+  await vi.waitFor(() => expect(scheduler.detail().backgroundActive).toBe(2));
+  expect(scheduler.detail().backgroundBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
+  expect(scheduler.stats()).toEqual({ active: 2, queued: 64 });
+  const selected = scheduler.request({ url: 'https://example.test/selected', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024 });
+  await vi.waitFor(() => expect(scheduler.stats().active).toBe(3));
+  expect(scheduler.detail().live).toBeLessThanOrEqual(8);
+  expect(scheduler.stats().active).toBe(3);
+  scheduler.dispose();
+  await Promise.all(background);
+  await selected.settled;
+  expect(scheduler.detail().bodyBytes).toBe(0);
+});
+
+
+it('reserves unknown, malformed and compressed lengths at the header watermark', async () => {
+  const responses = [
+    new Response(new ReadableStream<Uint8Array>({ start() {} })),
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12x' } }),
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '10', 'content-encoding': 'gzip' } }),
+    new Response(new ReadableStream<Uint8Array>({ start() {} }), { headers: { 'content-length': '12' } })
+  ];
+  let index = 0;
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => responses[index++]!), maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  const requests = [0, 1, 2, 3].map(i => scheduler.fetch(`https://example.test/${i}`));
+  await vi.waitFor(() => expect(scheduler.detail().active).toBe(4));
+  expect(scheduler.detail().bodyBytes).toBe(3 * 1024 * 1024 + 12);
+  scheduler.dispose();
+  await Promise.allSettled(requests);
+});
+
+it('rejects an oversized task and starts smaller runnable work past a non-fitting head', async () => {
+  let resolveFirst!: (response: Response) => void;
+  const fetchImpl = vi.fn<typeof fetch>((input) => String(input).includes('/large-1')
+    ? new Promise<Response>(resolve => { resolveFirst = resolve; })
+    : Promise.resolve(new Response(new Uint8Array(4))));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
+  expect(() => scheduler.request({ url: 'https://example.test/too-big', priority: 'foreground', kind: 'raster', maxResponseBytes: 5 * 1024 * 1024 })).toThrow('exceeds its class bound');
+  expect(() => scheduler.request({ url: 'https://example.test/big-bg', priority: 'background', kind: 'raster', maxResponseBytes: 3 * 1024 * 1024 })).toThrow('exceeds its class bound');
+  const large = scheduler.request({ url: 'https://example.test/large-1', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 3 * 1024 * 1024 });
+  const blocked = scheduler.request({ url: 'https://example.test/large-2', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 3 * 1024 * 1024 });
+  const small = scheduler.request({ url: 'https://example.test/small', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 1024 * 1024 });
+  await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+  expect(fetchImpl.mock.calls.map(call => call[0])).toEqual(['https://example.test/large-1', 'https://example.test/small']);
+  resolveFirst(new Response(new Uint8Array(4)));
+  await large.response;
+  await small.response;
+  scheduler.dispose();
+  await Promise.allSettled([large.response, blocked.response, small.response, large.settled, blocked.settled, small.settled]);
+});
+
+it('retains admission through a late response body cancellation', async () => {
+  let release!: () => void;
+  const cancel = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+  let complete!: (response: Response) => void;
+  const scheduler = createForecastRequestScheduler({ maxActive: 1, fetchImpl: vi.fn(() => new Promise<Response>(resolve => { complete = resolve; })) });
+  const handle = scheduler.request({ url: 'https://example.test/late', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024 });
+  handle.cancel(new DOMException('gone', 'AbortError'));
+  await expect(handle.response).rejects.toMatchObject({ name: 'AbortError' });
+  let settled = false;
+  void handle.settled.then(() => { settled = true; });
+  expect(scheduler.stats()).toEqual({ active: 1, queued: 0 });
+  complete(new Response(new ReadableStream<Uint8Array>({ cancel })));
+  await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+  expect(settled).toBe(false);
+  expect(scheduler.detail().bodyBytes).toBe(1024 * 1024);
+  release();
+  await handle.settled;
+  expect(settled).toBe(true);
+  expect(scheduler.detail().bodyBytes).toBe(0);
+  scheduler.dispose();
+});
+
+it('releases a streaming body once across repeated cancellation', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; }, cancel: async () => {} }));
+  const scheduler = createForecastRequestScheduler({ maxActive: 1, fetchImpl: vi.fn(async () => response) });
+  const handle = scheduler.request({ url: 'https://example.test/body', priority: 'foreground', kind: 'wind', maxResponseBytes: 4 * 1024 * 1024 });
+  const fetched = await handle.response;
+  stream.enqueue(new Uint8Array([1]));
+  const reader = fetched.body!.getReader();
+  await reader.read();
+  handle.cancel();
+  handle.cancel();
+  await handle.settled;
+  expect(scheduler.detail()).toMatchObject({ active: 0, queued: 0, bodyBytes: 0, backgroundBytes: 0 });
+  scheduler.dispose();
+});
+
+it('promotes queued speculative work without a duplicate fetch', async () => {
+  let finishFirst!: () => void;
+  let index = 0;
+  const fetchImpl = vi.fn((input: RequestInfo | URL) => {
+    index++;
+    if (index === 1) return new Promise<Response>(resolve => { finishFirst = () => resolve(new Response(null)); });
+    return Promise.resolve(new Response(null));
+  });
+  const scheduler = createForecastRequestScheduler({ fetchImpl: fetchImpl as typeof fetch, maxActive: 1 });
+  const first = scheduler.fetch('https://example.test/foreground');
+  const background = scheduler.request({ url: 'https://example.test/promoted', priority: 'background', kind: 'raster', maxResponseBytes: 2 * 1024 * 1024 });
+  expect(scheduler.stats()).toEqual({ active: 1, queued: 1 });
+  background.promote();
+  background.promote();
+  finishFirst();
+  await first;
+  await background.response;
+  expect(fetchImpl).toHaveBeenCalledTimes(2);
+  expect(scheduler.stats()).toEqual({ active: 0, queued: 0 });
+  scheduler.dispose();
+  await background.settled;
 });
