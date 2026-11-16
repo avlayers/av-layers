@@ -289,7 +289,6 @@ beforeEach(() => {
   windSample = { status: 'valid', u: 3, v: 4 };
   schedulerFetches.length = 0; rasterFetches.length = 0; windFetches.length = 0; disposalOrder.length = 0;
   vi.stubEnv('AV_API_BASE', 'https://api.test');
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', '');
   vi.useFakeTimers();
   vi.setSystemTime(horizon - 3600_000);
   manifest = fixtureManifestV5({ mapData: MAP_DATA });
@@ -350,109 +349,10 @@ it.each(['pagehide', 'gpu failure'])('shares the forecast scheduler and disposes
   expect(disposalOrder.lastIndexOf('raster')).toBeLessThan(disposalOrder.lastIndexOf('scheduler'));
 });
 
-it('loads configured Google terrain while forecast discovery runs and disposes it on pagehide', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let viewportSignal: AbortSignal | null | undefined;
-  fetchMock.mockImplementation(async (input, init) => {
-    const url = String(input);
-    if (url.includes('createSession')) {
-      await gate;
-      return new Response(JSON.stringify({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400, tileWidth: 256 }));
-    }
-    if (url.includes('/viewport')) {
-      viewportSignal = init?.signal;
-      return new Promise(() => {});
-    }
-    return latest();
-  });
-  await import('./main');
-  expect(maps).toHaveLength(0);
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/latest?'))).toBe(true);
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('createSession'))).toBe(true);
-  release();
-  await vi.waitFor(() => expect(maps).toHaveLength(1));
-  expect(map().options.style?.sources?.['google-terrain']?.tiles?.[0]).toContain('/v1/2dtiles/');
-  expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/latest?'))).toHaveLength(1);
-  expect(viewportSignal?.aborted).toBe(false);
-  page('pagehide', false);
-  expect(viewportSignal?.aborted).toBe(true);
-});
-
-it('falls back with a visible warning when configured Google terrain fails', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
-  fetchMock.mockImplementation(async input => String(input).includes('createSession') ? new Response('', { status: 403 }) : latest());
-  await import('./main');
-  await vi.waitFor(() => expect(maps).toHaveLength(1));
-  expect(map().options.style?.sources?.basemap?.tiles?.[0]).toContain('openstreetmap.org');
-  expect(ui('app').children.find(child => child.className === 'toast basemap-warning')?.textContent).toBe('Google terrain unavailable. Using OpenStreetMap.');
-});
-
-it('bounds Google session startup and falls back after timeout', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
-  fetchMock.mockImplementation(async (input, init) => {
-    if (!String(input).includes('createSession')) return latest();
-    return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
-  });
-  await import('./main');
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(map().options.style?.sources?.basemap?.tiles?.[0]).toContain('openstreetmap.org');
-  expect(ui('app').children.find(child => child.className === 'toast basemap-warning')).toBeDefined();
-});
-
-it('starts Auto discovery while Google terrain initializes and reuses the lookup', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
-  win.href = 'http://localhost:5173/?model=auto';
-  const build = autoBuild('gfs', [-180, -55, 180, 65], [1, 18, 36]);
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  fetchMock.mockImplementation(async input => {
-    const url = String(input);
-    if (url.includes('createSession')) {
-      await gate;
-      return Response.json({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400 });
-    }
-    if (url.includes('/viewport')) return Response.json({});
-    if (url.includes('/catalog')) return Response.json({ models: [autoCatalogRow(build.manifest, 27800)] });
-    return url.includes('/latest') ? Response.json(fixtureLatest(build.manifest)) : sample(input, build.manifest);
-  });
-  await import('./main');
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/catalog'))).toBe(true);
-  expect(maps).toHaveLength(0);
-  release();
-  await vi.waitFor(() => expect(maps).toHaveLength(1));
-  map().emit('style.load');
-  await vi.waitFor(() => expect(ui('freshness').textContent).toContain('gfs'));
-  expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/catalog'))).toHaveLength(1);
-});
-
-it('keeps the neutral offline basemap even with a configured Google key', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
+it('keeps the neutral offline basemap for the synthetic fixture', async () => {
   vi.stubEnv('VITE_OFFLINE_FIXTURE', 'true');
   await start();
   expect(map().options.style?.sources).toEqual({});
-  expect(fetchMock.mock.calls.some(([url]) => String(url).includes('createSession'))).toBe(false);
-});
-
-it('does not construct a map after pagehide during Google session startup', async () => {
-  vi.stubEnv('VITE_GOOGLE_MAPS_API_KEY', 'test-key');
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  let sessionSignal: AbortSignal | null | undefined;
-  fetchMock.mockImplementation(async (input, init) => {
-    if (!String(input).includes('createSession')) return latest();
-    sessionSignal = init?.signal;
-    await gate;
-    return new Response(JSON.stringify({ session: 'token', expiry: Math.floor(horizon / 1000) + 86400 }));
-  });
-  await import('./main');
-  page('pagehide', false);
-  expect(sessionSignal?.aborted).toBe(true);
-  release();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(maps).toHaveLength(0);
-  expect(ui('app').children).toHaveLength(0);
 });
 
 it('clears stale wind immediately and ignores an overtaken frame request', async () => {
@@ -1206,13 +1106,18 @@ it('starts Auto from a neutral world view when the URL supplies no camera', asyn
   expect(map().getZoom()).toBe(2);
 });
 
-it('uses the attributed OpenStreetMap basemap and restores the view from the back button', async () => {
+it('uses the XC Skies natural basemap and restores the view from the back button', async () => {
   await start();
   expect(map().options.style?.sources?.basemap).toMatchObject({
-    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    maxzoom: 19,
-    attribution: expect.stringContaining('href="https://www.openstreetmap.org/copyright"')
+    tiles: [
+      'https://s3rend1.xcskies.com/natural/{z}/{x}/{y}.jpg',
+      'https://s3rend2.xcskies.com/natural/{z}/{x}/{y}.jpg',
+      'https://s3rend3.xcskies.com/natural/{z}/{x}/{y}.jpg'
+    ],
+    maxzoom: 16,
+    attribution: expect.stringContaining('href="https://xcskies.com/"')
   });
+  expect(map().options.style?.sources?.xcskies).toMatchObject({ type: 'vector' });
   expect(win.location.search).toContain('model=gfs');
   expect(win.location.search).toContain('ref=agl');
   expect(win.location.search).toContain('opacity=0.5');

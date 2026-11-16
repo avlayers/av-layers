@@ -122,7 +122,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .fixture-warning { top: 96px; pointer-events: none; }
 .toast.status { background: #f4f7f8; color: #243140; }
 .toast.error { background: #fff1f1; color: #8d1d1d; }
-.basemap-warning { top: 104px; font-size: 11px; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
 

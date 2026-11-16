@@ -5,8 +5,8 @@ at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
-bundle (MapLibre GL, Google/OSM basemap session loader, raster overviews, and
-numeric wind overlay) at **388,000 B gzip** (~372.2 kB measured) and each lazy
+bundle (MapLibre GL, XC Skies natural basemap, raster overviews, and
+numeric wind overlay) at **388,000 B gzip** (~377.8 kB measured) and each lazy
 chunk (the on-demand `@av/windgram` renderer) at **32,000 B gzip** (~29.1 kB
 measured).
 
