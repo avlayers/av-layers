@@ -238,7 +238,12 @@ export class RasterOverlay {
   setWindActive(active: boolean, numericResident = active): void {
     if (this.windActive === active && this.windResident === numericResident) return;
     this.windActive = active; this.windResident = numericResident;
-    this.sourceLimits.clear(); this.enforceBudget(); this.prepareNext();
+    this.sourceLimits.clear(); this.enforceBudget();
+    const sel = this.requested;
+    if (sel && !this.moving && !this.map.isMoving?.() && sel.build.expiresAtMs > Date.now()) {
+      try { this.select(sel.build, sel.layer, sel.frame); } catch { /* reported */ }
+    }
+    this.prepareNext();
   }
 
   clear(dispose = false): void {

@@ -748,3 +748,23 @@ it('replaces a rested overview only after the camera stays outside it', async ()
     expect(fetch).toHaveBeenCalledTimes(4);
   } finally { f.overlay.destroy(); }
 });
+
+it('restores the rested overview after wind stops consuming the viewport budget', async () => {
+  class Canvas {
+    context = { clearRect() {}, drawImage() {} };
+    constructor(public width: number, public height: number) {}
+    getContext() { return this.context; }
+    transferToImageBitmap() { return { close() {} }; }
+  }
+  vi.stubGlobal('OffscreenCanvas', Canvas);
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 256, height: 256, close() {} })));
+  vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+  const f = fixture(300, true), b = build();
+  try {
+    f.setZoom(4);
+    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(fetch).not.toHaveBeenCalled();
+    f.overlay.setWindActive(false, false);
+    expect(fetch).toHaveBeenCalled();
+  } finally { f.overlay.destroy(); }
+});
