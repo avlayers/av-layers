@@ -623,10 +623,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   return {
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
-      gestureScale = null;
+      const nextIndex = nextFrames.findIndex(frame => frame.id === selectedFrame);
+      const sameFrames = nextFrames.length === frames.length && nextFrames.every((frame, index) => frame.id === frames[index]?.id && frame.validTime === frames[index]?.validTime);
+      const echo = activePointer !== null && sameFrames && nextDisabled === disabled && nextIndex === selectedIndex;
+      if (!echo) gestureScale = null;
       frames = nextFrames.slice();
-      selectedIndex = frames.findIndex(frame => frame.id === selectedFrame);
+      selectedIndex = nextIndex;
       disabled = nextDisabled;
+      if (activePointer !== null && !echo) gestureStart = selectedIndex;
       syncDays();
       render();
       if (controlsDisabled()) stopPlayback();

@@ -513,6 +513,37 @@ it('keeps the folded scale steady while a drag crosses into the night', () => {
   timeline.destroy();
 });
 
+it('keeps the folded scale when the app echoes the scrubbed frame', () => {
+  const offsetMinutes = -300;
+  const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
+  const place = solarMinuteBounds(37.54, -77.46, '2026-11-16', offsetMinutes);
+  const hourly: TimelineFrame[] = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`,
+    validTime: new Date(start + hour * 3_600_000).toISOString()
+  }));
+  doc = new Document();
+  const host = doc.createElement('div');
+  let timeline!: ReturnType<typeof createCompactTimeline>;
+  timeline = createCompactTimeline(host as unknown as HTMLElement, {
+    onSelect(index) { timeline.update(hourly, hourly[index]!.id); },
+    offsetMinutes,
+    latitude: 37.54,
+    longitude: -77.46
+  });
+  const root = host.children[0]!;
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 480;
+  timeline.update(hourly, 'h16');
+  const scale = buildDayScale(480, place, 16 * 60);
+  const evening = scale.segments.find(segment => segment.kind === 'evening')!;
+  pointer(track, 'pointerdown', minuteToX(scale, 16 * 60));
+  pointer(track, 'pointermove', (evening.x0 + evening.x1) / 2);
+  expect(named(root, 'ct-moon')).toHaveLength(2);
+  pointer(track, 'pointerup', (evening.x0 + evening.x1) / 2);
+  expect(named(root, 'ct-moon')).toHaveLength(1);
+  timeline.destroy();
+});
+
 it('drops a frozen drag scale when the frames or map center change, and keeps it across a resize', () => {
   const offsetMinutes = -300;
   const start = Date.parse('2026-11-16T00:00:00Z') - offsetMinutes * 60_000;
@@ -521,7 +552,7 @@ it('drops a frozen drag scale when the frames or map center change, and keeps it
     id: `h${hour}`,
     validTime: new Date(start + hour * 3_600_000).toISOString()
   }));
-  const { host, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const { host, onSelect, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
   const root = host.children[0]!;
   const track = byClass(root, 'ct-track');
   track.offsetWidth = 480;
@@ -535,9 +566,12 @@ it('drops a frozen drag scale when the frames or map center change, and keeps it
   track.offsetWidth = 640;
   pointer(track, 'pointermove', nightX);
   expect(named(root, 'ct-moon')).toHaveLength(2);
-  timeline.update(hourly, 'h21');
+  const refreshed = hourly.map(frame => ({ ...frame, validTime: new Date(Date.parse(frame.validTime) + 1000).toISOString() }));
+  onSelect.mockClear();
+  timeline.update(refreshed, 'h21');
   expect(named(root, 'ct-moon')).toHaveLength(1);
   pointer(track, 'pointerup', nightX);
+  expect(onSelect.mock.calls.some(call => call[1] === 'push')).toBe(false);
   timeline.update(hourly, 'h16');
   const daylight = buildDayScale(640, place, 16 * 60);
   pointer(track, 'pointerdown', minuteToX(daylight, 16 * 60));
