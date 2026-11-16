@@ -154,3 +154,23 @@ Browser evidence for these paths is not yet captured. The required
 `viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and
 constrained-device budget remain unverified; the draft PR records them as
 blocking release gates rather than reporting measured conclusions.
+
+
+### Source-isolated benchmark smoke
+
+The harness now resolves every `@av/*` import through each variant's own
+`codeRoot` package exports before Vite's workspace links, and accepts the
+48-frame guard. Two runs on 16 November 2026 used Node 22.23.4, bundled
+Chromium 157 through ANGLE SwiftShader, a 1920 × 1080 viewport at DPR 1, 48
+hourly fixture frames, a 250 ms response floor, and unrestricted bandwidth:
+
+| Run | Baseline first-correct p50 | Candidate first-correct p50 | Overview ready at 10 s |
+| --- | --- | --- | --- |
+| 48-frame cold wide view (z7.15, > 800 km²) | 2499.7 ms | 2440.0 ms | 1/48 both |
+
+Both variants ran their own source and painted the requested time and layer.
+The view is outside full-horizon eligibility, so this run checks source
+isolation and foreground cold latency (G01/G07), not automatic full-timeline
+preparation. A 6-frame smoke at the same boundary also completed for both
+variants. The `viewport-warm` profile, eligible-area calibration, warm sweep,
+DPR 2, constrained memory, faults and real-basemap cases remain unverified.

@@ -24,9 +24,10 @@ const output = resolve(option('--out', 'output/preview-layer-bench.json')), chan
 const variant = option('--variant', 'both'), frameCount = Number(option('--frames', '40'));
 const opacity = Number(option('--opacity', '1')), transparent = args.includes('--transparent');
 if (!Number.isInteger(repeats) || repeats < 1 || repeats > 200 || !Number.isInteger(tileDelayMs) || tileDelayMs < 0 || tileDelayMs > 1000 ||
-  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 40 || !['all', 'cold', 'smoke'].includes(scenario) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
+  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke'].includes(scenario) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
 await mkdir(dirname(output), { recursive: true });
 const scratch = await mkdtemp(join(tmpdir(), 'av-preview-bench-')), baselineRoot = join(scratch, 'baseline');
+const workspacePackages = new Map<string, Record<string, string>>();
 const certificate = join(scratch, 'localhost.pem'), privateKey = join(scratch, 'localhost-key.pem');
 execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-days', '1', '-nodes', '-keyout', privateKey, '-out', certificate, '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1'], { stdio: 'ignore' });
 const tls = { key: await readFile(privateKey), cert: await readFile(certificate) };
@@ -139,12 +140,26 @@ try {
       server: { hmr: { server: hmr, protocol: 'wss', host: '127.0.0.1', clientPort: hmrAddress.port }, middlewareMode: true, fs: { allow: [root, scratch] } }, optimizeDeps: { noDiscovery: true },
       define: { 'import.meta.env.AV_API_BASE': JSON.stringify(base), 'import.meta.env.VITE_OFFLINE_FIXTURE': '"true"' },
       esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
-      resolve: { alias: [{ find: '@av/client/dom', replacement: join(codeRoot, 'packages/client/src/dom.ts') },
-        { find: /^@av\/client$/, replacement: join(codeRoot, 'packages/client/src/index.ts') },
-        { find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },
-      plugins: [{ name: 'measure-real-preview', enforce: 'pre', resolveId(id, importer) {
-        if (id === 'maplibre-gl' && importer !== benchEntry) return benchEntry;
-      } }]
+      resolve: { alias: [{ find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },
+      plugins: [
+        { name: 'code-root-workspace', enforce: 'pre', async resolveId(id) {
+          const match = /^@av\/([^/]+)(?:\/(.+))?$/.exec(id);
+          if (!match) return;
+          const directory = join(codeRoot, 'packages', match[1]!);
+          let exportsMap = workspacePackages.get(directory);
+          if (!exportsMap) {
+            try {
+              const parsed = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8')) as { exports?: Record<string, string> };
+              exportsMap = parsed.exports ?? {}; workspacePackages.set(directory, exportsMap);
+            } catch { return; }
+          }
+          const target = exportsMap[match[2] ? `./${match[2]}` : '.'];
+          return typeof target === 'string' ? join(directory, target) : undefined;
+        } },
+        { name: 'measure-real-preview', enforce: 'pre', resolveId(id, importer) {
+          if (id === 'maplibre-gl' && importer !== benchEntry) return benchEntry;
+        } }
+      ]
     });
     async function openPage() {
       const start = count(), startedAt = Date.now();
