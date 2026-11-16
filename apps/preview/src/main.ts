@@ -254,7 +254,7 @@ function startPreview(lifecycle: AbortController): void {
 
   function reconcileWind(): void {
     const displayed = overlayState.displayed;
-    const sameBuild = Boolean(windView && windView.build === build && (windLoadStatus !== 'unavailable' || windView.frame !== selectedFrame));
+    const sameBuild = Boolean(windView && windView.build === build && windLoadStatus !== 'unavailable');
     const aligned = Boolean(sameBuild && windView!.frame === selectedFrame && (!displayed || displayed.build === windView!.build && displayed.frame === windView!.frame));
     if (aligned) setWindField(installedWind && installedWind.build === windView!.build ? 'swap' : 'replace');
     else if (!sameBuild && windDisplayed) { windOverlay.clear(); windDisplayed = false; installedWind = null; }

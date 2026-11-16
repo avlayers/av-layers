@@ -1855,6 +1855,20 @@ it('drops the previous wind hour when the selected frame exceeds the numeric bud
   expect(windStatuses.at(-1)).toBe('ready');
 });
 
+it('clears the previous wind hour when the selected frame is unavailable', async () => {
+  deferWind = true;
+  await start();
+  windResolve!('ready');
+  await Promise.resolve();
+  const painted = windFields.at(-1);
+  await selectFrame(1);
+  expect(windFields.at(-1)).toBe(painted);
+  windResolve!('unavailable');
+  await Promise.resolve();
+  expect(windFields.at(-1)).toBeNull();
+  expect(windStatuses.at(-1)).toBe('unavailable');
+});
+
 it('draws a coverage parallel that meets the view and removes it when the view leaves', async () => {
   await start();
   expect(map().sources.has('av-seam')).toBe(false);
