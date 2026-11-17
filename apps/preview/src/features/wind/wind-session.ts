@@ -103,7 +103,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     options.cache.evictUnreferenced?.();
     const beforeNumeric = options.cache.allocatedBytes, beforeShared = sharedBytes();
     const prior = parked.entries().next().value;
-    if (prior || frame === state().selectedFrame) {
+    const selectedReady = usableAt(selected());
+    if (prior || frame === state().selectedFrame || !selectedReady) {
       const distant = [...ordered()].reverse().map(key => jobs.get(key)).find(job => job && job.frame !== frame && job !== installed && job.status === 'ready');
       const victim = prior?.[1] ?? distant;
       if (victim) {
@@ -124,11 +125,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (numeric) {
       numericBlocked = !numericFreed;
       blockedNumericBytes = options.cache.allocatedBytes;
-      if (!numericBlocked) upgradeKey = '';
+      if (!numericBlocked) { upgradeKey = ''; narrowPlans.clear(); }
     } else {
       acquisitionBlocked = !(sharedFreed || numericFreed || displayCanHelp);
       blockedSharedBytes = sharedBytes();
-      if (!acquisitionBlocked) upgradeKey = '';
+      if (!acquisitionBlocked) { upgradeKey = ''; narrowPlans.clear(); }
     }
     if (!admissionBlocked()) schedule();
     if (!preparationBlocked) schedulePreparation();
@@ -454,7 +455,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (acquisitionBlocked) { acquisitionBlocked = false; wakeAdmission = true; }
       if (preparationBlocked) { preparationBlocked = false; wakePreparation = true; }
     }
-    if (wakeAdmission) { upgradeKey = ''; schedule(); }
+    if (wakeAdmission) { upgradeKey = ''; narrowPlans.clear(); schedule(); }
     if (wakePreparation) schedulePreparation();
   };
   if ('onRelease' in options.cache) options.cache.onRelease = released;

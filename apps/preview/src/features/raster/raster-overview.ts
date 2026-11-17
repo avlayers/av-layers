@@ -187,7 +187,7 @@ export class RasterOverview {
       && Math.abs(preview.zoom - this.context.preview.zoom) <= 1;
     if (!previewHeld) {
       this.reset(true);
-      if (!preview) { this.limited = true; this.onReady(); return; }
+      if (!preview) { this.selected = frame; this.limited = true; this.onReady(); return; }
       const native = warmed && required !== null ? planRasterCrop(view, required) : null;
       const previewBytes = frames.length * 256 * 256 * 4;
       const previewLease = this.options.budget
@@ -195,7 +195,7 @@ export class RasterOverview {
           ?? this.options.budget.reserve('raster-preview', previewBytes, 'foreground'))
         : null;
       if (this.options.budget && !previewLease && !this.options.budget.canReserve(256 * 256 * 4, 'foreground')) {
-        this.deferred = { build, layer, frame }; this.markLimited(); return;
+        this.deferred = { build, layer, frame }; this.selected = frame; this.markLimited(); return;
       }
       if (this.options.budget && !previewLease) this.markLimited();
       this.deferred = null;
