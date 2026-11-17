@@ -499,6 +499,84 @@
       "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf", "modelId": "wrf-armenia-3km"},
       "terrainSubdivisionFactor": 1,
       "execution": {"zoom": 10, "parallelism": 24, "schedule": []}
+    },
+    {
+      "modelId": "wrf-va-1km",
+      "id": "wrf-va-1km-soaring",
+      "coverageDir": "coverage/wrf-va-1km-land",
+      "source": {"modelFamily": "wrf", "configurationId": "va-1km-v1", "domainId": "va-1km-v1"},
+      "tier": "high",
+      "label": "WRF northern Virginia 1 km (RRFS)",
+      "attribution": "av-wrf · WRF-ARW / NOAA RRFS · Aviation Forecast Layers",
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "cloud-cover-low",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {"verticalCoordinate": "model-levels", "maxVerticalLevels": 40, "daylightFrames": "all-hours"},
+      "grid": {
+        "kind": "lambert-conformal",
+        "width": 156,
+        "height": 114,
+        "earthRadiusM": 6370000.0,
+        "centralMeridianDeg": -78.5,
+        "latitudeOfOriginDeg": 38.7,
+        "standardParallel1Deg": 37.5,
+        "standardParallel2Deg": 39.5,
+        "x0M": -77500.0,
+        "y0M": -56500.0,
+        "dxM": 1000.0,
+        "dyM": 1000.0,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "intervalHours": 1,
+        "cycleHoursUtc": [12],
+        "statisticsResetHours": null,
+        "expectedRunsPerDay": 1,
+        "window": {"hourlyThrough": 24, "endHour": 24, "tailStepHours": 1, "minHorizonHours": 18, "framesPerShard": 2}
+      },
+      "freshness": {"maxCycleAgeHours": 6},
+      "coverage": {
+        "id": "wrf-va-1km-land",
+        "description": "Land and 50 km coastal buffer within the northern Virginia 1 km Lambert domain.",
+        "west": -79.405534,
+        "south": 38.183827,
+        "east": -77.594466,
+        "north": 39.212755,
+        "seaBufferMeters": 50000,
+        "excludedA3": [],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["center", 38.7, -78.5, true],
+          ["luray", 38.665, -78.459, true],
+          ["front-royal", 38.918, -78.194, true],
+          ["harrisonburg", 38.449, -78.869, true],
+          ["washington", 38.907, -77.037, false],
+          ["charlottesville", 38.03, -78.477, false]
+        ]
+      },
+      "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf", "modelId": "wrf-va-1km"},
+      "terrainSubdivisionFactor": 1,
+      "execution": {"zoom": 10, "parallelism": 12, "schedule": []}
     }
   ]
 }

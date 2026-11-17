@@ -73,6 +73,8 @@ Read a committed `av-wrf` store with an explicit UTC cycle. The source directory
 contains `upstream/`; terrain uses the same pinned catalog as other forecasts.
 The public `av-wrf` product uses the current pilot configuration. Its upstream
 model ID, grid, coverage and forecast window live in [models.json](../packages/contracts/config/models.json).
+`wrf-va-1km` is the northern Virginia 1 km product and publishes on a 12Z cycle,
+for example `2026-11-17T12:00:00Z`.
 
 ```sh
 pnpm input:proof --model av-wrf --cycle 2026-11-13T00:00:00Z \

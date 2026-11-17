@@ -44,5 +44,16 @@ export const MODEL_OPTIONS = [
       48.21302,
       42.534384
     ]
+  },
+  {
+    "modelId": "wrf-va-1km",
+    "label": "WRF northern Virginia 1 km (RRFS)",
+    "nominalDxMeters": 1000,
+    "bounds": [
+      -79.405534,
+      38.183827,
+      -77.594466,
+      39.212755
+    ]
   }
 ] as const;

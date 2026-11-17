@@ -80,6 +80,22 @@ describe('model configuration', () => {
     }
   });
 
+  it('publishes the Virginia 1 km WRF product on its 12Z cycle for leads 1 through 24', () => {
+    const product = getProduct('wrf-va-1km')!;
+    expect(product.id).toBe('wrf-va-1km-soaring');
+    expect(product.forecast.cycleHoursUtc).toEqual([12]);
+    expect(product.frameHours).toEqual(Array.from({ length: 24 }, (_, hour) => hour + 1));
+    expect(product.execution.shards).toBe(12);
+    expect(product.execution.schedule).toEqual([]);
+    expect(product.expectedRunsPerDay).toBe(1);
+    expect(product.freshness.maxCycleAgeHours).toBe(6);
+    expect(product.grid).toMatchObject({
+      width: 156, height: 114, dxM: 1000, dyM: 1000, x0M: -77500, y0M: -56500,
+      centralMeridianDeg: -78.5, latitudeOfOriginDeg: 38.7, standardParallel1Deg: 37.5, standardParallel2Deg: 39.5
+    });
+    expect(product.upstream).toEqual({ protocol: 'wrf-zarr-v3', provider: 'av-wrf', modelId: 'wrf-va-1km' });
+  });
+
   it('derives scheduled run counts solely from the configured cron starts', () => {
     expect(defineProduct(configured).expectedRunsPerDay).toBe(4);
     expect(() => defineProduct({ ...configured, forecast: { ...configured.forecast, expectedRunsPerDay: 4 } }))
