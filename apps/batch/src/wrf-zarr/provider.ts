@@ -68,7 +68,9 @@ export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecas
     capeParcelDefinition: contract.capeParcelDefinition,
     lowCloudDefinition: contract.lowCloudDefinition,
     precipitationField: fieldName('precipitationMmPerHour') ?? '',
-    totalCloudField: fieldName('auxSurface.cloudTotalPct') ?? ''
+    totalCloudField: fieldName('auxSurface.cloudTotalPct') ?? '',
+    lowCloudField: fieldName('auxSurface.cloudLowPct') ?? '',
+    capeField: fieldName('auxSurface.capeJkg') ?? ''
   });
   return {
     id: model.source.configurationId, provider: upstream.provider, maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,

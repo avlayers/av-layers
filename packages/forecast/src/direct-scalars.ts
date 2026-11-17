@@ -92,14 +92,20 @@ export function assertWrfWeatherDefinitions(modelId: string, published: {
   lowCloudDefinition: string;
   precipitationField: string;
   totalCloudField: string;
+  lowCloudField: string;
+  capeField: string;
 }): void {
   const cape = weatherFieldDefinition(modelId, 'cape-jkg');
   if (!cape) return;
   const low = weatherFieldDefinition(modelId, 'cloud-cover-low');
   const total = weatherFieldDefinition(modelId, 'cloud-cover-total');
   const precipitation = weatherFieldDefinition(modelId, 'precip-rate');
-  if (cape.kind !== 'cape' || cape.producerDefinition !== published.capeParcelDefinition) throw new Error('WRF CAPE definition does not match the v3 contract');
-  if (!low || low.kind !== 'cloud-cover' || low.algorithmId !== published.lowCloudDefinition) throw new Error('WRF low-cloud definition does not match the v3 contract');
+  if (cape.kind !== 'cape' || cape.producerDefinition !== published.capeParcelDefinition || cape.sourceParameter !== published.capeField) {
+    throw new Error('WRF CAPE definition does not match the v3 contract');
+  }
+  if (!low || low.kind !== 'cloud-cover' || low.algorithmId !== published.lowCloudDefinition || low.sourceParameter !== published.lowCloudField) {
+    throw new Error('WRF low-cloud definition does not match the v3 contract');
+  }
   if (!total || total.kind !== 'cloud-cover' || total.sourceParameter !== published.totalCloudField) throw new Error('WRF total-cloud definition does not match the v3 contract');
   if (!precipitation || precipitation.kind !== 'precipitation-rate' || precipitation.sourceParameter !== published.precipitationField || precipitation.normalization !== 'producer-window-rate') {
     throw new Error('WRF precipitation definition does not match the v3 contract');

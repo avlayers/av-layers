@@ -99,10 +99,14 @@ describe('weather source selection', () => {
       capeParcelDefinition: contract.capeParcelDefinition,
       lowCloudDefinition: contract.lowCloudDefinition,
       precipitationField: 'precip_mm_hr',
-      totalCloudField: 'cloud_total_pct'
+      totalCloudField: 'cloud_total_pct',
+      lowCloudField: 'cloud_low_pct',
+      capeField: 'cape_jkg'
     };
     expect(() => assertWrfWeatherDefinitions('wrf-fixture', published)).not.toThrow();
     expect(() => assertWrfWeatherDefinitions('av-wrf', published)).not.toThrow();
     expect(() => assertWrfWeatherDefinitions('av-wrf', { ...published, capeParcelDefinition: 'other' })).toThrow(/CAPE/);
+    expect(() => assertWrfWeatherDefinitions('av-wrf', { ...published, capeField: 'cape' })).toThrow(/CAPE/);
+    expect(() => assertWrfWeatherDefinitions('av-wrf', { ...published, lowCloudField: 'cloud' })).toThrow(/low-cloud/);
   });
 });
