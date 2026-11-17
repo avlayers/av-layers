@@ -118,12 +118,12 @@ export class WindDeck {
       ...(barbs ? [
         new IconLayer<BarbFeature>({
           id: 'av-wind-barbs', data: staticFeatures, iconAtlas: this.atlasUrl, iconMapping: this.atlas.mapping,
-          getIcon: feature => feature.icon, getPosition: feature => feature.position, getAngle: feature => feature.angle,
+          getIcon: feature => feature.icon, getPosition: feature => feature.position, getAngle: feature => -feature.angle,
           getSize: BARB_ICON_SIZE, sizeUnits: 'pixels', billboard: false, pickable: false
         }),
         ...(dynamicFeatures.length ? [new IconLayer<BarbFeature>({
           id: 'av-wind-barbs-dynamic', data: dynamicFeatures, iconAtlas: this.atlas.dynamicUrl, iconMapping: this.atlas.dynamicMapping,
-          getIcon: feature => feature.icon, getPosition: feature => feature.position, getAngle: feature => feature.angle,
+          getIcon: feature => feature.icon, getPosition: feature => feature.position, getAngle: feature => -feature.angle,
           getSize: BARB_ICON_SIZE, sizeUnits: 'pixels', billboard: false, pickable: false
         })] : []),
         new TextLayer<BarbFeature>({

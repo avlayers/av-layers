@@ -72,6 +72,7 @@ export class WindBarbAtlas {
       if (previous && previous !== key) delete this.dynamicMapping[previous];
       this.dynamicKeys[slot] = key; this.dynamicNext++;
     }
+    if (dynamic) (dynamic ? this.dynamicCtx : this.ctx).clearRect(x, y, ICON, ICON);
     drawIcon(dynamic ? this.dynamicCtx : this.ctx, speedKt, southern, x, y);
     (dynamic ? this.dynamicMapping : this.mapping)[key] = { x, y, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
     if (dynamic) this.dynamicUrl = this.dynamicCanvas.toDataURL('image/png');
