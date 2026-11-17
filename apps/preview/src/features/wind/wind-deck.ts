@@ -86,8 +86,13 @@ export class WindDeck {
   }
 
   private readonly restore = (): void => {
-    if (this.destroyed || !this.overlay) return;
-    try { if (!this.map.hasControl(this.overlay)) this.map.addControl(this.overlay); } catch { /* style replacement in progress */ }
+    if (this.destroyed) return;
+    if (!this.overlay) {
+      this.overlay = this.mount(true) ?? this.mount(false);
+      if (this.overlay) this.render();
+      return;
+    }
+    try { if (!this.map.hasControl(this.overlay)) this.map.addControl(this.overlay); this.render(); } catch { /* style replacement in progress */ }
   };
 
   private mount(interleaved: boolean): MapLibreOverlay | null {
