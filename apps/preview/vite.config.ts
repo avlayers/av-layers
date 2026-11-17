@@ -10,8 +10,8 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  // CI measured 414067 B gzip startup after globe Auto selection.
-  plugins: [preact(), browserBundleBudget(414_150, 33_000), {
+  // Measured 414252 B gzip startup after the Virginia 1 km model option.
+  plugins: [preact(), browserBundleBudget(414_350, 33_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {

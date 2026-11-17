@@ -132,7 +132,7 @@ const wrf = {
 } as const satisfies Record<WeatherLayerId, WeatherFieldDefinition>;
 
 const definitions: Record<string, Record<WeatherLayerId, WeatherFieldDefinition>> = {
-  gfs, rrfs, 'icon-eu': icon, 'av-wrf': wrf
+  gfs, rrfs, 'icon-eu': icon, 'av-wrf': wrf, 'wrf-va-1km': wrf
 };
 
 export function weatherFieldDefinition(modelId: string, layerId: string): WeatherFieldDefinition | undefined {

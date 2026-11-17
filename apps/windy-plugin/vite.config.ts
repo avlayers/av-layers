@@ -17,8 +17,8 @@ export default defineConfig({
     minify: 'esbuild',
     sourcemap: true
   },
-  // Measured 101561 B gzip after the publication checks. The embedded build clock moves this size between builds.
-  plugins: [browserBundleBudget(101_800), {
+  // CI measured 101822 B gzip after the Virginia 1 km model option. The embedded build clock moves this size between builds.
+  plugins: [browserBundleBudget(101_900), {
     name: 'windy-metadata',
     generateBundle() {
       for (const [fileName, data] of Object.entries({

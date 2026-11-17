@@ -40,7 +40,7 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`414,150 B` gzip) and lazy
+[Build checks](vite.config.ts) bound startup (`414,350 B` gzip) and lazy
 (`33,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the

@@ -30,7 +30,7 @@ vi.mock('./validate.js', async importOriginal => {
   return { ...actual, validateBuild: vi.fn(async (root: string, manifest: ManifestV5) => ({ root: resolve(root), manifest, hash: actual.sha256(Buffer.from(JSON.stringify(manifest))) })) };
 });
 
-import { buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
+import { assertUsefulHorizon, buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
 import { localPath, sha256 } from './validate.js';
 import { fixtureManifest } from '../../../tests/forecast-fixture.js';
@@ -262,7 +262,18 @@ describe('immutable publication', () => {
     expect(peak).toBeLessThanOrEqual(reservation);
     expect(active).toBe(0);
   });
-  it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before writes', async defect => {
+  it('admits a Virginia publication through 18:00 UTC and rejects the next millisecond', () => {
+  const cycle = '2026-11-17T12:00:00.000Z', origin = Date.parse(cycle);
+  const frames = Array.from({ length: 24 }, (_, index) => {
+    const hour = index + 1, valid = origin + hour * 3_600_000;
+    return { id: `f${hour}`, validTime: new Date(valid).toISOString(), intervalStart: new Date(valid - 3_600_000).toISOString(), intervalEnd: new Date(valid).toISOString() };
+  });
+  const manifest = { model: 'wrf-va-1km', cycle, frames };
+  expect(() => assertUsefulHorizon(manifest, Date.parse('2026-11-17T18:00:00.000Z'))).not.toThrow();
+  expect(() => assertUsefulHorizon(manifest, Date.parse('2026-11-17T18:00:00.001Z'))).toThrow('useful forecast horizon');
+});
+
+it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before writes', async defect => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
     if (defect === 'old cycle') manifest.cycle = '2026-10-29T00:00:00.000Z';
     else {

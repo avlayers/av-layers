@@ -180,8 +180,11 @@ describe('declarative workflows', () => {
 
   it('checks all selected models independently and retains separate health records', () => {
     const check = record(record(workflow('health.yml').jobs).check);
+    expect(check.if).toBe("needs.select.outputs.models != '[]'");
     expect(record(check.strategy)['fail-fast']).toBe(false);
     const steps = list(check.steps).map(record);
+    const select = list(record(record(workflow('health.yml').jobs).select).steps).map(record);
+    expect(record(select.find(step => step.run === 'node --import tsx scripts/workflow-models.ts')!.env).TARGET_ENV).toBe("${{ inputs.environment || 'production' }}");
     expect(record(steps.find(step => step.run === 'pnpm health')!.env).MODEL).toBe('${{ matrix.model }}');
     expect(record(steps.find(step => step.uses === 'actions/upload-artifact@v4')!.with).name).toBe("health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}");
   });

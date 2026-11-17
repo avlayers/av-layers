@@ -91,9 +91,16 @@ export interface ProductDefinition {
   readonly execution: ModelExecution;
 }
 
+export interface ModelMonitoring {
+  readonly environments: readonly ('staging' | 'production')[];
+  readonly maxCycleAgeHours: number;
+  readonly minHorizonHours: number;
+}
+
 export interface ModelDefinition extends ProductDefinition {
   readonly nominalDxMeters: number;
   readonly expectedRunsPerDay: number;
+  readonly monitoring: ModelMonitoring;
   readonly upstream: Readonly<Record<string, unknown>>;
   readonly forecast: { readonly hours: readonly number[]; readonly intervalHours: number; readonly intervalChange?: ProductDefinition['intervalChange']; readonly mapEndHour?: number;
     readonly cycleHoursUtc: readonly number[]; readonly statisticsResetHours: number | null };
@@ -169,6 +176,11 @@ const productConfigSchema = z.object({
     .refine(forecast => forecast.mapEndHour === undefined || forecast.hours.some(hour => hour <= forecast.mapEndHour!), 'Map window requires a forecast prefix')
     .refine(forecast => !forecast.intervalChange || forecast.intervalChange.hours <= forecast.intervalChange.fromHour, 'Source interval exceeds transition hour'),
   freshness: z.object({ maxCycleAgeHours: z.number().positive(), minHorizonHours: z.number().nonnegative() }).readonly(),
+  monitoring: z.object({
+    environments: z.array(z.enum(['staging', 'production'])).refine(values => new Set(values).size === values.length, 'Monitoring environments must be unique').readonly(),
+    maxCycleAgeHours: z.number().finite().positive(),
+    minHorizonHours: z.number().finite().nonnegative()
+  }).strict().readonly(),
   terrainSubdivisionFactor: z.number().int().positive().max(64).optional(),
   coverage: z.object({
     id: identifier, description: z.string().min(1),
@@ -202,7 +214,7 @@ export function defineProduct(raw: unknown, workers = 0): ModelDefinition {
     ...(config.tier === undefined ? {} : { tier: config.tier }),
     attribution: config.attribution,
     bounds, nominalDxMeters: nominalGridSpacingMeters(config.grid, bounds),
-    coverageDescription: config.coverage.description, freshness: config.freshness,
+    coverageDescription: config.coverage.description, freshness: config.freshness, monitoring: config.monitoring,
     grid: config.grid, coverageId: config.coverage.id,
     maxNativeZoom: zoom,
     supportHaloCells: config.coverage.interpolationHaloCells,

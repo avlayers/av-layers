@@ -5,6 +5,7 @@ import { PRODUCTS } from '@av/contracts/models';
 interface WorkflowModel {
   modelId: string;
   execution: { parallelism: number; schedule: readonly string[] };
+  monitoring?: { environments: readonly ('staging' | 'production')[] };
 }
 
 interface ModelSelection {
@@ -12,10 +13,17 @@ interface ModelSelection {
   schedule?: string;
   products?: readonly WorkflowModel[];
   kind?: 'forecast' | 'health';
+  environment?: 'staging' | 'production';
+}
+
+export function monitoringEnvironment(value = process.env.TARGET_ENV): 'staging' | 'production' {
+  if (value === undefined || value === '') return 'production';
+  if (value === 'staging' || value === 'production') return value;
+  throw new Error('TARGET_ENV must be staging or production');
 }
 
 /** Select forecast jobs or health checks without loading source adapters. */
-export function selectWorkflowModels({ selection = 'all', schedule, products = PRODUCTS, kind = 'forecast' }: ModelSelection = {}) {
+export function selectWorkflowModels({ selection = 'all', schedule, products = PRODUCTS, kind = 'forecast', environment = 'production' }: ModelSelection = {}) {
   let selected = products.filter(product => selection === 'all' || product.modelId === selection);
   if (!selected.length) throw new Error(`Unknown forecast model: ${selection}`);
   if (kind === 'forecast' && schedule) {
@@ -24,6 +32,8 @@ export function selectWorkflowModels({ selection = 'all', schedule, products = P
   } else if (kind === 'forecast' && selection === 'all') {
     selected = selected.filter(product => product.execution.schedule.length > 0);
     if (!selected.length) throw new Error('No scheduled forecast models');
+  } else if (kind === 'health' && selection === 'all') {
+    selected = selected.filter(product => product.monitoring?.environments.includes(environment));
   }
   return selected.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
 }
@@ -32,7 +42,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const forecast = process.argv.includes('--forecast');
   const selection = process.env.MODEL_SELECTION ?? 'all';
   const schedule = forecast ? process.env.MODEL_SCHEDULE : undefined;
-  const models = selectWorkflowModels({ selection, schedule, kind: forecast ? 'forecast' : 'health' });
+  const models = selectWorkflowModels({ selection, schedule, kind: forecast ? 'forecast' : 'health', ...(forecast ? {} : { environment: monitoringEnvironment() }) });
   const value = forecast ? { include: models } : models.map(model => model.model);
   const output = `${forecast ? 'matrix' : 'models'}=${JSON.stringify(value)}\n${forecast ? `model-parallelism=${schedule ? models.length : 1}\n` : ''}`;
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, output);

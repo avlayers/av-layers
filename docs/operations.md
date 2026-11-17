@@ -172,7 +172,9 @@ gh workflow run deploy.yml --ref main -f environment=staging
 Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
 the clients, deploys the API Worker, and checks the complete model catalog.
 Scheduled models require a publication. Event-driven models may report
-`publication-unavailable` until an external cycle is published. Every available
+`publication-unavailable` until an external cycle is published. Hourly health
+checks only models enrolled for that environment, so a new model can stay
+registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
 tile routes; invalid, incomplete and expired publications fail deployment.
 After Cloudflare Pages deploys, the job checks the revision marker and Windy
@@ -251,9 +253,17 @@ Inspect the run's uploaded receipt artifacts:
 - `serving.json`: records live API verification after commit.
 
 The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
-checks each model's live API integrity, configured cycle age, remaining horizon
-and expiry. The report records response cache state, storage reads, Worker
-timings, and client JSON duration and retries. In Actions, correlate `forecast-stage`,
+checks each model enrolled in `monitoring.environments` for the selected
+environment. An empty list leaves the model out of that matrix. A manual run
+can still name it. Enroll `staging` after a validated staging publication, and
+`production` after the production pointer exists. An enrolled model with no
+publication fails the check.
+
+Publication admission uses `freshness`. Ongoing health uses `monitoring` for
+cycle age and remaining horizon. Exhausted valid times, expiry, and serving
+failures stay independent of those thresholds. The report records response cache
+state, storage reads, Worker timings, and client JSON duration and retries. In
+Actions, correlate `forecast-stage`,
 `forecast-published`, and `forecast-failure` by model, build, run and attempt.
 
 Use the report and artifacts to choose a recovery action.

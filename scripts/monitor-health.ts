@@ -10,11 +10,11 @@ function forecastFindings(manifest: ManifestV5, now: number): string[] {
   if (!product) return ['unknown-product: latest forecast model is not registered'];
   const cycleAgeHours = (now - Date.parse(manifest.cycle)) / 3600000;
   const horizonHours = (Math.max(...renderedFrames(manifest).map(f => Date.parse(f.validTime))) - now) / 3600000;
-  if (cycleAgeHours > product.freshness.maxCycleAgeHours) findings.push('upstream-lag: source cycle exceeds the admitted age');
+  if (cycleAgeHours > product.monitoring.maxCycleAgeHours) findings.push('upstream-lag: source cycle exceeds the admitted age');
   const daylightFiltered = product.capabilities.daylightFrames === 'regional-daylight';
   // Publication validates the selected frames; omitted night hours preserve source coverage.
   const coverageHours = daylightFiltered ? (product.mapEndHour ?? product.frameHours.at(-1)!) - cycleAgeHours : horizonHours;
-  if (coverageHours < product.freshness.minHorizonHours) findings.push(`shrinking-horizon: less than ${product.freshness.minHorizonHours} hours of forecast remain`);
+  if (coverageHours < product.monitoring.minHorizonHours) findings.push(`shrinking-horizon: less than ${product.monitoring.minHorizonHours} hours of forecast remain`);
   if (horizonHours <= 0) findings.push('exhausted-horizon: no published forecast times remain');
   if (Date.parse(manifest.expiresAt) <= now) findings.push('expired-publication: retained build expired');
   return findings;
