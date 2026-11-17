@@ -32,8 +32,7 @@ WMO/ICAO knot-feathered barbs through `@deck.gl/layers` (`IconLayer` in the map
 plane, upright `TextLayer` labels). The barb atlas covers calm plus 5–280 kt in
 both hemispheres and generates on-demand icons above 280 kt. Overlays share
 MapLibre's WebGL2 context (`MapLibreOverlay`, interleaved) and re-attach on
-`style.load`.
-`km/h` or `mph` speed labels at the selected height.
+`style.load`. Speed labels show `km/h` or `mph` at the selected height.
 The basemap is the XC Skies Natural shaded-relief raster, with the roads and
 place labels XC Skies draws above it. Retina displays request the `@2x` tiles.
 The offline fixture keeps the neutral background.
