@@ -341,7 +341,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
     if (await page.locator('#point-card').isVisible()) await page.locator('#point-close').click();
 
     await run('time change redraws wind for the selected hour', async () => {
-      await chooseStyle(page, 'Barbs and speed');
+      await chooseStyle(page, 'XC barbs');
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
       await page.waitForTimeout(350);
       const mapEl = page.locator('#map');
