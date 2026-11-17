@@ -158,7 +158,7 @@ export function createPreviewApp(): PreviewApp {
       totalFrames: frames.length,
       readyFrames: frames.filter(frame => ready?.get(frame.id)?.has(intent().windHeight)).length,
       numericAllocatedBytes: windCache.allocatedBytes,
-      horizonNumericRemainingBytes: windSession?.staged ? windSession.memory.horizonNumericRemaining : null
+      horizonNumericRemainingBytes: windSession?.staged ? windSession.horizonNumericRemaining : null
     });
   }
 

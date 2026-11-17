@@ -462,6 +462,7 @@ it('waits for ImageSource tile upload before calling beforeReveal, hiding the ol
     expect(f.painted()).toEqual([{ frame: first.id, quality: 'detail', opacity: 0.7 }]);
     uploaded = true;
     f.emit('sourcedata', { sourceId: overview.id });
+    await vi.advanceTimersByTimeAsync(0);
     f.emit('render');
     expect(revealed).toEqual([first.id, second.id]);
     expect(f.state()).toMatchObject({ displayed: { frame: second.id }, quality: 'overview' });

@@ -115,6 +115,7 @@ export class RasterOverview {
   private heldLease: PreparationLease | null = null;
   private displayLease: PreparationLease | null = null;
   private readonly retired: Retired[] = [];
+  private readonly opacities = new globalThis.Map<string, number>();
   private canvasLease: PreparationLease | null = null;
   private decodeLease: PreparationLease | null = null;
   private composing: Job | null = null;
@@ -140,7 +141,11 @@ export class RasterOverview {
     this.unsubscribeBudget = options.budget?.onRelease(() => {
       if (this.disposed) return;
       if (this.deferred) this.select(this.deferred.build, this.deferred.layer, this.deferred.frame);
-      else this.pump();
+      else {
+        this.refresh();
+        const context = this.context;
+        if (context && this.selected && this.needsUpdate(context.build, context.layer, this.selected)) this.onReady();
+      }
     }) ?? null;
   }
 
@@ -221,9 +226,12 @@ export class RasterOverview {
     return this.natives.has(frame) && this.nativeCovers() ? 'detail' : 'overview';
   }
 
-  needsUpgrade(build: PinnedBuild, layer: LayerId, frame: string): boolean {
-    const native = this.natives.get(frame);
-    return this.ready(build, layer, frame) && this.nativeCovers() && !!native && native !== this.shown;
+  needsUpdate(build: PinnedBuild, layer: LayerId, frame: string): boolean {
+    if (!this.ready(build, layer, frame)) return false;
+    const preview = this.previews.get(frame), native = this.nativeCovers() ? this.natives.get(frame) : undefined;
+    const image = native && (native === this.shown || !preview || !this.options.budget
+      || this.options.budget.canReserve(native.bitmap.width * native.bitmap.height * 8, 'background')) ? native : preview;
+    return !!image && image !== this.shown;
   }
 
   ownsSource(id: string | undefined): boolean { return id === this.id || id === `${this.id}-stage`; }
@@ -267,6 +275,7 @@ export class RasterOverview {
     if (created) {
       this.map.addSource(targetId, { type: 'image', coordinates });
       this.map.addLayer({ ...previewRasterLayer(0), id: targetId, source: targetId, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
+      this.opacities.set(targetId, 0);
     }
     const source = this.map.getSource(targetId) as ImageSourceLike | undefined;
     if (this.shown !== image) {
@@ -281,27 +290,35 @@ export class RasterOverview {
       source?.setCoordinates?.(coordinates);
       this.shownCoordinates = coordinates;
     }
-    this.map.setPaintProperty(targetId, 'raster-opacity', clampOpacity(opacity));
+    this.setOpacity(targetId, opacity);
     if (opacity > 0) {
-      if (this.visibleId && this.visibleId !== targetId && this.map.getLayer(this.visibleId)) this.map.setPaintProperty(this.visibleId, 'raster-opacity', 0);
+      if (this.visibleId && this.visibleId !== targetId && this.map.getLayer(this.visibleId)) this.setOpacity(this.visibleId, 0);
       this.visibleId = targetId;
     }
     return true;
   }
 
-  hide(): void { for (const id of [this.id, `${this.id}-stage`]) if (this.map.getLayer(id)) this.map.setPaintProperty(id, 'raster-opacity', 0); this.visibleId = null; }
+  hide(): void { for (const id of [this.id, `${this.id}-stage`]) if (this.map.getLayer(id)) this.setOpacity(id, 0); this.visibleId = null; }
+
+  private setOpacity(id: string, value: number): void {
+    const opacity = clampOpacity(value);
+    if (this.opacities.get(id) === opacity) return;
+    this.opacities.set(id, opacity);
+    this.map.setPaintProperty(id, 'raster-opacity', opacity);
+  }
 
   cancelStage(opacity: number): boolean {
     const oldId = this.visibleId !== this.shownId ? this.visibleId : this.retired.findLast(entry => entry.sourceId !== this.shownId)?.sourceId;
     if (!oldId) return false;
     if (this.map.getLayer(this.shownId)) this.map.removeLayer(this.shownId);
+    this.opacities.delete(this.shownId);
     if (this.map.getSource(this.shownId)) this.map.removeSource(this.shownId);
     if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
     const index = this.retired.findLastIndex(entry => entry.sourceId === oldId);
     const previous = index < 0 ? null : this.retired.splice(index, 1)[0];
     this.shown = previous?.image ?? null; this.shownId = oldId; this.visibleId = oldId; this.shownFrame = previous?.frame ?? null;
     this.shownCoordinates = previous?.coordinates ?? null; this.displayLease = previous?.displayLease ?? null; this.heldLease = previous?.previewLease ?? null;
-    if (this.map.getLayer(oldId)) this.map.setPaintProperty(oldId, 'raster-opacity', clampOpacity(opacity));
+    if (this.map.getLayer(oldId)) this.setOpacity(oldId, opacity);
     this.releaseRetired();
     return !!this.shown;
   }
@@ -370,6 +387,7 @@ export class RasterOverview {
     for (const retired of this.retired.splice(0)) {
       if (retired.sourceId !== this.visibleId && retired.sourceId !== this.shownId) {
         if (this.map.getLayer(retired.sourceId)) this.map.removeLayer(retired.sourceId);
+        this.opacities.delete(retired.sourceId);
         if (this.map.getSource(retired.sourceId)) this.map.removeSource(retired.sourceId);
       }
       if (!closed.has(retired.image) && retired.image !== this.shown && ![...this.previews.values(), ...this.natives.values()].includes(retired.image)) {
@@ -433,6 +451,7 @@ export class RasterOverview {
       this.displayLease?.release(); this.displayLease = null;
       for (const id of [this.id, `${this.id}-stage`]) {
         if (this.map.getLayer(id)) this.map.removeLayer(id);
+        this.opacities.delete(id);
         if (this.map.getSource(id)) this.map.removeSource(id);
       }
       this.releaseRetired();

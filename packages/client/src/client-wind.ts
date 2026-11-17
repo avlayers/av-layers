@@ -45,7 +45,7 @@ const chunks: (PackedWindChunk | undefined)[] = [], offsets: number[] = [], valu
 /** Typed capacity outcome, separate from validation RangeErrors. */
 export class WindCapacityError extends Error {
   readonly code = 'capacity';
-  constructor(message = 'Wind cache exceeds byte budget') { super(message); this.name = 'WindCapacityError'; }
+  constructor(message = 'Wind cache exceeds byte budget', readonly resource: 'numeric' | 'preparation' = 'preparation') { super(message); this.name = 'WindCapacityError'; }
 }
 
 interface CachedBytes {
@@ -136,7 +136,7 @@ export class WindDataCache {
     return lease;
   }
 
-  horizonCost(root: string, resources: readonly { kind: string; tile: number; bytes: number }[], horizon: number): { remaining: number; fits: boolean } {
+  horizonCost(root: string, resources: readonly { kind: string; tile: number; bytes: number }[], horizon: number): { remaining: number; fits: boolean; resource: 'numeric' | 'preparation' | null } {
     const split = root.lastIndexOf('/'), prefix = root.slice(0, split + 1), frame = root.slice(split + 1);
     const expected = new Map<string, number>([['', WIND_FRAME_LIMIT]]);
     for (const resource of resources) expected.set(`/${resource.kind}/${resource.tile}`, resource.bytes);
@@ -160,7 +160,8 @@ export class WindDataCache {
     const required = horizon * [...expected.values()].reduce((sum, bytes) => sum + bytes, 0) - backed;
     const numericAvailable = this.budgetBytes - this.bytes + reclaimable;
     const sharedAvailable = this.budget ? this.budget.limit - this.budget.used + reclaimable : Infinity;
-    return { remaining: required, fits: required <= Math.min(numericAvailable, sharedAvailable) };
+    const resource = required > numericAvailable ? 'numeric' : required > sharedAvailable ? 'preparation' : null;
+    return { remaining: required, fits: resource === null, resource };
   }
 
   get spansUnsupported(): boolean {
@@ -214,7 +215,7 @@ export class WindDataCache {
   take(url: string, limit: number, expiresAt: number, foreground = true, lazy = false): CachedBytes {
     for (const e of this.entries) {
       if (e.url !== url || e.expiresAt <= Date.now() || e.capacity !== limit) continue;
-      if (e.pending?.controller.signal.aborted) throw new WindCapacityError();
+      if (e.pending?.controller.signal.aborted) throw new WindCapacityError(undefined, 'numeric');
       e.references++; e.expiresAt = Math.min(e.expiresAt, expiresAt);
       this.entries.delete(e); this.entries.add(e);
       return e;
@@ -223,7 +224,7 @@ export class WindDataCache {
       if ((lazy || this.bytes + limit <= this.budgetBytes) && this.entries.size < this.entryLimit) break;
       if (!e.references && !e.pending) this.remove(e);
     }
-    if ((!lazy && this.bytes + limit > this.budgetBytes) || this.entries.size >= this.entryLimit) throw new WindCapacityError();
+    if ((!lazy && this.bytes + limit > this.budgetBytes) || this.entries.size >= this.entryLimit) throw new WindCapacityError(undefined, 'numeric');
     const entry: CachedBytes = { url, bytes: new Uint8Array(0), capacity: limit, used: null, references: 1, owners: new Set(), expiresAt };
     this.entries.add(entry);
     try { if (!lazy) this.allocate(entry, foreground); } catch (error) { this.entries.delete(entry); throw error; }
@@ -237,7 +238,7 @@ export class WindDataCache {
       if (this.bytes + limit <= this.budgetBytes) break;
       if (!e.references && !e.pending) this.remove(e);
     }
-    if (this.bytes + limit > this.budgetBytes) throw new WindCapacityError();
+    if (this.bytes + limit > this.budgetBytes) throw new WindCapacityError(undefined, 'numeric');
     let lease = this.budget?.reserve('wind-numeric', limit, foreground ? 'foreground' : 'background');
     if (this.budget && !lease) for (const entry of this.entries) {
       if (!entry.references && !entry.pending) {
@@ -799,33 +800,37 @@ export class WindDataSource {
     let fines = tilesForBounds(fine.grid, bounds, descriptor.fineTileSize, 2, fineMask);
     const windBytes = windTotal.chunkBytes, fineBytes = fineTotal.chunkBytes;
     const wind = new Map<number, PackedWindChunk>(), fineData = new Map<number, DataView>();
-    let capacityLimited = false;
+    let capacityResource: 'numeric' | 'preparation' | null = null;
     const horizonCost = (tasks: Array<{ kind: string; tile: number; bytes: number }>) => {
       const result = this.cache.horizonCost(root, tasks, this.options.horizon ?? 1);
-      if (!result.fits) capacityLimited = true;
+      if (!result.fits) capacityResource = result.resource;
       return result.fits ? result.remaining : Infinity;
     };
 
     const selectOverview = () => {
       let selected: { overview: Overview; tasks: Array<{ kind: string; tile: number; bytes: number }> } | undefined;
-      let cost = Infinity;
+      let fallback: typeof selected;
+      let cost = Infinity, fallbackCost = Infinity, missedCost = Infinity;
       for (const level of descriptor.overview ?? []) {
         const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, box, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
         if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
         const tasks = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
         const total = horizonCost(tasks);
-        if (total >= cost) continue;
-        cost = total;
-        selected = {
+        const candidate = {
           overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
           tasks
         };
+        if (total < cost) { cost = total; selected = candidate; }
+        const single = this.cache.horizonCost(root, tasks, 1);
+        if (single.fits && single.remaining < fallbackCost) { fallbackCost = single.remaining; fallback = candidate; }
+        else if (!single.fits && single.remaining < missedCost) { missedCost = single.remaining; capacityResource = single.resource; }
       }
-      return selected;
+      return selected ?? fallback;
     };
 
     const fetchTasks = async (rawTasks: Array<{ kind: string; tile: number; bytes: number }>, targetOverview?: Overview) => {
-      if (!this.cache.horizonCost(root, rawTasks, 1).fits) throw new WindCapacityError();
+      const admission = this.cache.horizonCost(root, rawTasks, 1);
+      if (admission.resource) throw new WindCapacityError(undefined, admission.resource);
       const coalesce = (this.options.coalesceSpans ?? !this.options.fetchImpl) && !this.cache.spansUnsupported;
       const tasks: Array<{ kind: string; tile: number; bytes: number; entry: CachedBytes }> = [];
       try {
@@ -933,7 +938,7 @@ export class WindDataSource {
       }
     } else {
       const selected = selectOverview();
-      if (!selected) { if (capacityLimited) throw new WindCapacityError(); return 'unavailable'; }
+      if (!selected) { if (capacityResource) throw new WindCapacityError(undefined, capacityResource); return 'unavailable'; }
       this.horizonResources = { root, tasks: selected.tasks };
       overview = selected.overview;
       try { await fetchTasks(selected.tasks, overview); } catch (error) { controller.abort(); throw error; }
