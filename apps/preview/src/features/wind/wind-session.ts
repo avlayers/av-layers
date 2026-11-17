@@ -86,6 +86,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   let pending: boolean | undefined;
   const isCapacity = (error: unknown) => error instanceof WindCapacityError || (error instanceof Error && ('code' in error && error.code === 'capacity' || error instanceof RangeError && /byte budget/.test(error.message)));
   const bytes = () => blockedNumeric ? options.cache.allocatedBytes : options.budget?.used ?? options.cache.allocatedBytes;
+  const releaseLimit = () => { limited = false; blockedBytes = 0; blockedNumeric = false; };
   const capacity = (frame: string, error: unknown) => {
     blockedNumeric = error instanceof WindCapacityError && error.resource === 'numeric';
     let reclaimed = false;
@@ -145,7 +146,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     for (const job of jobs.values()) dispose(job);
     for (const job of parked.values()) dispose(job);
     parked.clear();
-    jobs.clear(); failures.clear(); limited = false; blockedBytes = 0; build = null; lastFrame = null; viewKey = '';
+    jobs.clear(); failures.clear(); releaseLimit(); build = null; lastFrame = null; viewKey = '';
     setPending(false); options.overlay.setWindActive(false, false); publish.status('unavailable'); publish.reservation();
   }
   function ordered(): string[] {
@@ -306,7 +307,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     }
     build = s.build;
     const nextView = `${map.getZoom()}:${camera.join(',')}`;
-    if (viewKey && viewKey !== nextView) { failures.clear(); limited = false; blockedBytes = 0; }
+    if (viewKey && viewKey !== nextView) { failures.clear(); releaseLimit(); }
     viewKey = nextView;
     const fits = (job: WindJob) => job.build === s.build && coversBounds(job.bounds, camera) && (!job.source.isOverview || map.getZoom() <= job.zoom);
     if ([...jobs.values()].some(job => !fits(job)) || !jobs.size && [...parked.values()].some(fits)) {
@@ -333,7 +334,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
           if (victim) { jobs.delete(victim.frame); dispose(victim); }
         }
       }
-      if (!selected()) { limited = false; blockedBytes = 0; }
+      if (!selected()) releaseLimit();
       selected()?.source.promote?.();
     }
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -343,7 +344,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (!limited || destroyed) return;
     const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
     if (bytes() >= blockedBytes && reclaimed === 0) return;
-    limited = false; schedule();
+    releaseLimit(); schedule();
   };
   if ('onRelease' in options.cache) options.cache.onRelease = released;
   const unsubscribe = options.budget?.onRelease(released);
@@ -354,7 +355,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       const s = state();
       if (previous === s.height || destroyed) return;
       if (preparationTimer !== null) { clearTimeout(preparationTimer); preparationTimer = null; }
-      failures.clear(); limited = false; blockedBytes = 0;
+      failures.clear(); releaseLimit();
       if (installed && installedHeight !== s.height) clearField();
       const job = selected();
       if (job?.status === 'ready') prepare(job, s.height);

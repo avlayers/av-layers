@@ -810,7 +810,7 @@ export class WindDataSource {
     const selectOverview = () => {
       let selected: { overview: Overview; tasks: Array<{ kind: string; tile: number; bytes: number }> } | undefined;
       let fallback: typeof selected;
-      let cost = Infinity, fallbackCost = Infinity;
+      let cost = Infinity, fallbackCost = Infinity, missedCost = Infinity;
       for (const level of descriptor.overview ?? []) {
         const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, box, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
         if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
@@ -823,7 +823,7 @@ export class WindDataSource {
         if (total < cost) { cost = total; selected = candidate; }
         const single = this.cache.horizonCost(root, tasks, 1);
         if (single.fits && single.remaining < fallbackCost) { fallbackCost = single.remaining; fallback = candidate; }
-        else if (!single.fits) capacityResource = single.resource;
+        else if (!single.fits && single.remaining < missedCost) { missedCost = single.remaining; capacityResource = single.resource; }
       }
       return selected ?? fallback;
     };

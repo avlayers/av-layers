@@ -28,9 +28,14 @@ Regression tests exercise the real raster overlay and overview together:
 
 The source-event fixture caps recursion to keep the failing test bounded.
 These are operation counts. Browser frame times and GPU pixel behavior remain
-release checks; the isolated browser could not open the local verification
-page under its URL policy. The live merged page reproduced preparation stalls,
-capacity errors, a blank map and unresponsive controls.
+release checks. The original patch environment could not open its local page.
+A later local preview of this revision, against production GFS build
+`20261117T002820Z-7a0954c0-dddc-46ce-a131-78a60c0c9f3d` at latitude 0,
+longitude -10.8614, zoom about 1, opacity 0.5, and hybrid wind, reached
+preview and wind readiness 40/40. Day changes and playback stayed responsive
+and settled on the selected frame. Pixel capture, regional benchmarks, and
+physical devices were not run. The live merged page reproduced preparation
+stalls, capacity errors, a blank map and unresponsive controls.
 
 ## Earlier viewport measurements
 

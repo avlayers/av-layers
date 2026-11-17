@@ -653,6 +653,24 @@ it.each(['numeric', 'speculative'] as const)('settles %s capacity pressure witho
   if (kind === 'speculative') expect(f.session.installed?.frame).toBe(f.frames[0]);
 });
 
+it('relieves selected shared pressure after a numeric block has cleared', async () => {
+  vi.useFakeTimers();
+  const f = harness();
+  wind.numericLimit = 1;
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(f.session.preparation.limited).toBe(true);
+  expect(f.relieveDisplay).not.toHaveBeenCalled();
+  wind.numericLimit = 0;
+  wind.capacityFrame = f.frames[0]!;
+  f.relieveDisplay.mockImplementation(() => { wind.capacityAvailable = true; return true; });
+  f.state.height = 500;
+  f.session.heightChanged('surface');
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(f.relieveDisplay).toHaveBeenCalled();
+  expect(f.session.preparation.limited).toBe(false);
+});
+
 it('keeps numeric admission blocked when only renderer memory is released', async () => {
   vi.useFakeTimers();
   const budget = createPreparationBudget(128 * 1024 * 1024);
