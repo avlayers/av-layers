@@ -25,6 +25,7 @@ const ARMENIA = { west: 44.27798057856188, east: 44.72201942143812, south: 40.10
 
 function session() {
   const build = fixtureBuild({ buildId: `20260101T000000Z-${'b'.repeat(36)}` });
+  (build as { expiresAtMs: number }).expiresAtMs = Date.now() + 86_400_000;
   (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
   const frame = build.manifest.frames[0]!.id;
   return createWindSession({
@@ -49,7 +50,7 @@ it('settles on a bounded admitted window instead of evicting and reacquiring', a
   view.update();
   await vi.advanceTimersByTimeAsync(20_000);
   const attempts = wind.attempts.length;
-  expect(attempts).toBeLessThanOrEqual(5);
+  expect(attempts).toBeLessThanOrEqual(7);
   expect(view.preparation).toMatchObject({ promised: 8, admitted: 3, limited: true });
   await vi.advanceTimersByTimeAsync(20_000);
   expect(wind.attempts.length).toBe(attempts);

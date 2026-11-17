@@ -16,6 +16,11 @@ describe('preview framebuffer oracle', () => {
     const mixed = probes(3); mixed[0] = probes(3, 6)[0];
     expect(classifyViewport(mixed, 'agl', 7, 1, false)).toBeNull();
   });
+  it('distinguishes zoom 8 overview from zoom 9 detail', () => {
+    const at = (zoom: number) => positions.map(({ u, v }) => ({ u, v, pixel: expectedPixel('agl', 7, zoom, u, v, 1, false, 9).map(Math.round) }));
+    expect(recognizeViewport(at(8), 'agl', 1, false, 40, 9)?.quality).toBe('overview');
+    expect(recognizeViewport(at(9), 'agl', 1, false, 40, 9)?.quality).toBe('detail');
+  });
   it('rejects a stretched or displaced image with the correct frame colors', () => {
     const displaced = probes(3).map(probe => ({ ...probe, pixel: expectedPixel('agl', 7, 3, probe.u + 0.03, probe.v, 1, false) }));
     expect(classifyViewport(displaced, 'agl', 7, 1, false)).toBeNull();

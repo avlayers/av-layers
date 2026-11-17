@@ -9,6 +9,7 @@ import type { PointSession } from './point-session';
 export interface PointWind {
   readonly build: PinnedBuild;
   readonly frame: string;
+  readonly overview?: boolean;
   sample(lat: number, lon: number): { u: number | null; v: number | null; status: string };
 }
 
@@ -46,6 +47,7 @@ export interface PointFeature {
   dispose(): void;
   readonly pending: boolean;
   readonly current: PointSeriesContext | null;
+  readonly frameId: string | null;
   refreshDiagnostics(): void;
   dismiss(target: EventTarget | null, mapContainer: Element): void;
 }
@@ -96,7 +98,8 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     const speed = sample.status === 'valid' && sample.u !== null && sample.v !== null ? displayedWindSpeed(Math.hypot(sample.u, sample.v), units) : null;
     const value = speed !== null ? `${speed} ${windSpeedUnitLabel(units)}`
       : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
-    options.publish.wind(`Map wind · ${formatPlaceTime(Date.parse(validTime), longitudeOffsetHours(context.point.lon) * 60, 'stamp')} · ${value}`);
+    const label = wind.overview ? 'Map wind overview' : 'Map wind';
+    options.publish.wind(`${label} · ${formatPlaceTime(Date.parse(validTime), longitudeOffsetHours(context.point.lon) * 60, 'stamp')} · ${value}`);
   }
 
   return {
@@ -119,6 +122,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     dispose() { session?.dispose(); },
     get pending() { return Boolean(session?.pending); },
     get current() { return session?.current ?? null; },
+    get frameId() { return session?.frameId ?? null; },
     refreshDiagnostics() {
       const container = meta(), build = options.getBuild();
       if (container && build && session?.current && !container.children.length) renderBuildDetails(container, build, session.current.point.lon);

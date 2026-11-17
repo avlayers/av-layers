@@ -23,10 +23,11 @@ const WIDE = { west: -110, east: -90, south: 30, north: 45 };
 
 afterEach(() => { vi.useRealTimers(); });
 
-it('warms the full rendered axis only while the viewport stays small', async () => {
+it('warms the full rendered axis for wide and small viewports', async () => {
   vi.useFakeTimers();
   wind.loads.length = 0; wind.prepared.length = 0;
   const build = fixtureBuild({ buildId: `20260101T000000Z-${'a'.repeat(36)}` });
+  (build as { expiresAtMs: number }).expiresAtMs = Date.now() + 86_400_000;
   (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
   let bounds = WIDE; const frame = build.manifest.frames[0]!.id;
   const session = createWindSession({
@@ -43,7 +44,7 @@ it('warms the full rendered axis only while the viewport stays small', async () 
   });
   session.update();
   await vi.advanceTimersByTimeAsync(1_200);
-  expect(wind.loads).toEqual([frame]);
+  expect(new Set(wind.loads).size).toBe(8);
   bounds = ARMENIA;
   session.update();
   await vi.advanceTimersByTimeAsync(5_000);

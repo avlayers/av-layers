@@ -23,6 +23,7 @@ import { createWindSession } from './wind-session';
 const ARMENIA = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
 function session() {
   const build = fixtureBuild({ buildId: `20260101T000000Z-${'c'.repeat(36)}` });
+  (build as { expiresAtMs: number }).expiresAtMs = Date.now() + 86_400_000;
   (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
   const cache = {
     isBuildUnavailable: () => false,
@@ -52,7 +53,7 @@ it('automatically resumes useful preparation after a real release while the admi
   view.update();
   await vi.advanceTimersByTimeAsync(20_000);
   const before = wind.attempts.length;
-  expect(before).toBeLessThanOrEqual(5);
+  expect(before).toBeLessThanOrEqual(7);
   expect(view.preparation.limited).toBe(true);
   wind.live = 2; wind.unreferenced = 1;
   wind.notify!();

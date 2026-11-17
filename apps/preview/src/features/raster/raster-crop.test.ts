@@ -5,6 +5,16 @@ import { canonicalTileX, planRasterCrop, requiredSourceZoom } from './raster-cro
 const ARMENIA: [number, number, number, number] = [44.27798057856188, 40.104612670852696, 44.72201942143812, 40.29538732914732];
 
 describe('viewport area policy', () => {
+  it('enters native full-horizon preparation below 100000 km² and exits above 125000 km²', () => {
+    const warmth = createViewportWarmth();
+    expect(warmth.update(100_001)).toBe(false);
+    expect(warmth.update(100_000)).toBe(false);
+    expect(warmth.update(99_999)).toBe(true);
+    expect(warmth.update(125_000)).toBe(true);
+    expect(warmth.update(125_001)).toBe(false);
+    expect(warmth.update(110_000)).toBe(false);
+  });
+
   it('computes the 800 km² Armenia rectangle from spherical geometry', () => {
     expect(boundsAreaKm2(ARMENIA)).toBeCloseTo(800, 6);
   });
@@ -27,15 +37,15 @@ describe('viewport area policy', () => {
     expect(boundsAreaKm2([0, 0, 0, 10])).toBeNull();
   });
 
-  it('applies the 800/1000 km² hysteresis band with boundary epsilon', () => {
+  it('applies the native hysteresis band with boundary epsilon', () => {
     const warmth = createViewportWarmth();
-    expect(warmth.update(801)).toBe(false);
-    expect(warmth.update(799)).toBe(true);
-    expect(warmth.update(999)).toBe(true);
-    expect(warmth.update(1001)).toBe(false);
-    expect(warmth.update(799.9999999)).toBe(true);
-    expect(fullHorizonFor(800.0000000000045, false)).toBe(true);
-    expect(fullHorizonFor(1000.0001, true)).toBe(false);
+    expect(warmth.update(100_001)).toBe(false);
+    expect(warmth.update(99_999)).toBe(true);
+    expect(warmth.update(124_999)).toBe(true);
+    expect(warmth.update(125_001)).toBe(false);
+    expect(warmth.update(99_999.9999)).toBe(true);
+    expect(fullHorizonFor(100_000, false)).toBe(false);
+    expect(fullHorizonFor(125_000.0001, true)).toBe(false);
   });
 });
 

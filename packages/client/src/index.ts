@@ -9,3 +9,4 @@ export * from './client-raster.ts';
 export * from './client-seam.ts';
 
 export type { ForecastRequestHandle, ForecastRequestSpec } from './client-request-scheduler.ts';
+export { createPreparationBudget, type PreparationBudget, type PreparationLease } from './client-preparation-budget.ts';

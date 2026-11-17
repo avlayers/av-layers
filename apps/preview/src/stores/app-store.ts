@@ -68,6 +68,8 @@ export interface NoticeView {
   readonly overviewReady: number;
   readonly overviewTotal: number;
   readonly overviewFailed: number;
+  readonly detailReady: number;
+  readonly preparationLimited: boolean;
   readonly scaleWidth: number;
   readonly scaleText: string;
 }
@@ -93,6 +95,18 @@ export interface PreviewWriter {
   point(update: Partial<PointView>): void;
   location(update: Partial<LocationView>): void;
   notices(update: Partial<NoticeView>): void;
+}
+
+export function preparedAxisReadiness(
+  frames: readonly { id: string }[], previews: ReadonlySet<string>, details: ReadonlySet<string>, wind: ReadonlySet<string> | null
+): Pick<NoticeView, 'overviewReady' | 'overviewTotal' | 'detailReady'> {
+  let overviewReady = 0, detailReady = 0;
+  for (const { id } of frames) {
+    const native = details.has(id);
+    if (native) detailReady++;
+    if ((native || previews.has(id)) && (wind === null || wind.has(id))) overviewReady++;
+  }
+  return { overviewReady, overviewTotal: frames.length, detailReady };
 }
 
 export interface PreviewInitialState {

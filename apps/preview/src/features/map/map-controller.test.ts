@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createMapCamera } from './map-controller';
+import { createMap, createMapCamera, maplibregl } from './map-controller';
+
+vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn(), Map: vi.fn(function () { return {}; }) }));
+
+it('uses the bounded per-source tile cache on every memory class', () => {
+  createMap({ container: {} as HTMLElement, offlineFixture: true, camera: null });
+  expect(maplibregl.Map).toHaveBeenCalledWith(expect.objectContaining({ maxTileCacheSize: 48 }));
+});
 
 function camera(lng: number) {
   const map = {

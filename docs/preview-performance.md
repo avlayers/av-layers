@@ -5,11 +5,12 @@ at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
-bundle (MapLibre GL, XC Skies natural basemap, raster overviews, and
-numeric wind overlay) at **400,000 B gzip** (391,946 B measured on 16 November 2026)
-and each lazy chunk (the on-demand `@av/windgram` renderer) at **32,000 B gzip**
-(27,336 B measured the same day). The timeline figures below remain the
-13 November capture.
+bundle (MapLibre GL, XC Skies natural basemap, raster previews, and numeric wind
+overlay) at **412,000 B gzip** and each lazy chunk (the on-demand `@av/windgram`
+renderer) at **33,000 B gzip**. The 16 November 2026 baseline measured
+391,946 B startup and 27,336 B lazy; full-horizon preparation measured
+402,953 B startup and 30,006 B lazy, so both caps were raised by that measured
+delta. The timeline figures below remain the 13 November capture.
 
 ```sh
 pnpm bench:preview --baseline 2f34b65 --channel chrome --frames 40 --delay-ms 40 --out output/timeline-40.json
@@ -116,56 +117,55 @@ harness           4f28d58096d7342253c68b608488c8f2f23606fc31f57a5c970f884d2c620f
 ```
 
 
-## Viewport preparation
+## Full-horizon preparation
 
-The 16 November 2026 change adds a native-pixel crop for small views, prepared
-wind lattices and a shared request-admission policy. It does not change the
-measured 13 November captures above.
+The 16 November 2026 change prepares every rendered map frame for browsing:
+a cheap aspect-preserving raster preview bounded by 256 × 256 px from at most
+four lower-zoom tiles, plus numeric wind at the selected height. It does not
+change the measured 13 November captures above.
 
-- A conservative camera rectangle of at most **800 km²** starts full-timeline
-  preparation; the intent is retained until the rectangle exceeds **1000 km²**.
-  Dateline and full-world rectangles keep their coherent longitude span.
-- Small raster views ask MapLibre `coveringTiles` for the canonical source zoom,
-  then retain `visible × 1.2 + 2 px` per axis. Coverage comes from that integer
-  rectangle, so a pan inside the retained margin keeps the same prepared frames.
-  The native-z10 Armenia fixture is 391 × 221 px and 15.8223 MiB across 48 frames;
-  the fixture's capped source zoom produces 197 × 112 px at z9.
-- Background warming prepares each acquired wind frame's 128×128 RGBA lattice;
-  selection installs the prepared lattice and native fallback field in one
-  overlay operation before renderer synchronization. The following GL prerender
-  uploads the prepared bytes. Point sampling keeps the exact native sampler.
-- Numeric wind retries transient 502/503/504 responses three times inside the
-  request deadline, then records a 30 s per-resource cooldown and advances to the
-  next promised time. Capacity is a typed outcome that records a bounded admitted
-  window, evicts only outside that window and stops expanding under unchanged
-  pressure; a playback toggle is not required.
-- Physical request admission counts headers and live bodies until settlement.
-  An explicit request reserves its validated expected size or its safe maximum.
-  Unknown, malformed and non-identity encodings keep that reservation; an
-  explicitly exposed `Content-Encoding: identity` permits an exact length.
-- Raster, numeric wind and forecast metadata share one app-owned scheduler.
-  Background wind requests carry low priority.
+- Full native-detail expansion starts below **100,000 km²** and stays enabled
+  until the rectangle exceeds **125,000 km²**. Dateline and full-world rectangles
+  keep their coherent longitude span. Cheap previews and matching wind cover the
+  whole axis outside that band.
+- Preparation order is selected time, next and previous time, then the rest of
+  the rendered axis in scrub direction, with a five-time native window as the
+  retention fallback under memory pressure. Whole-axis preview and wind finish
+  before speculative bandwidth goes to distant native crops.
+- One scheduler serves raster, numeric wind and metadata with 24 active bodies,
+  20 background bodies, four reserved foreground slots and 24/20 MiB response
+  reservations; `VITE_FORECAST_REQUESTS` selects the 16, 24 or 32 profile.
+  A 24 MiB managed foreground working-set reserve keeps selected responses,
+  JSON parsing and raster processing ahead of speculative claims.
+- Raster downloads run in a rolling queue that spans forecast times, separate
+  from a four-decode queue and one composition canvas. A partial native crop
+  suspends as an `ImageBitmap` when a selected preview is ready, and resumes
+  without re-requesting drawn tiles.
+- Native crops use `planRasterCrop()` at the canonical source zoom with the 10%
+  pixel margin and one-source-pixel gutter. A native-complete crop suppresses
+  the delayed detail source.
+- Wind keeps up to six speculative frame jobs. Selected frames promote their
+  queued and active physical requests, and deselected sources demote future
+  chunks to background. Readiness requires both the prepared RGBA lattice and
+  the raw field sampler for the selected height, build, coverage and expiry.
+- Display installs the exact-time raster preview and matching wind under one
+  selection generation. A cold target shows its preview as soon as it is usable,
+  clears incompatible wind through `beforeRasterReveal`, and labels published
+  coarse wind as overview quality.
+- Readiness counts the intersection of usable raster and selected-height wind
+  across every rendered frame, and reports detail separately.
+- One preparation ledger bounds managed allocations at 128 MiB with a reported
+  4 GB device hint or less, 256 MiB otherwise, and an explicit validated
+  opt-in for 512 MiB. It covers response bodies, JSON working sets, compressed
+  tiles, decoded crops, composition canvases, prepared wind grids, samplers and
+  retained display textures.
 
-Wind lattice preparation still runs on the main thread during background
-warming. The worker snapshot, prepared barb lattice, combined allocation ledger
-and raster/wind stage-then-commit barrier are not implemented.
-
-The review revision also:
-
-- separates replacement preparation from the displayed raster generation, so
-  render/idle events cannot cancel an unfinished crop;
-- prepares every retained time for a changed height, selected frame first;
-- promotes an active physical raster request when its source becomes
-  interactive;
-- recovers useful wind preparation after a cache release notification;
-- enforces explicit body ceilings and rejects impossible background admission;
-- translates a dateline prepared interval into the displayed world copy;
-- reattaches the wind custom layer when the restored map style is missing it.
-
-Browser evidence for these paths is not yet captured. The required
-`viewport-warm` benchmark profile, 48-frame primary case, warm p95 sweep and
-constrained-device budget remain unverified; the draft PR records them as
-blocking release gates rather than reporting measured conclusions.
+Browser evidence for these paths is partly captured. A headless Chromium
+MapLibre 6.16 probe confirms that an `ImageSource` reports no uploaded tile
+before its first render and keeps the outgoing pixel during hidden staging.
+Real iPhone/Safari and Android/Chrome runs, GPU blended-wind pixel identity,
+16/24/32 profile comparisons, and the warm p95 target remain unverified; the
+pull request records them as release gates rather than measured conclusions.
 
 
 ### Source-isolated benchmark smoke

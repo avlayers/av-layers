@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import type { Map } from 'maplibre-gl';
+import type { CustomLayerInterface, Map } from 'maplibre-gl';
+import { createPreparationBudget, type PreparationBudget } from '@av/client';
 import { barbGeometry } from '../../../../../packages/windgram/src/wind-barb';
 import { WIND_CANVAS_BYTES, WIND_TRAIL_PIXELS } from '../raster/raster-budget';
 import { WindOverlay, type WindField } from './wind-overlay';
@@ -23,7 +24,7 @@ class Canvas extends EventTarget {
   remove(): void { this.removed = true; }
 }
 
-function fixture(width = 256, height = 256, containerHeight = height) {
+function fixture(width = 256, height = 256, containerHeight = height, budget?: PreparationBudget, useGl = false) {
   const canvases: Canvas[] = [], frames = new globalThis.Map<number, FrameRequestCallback>();
   const handlers = new globalThis.Map<string, Set<() => void>>();
   const doc = Object.assign(new EventTarget(), { hidden: false, createElement: () => { const canvas = new Canvas(); canvases.push(canvas); return canvas; } });
@@ -40,18 +41,110 @@ function fixture(width = 256, height = 256, containerHeight = height) {
     project: ([lon, lat]: number[]) => ({ x: (lon + 45) * width / 90, y: (45 - lat) * height / 90 }),
     unproject: ([x, y]: number[]) => ({ lng: x * 90 / width - 45, lat: 45 - y * 90 / height })
   };
+  let allocations = 0, layer: CustomLayerInterface | null = null;
+  if (useGl) {
+    const enums = new globalThis.Map<string, number>();
+    const gl = new Proxy({} as WebGL2RenderingContext, {
+      get(_target, property) {
+        const key = String(property);
+        if (/^[A-Z0-9_]+$/.test(key)) { if (!enums.has(key)) enums.set(key, enums.size + 1); return enums.get(key); }
+        if (key === 'getParameter') return (value: number) => value === gl.MAX_TEXTURE_SIZE ? 4096 : value === gl.COLOR_CLEAR_VALUE ? [0, 0, 0, 0] : value === gl.COLOR_WRITEMASK ? [true, true, true, true] : null;
+        if (key === 'getExtension' || key.startsWith('create')) return () => ({});
+        if (key === 'getShaderParameter' || key === 'getProgramParameter') return () => true;
+        if (key === 'checkFramebufferStatus') return () => gl.FRAMEBUFFER_COMPLETE;
+        if (key === 'isEnabled') return () => false;
+        if (key === 'texImage2D') return () => { allocations++; };
+        return () => {};
+      }
+    });
+    Object.assign(map, {
+      addLayer(value: CustomLayerInterface) { layer = value; value.onAdd!(map as unknown as Map, gl); },
+      getLayer: () => layer,
+      removeLayer() { layer?.onRemove?.(map as unknown as Map, gl); layer = null; },
+      getStyle: () => ({ layers: [{ id: 'av-wind-particles' }] }), moveLayer() {}, once() {}, isStyleLoaded: () => true, triggerRepaint() {}
+    });
+  }
   let next = 0;
   vi.stubGlobal('document', doc);
   vi.stubGlobal('window', { devicePixelRatio: 3 });
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { const id = ++next; frames.set(id, fn); return id; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
-  const overlay = new WindOverlay(map as unknown as Map);
+  const overlay = new WindOverlay(map as unknown as Map, { budget });
   const tick = (time: number) => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
   const emit = (name: string) => handlers.get(name)?.forEach(handler => handler());
-  return { overlay, canvases, frames, tick, emit, handlers, doc, map };
+  return { overlay, canvases, frames, tick, emit, handlers, doc, map, allocations: () => allocations };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+it('keeps real overlay GL and canvas pressure relief stable until wind admission', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024);
+  const f = fixture(800, 600, 600, budget, true);
+  await Promise.resolve();
+  f.overlay.setOptions({ style: 'hybrid' });
+  const other = budget.reserve('other', budget.limit - budget.used - 1_048_576)!;
+  expect(budget.reserve('wind-numeric', 4_194_304)).toBeNull();
+  const before = budget.used;
+  expect(f.overlay.relievePressure()).toBe(true);
+  const reduced = budget.used, allocations = f.allocations();
+  expect(reduced).toBeLessThan(before);
+  await Promise.resolve(); await Promise.resolve();
+  expect(budget.used).toBe(reduced);
+  expect(f.allocations()).toBe(allocations);
+  const wind = budget.reserve('wind-numeric', 4_194_304);
+  expect(wind).not.toBeNull();
+  wind!.release(); other.release(); f.overlay.destroy();
+  expect(budget.used).toBe(0);
+});
+
+it('bounds canvas backing at 128 MiB, retains clear ownership, and recovers on release', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024);
+  const other = budget.reserve('other', 127 * 1024 * 1024)!;
+  const f = fixture(1200, 800, 800, budget);
+  const actual = () => f.canvases.reduce((sum, canvas) => sum + canvas.width * canvas.height * 4, 0);
+  for (const canvas of f.canvases) canvas.onSize = () => expect(actual()).toBeLessThanOrEqual(budget.snapshot()['wind-display-canvas'] ?? 0);
+  f.overlay.setOptions({ style: 'hybrid' });
+  expect(f.overlay.displayMemory.limited).toBe(true);
+  expect(f.overlay.displayMemory.canvasBytes).toBe(actual());
+  expect(budget.used).toBe(other.bytes + actual());
+  const reduced = actual();
+  f.overlay.clear();
+  expect(budget.used).toBe(other.bytes + reduced);
+  other.release();
+  await Promise.resolve();
+  expect(actual()).toBeGreaterThan(reduced);
+  expect(f.overlay.displayMemory.limited).toBe(false);
+  expect(budget.used).toBe(actual());
+  const full = actual();
+  expect(f.overlay.relievePressure()).toBe(true);
+  expect(actual()).toBeLessThan(full);
+  const use = budget.reserve('wind-numeric', 131_072)!;
+  await Promise.resolve();
+  expect(actual()).toBeLessThan(full);
+  use.release();
+  await Promise.resolve();
+  expect(actual()).toBe(full);
+  for (const style of ['barbs', 'hybrid', 'trails', 'hybrid'] as const) {
+    f.overlay.setOptions({ style });
+    expect(budget.used).toBe(actual());
+  }
+  f.overlay.destroy();
+  expect(actual()).toBe(0);
+  expect(budget.used).toBe(0);
+  expect(f.overlay.displayMemory).toEqual({ canvasBytes: 0, glBytes: 0, limited: false });
+});
+
+it('clears CPU trail and barb pixels before installing a different time', () => {
+  const f = fixture();
+  f.overlay.setOptions({ style: 'hybrid' });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
+  f.tick(100); f.tick(200);
+  for (const canvas of f.canvases) canvas.context.clearRect.mockClear();
+  f.overlay.clear();
+  for (const canvas of f.canvases) expect(canvas.context.clearRect).toHaveBeenCalled();
+  f.overlay.setField({ sample: () => ({ status: 0, u: -10, v: 0 }) }, 'swap');
+  f.overlay.destroy();
+});
 
 it('sizes and renders against the map canvas when its append container has zero height', () => {
   const f = fixture(1200, 800, 0);
@@ -153,17 +246,14 @@ it.each([
   f.overlay.destroy();
 });
 
-it('keeps connected trails when the field is swapped', () => {
+it('clears connected trails when the field is swapped', () => {
   vi.spyOn(Math, 'random').mockReturnValue(0.5);
   const f = fixture();
   f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) });
   f.tick(1000); f.tick(1100);
-  const moves = f.canvases[0].context.moveTo.mock.calls.length;
   f.canvases[0].context.clearRect.mockClear();
   f.overlay.setField({ sample: () => ({ status: 0, u: 0, v: 10 }) }, 'swap');
-  expect(f.canvases[0].context.clearRect).not.toHaveBeenCalled();
-  f.tick(1200);
-  expect(f.canvases[0].context.moveTo.mock.calls.length).toBeGreaterThan(moves);
+  expect(f.canvases[0].context.clearRect).toHaveBeenCalled();
   f.overlay.destroy();
 });
 
