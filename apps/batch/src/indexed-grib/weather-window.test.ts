@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getProduct, type ModelDefinition } from '@av/contracts/models';
-import { setBit, sourceIntervalHours, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_UNAVAILABLE, STATUS_VALID, type CoverageMask, type Grid } from '@av/contracts';
+import { canonicalGridJson, planWholeDomainGrid, setBit, sourceIntervalHours, sparseCoverageFromDense, sparseCoverageLookup, STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_CUMULUS, type CoverageMask, type Grid } from '@av/contracts';
 import { intervalMeanAmountMm, recoverTrailingWindow } from '@av/forecast/intervals';
 import { assertWrfWeatherDefinitions } from '@av/forecast/direct-scalars';
 import { deriveFrame } from '@av/forecast/frame';
+import { preparePackedTerrainColumns } from '@av/forecast/refinement';
 import type { AuxField, NormalizedFrame } from '@av/forecast/inputs';
 import { decodePackedWindChunk, normalizedWindColumn, samplePackedWindColumns } from '@av/forecast/wind';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
@@ -150,6 +152,66 @@ describe('weather source selection', () => {
       expect(samplePackedWindColumns(samplePlan, [chunk], [0], 'surface')).toMatchObject({ u: 3.5, v: -1.5, status: STATUS_VALID });
       expect(samplePackedWindColumns(samplePlan, [chunk], [0], 1500)).toMatchObject({ u: 8, v: -4, status: STATUS_VALID });
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('keeps PBL height when surface LCL runs the native diagnostic', () => {
+    const icon = getProduct('icon-eu')!;
+    const layers = ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'surface-lcl-msl'] as const;
+    const nativeGrid: Grid = { kind: 'regular-latlon', width: 2, height: 2, earthRadiusM: 6371229, lon0: 0, lat0: 40, dx: 0.1, dy: -0.1, wrapLongitude: false };
+    const plan = planWholeDomainGrid(nativeGrid, 2);
+    const active = Uint32Array.of(0, 1, 2, 3);
+    const mask: CoverageMask = { grid: nativeGrid, output: new Uint8Array(1), halo: new Uint8Array(1), tiles: Uint8Array.of(1), maxZoom: 0 };
+    for (const index of active) setBit(mask.output, index);
+    const frame = normalizedFixtureFrame(nativeGrid, active, '2026-06-21T00:00:00Z', 12, 1);
+    const values = (value: number) => new Float32Array(active.length).fill(value);
+    const aux = (value: number): AuxField => ({ values: values(value), missing: new Uint8Array(active.length) });
+    frame.terrainM = values(100);
+    frame.temp2mK = values(25 + 273.15);
+    frame.specificHumidity2mKgKg = values(0.019);
+    frame.sensibleHeatFluxWm2 = values(80);
+    frame.latentHeatFluxWm2 = values(0);
+    frame.surfacePressurePa = values(100000);
+    frame.hgtM = [400, 900, 1500].map(values);
+    frame.tempK = [30, 22, 12].map(temperature => values(temperature + 273.15));
+    frame.pressureLevelsHpa = [960, 900, 850];
+    frame.missing.hgt = frame.hgtM.map(() => new Uint8Array(active.length));
+    frame.missing.temp = frame.tempK.map(() => new Uint8Array(active.length));
+    frame.auxSurface = { pblHeightM: aux(120), cloudTotalPct: aux(60) };
+    frame.auxLevels = { rhPercent: [20, 20, 20].map(aux) };
+    const hash = (grid: Grid) => createHash('sha256').update(canonicalGridJson(grid)).digest('hex');
+    const fineCells = plan.fine.width * plan.fine.height;
+    const fineMask: CoverageMask = { grid: plan.fine, output: new Uint8Array(Math.ceil(fineCells / 8)), halo: new Uint8Array(Math.ceil(fineCells / 8)), tiles: Uint8Array.of(1), maxZoom: 0 };
+    for (let index = 0; index < fineCells; index++) setBit(fineMask.output, index);
+    const coverage = sparseCoverageFromDense({ ...plan.fine, gridHash: hash(plan.fine), output: fineMask.output, halo: fineMask.halo });
+    const count = coverage.offsets[coverage.blockIds.length]!;
+    const terrain = { elevationM: new Float32Array(count).fill(100), valid: new Uint8Array(count).fill(1) };
+    const diagnostics = { ceilingMslM: new Float32Array(active.length), buoyancyM2S3: new Float32Array(active.length), branch: new Uint8Array(active.length) };
+    const day = { intervalStart: '2026-06-21T11:00:00Z', validTime: '2026-06-21T12:00:00Z' };
+    const packed = preparePackedTerrainColumns(plan, coverage, active, frame.hgtM.length, { maxBytes: 2_000_000, expectedGridHash: hash(plan.fine) });
+    const deriveFine = (source: NormalizedFrame) => {
+      const flags = deriveFrame(source, mask, { layers: [...layers], daylightOnly: false })['usable-lift-msl']!.flags;
+      return packed.derive(source, terrain, day, { daylightOnly: false, nativeClearance: { validTime: day.validTime, grid: nativeGrid, diagnostics, flags } }).fields;
+    };
+    for (const source of [indexedSource({ ...gfs, layers: [...layers] } as ModelDefinition), splitSource({ ...icon, layers: [...layers] } as ModelDefinition)]) {
+      expect(source.upstream.auxSurface).toHaveProperty('pblHeightM');
+      expect(source.upstream.auxSurface).not.toHaveProperty('cloudTotalPct');
+      const selected = structuredCloneFrame(frame);
+      selected.auxSurface = pick(selected.auxSurface, Object.keys(source.upstream.auxSurface ?? {})) as typeof selected.auxSurface;
+      selected.auxLevels = pick(selected.auxLevels, Object.keys(source.upstream.auxLevels ?? {})) as typeof selected.auxLevels;
+      const unpruned = deriveFine(frame);
+      const acquired = deriveFine(selected);
+      for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
+        expect([...acquired[layer].values]).toEqual([...unpruned[layer].values]);
+        expect([...acquired[layer].flags]).toEqual([...unpruned[layer].flags]);
+        expect(acquired[layer].flags.every(flag => flag === (STATUS_NO_LIFT | SUPPORT_CUMULUS))).toBe(true);
+        expect(acquired[layer].values.every(value => value === (layer === 'usable-lift-msl' ? 100 : 0))).toBe(true);
+      }
+      delete selected.auxSurface!.pblHeightM;
+      const dropped = deriveFine(selected);
+      expect(dropped['usable-lift-msl'].flags.every(flag => flag === STATUS_NO_LIFT)).toBe(true);
+      expect([...dropped['usable-lift-msl'].values]).toEqual([...unpruned['usable-lift-msl'].values]);
+    }
+    expect(indexedSource({ ...gfs, layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'] } as ModelDefinition).upstream.auxSurface).toBeUndefined();
   });
 
   it('rejects a cloud binding whose level or units differ from the definition', () => {

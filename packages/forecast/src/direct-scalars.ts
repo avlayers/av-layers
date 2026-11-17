@@ -12,7 +12,7 @@ const DIRECT_SURFACE = {
   'wind-gust-10m': 'gust10mMps'
 } as const satisfies Partial<Record<LayerId, AuxSurfaceId>>;
 
-const PBL_CONSUMERS = ['thermal-velocity', 'thermal-top-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'] as const;
+const PBL_CONSUMERS = ['thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'] as const;
 const PROFILE_LEVELS = ['rhPercent', 'spfhKgKg', 'uWindMps', 'vWindMps', 'omegaPaS'] as const satisfies readonly AuxLevelId[];
 const SCALAR_AUX: Partial<Record<AuxSurfaceId, WeatherLayerId>> = {
   capeJkg: 'cape-jkg', cloudTotalPct: 'cloud-cover-total', cloudLowPct: 'cloud-cover-low'

@@ -255,6 +255,87 @@ describe('ApiClient v5 pinning', () => {
     expect((await api.sample(build, request)).frames[0]?.layers['precip-rate']?.value).toBe(7);
   });
 
+  it.each(['cell-major-block-shards-v1', 'frame-group-block-shards-v1'] as const)('rejects an extended publication whose original dimensions or method identity are wrong (%s)', async format => {
+    const payload = appendScalar(latestPayload(), 'own');
+    if (format === 'frame-group-block-shards-v1') for (const surface of payload.manifest.surfaces) {
+      const samples = surface.samples as { format?: string; shards: Array<Record<string, unknown>> };
+      samples.format = format;
+      samples.shards = samples.shards.map((shard, blockShard) => ({ ...shard, group: 0, firstFrame: 0, frameCount: payload.manifest.frames.length, blockShard, key: `${prefix}/surfaces/${surface.id}/samples/g0-b${blockShard}.bin` }));
+    }
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(payload));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    expect((await api.latest('gfs')).publication?.surfaces.find(surface => surface.kind === 'native')?.layers).toContain('cloud-cover-mid');
+    const fine = payload.manifest.surfaces.find(surface => surface.kind === 'fine')!;
+    fine.samples.channelCount = 999999;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    fine.samples.channelCount = payload.manifest.frames.length * fine.layers.length;
+    fine.samples.shards[0]!.bytes = -1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    fine.samples.shards[0]!.bytes = fine.samples.storedCells * fine.samples.channelCount * 5;
+    const native = payload.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    native.samples.channelCount = 1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    native.samples.channelCount = payload.manifest.frames.length * native.layers.length;
+    native.samples.shards[0]!.bytes = -1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+  });
+
+  it('rejects an extra descriptor or method that does not match its key', async () => {
+    const cases = [
+      (manifest: ExtendedManifest) => { manifest.descriptors.layers['cloud-cover-mid']!.id = 'cloud-cover-high'; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.outputs = []; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.id = 'other-method'; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1'] = { outputs: ['cloud-cover-mid'] }; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.outputs = ['precip-rate']; },
+      (manifest: ExtendedManifest) => { manifest.method.id = `${manifest.method.id}+not-published`; }
+    ];
+    const shared = appendScalar(latestPayload(), 'shared');
+    shared.manifest.method.id = `${shared.manifest.method.id}+bogus`;
+    await expect(new ApiClient({ baseUrl: 'https://api.test', fetchImpl: vi.fn<typeof fetch>(async () => jsonResponse(shared)), now: () => Date.parse(created) }).latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    for (const mutate of cases) {
+      const payload = appendScalar(latestPayload(), 'own');
+      mutate(payload.manifest);
+      const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: vi.fn<typeof fetch>(async () => jsonResponse(payload)), now: () => Date.parse(created) });
+      await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    }
+  });
+
+  it('rejects a sample whose extra-field layout differs from the pinned publication', async () => {
+    const payload = appendScalar(latestPayload(), 'shared');
+    let body = extendedSample(payload.manifest, ['precip-rate']);
+    const fetchImpl = vi.fn<typeof fetch>(async input => jsonResponse(String(input).includes('/latest') ? payload : body));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const build = await api.latest('gfs');
+    const request = { lat: 0.5, lon: 0.5, frames: ['h001'] as const, layers: ['precip-rate'] as const };
+    const native = () => body.surfaces.find(surface => surface.kind === 'native')!;
+    const fine = () => body.surfaces.find(surface => surface.kind === 'fine')!;
+    native().layers.push('totally-unpublished-field');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers = native().layers.filter(id => id !== 'cloud-cover-mid');
+    fine().layers.push('cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers = native().layers.filter(id => id !== 'cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers.push('cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+  });
+
+  it('reports a malformed catalog or batch container without retrying', async () => {
+    const catalogFetch = vi.fn<typeof fetch>(async () => jsonResponse({ models: [{ model: 'gfs', available: true, surfaces: { layers: ['precip-rate'] } }] }));
+    const catalogApi = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: catalogFetch, now: () => Date.parse(created), retryDelayMs: 0 });
+    await expect(catalogApi.catalog()).rejects.toBeInstanceOf(InvalidApiResponseError);
+    expect(catalogFetch).toHaveBeenCalledTimes(1);
+    const payload = appendScalar(latestPayload(), 'shared');
+    const batchFetch = vi.fn<typeof fetch>(async input => jsonResponse(String(input).includes('/latest') ? payload : { points: [null] }));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: batchFetch, now: () => Date.parse(created), retryDelayMs: 0 });
+    const build = await api.latest('gfs');
+    await expect(api.samples(build, { points: [{ lat: 0.5, lon: 0.5 }], frames: ['h001'], layers: ['precip-rate'] })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    expect(batchFetch).toHaveBeenCalledTimes(2);
+  });
+
   it('requires every rendered layer template', async () => {
     const payload = nativeLatestPayload(); delete payload.templates!['precip-rate'];
     const { client: api } = client(() => payload);

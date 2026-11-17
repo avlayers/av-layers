@@ -1,5 +1,6 @@
 import { CELL_BYTES } from './format.js';
 import { isLayerId } from './layers.js';
+import { methodDescriptorSchema } from './method-schemas.js';
 import { manifestV5Schema, type ManifestV5 } from './publication.js';
 
 const EXTRA_ID = /^[a-z][a-z0-9-]{0,63}$/;
@@ -17,16 +18,26 @@ export interface ExtraScalarField {
   method: Record<string, unknown>;
 }
 
+export interface PublishedSurface {
+  id: string;
+  kind: 'native' | 'fine';
+  layers: readonly string[];
+  coverage: { id: unknown; hash: unknown; maskKey: unknown; maxZoom: unknown; gridHash: unknown };
+}
+
 export interface PublishedIdentity {
   method: { id: string; hash: string };
+  surfaces: readonly PublishedSurface[];
 }
 
 interface MutableMethod { outputs?: unknown; [key: string]: unknown }
 interface MutableShard { storedCells?: unknown; bytes?: number; frameCount?: unknown }
+interface MutableCoverage { id?: unknown; hash?: unknown; maskKey?: unknown; maxZoom?: unknown; gridHash?: unknown }
 interface MutableSurface {
   id?: unknown;
   kind?: unknown;
   layers?: unknown;
+  coverage?: MutableCoverage;
   samples?: { format?: unknown; channelCount?: number; shards?: MutableShard[] };
 }
 interface MutableManifest {
@@ -80,7 +91,7 @@ function frameCount(manifest: MutableManifest, kind: unknown): number {
 
 /** Project a manifest onto the strict schema, keeping appended sample-only scalars beside it.
  * Shard byte lengths on the projection follow the known channel count. `extraScalars` keeps the published descriptor and method.
- * `publication` keeps the published method id. Appended scalars stay on `extraScalars`.
+ * `publication` keeps the published method id and each surface's id, kind, layer list, and coverage. Appended scalars stay on `extraScalars`.
  */
 export function projectClientManifest(value: unknown): { manifest: ManifestV5; extraScalars: ExtraScalarField[]; publication?: PublishedIdentity } {
   if (!value || typeof value !== 'object' || !Array.isArray((value as { layers?: unknown }).layers)) throw new Error(SCHEMA_ERROR);
@@ -106,22 +117,38 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
     if (owners.length !== 1 || owners[0]?.kind !== 'native' || typeof owners[0].id !== 'string') throw new Error('Unsupported scalar layout');
     const descriptor = readExtra(descriptors[id], methods);
     const method = methods[String(descriptor.methodId)];
-    if (!method) throw new Error('Unsupported contract');
+    const admitted = methodDescriptorSchema.safeParse(method);
+    if (!method || descriptor.id !== id || !admitted.success || admitted.data.id !== descriptor.methodId || !admitted.data.outputs.includes(id)) throw new Error('Unsupported contract');
     return { id, surfaceId: owners[0].id, descriptor: structuredClone(descriptor), method: structuredClone(method) };
   });
   const publishedMethodId = copy.method.id;
+  const publishedMethodIds: string[] = [];
+  for (const layer of copy.layers) {
+    const methodId = descriptors[layer]?.methodId;
+    if (typeof methodId !== 'string') throw new Error('Unsupported contract');
+    if (!publishedMethodIds.includes(methodId)) publishedMethodIds.push(methodId);
+  }
+  if (typeof publishedMethodId !== 'string' || publishedMethodId !== publishedMethodIds.join('+')) throw new Error('Unsupported contract');
+  const publishedSurfaces: PublishedSurface[] = [];
   copy.layers = copy.layers.filter(id => !extra.has(id));
   for (const id of extra) delete descriptors[id];
   for (const surface of surfaces) {
     if (!Array.isArray(surface.layers) || surface.layers.some(id => typeof id !== 'string')) throw new Error('Unsupported contract');
     const published = surface.layers as string[];
-    if (!suffix(published, extra)) throw new Error('Unsupported scalar layout');
+    const coverage = surface.coverage;
+    if (!suffix(published, extra) || typeof surface.id !== 'string' || (surface.kind !== 'native' && surface.kind !== 'fine') || !coverage) throw new Error('Unsupported scalar layout');
     const layers = published.filter(id => !extra.has(id));
-    surface.layers = layers;
     if (!layers.length) throw new Error('Unsupported scalar layout');
     const samples = surface.samples;
     if (!samples || !Array.isArray(samples.shards)) throw new Error('Unsupported contract');
-    const channels = frameCount(copy, surface.kind) * layers.length;
+    const frames = frameCount(copy, surface.kind);
+    admitSampleBytes(samples, published.length, frames);
+    publishedSurfaces.push({
+      id: surface.id, kind: surface.kind, layers: [...published],
+      coverage: { id: coverage.id, hash: coverage.hash, maskKey: coverage.maskKey, maxZoom: coverage.maxZoom, gridHash: coverage.gridHash }
+    });
+    surface.layers = layers;
+    const channels = frames * layers.length;
     samples.channelCount = channels;
     for (const shard of samples.shards) {
       const stored = shard.storedCells;
@@ -144,10 +171,21 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
   for (const id of Object.keys(methods)) if (!referenced.has(id)) delete methods[id];
   for (const method of Object.values(methods)) if (!Array.isArray(method.outputs) || !method.outputs.length) throw new Error('Unsupported scalar layout');
   copy.method.id = methodIds.join('+');
-  if (typeof publishedMethodId !== 'string' || (publishedMethodId !== copy.method.id && !publishedMethodId.startsWith(`${copy.method.id}+`))) throw new Error('Unsupported contract');
   const parsed = manifestV5Schema.safeParse(copy);
   if (!parsed.success) throw new Error('Unsupported contract');
-  return { manifest: parsed.data, extraScalars, publication: { method: { id: publishedMethodId, hash: parsed.data.method.hash } } };
+  return { manifest: parsed.data, extraScalars, publication: { method: { id: publishedMethodId, hash: parsed.data.method.hash }, surfaces: publishedSurfaces } };
+}
+
+function admitSampleBytes(samples: NonNullable<MutableSurface['samples']>, layerCount: number, frames: number): void {
+  const channels = frames * layerCount;
+  if (!Number.isSafeInteger(channels) || samples.channelCount !== channels || !samples.shards) throw new Error('Unsupported contract');
+  for (const shard of samples.shards) {
+    const stored = shard.storedCells;
+    const shardChannels = samples.format === 'frame-group-block-shards-v1' ? Number(shard.frameCount) * layerCount : channels;
+    if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 1 || !Number.isSafeInteger(shardChannels) || shardChannels < 1) throw new Error('Unsupported contract');
+    const bytes = stored * shardChannels * CELL_BYTES;
+    if (!Number.isSafeInteger(bytes) || shard.bytes !== bytes) throw new Error('Unsupported contract');
+  }
 }
 
 function knownLayerIds(layers: unknown): string[] | undefined {
@@ -156,15 +194,60 @@ function knownLayerIds(layers: unknown): string[] | undefined {
   return known.length && known.length < layers.length ? known : undefined;
 }
 
-/** Drop appended layer ids from a catalog, sample, or batch response. Samples strip only for a build that published extras. */
+function surfaceStamp(surfaces: ReadonlyArray<{ id?: unknown; kind?: unknown; layers?: unknown; coverage?: PublishedSurface['coverage'] }>): string {
+  return JSON.stringify(surfaces.map(surface => {
+    const coverage = surface?.coverage;
+    return {
+      id: surface?.id, kind: surface?.kind, layers: surface?.layers,
+      coverage: coverage && { id: coverage.id, hash: coverage.hash, maskKey: coverage.maskKey, maxZoom: coverage.maxZoom, gridHash: coverage.gridHash }
+    };
+  }));
+}
+
+function admitCatalog(value: { models: unknown[] }): unknown {
+  for (const model of value.models) {
+    const surfaces = (model as { surfaces?: unknown } | null)?.surfaces;
+    if (surfaces === undefined) continue;
+    if (!Array.isArray(surfaces)) throw new Error('Unsupported contract');
+    for (const surface of surfaces) {
+      if (!surface || typeof surface !== 'object') throw new Error('Unsupported contract');
+      const layers = (surface as { layers?: unknown }).layers;
+      if (!Array.isArray(layers) || layers.some(id => typeof id !== 'string')) throw new Error('Unsupported contract');
+      const ids = layers as string[], extraIds = ids.filter(id => !isLayerId(id));
+      if (!extraIds.length) continue;
+      if (extraIds.length > MAX_EXTRAS || extraIds.some(id => !EXTRA_ID.test(id)) || !suffix(ids, new Set(extraIds))) throw new Error('Unsupported contract');
+      const known = ids.filter(isLayerId);
+      if (!known.length) throw new Error('Unsupported contract');
+      (surface as { layers: string[] }).layers = known;
+    }
+  }
+  return value;
+}
+
+function admitSample(sample: { surfaces?: unknown }, publication: PublishedIdentity): void {
+  const surfaces = sample.surfaces;
+  if (!Array.isArray(surfaces) || surfaceStamp(surfaces) !== surfaceStamp(publication.surfaces)) throw new Error('sample surfaces do not match pinned build');
+  for (const surface of surfaces) {
+    if (!surface || typeof surface !== 'object') throw new Error('Unsupported contract');
+    const known = knownLayerIds((surface as { layers?: unknown }).layers);
+    if (known) (surface as { layers: string[] }).layers = known;
+  }
+}
+
+/** Drop admitted suffix layer ids after the published surface list matches the pinned build. Catalog checks stay bounded. */
 export function projectKnownResponse(value: unknown, publication?: PublishedIdentity): unknown {
   if (!value || typeof value !== 'object') return value;
-  const record = value as { models?: Array<{ surfaces?: Array<{ layers?: unknown }> }>; points?: Array<{ sample?: { surfaces?: Array<{ layers?: unknown }> } }>; surfaces?: Array<{ layers?: unknown }> };
-  if (!publication && !Array.isArray(record.models)) return value;
-  const groups = Array.isArray(record.models) ? record.models : Array.isArray(record.points) ? record.points.map(point => point.sample) : [record];
-  for (const group of groups) for (const surface of group?.surfaces ?? []) {
-    const known = knownLayerIds(surface?.layers);
-    if (known) surface.layers = known;
+  const record = value as { models?: unknown; points?: unknown; surfaces?: unknown };
+  if (!publication) return Array.isArray(record.models) ? admitCatalog(record as { models: unknown[] }) : value;
+  if ('points' in record) {
+    if (!Array.isArray(record.points)) throw new Error('Unsupported contract');
+    for (const point of record.points) {
+      const sample = (point as { sample?: unknown } | null)?.sample;
+      if (!point || typeof point !== 'object' || !sample || typeof sample !== 'object') throw new Error('Unsupported contract');
+      admitSample(sample as { surfaces?: unknown }, publication);
+    }
+    return value;
   }
+  admitSample(record, publication);
   return value;
 }

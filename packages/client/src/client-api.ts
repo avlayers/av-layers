@@ -195,6 +195,11 @@ function sampleSelection(build: PinnedBuild, request: Pick<SampleRequest, 'frame
   return { expectedFrames, layers, frameQuery: frames === 'all' ? 'all' : frames.join(',') };
 }
 
+function admit<T>(parse: () => T, message: string): T {
+  try { return parse(); }
+  catch (error) { throw new InvalidApiResponseError(error instanceof Error && error.message ? error.message : message); }
+}
+
 function pointPath(build: PinnedBuild, route: 'sample' | 'samples' | 'profile'): string {
   return `/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/${route}`;
 }
@@ -263,7 +268,7 @@ export class ApiClient {
   }
 
   async catalog(options: RequestOptions = {}): Promise<CatalogModelEntry[]> {
-    const parsed = await this.getJson('catalog', '/v1/catalog', options.signal, value => catalogSchema.safeParse(projectKnownResponse(value)));
+    const parsed = await this.getJson('catalog', '/v1/catalog', options.signal, value => admit(() => catalogSchema.safeParse(projectKnownResponse(value)), 'catalog response does not match contract schema'));
     if (!parsed.success) throw new InvalidApiResponseError('catalog response does not match contract schema');
     return parsed.data.models;
   }
@@ -325,7 +330,7 @@ export class ApiClient {
       layers: layers.join(',')
     });
     const path = `${pointPath(build, 'sample')}?${params}`;
-    const parsed = await this.getJson('sample', path, request.signal, value => sampleResponseV5Schema.safeParse(projectKnownResponse(value, build.publication)));
+    const parsed = await this.getJson('sample', path, request.signal, value => admit(() => sampleResponseV5Schema.safeParse(projectKnownResponse(value, build.publication)), 'sample response does not match contract schema'));
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
@@ -358,7 +363,7 @@ export class ApiClient {
     for (const point of request.points) validatePoint(point);
     const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, build.manifest.layers, request.points.length);
     const params = new URLSearchParams({ points: request.points.map(point => `${point.lat},${point.lon}`).join(';'), frame: frameQuery, layers: layers.join(',') });
-    const parsed = await this.getJson('samples', `${pointPath(build, 'samples')}?${params}`, request.signal, value => multiPointSampleResponseSchema.safeParse(projectKnownResponse(value, build.publication)));
+    const parsed = await this.getJson('samples', `${pointPath(build, 'samples')}?${params}`, request.signal, value => admit(() => multiPointSampleResponseSchema.safeParse(projectKnownResponse(value, build.publication)), 'multi-point sample response does not match contract schema'));
     assertNotExpired(build.manifest.expiresAt, this.now());
     if (!parsed.success) throw new InvalidApiResponseError('multi-point sample response does not match contract schema');
     const payload = parsed.data;

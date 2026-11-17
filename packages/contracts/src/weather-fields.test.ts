@@ -77,18 +77,26 @@ describe('client manifest projection', () => {
     const id = 'cloud-cover-mid';
     const methodId = 'native-middle-cloud-v1';
     const precip = manifest.descriptors.layers['precip-rate']!;
-    manifest.descriptors.methods[methodId] = { outputs: [id] };
+    const precipMethod = manifest.descriptors.methods[String(precip.methodId)]!;
+    manifest.descriptors.methods[methodId] = { ...structuredClone(precipMethod), id: methodId, outputs: [id] } as { outputs: string[] };
     manifest.descriptors.layers[id] = {
       ...precip, id, label: 'Middle cloud', quantity: 'cloud-cover-middle', units: '%', methodId, delivery: 'samples-only', palette: undefined,
       definition: { version: 1, id: 'sample-middle-cloud-v1', kind: 'cloud-cover' }
     };
     const native = manifest.surfaces.find(surface => surface.kind === 'native')!;
+    const samples = (native as unknown as { samples: { channelCount: number; format: string; shards: Array<{ storedCells: number; bytes: number; frameCount?: number }> } }).samples;
+    const previous = native.layers.length;
     if (place === 'suffix') {
       manifest.layers.push(id);
       native.layers.push(id);
     } else {
       manifest.layers.unshift(id);
       native.layers.unshift(id);
+    }
+    samples.channelCount = samples.channelCount / previous * native.layers.length;
+    for (const shard of samples.shards) {
+      const shardChannels = samples.format === 'frame-group-block-shards-v1' ? Number(shard.frameCount) * native.layers.length : samples.channelCount;
+      shard.bytes = shard.storedCells * shardChannels * 5;
     }
     (manifest as unknown as { method: { id: string } }).method.id = [...new Set(manifest.layers.map(layer => String(manifest.descriptors.layers[layer]?.methodId)))].join('+');
     return { manifest, id, methodId, native };
@@ -103,6 +111,7 @@ describe('client manifest projection', () => {
     expect(projected.manifest.descriptors.methods[methodId]).toBeUndefined();
     expect(projected.extraScalars).toMatchObject([{ id, descriptor: { definition: { version: 1, id: 'sample-middle-cloud-v1' } }, method: { outputs: [id] } }]);
     expect(projected.manifest.surfaces.find(surface => surface.kind === 'native')!.layers).toEqual(['precip-rate']);
+    expect(projected.publication?.surfaces.find(surface => surface.id === native.id)?.layers).toEqual(['precip-rate', id]);
     expect(projected.publication?.method.id).toContain(methodId);
     expect(projected.manifest.method.id.includes(methodId)).toBe(false);
     expect(projected.extraScalars.map(field => field.id)).toEqual([id]);
@@ -115,5 +124,19 @@ describe('client manifest projection', () => {
     const native = manifest.surfaces.find(surface => surface.kind === 'native')!;
     (native as unknown as { samples: { format: string } }).samples.format = 'future-pack';
     expect(() => projectClientManifest(manifest)).toThrow('Unsupported contract');
+  });
+
+  it('rejects an extra whose method, identity, or original sample dimensions are incomplete', () => {
+    const incomplete = withExtra('suffix');
+    incomplete.manifest.descriptors.methods[incomplete.methodId] = { outputs: [incomplete.id] };
+    expect(() => projectClientManifest(incomplete.manifest)).toThrow('Unsupported contract');
+    const renamed = withExtra('suffix');
+    renamed.manifest.descriptors.layers[renamed.id]!.id = 'cloud-cover-high';
+    expect(() => projectClientManifest(renamed.manifest)).toThrow('Unsupported contract');
+    const dimensions = withExtra('suffix');
+    const fine = dimensions.manifest.surfaces.find(surface => surface.kind === 'fine') as unknown as { samples: { channelCount: number; shards: Array<{ bytes: number }> } };
+    fine.samples.channelCount = 999999;
+    fine.samples.shards[0]!.bytes = -1;
+    expect(() => projectClientManifest(dimensions.manifest)).toThrow('Unsupported contract');
   });
 });
