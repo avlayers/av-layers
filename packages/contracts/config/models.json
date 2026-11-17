@@ -52,6 +52,7 @@
         "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 2}
       },
       "freshness": {"maxCycleAgeHours": 18},
+      "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 18, "minHorizonHours": 48},
       "coverage": {
         "id": "soaring-land-v1",
         "description": "Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.",
@@ -196,6 +197,7 @@
         "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 18},
+      "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 18, "minHorizonHours": 48},
       "coverage": {
         "id": "icon-eu-land-v1",
         "description": "Land and 50 km coastal buffer across the DWD ICON-EU regridded regular-lat-lon domain (23.5°W–62.5°E, 29.5°N–70.5°N); Russia, China, Greenland, Antarctica and Africa excluded.",
@@ -331,6 +333,7 @@
         "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 12},
+      "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 12, "minHorizonHours": 48},
       "coverage": {
         "id": "rrfs-conus-land-v1",
         "description": "Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.",
@@ -477,6 +480,7 @@
         "window": {"hourlyThrough": 36, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 36, "framesPerShard": 2}
       },
       "freshness": {"maxCycleAgeHours": 36},
+      "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 36, "minHorizonHours": 36},
       "coverage": {
         "id": "av-wrf-pilot-land-v1",
         "description": "Land and 50 km coastal buffer within the configured av-wrf Lambert domain; Russia excluded.",
@@ -554,6 +558,7 @@
         "window": {"hourlyThrough": 24, "endHour": 24, "tailStepHours": 1, "minHorizonHours": 18, "framesPerShard": 2}
       },
       "freshness": {"maxCycleAgeHours": 6},
+      "monitoring": {"environments": [], "maxCycleAgeHours": 30, "minHorizonHours": 0},
       "coverage": {
         "id": "wrf-va-1km-land",
         "description": "Land and 50 km coastal buffer within the northern Virginia 1 km Lambert domain.",

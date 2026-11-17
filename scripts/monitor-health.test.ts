@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
+import { DEFAULT_PRODUCT, PRODUCTS, getProduct } from '@av/contracts/models';
 import { type ProductDefinition, type ManifestV5 } from '@av/contracts';
 import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
 import { assertUsefulHorizon } from '../apps/batch/src/publication.js';
@@ -56,11 +56,12 @@ it('reports the first successful response when a probe retries', async () => {
   expect(result.probes.latest).toMatchObject({ status: 200, elapsedMs: 8, responseCache: 'hit' });
 });
 
-it.each(PRODUCTS)('uses configured source age, horizon and expiry for $modelId', async product => {
-  const manifest = fixture(product), cycle = Date.parse(manifest.cycle);
-  const deadline = cycle + Math.min(product.freshness.maxCycleAgeHours, product.frameHours.at(-1)! - product.freshness.minHorizonHours) * HOUR;
+it.each(PRODUCTS)('uses monitoring age, horizon and expiry for $modelId', async product => {
+  const manifest = fixture(product), cycle = Date.parse(manifest.cycle), last = product.frameHours.at(-1)!;
+  const span = Math.min(product.monitoring.maxCycleAgeHours, last - product.monitoring.minHorizonHours);
+  const deadline = cycle + span * HOUR - (span >= last ? 1 : 0);
   expect((await observe(manifest, deadline)).healthy).toBe(true);
-  const staleAt = cycle + (product.freshness.maxCycleAgeHours + product.frameHours.at(-1)! + 1) * HOUR;
+  const staleAt = cycle + (product.monitoring.maxCycleAgeHours + product.frameHours.at(-1)! + 1) * HOUR;
   const stale = await observe(manifest, staleAt);
   expect(stale.findings.join(';')).toContain('upstream-lag');
   expect(stale.findings.join(';')).toContain('shrinking-horizon');
@@ -82,6 +83,33 @@ it.each(PRODUCTS.filter(product => product.capabilities.daylightFrames === 'regi
     expect(() => assertUsefulHorizon(manifest, deadline + 1)).toThrow('useful forecast horizon');
     expect((await observe(manifest, deadline + 1)).healthy).toBe(false);
   }
+});
+
+it('keeps a delivered Virginia cycle healthy until the next 12Z', async () => {
+  const manifest = fixture(getProduct('wrf-va-1km')!, '2026-11-17T12:00:00.000Z');
+  expect((await observe(manifest, Date.parse('2026-11-17T18:01:00.000Z'))).healthy).toBe(true);
+  expect((await observe(manifest, Date.parse('2026-11-18T11:00:00.000Z'))).findings).toEqual([]);
+  const exhausted = await observe(manifest, Date.parse('2026-11-18T12:00:00.000Z'));
+  expect(exhausted.healthy).toBe(false);
+  expect(exhausted.findings.join(';')).toContain('exhausted-horizon');
+  expect(exhausted.findings.some(finding => finding.startsWith('upstream-lag'))).toBe(false);
+});
+
+it.each(['No publication for wrf-va-1km', 'corrupt publication'])('fails health when the publication probe reports %s', async defect => {
+  vi.spyOn(serving, 'probeApi').mockRejectedValue(new Error(defect));
+  const result = await monitor('https://api.example', 'wrf-va-1km');
+  expect(result.healthy).toBe(false);
+  expect(result.findings.join(';')).toContain('serving-integrity');
+  expect(result.findings.join(';')).toContain(defect);
+});
+
+it('fails an expired Virginia publication inside its monitoring age', async () => {
+  const manifest = fixture(getProduct('wrf-va-1km')!, '2026-11-17T12:00:00.000Z');
+  manifest.expiresAt = '2026-11-17T13:00:00.000Z';
+  const result = await observe(manifest, Date.parse('2026-11-17T14:00:00.000Z'));
+  expect(result.healthy).toBe(false);
+  expect(result.findings.join(';')).toContain('expired-publication');
+  expect(result.findings.some(finding => finding.startsWith('upstream-lag'))).toBe(false);
 });
 
 it('reports an unknown model before probing', async () => {

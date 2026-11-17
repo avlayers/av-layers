@@ -89,7 +89,8 @@ export async function referenceArtifacts(): Promise<Record<string, string>> {
         const definition = contracts.weatherFieldDefinition(product.modelId, layer);
         return definition ? [`- ${code(layer)} definition: ${code(definition.id)}.`] : [];
       }),
-      `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`, '');
+      `- Publication timing: cycle age at most ${product.freshness.maxCycleAgeHours} hours; remaining horizon at least ${product.freshness.minHorizonHours} hours.`,
+      `- Monitoring: environments ${product.monitoring.environments.length ? product.monitoring.environments.map(code).join(', ') : 'none'}; cycle age at most ${product.monitoring.maxCycleAgeHours} hours; remaining horizon at least ${product.monitoring.minHorizonHours} hours.`, '');
   }
   lines.push('## Scalar quantities and units', '', 'Source: [layer definitions](../packages/contracts/src/layers.ts). Each product selects the method matching its vertical coordinate. See [the data guide](data.md).', '');
   for (const [id, layer] of entries(contracts.LAYERS)) {

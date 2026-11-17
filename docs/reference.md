@@ -78,6 +78,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cloud-cover-total` definition: `av-wrf-cloud-total-pct-v1`.
 - `cloud-cover-low` definition: `av-wrf-ecmwf-sigma-ge-0p8-max-random-overlap-v1`.
 - Publication timing: cycle age at most 36 hours; remaining horizon at least 36 hours.
+- Monitoring: environments `staging`, `production`; cycle age at most 36 hours; remaining horizon at least 36 hours.
 
 ### GFS (gfs-soaring)
 
@@ -102,6 +103,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cloud-cover-total` definition: `noaa-gfs-tcdc-total-v1`.
 - `cloud-cover-low` definition: `noaa-gfs-lcdc-low-v1`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
+- Monitoring: environments `staging`, `production`; cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### ICON-EU (icon-eu-soaring)
 
@@ -125,6 +127,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cloud-cover-total` definition: `dwd-icon-eu-clct-v1`.
 - `cloud-cover-low` definition: `dwd-icon-eu-clcl-v1`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
+- Monitoring: environments `staging`, `production`; cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### RRFS (CONUS) (rrfs-conus-soaring)
 
@@ -148,6 +151,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cloud-cover-total` definition: `noaa-rrfs-tcdc-total-v1`.
 - `cloud-cover-low` definition: `noaa-rrfs-lcdc-low-v1`.
 - Publication timing: cycle age at most 12 hours; remaining horizon at least 48 hours.
+- Monitoring: environments `staging`, `production`; cycle age at most 12 hours; remaining horizon at least 48 hours.
 
 ### WRF northern Virginia 1 km (RRFS) (wrf-va-1km-soaring)
 
@@ -171,6 +175,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cloud-cover-total` definition: `av-wrf-cloud-total-pct-v1`.
 - `cloud-cover-low` definition: `av-wrf-ecmwf-sigma-ge-0p8-max-random-overlap-v1`.
 - Publication timing: cycle age at most 6 hours; remaining horizon at least 18 hours.
+- Monitoring: environments none; cycle age at most 30 hours; remaining horizon at least 0 hours.
 
 ## Scalar quantities and units
 

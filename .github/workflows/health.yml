@@ -33,10 +33,12 @@ jobs:
         id: models
         env:
           MODEL_SELECTION: ${{ inputs.model || 'all' }}
+          TARGET_ENV: ${{ inputs.environment || 'production' }}
         run: node --import tsx scripts/workflow-models.ts
   check:
     name: Check ${{ matrix.model }}
     needs: select
+    if: needs.select.outputs.models != '[]'
     strategy:
       fail-fast: false
       matrix:

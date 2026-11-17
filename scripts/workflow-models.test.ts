@@ -5,12 +5,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
 import { PRODUCTS } from '@av/contracts/models';
-import { selectWorkflowModels } from './workflow-models.js';
+import { monitoringEnvironment, selectWorkflowModels } from './workflow-models.js';
 
 it('selects registered models with their fixed configured caps', () => {
   const all = PRODUCTS.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
+  const enrolled = (environment: 'staging' | 'production') => all.filter(model => PRODUCTS.find(product => product.modelId === model.model)!.monitoring.environments.includes(environment));
   expect(selectWorkflowModels()).toEqual(all.filter(model => PRODUCTS.find(product => product.modelId === model.model)!.execution.schedule.length));
-  expect(selectWorkflowModels({ kind: 'health' })).toEqual(all);
+  expect(selectWorkflowModels({ kind: 'health' })).toEqual(enrolled('production'));
+  expect(selectWorkflowModels({ kind: 'health', environment: 'staging' })).toEqual(enrolled('staging'));
+  expect(enrolled('production').map(model => model.model)).toEqual(['gfs', 'icon-eu', 'rrfs', 'av-wrf']);
+  expect(selectWorkflowModels({ kind: 'health', selection: 'wrf-va-1km' })).toEqual([all.find(model => model.model === 'wrf-va-1km')]);
   for (const model of all) expect(selectWorkflowModels({ selection: model.model })).toEqual([model]);
   for (const value of ['', 'unknown', 'constructor', 'toString', all.map(model => model.model).join(',')]) {
     expect(() => selectWorkflowModels({ selection: value })).toThrow('Unknown forecast model');
@@ -18,10 +22,11 @@ it('selects registered models with their fixed configured caps', () => {
 });
 
 it('uses literal cron triggers for distinct/shared schedules and keeps health and explicit selection complete', () => {
+  const monitoring = { environments: ['staging', 'production'] as const };
   const models = [
-    { modelId: 'first', execution: { parallelism: 3, schedule: ['17 5 * * *', '31 12 * * *'] } },
-    { modelId: 'second', execution: { parallelism: 2, schedule: ['23 6 * * *', '31 12 * * *'] } },
-    { modelId: 'manual', execution: { parallelism: 1, schedule: [] } }
+    { modelId: 'first', execution: { parallelism: 3, schedule: ['17 5 * * *', '31 12 * * *'] }, monitoring },
+    { modelId: 'second', execution: { parallelism: 2, schedule: ['23 6 * * *', '31 12 * * *'] }, monitoring },
+    { modelId: 'manual', execution: { parallelism: 1, schedule: [] }, monitoring }
   ];
   const all = selectWorkflowModels({ products: models });
   vi.useFakeTimers();
@@ -39,12 +44,27 @@ it('uses literal cron triggers for distinct/shared schedules and keeps health an
   } finally { vi.useRealTimers(); }
 });
 
+it('enrolls health by environment and still runs an explicit unenrolled check', () => {
+  const model = { modelId: 'wrf-va-1km', execution: { parallelism: 12, schedule: [] as string[] }, monitoring: { environments: [] as ('staging' | 'production')[] } };
+  const staged = { ...model, monitoring: { environments: ['staging'] as ('staging' | 'production')[] } };
+  expect(selectWorkflowModels({ products: [model], kind: 'health' })).toEqual([]);
+  expect(selectWorkflowModels({ products: [model], kind: 'health', environment: 'staging' })).toEqual([]);
+  expect(selectWorkflowModels({ products: [staged], kind: 'health', environment: 'staging' })).toEqual([{ model: 'wrf-va-1km', parallelism: 12 }]);
+  expect(selectWorkflowModels({ products: [staged], kind: 'health' })).toEqual([]);
+  expect(selectWorkflowModels({ products: [model], kind: 'health', selection: 'wrf-va-1km' })).toEqual([{ model: 'wrf-va-1km', parallelism: 12 }]);
+  expect(() => selectWorkflowModels({ products: [model] })).toThrow('No scheduled forecast models');
+  expect(() => selectWorkflowModels({ products: [model], selection: 'missing' })).toThrow('Unknown forecast model');
+  expect(() => monitoringEnvironment('preview')).toThrow('TARGET_ENV');
+  expect(monitoringEnvironment()).toBe('production');
+  expect(monitoringEnvironment('staging')).toBe('staging');
+});
+
 it.each([undefined, '', ...new Set(PRODUCTS.flatMap(product => product.execution.schedule))])('writes the runner output for cron=%s, leaving health independent', schedule => {
   const forecast = schedule !== undefined;
   const root = mkdtempSync(join(tmpdir(), 'av-workflow-models-')), output = join(root, 'github-output');
   try {
     execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), ...(forecast ? ['--forecast'] : [])], {
-      env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', GITHUB_OUTPUT: output }
+      env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', TARGET_ENV: 'production', GITHUB_OUTPUT: output }
     });
     const models = selectWorkflowModels({ schedule, kind: forecast ? 'forecast' : 'health' });
     expect(readFileSync(output, 'utf8')).toBe(forecast

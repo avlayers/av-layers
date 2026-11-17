@@ -88,7 +88,19 @@ describe('model configuration', () => {
     expect(product.execution.shards).toBe(12);
     expect(product.execution.schedule).toEqual([]);
     expect(product.expectedRunsPerDay).toBe(1);
-    expect(product.freshness.maxCycleAgeHours).toBe(6);
+    expect(product.freshness).toEqual({ maxCycleAgeHours: 6, minHorizonHours: 18 });
+    expect(product.monitoring).toEqual({ environments: [], maxCycleAgeHours: 30, minHorizonHours: 0 });
+    for (const [modelId, monitoring] of [
+      ['gfs', { environments: ['staging', 'production'], maxCycleAgeHours: 18, minHorizonHours: 48 }],
+      ['icon-eu', { environments: ['staging', 'production'], maxCycleAgeHours: 18, minHorizonHours: 48 }],
+      ['rrfs', { environments: ['staging', 'production'], maxCycleAgeHours: 12, minHorizonHours: 48 }],
+      ['av-wrf', { environments: ['staging', 'production'], maxCycleAgeHours: 36, minHorizonHours: 36 }]
+    ] as const) {
+      const existing = getProduct(modelId)!;
+      expect(existing.monitoring).toEqual(monitoring);
+      expect(existing.freshness.maxCycleAgeHours).toBe(monitoring.maxCycleAgeHours);
+      expect(existing.freshness.minHorizonHours).toBe(monitoring.minHorizonHours);
+    }
     expect(product.grid).toMatchObject({
       width: 156, height: 114, dxM: 1000, dyM: 1000, x0M: -77500, y0M: -56500,
       centralMeridianDeg: -78.5, latitudeOfOriginDeg: 38.7, standardParallel1Deg: 37.5, standardParallel2Deg: 39.5
@@ -159,6 +171,12 @@ describe('model configuration', () => {
     expect(defineProduct({ ...settings, execution: { ...settings.execution, workers: 0 } }, 1).execution.workers).toBe(0);
   });
 
+  it('requires an explicit monitoring enrollment', () => {
+    const { monitoring: _monitoring, ...without } = raw;
+    expect(() => defineProduct(without)).toThrow();
+    expect(defineProduct({ ...raw, monitoring: { environments: [], maxCycleAgeHours: 30, minHorizonHours: 0 } }).monitoring).toEqual({ environments: [], maxCycleAgeHours: 30, minHorizonHours: 0 });
+  });
+
   it.each([
     { modelId: 'all' },
     { layers: ['invented-layer'] }, { layers: ['usable-lift-agl', 'usable-lift-agl'] },
@@ -166,7 +184,12 @@ describe('model configuration', () => {
     { forecast: { ...raw.forecast, hours: [3, 1] } },
     { forecast: { ...raw.forecast, hours: [1, 3], intervalHours: 2 } },
     { forecast: { ...raw.forecast, cycleHoursUtc: [0, 24] } },
-    { coverageDir: '../../outside' }
+    { coverageDir: '../../outside' },
+    { monitoring: { environments: ['production', 'production'], maxCycleAgeHours: 18, minHorizonHours: 48 } },
+    { monitoring: { environments: ['preview'], maxCycleAgeHours: 18, minHorizonHours: 48 } },
+    { monitoring: { environments: ['production'], maxCycleAgeHours: 0, minHorizonHours: 48 } },
+    { monitoring: { environments: ['production'], maxCycleAgeHours: Number.POSITIVE_INFINITY, minHorizonHours: 48 } },
+    { monitoring: { environments: ['production'], maxCycleAgeHours: 18, minHorizonHours: -1 } }
   ])('rejects unsupported or ambiguous configuration %j', invalid => {
     expect(() => defineProduct({ ...raw, ...invalid })).toThrow();
   });
