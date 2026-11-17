@@ -23,6 +23,7 @@ export interface ForecastSessionOptions {
   readonly writer: Pick<PreviewWriter, 'forecast' | 'intent' | 'notices'>;
   readonly intent: () => PreviewIntent;
   readonly center: () => GeoPoint;
+  readonly globe?: () => boolean;
   readonly mapFailed: () => boolean;
   readonly aborted: () => boolean;
   readonly now: () => number;
@@ -87,13 +88,17 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
     if (intent().model !== AUTO_MODEL_ID || options.mapFailed() || options.aborted() || destroyed) return;
     autoAbort?.abort();
     const request = new AbortController(); autoAbort = request;
-    const center = normalizePoint(options.center().lat, options.center().lon);
+    const raw = options.center();
+    const located = Number.isFinite(raw.lat) && Number.isFinite(raw.lon);
     const time = Date.parse(intent().requestedTime ?? '');
     const custom = intent().customLayer;
     const layers = custom ? [custom, ...LIFT_LAYERS] : intent().reference === 'agl' ? [...LIFT_LAYERS] : [...LIFT_LAYERS].reverse();
     if (!build) writer.notices({ freshness: 'Finding a forecast for this location…' });
     try {
-      const next = await resolveAutoBuild(api, { ...center, layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {}) });
+      const next = await resolveAutoBuild(api, {
+        ...(located ? normalizePoint(raw.lat, raw.lon) : {}), globe: options.globe?.() ?? false,
+        layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {})
+      });
       if (destroyed || request.signal.aborted || autoAbort !== request || intent().model !== AUTO_MODEL_ID) return;
       if (next) {
         if (build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {

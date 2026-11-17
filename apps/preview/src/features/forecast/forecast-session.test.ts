@@ -5,6 +5,12 @@ import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import type { PreviewIntent } from '../../stores/app-store';
 import { createForecastSession } from './forecast-session';
 
+const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn() }));
+vi.mock('@av/client', async importOriginal => {
+  const actual = await importOriginal<typeof import('@av/client')>();
+  return { ...actual, resolveAutoBuild: mocks.resolveAutoBuild };
+});
+
 function build() {
   return fixtureBuild({ expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: new Date().toISOString() });
 }
@@ -18,6 +24,8 @@ function harness() {
     windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', requestedTime: null
   };
   let current = { ...intent };
+  let center = { lat: 40, lon: -100 };
+  let globe = false;
   const latest = vi.fn(async (model: string) => { calls.push(model); return builds[0]!; });
   const session = createForecastSession({
     api: { latest } as unknown as ApiClient,
@@ -27,7 +35,8 @@ function harness() {
       notices: update => { calls.push(`notices:${JSON.stringify(update)}`); }
     },
     intent: () => current,
-    center: () => ({ lat: 40, lon: -100 }),
+    center: () => center,
+    globe: () => globe,
     mapFailed: () => false,
     aborted: () => false,
     now: () => Date.now(),
@@ -43,7 +52,11 @@ function harness() {
       stopTimer: () => calls.push('timer:stop')
     }
   });
-  return { session, calls, latest, builds, current: () => current };
+  return {
+    session, calls, latest, builds, current: () => current,
+    setCenter(next: typeof center) { center = next; },
+    setGlobe(next: boolean) { globe = next; }
+  };
 }
 
 describe('forecast session', () => {
@@ -81,6 +94,24 @@ describe('forecast session', () => {
     expect(test.calls).toContain('expired');
     expect(test.session.expired).toBe(true);
     expect(overdue).toBeDefined();
+  });
+
+  it('passes a globe view through and omits a non-finite center', async () => {
+    const test = harness();
+    mocks.resolveAutoBuild.mockReset().mockResolvedValue(null);
+    test.setGlobe(true);
+    await test.session.load('auto');
+    expect(mocks.resolveAutoBuild).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ lat: 40, lon: -100, globe: true }));
+    test.setCenter({ lat: Number.NaN, lon: -100 });
+    await test.session.loadAuto();
+    const unlocated = mocks.resolveAutoBuild.mock.calls.at(-1)?.[1] as { lat?: number; lon?: number; globe?: boolean };
+    expect(unlocated.lat).toBeUndefined();
+    expect(unlocated.lon).toBeUndefined();
+    expect(unlocated.globe).toBe(true);
+    test.setCenter({ lat: 40, lon: -100 });
+    test.setGlobe(false);
+    await test.session.loadAuto();
+    expect(mocks.resolveAutoBuild).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ lat: 40, lon: -100, globe: false }));
   });
 
   it('suspends a pending discovery and resumes it', async () => {

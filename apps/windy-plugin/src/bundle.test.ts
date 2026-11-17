@@ -130,13 +130,14 @@ it.each([
   };
   const renderListeners = new Map<string, Set<() => void>>();
   let center = { lat: point.lat, lng: point.lon };
+  let zoom = 7;
   const map = { on: vi.fn(), off: vi.fn(), addLayer: vi.fn(), removeLayer: vi.fn(), maplibreMap: {
     setPaintProperty: vi.fn(),
     on: (name: string, listener: () => void) => { const listeners = renderListeners.get(name) ?? new Set(); listeners.add(listener); renderListeners.set(name, listeners); },
     off: (name: string, listener: () => void) => renderListeners.get(name)?.delete(listener),
     isMoving: () => false,
     getCenter: () => center,
-    getZoom: () => 7,
+    getZoom: () => zoom,
     getBounds: () => ({ getWest: () => -118, getEast: () => -117, getSouth: () => 32, getNorth: () => 33 })
   } };
   let hostTimestamp = hostTime;
@@ -365,6 +366,11 @@ it.each([
     automatic.onopen();
     selects[0].value = 'auto'; selects[0].dispatch('change');
     await vi.waitFor(() => expect(layer.url).toContain(`/tiles/${regionA.manifest.model}/${regionA.manifest.buildId}/usable-lift-msl/f018/`));
+    zoom = 1;
+    for (const listener of renderListeners.get('movestart') ?? []) listener();
+    for (const listener of renderListeners.get('moveend') ?? []) listener();
+    await vi.waitFor(() => expect(layer.url).toContain(`/tiles/gfs/${gfs.manifest.buildId}/usable-lift-msl/f018/`));
+    zoom = 7;
     center = { lat: REGION_B_POINT.lat, lng: REGION_B_POINT.lon };
     for (const listener of renderListeners.get('movestart') ?? []) listener();
     for (const listener of renderListeners.get('moveend') ?? []) listener();
