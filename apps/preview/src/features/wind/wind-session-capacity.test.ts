@@ -15,6 +15,7 @@ vi.mock('@av/client/wind', () => {
     });
     readonly dispose = vi.fn(() => { wind.live = Math.max(0, wind.live - 1); });
     readonly prepare = vi.fn(() => { wind.prepared++; return { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height: 'surface' as const, key: 'p' }; });
+    readonly prepareAsync = async () => this.prepare();
     readonly field = () => ({ sample: () => ({ u: 1, v: 1, status: 0 }) });
     readonly sample = vi.fn(() => ({ u: 1, v: 1, status: 'valid' }));
   } };

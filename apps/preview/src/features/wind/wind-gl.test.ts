@@ -121,7 +121,7 @@ it('reserves GL targets before allocation, degrades and recovers, and releases w
     triggerRepaint: () => {}
   };
   vi.stubGlobal('window', { devicePixelRatio: 2 });
-  const renderer = attachWindGl(map as unknown as Map, () => {}, budget)!;
+  const ready = vi.fn(), renderer = attachWindGl(map as unknown as Map, ready, budget)!;
   expect(renderer.limited).toBe(true);
   expect(budget.snapshot()['wind-display-gl']).toBe(renderer.bytes);
   const reduced = renderer.bytes;
@@ -143,9 +143,11 @@ it('reserves GL targets before allocation, degrades and recovers, and releases w
   await Promise.resolve();
   expect(renderer.bytes).toBe(full);
   failedResizeCall = 1;
-  expect(() => renderer.relievePressure()).toThrow('texture allocation failed');
-  expect(budget.used).toBe(renderer.bytes);
-  expect(renderer.bytes).toBeGreaterThan(full);
+  expect(() => renderer.relievePressure()).not.toThrow();
+  expect(budget.used).toBe(0);
+  expect(renderer.bytes).toBe(0);
+  await Promise.resolve();
+  expect(ready).toHaveBeenLastCalledWith(false);
   renderer.destroy();
   expect(budget.used).toBe(0);
   expect(renderer.bytes).toBe(0);

@@ -30,15 +30,15 @@ export function configureRrfsWindGrid(manifest: ManifestV5) {
   }
 }
 
-export function previewWindFixture(manifest: ManifestV5, globalGfs: boolean | 'rrfs' = false) {
+export function previewWindFixture(manifest: ManifestV5, globalGfs: boolean | 'rrfs' | 'av-wrf' = false) {
   const native = manifest.surfaces.find(surface => surface.kind === 'native')!.grid;
   const fine = manifest.surfaces.find(surface => surface.kind === 'fine')!.grid;
-  const levels = globalGfs === 'rrfs' ? 26 : globalGfs ? 22 : 3;
+  const levels = globalGfs === 'av-wrf' ? 41 : globalGfs === 'rrfs' ? 26 : globalGfs ? 22 : 3;
   const nativeLayout = windLayout(native.width, native.height, 16, levels);
   const fineLayout = windLayout(fine.width, fine.height, 64);
-  const masks = globalGfs === 'rrfs' ? rrfs : { windMask: golden.windMask, fineMask: gfsFineMask };
-  const windMask = globalGfs ? decodeTileMask(masks.windMask, nativeLayout.count) : null;
-  const fineMask = globalGfs ? decodeTileMask(masks.fineMask, fineLayout.count) : null;
+  const masks = globalGfs === 'rrfs' ? rrfs : globalGfs === true ? { windMask: golden.windMask, fineMask: gfsFineMask } : null;
+  const windMask = masks ? decodeTileMask(masks.windMask, nativeLayout.count) : null;
+  const fineMask = masks ? decodeTileMask(masks.fineMask, fineLayout.count) : null;
   const logicalTiles = (count: number, mask: typeof windMask) => {
     if (!mask) return null;
     const result = new Array<number>(mask.count);
@@ -71,7 +71,7 @@ export function previewWindFixture(manifest: ManifestV5, globalGfs: boolean | 'r
     descriptor(frame: string) {
       if (!manifest.frames.some(item => item.id === frame)) return null;
       return { version: 3, frame, levels, tileSize: 16, fineTileSize: 64,
-        ...(globalGfs ? { windMask: masks.windMask, fineMask: masks.fineMask } : {}),
+        ...(masks ? { windMask: masks.windMask, fineMask: masks.fineMask } : {}),
         wind: shards(frame, 'wind', windMask?.count ?? nativeLayout.count, nativeLayout.chunkBytes), fine: shards(frame, 'fine', fineMask?.count ?? fineLayout.count, fineLayout.chunkBytes),
         overview: strides.map(stride => { const layout = windOverviewLayout(native, stride); return { stride, shards: shards(frame, `overview-${stride}`, layout.count, layout.chunkBytes) }; }) };
     },

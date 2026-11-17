@@ -1,6 +1,6 @@
 import { Map as PreviewMap, type MapOptions } from 'maplibre-gl';
 import { recognizeViewport, TILE_SIZE, type BenchLayer, type PixelProbe } from '../../scripts/preview-pixels';
-import { measureWindCall } from '../../scripts/preview-observe';
+import { matchesWind, measureWindCall } from '../../scripts/preview-observe';
 import { boundsAreaKm2, cameraBounds } from './src/features/map/viewport-policy';
 export * from 'maplibre-gl';
 
@@ -293,8 +293,7 @@ function installBench(map: PreviewMap): void {
       waiting.sample.firstCorrectMs ??= performance.now() - waiting.sample.inputAt;
       waiting.sample.pixels = probes.map(probe => [...probe.pixel]);
       const expected = expectedWind[match.index];
-      if (wind && observed?.frame === frames[match.index] && observed.height === 1500 && observed.sample.status === 'valid' && expected
-        && observed.sample.u !== null && observed.sample.v !== null && Math.abs(observed.sample.u - expected.u) < 0.03 && Math.abs(observed.sample.v - expected.v) < 0.03 && waiting.sample.combinedMs === null) {
+      if (wind && matchesWind(observed, frames[match.index], 1500, expected) && waiting.sample.combinedMs === null) {
         waiting.sample.combinedMs = performance.now() - waiting.sample.inputAt;
         waiting.sample.combinedRasterFrame = frames[match.index]; waiting.sample.combinedWind = structuredClone(observed);
       }

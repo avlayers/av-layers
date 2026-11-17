@@ -635,6 +635,39 @@ function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onInten
   return { host, track, timeline, onSelect, hours, callbacks, flush };
 }
 
+it('reuses timeline decorations and labels throughout a drag', () => {
+  const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  const root = host.children[0]!, ticks = [...byClass(root, 'ct-ticks').children], label = byClass(root, 'ct-time-local');
+  const created = doc.elements.length;
+  for (let index = 0; index < 100; index++) pointer(track, 'pointermove', index % 2 ? 180 : 60);
+  expect(doc.elements.length).toBe(created);
+  expect(byClass(root, 'ct-ticks').children).toEqual(ticks);
+  expect(byClass(root, 'ct-time-local')).toBe(label);
+  expect(byClass(root, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
+  expect(callbacks.size).toBe(1);
+  expect(onSelect).not.toHaveBeenCalled();
+  flush();
+  expect(onSelect).toHaveBeenCalledExactlyOnceWith(3, 'none');
+  pointer(track, 'pointerup', 180); timeline.destroy();
+});
+
+it('skips unchanged frame updates and active-gesture scene echoes', () => {
+  const { track, timeline, hours, flush } = setupAnimationTimeline();
+  const created = doc.elements.length, measure = vi.spyOn(track, 'getBoundingClientRect');
+  for (let index = 0; index < 100; index++) timeline.update(hours.map(frame => ({ ...frame })), 'h0');
+  expect(doc.elements.length).toBe(created);
+  expect(measure).not.toHaveBeenCalled();
+  pointer(track, 'pointerdown', 0); pointer(track, 'pointermove', 60);
+  const dragged = doc.elements.length;
+  measure.mockClear();
+  timeline.update(hours, 'h0');
+  expect(measure).not.toHaveBeenCalled();
+  expect(doc.elements.length).toBe(dragged);
+  expect(track.getAttribute('aria-valuenow')).toBe('1');
+  flush(); pointer(track, 'pointerup', 60); timeline.destroy();
+});
+
 it('coalesces drag scene work while immediately moving the playhead', () => {
   const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
   pointer(track, 'pointerdown', 0);

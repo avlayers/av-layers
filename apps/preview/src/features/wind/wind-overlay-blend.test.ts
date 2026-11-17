@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
-import { createPreparationBudget } from '@av/client';
+import { createPreparationBudget, type PreparationBudget } from '@av/client';
 import { WindDataCache, WindDataSource } from '@av/client/wind';
 import { WIND_FINE_CELL_BYTES } from '@av/contracts/wind-data';
 import { encodeWindColumns } from '@av/forecast/wind';
@@ -22,8 +22,9 @@ class Canvas extends EventTarget {
   remove(): void {}
 }
 
-function overlay(): WindOverlay {
-  const doc = Object.assign(new EventTarget(), { hidden: false, createElement: () => new Canvas() });
+function fixture(budget?: PreparationBudget) {
+  const canvases: Canvas[] = [];
+  const doc = Object.assign(new EventTarget(), { hidden: false, createElement: () => { const canvas = new Canvas(); canvases.push(canvas); return canvas; } });
   vi.stubGlobal('document', doc);
   vi.stubGlobal('window', { devicePixelRatio: 1 });
   vi.stubGlobal('requestAnimationFrame', () => 1);
@@ -32,7 +33,7 @@ function overlay(): WindOverlay {
     getCanvasContainer: () => ({ appendChild: () => {} }),
     getCanvas: () => ({ clientWidth: 64, clientHeight: 64 }),
     on: () => {},
-    off: () => {},
+    off: vi.fn(),
     getBounds: () => ({ getWest: () => -1, getEast: () => 1, getNorth: () => 1, getSouth: () => -1 }),
     getZoom: () => 0,
     getBearing: () => 0,
@@ -40,8 +41,10 @@ function overlay(): WindOverlay {
     project: () => ({ x: 0, y: 0 }),
     unproject: () => ({ lng: 0, lat: 0 })
   };
-  return new WindOverlay(map as unknown as Map);
+  return { view: new WindOverlay(map as unknown as Map, { budget }), map, doc, canvases };
 }
+
+const overlay = () => fixture().view;
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); gl.setFields.mockReset(); gl.setPrepared.mockReset(); gl.destroy.mockReset(); gl.reset.mockReset(); });
 
@@ -136,7 +139,7 @@ it('retains prepared grids until the renderer detaches them without GC', () => {
   expect(gl.reset).toHaveBeenCalled();
 });
 
-it('returns the real source and renderer budget to baseline on replacement and disposal', async () => {
+it.each(['none', 'reset', 'setPrepared'] as const)('returns source and renderer allocations on replacement and disposal with %s failure', async failure => {
   const budget = createPreparationBudget(1024 * 1024), cache = new WindDataCache(undefined, undefined, budget), view = overlay();
   const pinned = fixtureBuild();
   pinned.expiresAtMs = Date.now() + 60_000;
@@ -164,7 +167,12 @@ it('returns the real source and renderer budget to baseline on replacement and d
   expect(await source.load({ build: pinned, frame, bounds: [-1, -1, 2, 2] })).toBe('ready');
   const surface = source.prepare('surface')!, elevated = source.prepare(500)!;
   view.install(source.field('surface'), surface);
-  view.install(source.field(500), elevated);
+  if (failure === 'none') view.install(source.field(500), elevated);
+  else {
+    gl[failure].mockImplementationOnce(() => { throw new Error('renderer replacement failed'); });
+    expect(() => view.install(source.field(500), elevated)).toThrow('renderer replacement failed');
+    expect(gl.destroy).toHaveBeenCalledOnce();
+  }
   source.dispose(); cache.clear();
   expect(budget.used).toBe(elevated.data.byteLength);
   const borrowed = elevated.data;
@@ -173,4 +181,28 @@ it('returns the real source and renderer budget to baseline on replacement and d
   expect(borrowed.byteLength).toBe(elevated.data.byteLength);
   view.destroy();
   expect(budget.used).toBe(0);
+});
+
+it('releases prepared data, canvases and listeners when renderer destruction fails', () => {
+  const budget = createPreparationBudget(1024 * 1024), f = fixture(budget);
+  const lease = budget.reserve('wind-prepared', 16)!, release = vi.fn(() => lease.release());
+  const prepared = { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(16), size: 2, height: 'surface' as const, key: 'current', retain: () => release };
+  f.view.install({ sample: () => ({ status: 0, u: 1, v: 1 }) }, prepared);
+  const documentOff = vi.spyOn(f.doc, 'removeEventListener'), cancel = vi.spyOn(globalThis, 'cancelAnimationFrame');
+  const canvasOff = vi.spyOn(Canvas.prototype, 'removeEventListener'), remove = vi.spyOn(Canvas.prototype, 'remove');
+  gl.reset.mockImplementation(() => { throw new Error('reset during destruction'); });
+  gl.destroy.mockImplementationOnce(() => { throw new Error('renderer destruction failed'); });
+  expect(() => f.view.destroy()).toThrow('renderer destruction failed');
+  expect(f.canvases.every(canvas => canvas.width === 0 && canvas.height === 0)).toBe(true);
+  expect(remove).toHaveBeenCalledTimes(2);
+  expect(canvasOff).toHaveBeenCalledTimes(4);
+  expect(f.map.off).toHaveBeenCalledTimes(4);
+  expect(documentOff).toHaveBeenCalledWith('visibilitychange', expect.any(Function));
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
+  expect(budget.used).toBe(0);
+  expect(f.view.displayMemory).toEqual({ canvasBytes: 0, glBytes: 0, limited: false });
+  expect(() => f.view.destroy()).not.toThrow();
+  expect(gl.destroy).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
 });

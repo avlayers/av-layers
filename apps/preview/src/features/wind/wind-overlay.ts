@@ -174,9 +174,15 @@ export class WindOverlay {
     const nextRelease = changed ? prepared?.retain?.() ?? null : previousRelease;
     this.field = field; this.prepared = prepared; this.barbSamples.clear();
     this.releasePrepared = nextRelease;
-    this.gl?.reset();
-    this.syncGl();
-    if (changed) previousRelease?.();
+    try {
+      this.gl?.reset();
+      this.syncGl();
+    } catch (error) {
+      const failed = this.gl;
+      this.gl = null; this.gpu = false;
+      try { failed?.destroy(); } finally { this.resize(); }
+      throw error;
+    } finally { if (changed) previousRelease?.(); }
     this.resetTrails(); this.drawBarbs(); this.schedule();
   }
 
@@ -205,13 +211,17 @@ export class WindOverlay {
     this.unsubscribeBudget?.();
     this.map.off('move', this.move); this.map.off('resize', this.resize);
     this.map.off('webglcontextlost', this.mapContextLost); this.map.off('webglcontextrestored', this.mapContextRestored);
-    this.gl?.reset(); this.gl?.destroy();
     document.removeEventListener('visibilitychange', this.visibility);
-    for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.width = 0; c.height = 0; c.remove(); }
-    this.canvasLease?.release(); this.canvasLease = null; this.canvasBytes = 0;
-    this.canvasLimited = this.glLimited = false;
-    this.field = null; this.prepared = null; this.particles = []; this.barbSamples.clear();
-    this.releasePrepared?.(); this.releasePrepared = null;
+    const gl = this.gl, releasePrepared = this.releasePrepared;
+    this.gl = null; this.releasePrepared = null;
+    this.field = null; this.prepared = null; this.particles = []; this.barbSamples.clear(); this.lostCanvases.clear();
+    try { gl?.destroy(); }
+    finally {
+      for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.width = 0; c.height = 0; c.remove(); }
+      this.canvasLease?.release(); this.canvasLease = null; this.canvasBytes = 0;
+      this.canvasLimited = this.glLimited = false;
+      releasePrepared?.();
+    }
   }
 
   private resetTrails(): void {

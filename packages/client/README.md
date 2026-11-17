@@ -23,6 +23,14 @@ descriptors. [`@av/windgram`](../windgram/README.md) owns point presentation.
 - [`@av/client/wind`](src/client-wind.ts) loads one bounded wind viewport and
   samples Surface, AGL or Top-of-lift vectors. Dispose it when its view closes.
 
+Use `await source.prepareAsync(height, { signal })` for interactive wind grids.
+It yields between short row batches and releases unfinished work on cancellation,
+another preparation, a new load or disposal. `prepare(height)` shares the same
+sampling algorithm and returns cached grids synchronously. Under memory pressure,
+`trimHeights(activeHeight)` reclaims historical grids and samplers while preserving
+the active height. A grid retained with `retain()` stays charged until its caller
+releases it.
+
 The coverage seam follows the cell-center edge of the displayed layer grid, or the coverage parallels when that grid wraps longitude. Auto ranks models by native spacing and keeps a candidate when `locateSampleCell` hits that grid and the sample is `valid` or `no-usable-lift`.
 
 Point requests default to the first published frame. Select frame pages for complete

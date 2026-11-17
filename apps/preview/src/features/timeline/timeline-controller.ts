@@ -298,7 +298,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   play.setAttribute('aria-pressed', 'false');
   playGlyph.setAttribute('aria-hidden', 'true');
   play.append(playGlyph);
-  const timeLabel = el('time', 'ct-time', '--:--');
+  const timeLabel = el('time', 'ct-time');
+  const localLabel = el('span', 'ct-time-local', '--:--'), utcLabel = el('span', 'ct-time-utc');
+  timeLabel.append(localLabel, utcLabel);
   const track = el('div', 'ct-track');
   track.setAttribute('role', 'slider');
   track.setAttribute('aria-orientation', 'horizontal');
@@ -322,6 +324,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   let daySignature = '', selectedIndex = -1, sceneIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
   let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false, lastPointerX = Number.NaN;
   let sceneRequest: number | null = null, gestureVersion = 0, gestureChanged = false;
+  let framesRevision = 0, decorationKey = '';
   const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
 
   const controlsDisabled = () => disabled || !frames.length;
@@ -461,8 +464,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     rebuildDays();
   }
 
-  function render(): void {
-    const width = trackWidth();
+  function render(width = trackWidth()): void {
     const scale = currentScale(width);
     const selectedDay = selectedIndex >= 0 ? placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes) : '';
     const off = controlsDisabled();
@@ -479,15 +481,15 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const ms = frame ? Date.parse(frame.validTime) : Number.NaN;
     const local = frame && Number.isFinite(ms) ? localTimeFromMs(ms, offsetMinutes) : null;
     if (!frame || !Number.isFinite(ms)) {
-      timeLabel.replaceChildren(el('span', 'ct-time-local', '--:--'));
+      localLabel.textContent = '--:--'; utcLabel.textContent = '';
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
       playhead.setAttribute('hidden', '');
     } else {
       const clock = formatPlaceTime(ms, offsetMinutes, 'clock');
       const split = clock.indexOf(' (');
-      const localText = el('span', 'ct-time-local', split < 0 ? clock : clock.slice(0, split));
-      timeLabel.replaceChildren(localText, ...(split < 0 ? [] : [el('span', 'ct-time-utc', clock.slice(split))]));
+      localLabel.textContent = split < 0 ? clock : clock.slice(0, split);
+      utcLabel.textContent = split < 0 ? '' : clock.slice(split);
       timeLabel.setAttribute('dateTime', frame.validTime);
       track.setAttribute('aria-valuetext', formatPlaceTime(ms, offsetMinutes, 'stamp'));
       if (local) {
@@ -496,13 +498,18 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       } else playhead.setAttribute('hidden', '');
     }
     const group = selectedGroup();
-    const solar = group ? daySolar(group.day) : { stops: null, bounds: null };
-    const warped = solar.stops ? solar.stops.map(stop => ({ color: stop.color, at: placeMinute(scale, stop.at / 100 * DAY_MINUTES) * 100 })) : null;
-    ribbon.style.background = warped ? ribbonGradient(monotonicStops(warped)) : NEUTRAL;
-    paintHatches(scale, group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
-    paintCoarse(scale, group ? coarseSpanFractions(frames, group.indices, offsetMinutes) : []);
-    paintTicks(scale);
-    paintMoons(scale);
+    const key = [framesRevision, group?.day, offsetMinutes, latitude, longitude, width,
+      ...scale.segments.flatMap(segment => [segment.kind, segment.start, segment.end, segment.folded, segment.x0, segment.x1])].join('|');
+    if (key !== decorationKey) {
+      decorationKey = key;
+      const solar = group ? daySolar(group.day) : { stops: null, bounds: null };
+      const warped = solar.stops ? solar.stops.map(stop => ({ color: stop.color, at: placeMinute(scale, stop.at / 100 * DAY_MINUTES) * 100 })) : null;
+      ribbon.style.background = warped ? ribbonGradient(monotonicStops(warped)) : NEUTRAL;
+      paintHatches(scale, group ? dayHatchFractions(frames, group.indices, offsetMinutes) : []);
+      paintCoarse(scale, group ? coarseSpanFractions(frames, group.indices, offsetMinutes) : []);
+      paintTicks(scale);
+      paintMoons(scale);
+    }
     paintedWidth = width;
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
@@ -574,7 +581,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       const version = gestureVersion;
       selectedIndex = index;
       gestureChanged = true;
-      render();
+      render(rect.width);
       options.onIntent?.(index);
       if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
       if (queue) queueScene();
@@ -692,13 +699,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (destroyed) return;
       const nextIndex = nextFrames.findIndex(frame => frame.id === selectedFrame);
       const sameFrames = nextFrames.length === frames.length && nextFrames.every((frame, index) => frame.id === frames[index]?.id && frame.validTime === frames[index]?.validTime);
+      if (paintedWidth >= 0 && sameFrames && nextDisabled === disabled && nextIndex === sceneIndex && (activePointer !== null || nextIndex === selectedIndex)) return;
       const echo = activePointer !== null && sameFrames && nextDisabled === disabled && nextIndex === sceneIndex;
       if (!echo && (activePointer !== null || !sameFrames || nextDisabled !== disabled || nextIndex !== sceneIndex)) invalidateGesture();
-      frames = nextFrames.slice();
+      if (!sameFrames) { frames = nextFrames.slice(); framesRevision++; }
       if (!echo) selectedIndex = nextIndex;
       sceneIndex = nextIndex;
       disabled = nextDisabled;
-      syncDays();
+      if (!sameFrames) syncDays();
       render();
       if (controlsDisabled()) stopPlayback();
     },

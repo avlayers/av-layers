@@ -22,6 +22,7 @@ vi.mock('@av/client/wind', () => ({
     readonly dispose = vi.fn();
     readonly sample = vi.fn((_lat: number, _lon: number, height: WindHeight) => ({ u: 1, v: 2, status: 'valid', height }));
     readonly prepare = vi.fn((height: WindHeight) => { this.prepared.add(height); return { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height, key: `prepared:${height}` }; });
+    readonly prepareAsync = async (height: WindHeight) => this.prepare(height);
     readonly hasPrepared = (height: WindHeight) => this.prepared.has(height);
   }
 }));
@@ -107,7 +108,7 @@ describe('wind session acquisition and presentation status', () => {
     test.session.reconcile();
     test.setHeight(1000);
     test.session.heightChanged('surface');
-    expect(test.fields.at(-1)).toBe(1000);
+    await vi.waitFor(() => expect(test.fields.at(-1)).toBe(1000));
     expect(test.modes.at(-1)).toBe('replace');
   });
 
@@ -193,7 +194,7 @@ it('reports the installed height rather than the pending intent', async () => {
   test.setHeight(1000);
   expect(test.session.installed).toMatchObject({ frame: test.framesA[0]!.id, height: 'surface' });
   test.session.heightChanged('surface');
-  expect(test.session.installed).toMatchObject({ height: 1000 });
+  await vi.waitFor(() => expect(test.session.installed).toMatchObject({ height: 1000 }));
   test.session.destroy();
 });
 

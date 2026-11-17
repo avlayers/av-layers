@@ -75,6 +75,7 @@ class FakeElement {
 
 class FakeDocument {
   activeElement: FakeElement | null = null;
+  defaultView?: Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>;
   listeners = new Map<string, Listener[]>();
   createElement(tag: string): FakeElement { return new FakeElement(tag, this); }
   addEventListener(type: string, listener: Listener): void {
@@ -106,16 +107,26 @@ function one(root: FakeElement, name: string): FakeElement {
 }
 
 function fire(node: FakeElement, type: string, values: Record<string, unknown> = {}): void {
-  node.dispatchEvent({ type, ...values });
+  node.dispatchEvent({ type, ...(type.startsWith('pointer') ? { pointerId: 1, button: 0, isPrimary: true } : {}), ...values });
 }
 
 let doc: FakeDocument;
 let parent: FakeElement;
 let storage: Map<string, string>;
 
-function create(onChange = vi.fn<(state: WindControlState) => void>()) {
-  const controls = createWindControls(parent as unknown as HTMLElement, { onChange });
-  return { controls, onChange, root: parent.children[0]! };
+function create(onChange = vi.fn<(state: WindControlState) => void>(), onCommit = vi.fn()) {
+  const controls = createWindControls(parent as unknown as HTMLElement, { onChange, onCommit });
+  return { controls, onChange, onCommit, root: parent.children[0]! };
+}
+
+function animationFrames() {
+  const pending = new Map<number, FrameRequestCallback>();
+  let next = 0;
+  doc.defaultView = {
+    requestAnimationFrame(callback) { pending.set(++next, callback); return next; },
+    cancelAnimationFrame(id) { pending.delete(id); }
+  };
+  return { pending, flush() { const callbacks = [...pending.values()]; pending.clear(); for (const callback of callbacks) callback(16); } };
 }
 
 beforeEach(() => {
@@ -135,6 +146,131 @@ afterEach(() => {
 });
 
 describe('wind controls', () => {
+  it('keeps altitude feedback immediate and delivers only the latest changed value per animation frame', () => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    for (let index = 0; index < 100; index++) { range.value = String(index % 10); fire(range, 'input'); }
+    expect(controls.state.height).toBe(4000);
+    expect(range.getAttribute('aria-valuetext')).toBe('4,000 m AGL');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(frames.pending.size).toBe(1);
+    frames.flush();
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ height: 4000 }));
+    for (let index = 0; index < 100; index++) fire(range, 'input');
+    expect(frames.pending.size).toBe(0);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(storage.size).toBe(0);
+    fire(range, 'change'); fire(range, 'pointerup');
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(storage.size).toBe(1);
+    controls.destroy();
+  });
+
+  it.each(['change', 'pointerup', 'pointercancel'])('flushes the final altitude once on %s before its queued animation frame', event => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    fire(range, 'pointerdown');
+    range.value = '6'; fire(range, 'input');
+    fire(range, event);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ height: 1500 }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(frames.pending.size).toBe(0);
+    frames.flush(); fire(range, 'change');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    controls.destroy();
+  });
+
+  it('replaces a pending altitude with a restored selection and cancels callbacks on destruction', () => {
+    const frames = animationFrames(), { controls, root, onChange } = create();
+    const range = one(root, 'wind-controls-range');
+    range.value = '7'; fire(range, 'input');
+    controls.setState!({ height: 'surface' });
+    frames.flush();
+    expect(controls.state.height).toBe('surface');
+    expect(onChange).not.toHaveBeenCalled();
+    range.value = '6'; fire(range, 'input');
+    controls.destroy(); frames.flush();
+    expect(frames.pending.size).toBe(0);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('remembers the numeric height when an uncommitted drag returns to Surface', () => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    range.value = '6'; fire(range, 'input');
+    fire(one(root, 'wind-controls-surface'), 'click'); frames.flush();
+    expect(controls.state.height).toBe('surface');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(JSON.parse([...storage.values()][0])).toMatchObject({ height: 'surface', fixedHeight: 1500 });
+    controls.destroy();
+  });
+
+  it('commits a delivered preview that returns to the original height', () => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    range.value = '6'; fire(range, 'input'); frames.flush();
+    // Other map or timeline commands may write this delivered height to the URL.
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ height: 1500 }));
+    fire(one(root, 'wind-controls-surface'), 'click');
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ height: 'surface' }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(JSON.parse([...storage.values()][0])).toMatchObject({ height: 'surface', fixedHeight: 1500 });
+    controls.destroy();
+  });
+
+  it('ignores the remainder of a height gesture after a history restore', () => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    fire(range, 'pointerdown'); range.value = '6'; fire(range, 'input');
+    controls.setState!({ height: 'lift' });
+    range.value = '7'; fire(range, 'input'); fire(range, 'change'); fire(range, 'pointerup');
+    frames.flush();
+    expect(controls.state.height).toBe('lift');
+    expect(range.value).toBe('9');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+    fire(range, 'pointerdown'); range.value = '3'; fire(range, 'input'); fire(range, 'pointerup');
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ height: 500 }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    controls.destroy();
+  });
+
+  it('commits a range release outside the control and ignores other pointer releases', () => {
+    const frames = animationFrames(), { controls, root, onChange, onCommit } = create();
+    const range = one(root, 'wind-controls-range');
+    fire(range, 'pointerdown'); range.value = '6'; fire(range, 'input');
+    fire(range, 'pointerup', { pointerId: 2 });
+    expect(frames.pending.size).toBe(1);
+    expect(onCommit).not.toHaveBeenCalled();
+    doc.dispatchEvent({ type: 'pointerup', pointerId: 1 });
+    expect(frames.pending.size).toBe(0);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ height: 1500 }));
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    controls.destroy();
+  });
+
+  it('does not leave Surface for an unrelated pointer release', () => {
+    const { controls, root, onChange, onCommit } = create();
+    fire(one(root, 'wind-controls-range'), 'pointerup');
+    expect(controls.state.height).toBe('surface');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+    controls.destroy();
+  });
+
+  it('does not persist or commit after onChange destroys the controls', () => {
+    const onChange = vi.fn<(state: WindControlState) => void>(() => controls.destroy());
+    const { controls, root, onCommit } = create(onChange);
+    fire(one(root, 'wind-controls-lift'), 'click');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+  });
+
   it('renders into the parent with the approved closed and rail structure', () => {
     const { controls, root } = create();
     expect(parent.children).toEqual([root]);
@@ -304,6 +440,7 @@ describe('wind controls', () => {
   it('returns to the remembered fixed height when its unmoved thumb is tapped', () => {
     const { controls, root } = create();
     fire(one(root, 'wind-controls-lift'), 'click');
+    fire(one(root, 'wind-controls-range'), 'pointerdown');
     fire(one(root, 'wind-controls-range'), 'pointerup');
     expect(controls.state.height).toBe(20);
     controls.destroy();

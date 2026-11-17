@@ -13,7 +13,7 @@ type Coordinates = [[number, number], [number, number], [number, number], [numbe
 interface Image { bitmap: ImageBitmap; lease: PreparationLease | null }
 interface Retired { image: Image; frame: string | null; coordinates: Coordinates | null; sourceId: string; displayLease: PreparationLease | null; previewLease: PreparationLease | null }
 interface Tile {
-  state: 'waiting' | 'fetching' | 'compressed' | 'decoding' | 'drawn';
+  state: 'waiting' | 'fetching' | 'compressed' | 'decoding' | 'drawn' | 'cancelled';
   handle?: RasterTileHandle;
   data?: ArrayBuffer;
   release?: () => void;
@@ -116,11 +116,14 @@ export class RasterOverview {
   private displayLease: PreparationLease | null = null;
   private readonly retired: Retired[] = [];
   private readonly opacities = new globalThis.Map<string, number>();
+  private failedImage: Image | null = null;
+  private publishing = false;
   private canvasLease: PreparationLease | null = null;
   private decodeLease: PreparationLease | null = null;
   private composing: Job | null = null;
   private fetching = 0;
   private decoding = 0;
+  private pumpVersion = 0;
   private previewEpoch = 0;
   private nativeEpoch = 0;
   private coverageCache: { key: string; preview: boolean; native: boolean } | null = null;
@@ -175,6 +178,7 @@ export class RasterOverview {
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (!this.supported || this.disposed) return;
+    this.failedImage = null;
     const frames = renderedFrames(build.manifest).map(value => value.id);
     if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !frames.includes(frame)) { this.clear(); return; }
     const view = bounds(this.map), maxzoom = layerMaxZoom(build.manifest, layer);
@@ -187,6 +191,7 @@ export class RasterOverview {
       && Math.abs(preview.zoom - this.context.preview.zoom) <= 1;
     if (!previewHeld) {
       this.reset(true);
+      if (this.context || this.disposed) return;
       if (!preview) { this.selected = frame; this.limited = true; this.onReady(); return; }
       const native = warmed && required !== null ? planRasterCrop(view, required) : null;
       const previewBytes = frames.length * 256 * 256 * 4;
@@ -212,6 +217,7 @@ export class RasterOverview {
       } else if (context.previewZoom !== previewZoom) {
         context.previewZoom = previewZoom; this.coverageCache = null;
       }
+      if (this.context !== context || this.disposed) return;
     }
     if (this.selected !== frame) {
       if (this.selected) this.direction = frames.indexOf(frame) > frames.indexOf(this.selected) ? 1 : -1;
@@ -224,6 +230,7 @@ export class RasterOverview {
     const active = this.context;
     if (!active) return;
     if (active.nativeWindowed) this.updateNativeWindow();
+    if (this.context !== active || this.disposed) return;
     if (active.nativeScheduled && active.native && this.previews.has(frame) && !this.natives.has(frame) && !active.jobs.some(job => job.quality === 'detail' && job.frame === frame)) {
       active.jobs.push(this.job(frame, 'detail', active.native));
     }
@@ -255,7 +262,7 @@ export class RasterOverview {
     const preview = this.previews.get(frame), native = this.nativeCovers() ? this.natives.get(frame) : undefined;
     const image = native && (native === this.shown || !preview || !this.options.budget
       || this.options.budget.canReserve(native.bitmap.width * native.bitmap.height * 8, 'background')) ? native : preview;
-    return !!image && image !== this.shown;
+    return !!image && image !== this.shown && image !== this.failedImage;
   }
 
   ownsSource(id: string | undefined): boolean { return id === this.id || id === `${this.id}-stage`; }
@@ -274,11 +281,11 @@ export class RasterOverview {
   }
 
   show(build: PinnedBuild, layer: LayerId, frame: string, opacity: number): boolean {
-    if (!this.ready(build, layer, frame)) return false;
+    if (this.publishing || !this.ready(build, layer, frame)) return false;
     const native = this.nativeCovers() ? this.natives.get(frame) : undefined;
     const preview = this.previews.get(frame);
     let image = native ?? preview;
-    if (!image) return false;
+    if (!image || image === this.failedImage) return false;
     let coordinates = image === native ? this.context!.native!.coordinates : this.context!.preview.coordinates;
     let displayLease: PreparationLease | null = null;
     if (this.shown !== image) {
@@ -294,31 +301,60 @@ export class RasterOverview {
       }
       if (this.shown !== image && this.options.budget && !displayLease) { this.markLimited(); return false; }
     }
+    if (image === this.failedImage) { displayLease?.release(); return false; }
     const targetId = this.shown !== image && this.visibleId === this.shownId ? (this.shownId === this.id ? `${this.id}-stage` : this.id) : this.shownId;
-    const created = !this.map.getSource(targetId);
-    if (created) {
-      this.map.addSource(targetId, { type: 'image', coordinates });
-      this.map.addLayer({ ...previewRasterLayer(0), id: targetId, source: targetId, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
-      this.opacities.set(targetId, 0);
-    }
-    const source = this.map.getSource(targetId) as ImageSourceLike | undefined;
-    if (this.shown !== image) {
+    const context = this.context, selected = this.selected, shown = this.shown, visibleId = this.visibleId;
+    const previous = targetId === this.shownId ? { image: this.shown, coordinates: this.shownCoordinates }
+      : this.retired.findLast(entry => entry.sourceId === targetId);
+    const targetOpacity = this.opacities.get(targetId) ?? 0;
+    const visibleOpacity = visibleId ? this.opacities.get(visibleId) ?? 0 : 0;
+    let created = false;
+    let source: ImageSourceLike | undefined;
+    this.publishing = true;
+    try {
+      created = !this.map.getSource(targetId);
+      if (created) {
+        this.map.addSource(targetId, { type: 'image', coordinates });
+        this.map.addLayer({ ...previewRasterLayer(0), id: targetId, source: targetId, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
+        this.opacities.set(targetId, 0);
+      }
+      source = this.map.getSource(targetId) as ImageSourceLike | undefined;
+      if (!source) throw new Error('Raster image source unavailable');
+      if (this.shown !== image) {
+        source?.updateImage?.({ image: image.bitmap, coordinates });
+        if (created) source?.setCoordinates?.(coordinates);
+      } else if (this.shownCoordinates !== coordinates) {
+        source?.setCoordinates?.(coordinates);
+      }
+      this.setOpacity(targetId, opacity);
+      if (opacity > 0 && visibleId && visibleId !== targetId && this.map.getLayer(visibleId)) this.setOpacity(visibleId, 0);
+      if (this.context !== context || this.selected !== selected || this.shown !== shown || this.disposed
+        || (this.previews.get(frame) !== image && this.natives.get(frame) !== image)) throw new Error('Raster selection changed during publication');
+    } catch {
+      if (created) {
+        try { this.removeSource(targetId); } catch { /* The owning map may already be unavailable. */ }
+      } else {
         try {
-          source?.updateImage?.({ image: image.bitmap, coordinates });
-          if (created) source?.setCoordinates?.(coordinates);
-        } catch (error) { displayLease?.release(); throw error; }
-        if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
-        this.heldLease = null; this.displayLease = displayLease;
-        this.shown = image; this.shownId = targetId; this.shownFrame = frame; this.shownCoordinates = coordinates;
-    } else if (this.shownCoordinates !== coordinates) {
-      source?.setCoordinates?.(coordinates);
-      this.shownCoordinates = coordinates;
+          if (previous?.image && previous.coordinates) source?.updateImage?.({ image: previous.image.bitmap, coordinates: previous.coordinates });
+          this.setOpacity(targetId, targetOpacity);
+        } catch { /* Keep the previous display ownership until a later selection can recover. */ }
+      }
+      if (visibleId && visibleId !== targetId) {
+        try { this.setOpacity(visibleId, visibleOpacity); } catch { /* Retain the previous image if its map cannot be updated. */ }
+      }
+      displayLease?.release();
+      if (this.context === context && this.selected === selected) this.failedImage = image;
+      return false;
+    } finally {
+      this.publishing = false;
     }
-    this.setOpacity(targetId, opacity);
-    if (opacity > 0) {
-      if (this.visibleId && this.visibleId !== targetId && this.map.getLayer(this.visibleId)) this.setOpacity(this.visibleId, 0);
-      this.visibleId = targetId;
+    if (this.shown !== image) {
+      if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
+      this.heldLease = null; this.displayLease = displayLease;
+      this.shown = image; this.shownId = targetId; this.shownFrame = frame;
     }
+    this.shownCoordinates = coordinates;
+    if (opacity > 0) this.visibleId = targetId;
     return true;
   }
 
@@ -327,8 +363,9 @@ export class RasterOverview {
   private setOpacity(id: string, value: number): void {
     const opacity = clampOpacity(value);
     if (this.opacities.get(id) === opacity) return;
+    try { this.map.setPaintProperty(id, 'raster-opacity', opacity); }
+    catch (error) { this.opacities.delete(id); throw error; }
     this.opacities.set(id, opacity);
-    this.map.setPaintProperty(id, 'raster-opacity', opacity);
   }
 
   cancelStage(opacity: number): boolean {
@@ -382,9 +419,11 @@ export class RasterOverview {
       const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
       if (!this.nativeAdmitted(protectedBytes)) this.evictNative(protectedBytes);
     }
+    if (context !== this.context || this.disposed) return;
     if (context.native && this.options.canExpandNative?.() === false && context.nativeScheduled && !context.nativeWindowed) {
       context.nativeWindowed = true; this.updateNativeWindow();
     }
+    if (context !== this.context || this.disposed) return;
     if (context.native && this.allAxisUsable(context) && !context.jobs.some(job => job.quality === 'overview')) {
       if (!context.nativeScheduled) {
         this.scheduleNative(context);
@@ -404,15 +443,26 @@ export class RasterOverview {
     this.pump();
   }
   clear(): void { this.deferred = null; this.reset(false); }
-  destroy(): void { this.disposed = true; this.unsubscribeBudget?.(); this.clear(); this.transport?.dispose(); }
+  destroy(): void {
+    if (this.disposed) return;
+    this.disposed = true; this.unsubscribeBudget?.();
+    try { this.clear(); } finally { this.transport?.dispose(); }
+  }
+
+  private removeSource(id: string): void {
+    let failure: unknown;
+    try { if (this.map.getLayer(id)) this.map.removeLayer(id); } catch (error) { failure = error; }
+    this.opacities.delete(id);
+    try { if (this.map.getSource(id)) this.map.removeSource(id); } catch (error) { failure ??= error; }
+    if (failure) throw failure;
+  }
 
   private releaseRetired(): void {
     const closed = new Set<Image>();
+    let failure: unknown;
     for (const retired of this.retired.splice(0)) {
       if (retired.sourceId !== this.visibleId && retired.sourceId !== this.shownId) {
-        if (this.map.getLayer(retired.sourceId)) this.map.removeLayer(retired.sourceId);
-        this.opacities.delete(retired.sourceId);
-        if (this.map.getSource(retired.sourceId)) this.map.removeSource(retired.sourceId);
+        try { this.removeSource(retired.sourceId); } catch (error) { failure ??= error; }
       }
       if (!closed.has(retired.image) && retired.image !== this.shown && ![...this.previews.values(), ...this.natives.values()].includes(retired.image)) {
         retired.image.bitmap.close(); retired.image.lease?.release();
@@ -420,6 +470,7 @@ export class RasterOverview {
       }
       retired.displayLease?.release(); retired.previewLease?.release();
     }
+    if (failure) throw failure;
   }
 
   private ensureSelectedPreview(frame: string): void {
@@ -465,6 +516,7 @@ export class RasterOverview {
     for (const job of [...context.jobs]) {
       if (job.quality !== 'detail') continue;
       this.cancelJob(job);
+      if (context !== this.context || this.disposed) return;
       context.jobs = context.jobs.filter(value => value !== job);
     }
     for (const [frame, image] of [...this.natives]) {
@@ -477,18 +529,11 @@ export class RasterOverview {
   }
 
   private reset(keepShown: boolean): void {
-    this.previewEpoch++; this.nativeEpoch++; this.coverageCache = null;
-    for (const job of this.context?.jobs ?? []) {
-      job.failed = true;
-      for (const tile of job.tiles) {
-        tile.handle?.cancel();
-        if (tile.state !== 'decoding') { tile.release?.(); tile.release = undefined; tile.data = undefined; }
-      }
-      job.partial?.close(); job.partial = undefined;
-      job.lease?.release();
-    }
     const previous = this.context;
-    this.context = null; this.selected = null; this.composing = null; this.fetching = 0;
+    this.previewEpoch++; this.nativeEpoch++; this.coverageCache = null;
+    for (const job of previous?.jobs ?? []) this.cancelJob(job);
+    if (this.context !== previous) return;
+    this.context = null; this.selected = null; this.composing = null; this.fetching = 0; this.failedImage = null;
     if (this.expiry !== null) clearTimeout(this.expiry); this.expiry = null;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer); this.retryTimer = null;
     if (this.nativeTimer !== null) clearTimeout(this.nativeTimer); this.nativeTimer = null; this.nativeRested = false;
@@ -522,24 +567,24 @@ export class RasterOverview {
         }
       } else group.release();
     }
-    this.heldLease = retained;
-    if (previousHeld && previousHeld !== retained) previousHeld.release();
+    this.heldLease = retained ?? (keepShown && this.shown && !ownedShown ? previousHeld : null);
+    if (previousHeld && previousHeld !== this.heldLease) previousHeld.release();
+    let failure: unknown;
     if (!(keepShown && this.shown)) {
       retained?.release(); this.heldLease = null;
       if (this.shown && !ownedShown) { this.shown.bitmap.close(); this.shown.lease?.release(); }
       this.shown = null; this.shownFrame = null; this.shownCoordinates = null; this.shownId = this.id; this.visibleId = null;
       this.displayLease?.release(); this.displayLease = null;
       for (const id of [this.id, `${this.id}-stage`]) {
-        if (this.map.getLayer(id)) this.map.removeLayer(id);
-        this.opacities.delete(id);
-        if (this.map.getSource(id)) this.map.removeSource(id);
+        try { this.removeSource(id); } catch (error) { failure ??= error; }
       }
-      this.releaseRetired();
+      try { this.releaseRetired(); } catch (error) { failure ??= error; }
     }
     this.canvasLease?.release(); this.canvasLease = null;
     if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
     if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
     this.limited = false;
+    if (failure) throw failure;
   }
 
   private coverage(): { preview: boolean; native: boolean } {
@@ -569,6 +614,10 @@ export class RasterOverview {
     const scale = quality === 'overview' ? Math.min(1, 256 / Math.max(crop.width, crop.height)) : 1;
     return { frame, quality, crop, width: Math.max(1, Math.round(crop.width * scale)), height: Math.max(1, Math.round(crop.height * scale)),
       tiles: crop.tiles.map(() => ({ state: 'waiting' })), failed: false, lease: null };
+  }
+
+  private ownsJob(job: Job, context = this.context): boolean {
+    return !this.disposed && !!context && context === this.context && !job.failed && context.jobs.includes(job);
   }
 
   private ordered(jobs: Job[]): Job[] {
@@ -611,7 +660,9 @@ export class RasterOverview {
     if (!job || this.decoding > 0) return;
     if (job.tiles.some(tile => tile.state === 'drawn')) {
       job.partial?.close();
-      job.partial = this.canvas!.transferToImageBitmap();
+      job.partial = undefined;
+      try { job.partial = this.canvas!.transferToImageBitmap(); }
+      catch { this.fail(job); return; }
     }
     this.composing = null;
   }
@@ -619,13 +670,17 @@ export class RasterOverview {
   private pump(): void {
     const context = this.context;
     if (!context || this.disposed || context.build.expiresAtMs <= Date.now()) return;
+    const version = ++this.pumpVersion;
+    const current = () => this.context === context && this.pumpVersion === version && !this.disposed;
     if (this.options.budget) {
       const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
       if (!this.nativeAdmitted(protectedBytes)) this.evictNative(protectedBytes);
     }
+    if (!current()) return;
     if (context.native && this.options.canExpandNative?.() === false && context.nativeScheduled && !context.nativeWindowed) {
       context.nativeWindowed = true; this.updateNativeWindow();
     }
+    if (!current()) return;
     if (context.native && this.nativeRested && !this.playing) {
       if (!context.nativeScheduled && this.allAxisUsable(context)) {
         this.scheduleNative(context);
@@ -636,6 +691,7 @@ export class RasterOverview {
         }
       }
     }
+    if (!current()) return;
     const jobs = this.ordered(context.jobs.filter(job => !job.failed));
     const maxActive = this.options.requestLimits?.maxActive ?? 24;
     const maxBackground = this.options.requestLimits?.maxPrefetchActive ?? 20;
@@ -644,9 +700,11 @@ export class RasterOverview {
     let selectedFetching = 0;
     for (const job of jobs) if (job.frame === this.selected) for (const tile of job.tiles) if (tile.state === 'fetching') selectedFetching++;
     for (const job of jobs) {
+      if (!current()) return;
+      if (!this.ownsJob(job, context)) continue;
       const isSelected = job.frame === this.selected;
       if (job.quality === 'detail' && (!this.nativeRested || this.playing)) continue;
-      while (job.tiles.some(tile => tile.state === 'waiting')) {
+      while (this.ownsJob(job, context) && job.tiles.some(tile => tile.state === 'waiting')) {
         if (this.fetching >= maxActive || this.fetching * MAX_TILE_BYTES + this.compressedBytes() + MAX_TILE_BYTES > maxPendingBytes) break;
         if (job.quality === 'detail' && jobs.some(other => other.quality === 'overview')
           && jobs.filter(other => other.quality === 'detail').flatMap(other => other.tiles).filter(tile => tile.state === 'fetching').length >= SELECTED_PREVIEW_SLOTS) break;
@@ -668,6 +726,8 @@ export class RasterOverview {
           const staging = Math.max(0, bytes - (this.canvasLease?.bytes ?? 0)) + decodeBytes;
           const required = bytes + staging + protectedBytes;
           if (isSelected) this.evictNative(required);
+          if (!current()) return;
+          if (!this.ownsJob(job, context)) break;
           if (!this.nativeAdmitted(required)) {
             this.markLimited();
             break;
@@ -678,9 +738,11 @@ export class RasterOverview {
         const index = job.tiles.findIndex(tile => tile.state === 'waiting');
         if (isSelected) selectedFetching++;
         this.fetch(job, index);
+        if (!current()) return;
       }
     }
-    const readyToCompose = (candidate: Job) => candidate.tiles.some(tile => tile.state === 'compressed');
+    if (!current()) return;
+    const readyToCompose = (candidate: Job) => this.ownsJob(candidate, context) && candidate.tiles.some(tile => tile.state === 'compressed');
     const nextReady = jobs.find(readyToCompose) ?? null;
     if (this.composing && this.decoding === 0) {
       if (this.composing.tiles.every(tile => tile.state === 'drawn')) {
@@ -691,12 +753,15 @@ export class RasterOverview {
       const preempted = !!nextReady && nextReady !== this.composing && jobs.indexOf(nextReady) < jobs.indexOf(this.composing);
       if (stalled || preempted) this.suspendComposition();
     }
+    if (!current()) return;
     if (!this.composing) {
       const next = jobs.find(readyToCompose);
-      if (next && this.startComposition(next)) this.composing = next;
+      if (next && this.startComposition(next) && current() && this.ownsJob(next, context)) this.composing = next;
     }
+    if (!current()) return;
     const job = this.composing;
-    if (!job) {
+    if (!job || !this.ownsJob(job, context)) {
+      this.composing = null;
       if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
       return;
     }
@@ -710,12 +775,15 @@ export class RasterOverview {
   }
 
   private startComposition(job: Job): boolean {
+    const context = this.context, version = this.pumpVersion;
+    if (!this.ownsJob(job, context)) return false;
     const budget = this.options.budget, bytes = job.width * job.height * 4;
     const priority = job.quality === 'overview' && job.frame === this.selected ? 'foreground' : 'background';
     if (budget) {
       const needed = Math.max(0, bytes - (this.canvasLease?.bytes ?? 0)) + (this.decodeLease ? 0 : DECODE_LEASE_BYTES);
       if (!budget.canReserve(needed, priority) || needed > budget.limit - budget.used) {
         if (priority === 'foreground') this.evictNative(needed + Math.max(0, this.options.protectedBytes?.() ?? 0));
+        if (!this.ownsJob(job, context) || this.pumpVersion !== version) return false;
         if (!budget.canReserve(needed, priority) || needed > budget.limit - budget.used) { this.markLimited(); return false; }
       }
       if (!this.canvasLease) {
@@ -734,19 +802,24 @@ export class RasterOverview {
       if (!this.decodeLease) this.decodeLease = budget.reserve('raster-decode', DECODE_LEASE_BYTES, priority);
       if (!this.canvasLease || !this.decodeLease) { this.markLimited(); return false; }
     }
-    this.canvas!.width = job.width; this.canvas!.height = job.height;
-    const ctx = this.canvas!.getContext('2d')!;
-    ctx.clearRect(0, 0, job.width, job.height);
-    if (job.partial) {
-      try { ctx.drawImage(job.partial, 0, 0, job.width, job.height); }
-      finally { job.partial.close(); job.partial = undefined; }
+    try {
+      this.canvas!.width = job.width; this.canvas!.height = job.height;
+      const ctx = this.canvas!.getContext('2d')!;
+      ctx.clearRect(0, 0, job.width, job.height);
+      if (job.partial) {
+        try { ctx.drawImage(job.partial, 0, 0, job.width, job.height); }
+        finally { job.partial.close(); job.partial = undefined; }
+      }
+    } catch {
+      this.fail(job);
+      return false;
     }
     return true;
   }
 
   private fetch(job: Job, index: number): void {
-    const context = this.context!, tile = job.tiles[index], location = job.crop.tiles[index], epoch = job.quality === 'overview' ? this.previewEpoch : this.nativeEpoch;
-    const currentEpoch = () => job.quality === 'overview' ? this.previewEpoch : this.nativeEpoch;
+    const context = this.context, tile = job.tiles[index], location = job.crop.tiles[index];
+    if (!context || !this.ownsJob(job, context) || tile.state !== 'waiting') return;
     const url = frameTileUrl(context.build.templates[context.layer], job.frame).replaceAll('{z}', String(location.z)).replaceAll('{x}', String(location.canonicalX)).replaceAll('{y}', String(location.y));
     tile.state = 'fetching'; this.fetching++;
     let response: Promise<{ data: ArrayBuffer; release?: () => void }>;
@@ -760,45 +833,57 @@ export class RasterOverview {
         tile.handle = { response: response as RasterTileHandle['response'], promote() {}, cancel: () => controller.abort() };
       }
     } catch {
-      if (tile.state === 'fetching') this.fetching--;
+      this.finishFetch(tile);
       this.fail(job);
       return;
     }
+    if (!this.ownsJob(job, context)) tile.handle?.cancel();
     void response.then(value => {
-      if (epoch === currentEpoch() && tile.state === 'fetching') this.fetching--;
-      if (epoch !== currentEpoch() || job.failed) { value.release?.(); return; }
+      this.finishFetch(tile); tile.handle = undefined;
+      if (!this.ownsJob(job, context)) { value.release?.(); return; }
       if (value.data.byteLength > MAX_TILE_BYTES) { value.release?.(); this.fail(job); return; }
       tile.data = value.data; tile.release = value.release; tile.state = 'compressed'; this.pump();
     }).catch(() => {
-      if (epoch === currentEpoch() && tile.state === 'fetching') this.fetching--;
-      if (epoch === currentEpoch() && !job.failed) this.fail(job);
+      this.finishFetch(tile); tile.handle = undefined;
+      this.fail(job);
     });
   }
 
+  private finishFetch(tile: Tile): void {
+    if (tile.state !== 'fetching') return;
+    tile.state = 'waiting'; this.fetching--;
+  }
+
   private decode(job: Job, index: number): void {
-    const tile = job.tiles[index], epoch = job.quality === 'overview' ? this.previewEpoch : this.nativeEpoch, data = tile.data!;
-    const currentEpoch = () => job.quality === 'overview' ? this.previewEpoch : this.nativeEpoch;
+    const context = this.context, tile = job.tiles[index], data = tile.data;
+    if (!this.ownsJob(job, context) || this.composing !== job || tile.state !== 'compressed' || !data) return;
     tile.state = 'decoding'; this.decoding++;
-    void Promise.resolve().then(() => createImageBitmap(new Blob([data], { type: 'image/webp' }))).then(image => {
-      if (epoch !== currentEpoch() || job.failed || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) {
-        image.close(); if (epoch === currentEpoch() && !job.failed) this.fail(job); return;
+    void Promise.resolve().then(() => this.ownsJob(job, context) ? createImageBitmap(new Blob([data], { type: 'image/webp' })) : null).then(image => {
+      if (!image) return;
+      if (!this.ownsJob(job, context) || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) {
+        image.close(); this.fail(job); return;
       }
       const location = job.crop.tiles[index], sx = job.width / job.crop.width, sy = job.height / job.crop.height;
       try { this.canvas!.getContext('2d')!.drawImage(image, location.drawX * sx, location.drawY * sy, RASTER_TILE_SIZE * sx, RASTER_TILE_SIZE * sy); }
       finally { image.close(); }
       tile.state = 'drawn';
-    }).catch(() => { if (epoch === currentEpoch() && !job.failed) this.fail(job); })
+    }).catch(() => this.fail(job))
       .finally(() => {
         tile.release?.(); tile.release = undefined; tile.data = undefined; this.decoding--;
+        if (job.failed) tile.state = 'cancelled';
         if (!this.context && !this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
         this.pump();
       });
   }
 
   private finish(job: Job): void {
-    const context = this.context!;
+    const context = this.context;
+    if (!context || !this.ownsJob(job, context) || this.composing !== job) return;
     job.partial?.close(); job.partial = undefined;
-    const image = { bitmap: this.canvas!.transferToImageBitmap(), lease: job.lease };
+    let bitmap: ImageBitmap;
+    try { bitmap = this.canvas!.transferToImageBitmap(); }
+    catch { this.fail(job); return; }
+    const image = { bitmap, lease: job.lease };
     job.lease = null;
     (job.quality === 'overview' ? this.previews : this.natives).set(job.frame, image);
     if (job.quality === 'overview') {
@@ -814,21 +899,24 @@ export class RasterOverview {
   }
 
   private cancelJob(job: Job): void {
+    if (job.failed) return;
     job.failed = true;
+    for (const tile of job.tiles) this.finishFetch(tile);
+    if (this.composing === job) this.composing = null;
     for (const tile of job.tiles) {
-      if (tile.state === 'fetching') { this.fetching--; tile.state = 'waiting'; }
-      tile.handle?.cancel();
-      if (tile.state !== 'decoding') { tile.release?.(); tile.release = undefined; tile.data = undefined; }
+      const handle = tile.handle; tile.handle = undefined;
+      handle?.cancel();
+      if (tile.state !== 'decoding') { tile.state = 'cancelled'; tile.release?.(); tile.release = undefined; tile.data = undefined; }
     }
     job.partial?.close(); job.partial = undefined;
     job.lease?.release(); job.lease = null;
-    if (this.composing === job) this.composing = null;
   }
 
   private fail(job: Job): void {
     const context = this.context;
-    if (!context || job.failed) return;
+    if (!context || !this.ownsJob(job, context)) return;
     this.cancelJob(job);
+    if (context !== this.context || this.disposed) return;
     context.jobs = context.jobs.filter(value => value !== job);
     if (job.quality === 'overview') {
       const attempts = (this.failureCounts.get(job.frame) ?? 0) + 1;
@@ -861,8 +949,10 @@ export class RasterOverview {
       .sort((a, b) => Math.abs(context.frames.indexOf(b.frame) - index) - Math.abs(context.frames.indexOf(a.frame) - index));
     while (!this.nativeAdmitted(required) && queued.length) {
       const job = queued.shift()!;
+      if (!this.ownsJob(job, context)) continue;
       if (this.composing === job && this.decoding > 0) continue;
       this.cancelJob(job);
+      if (context !== this.context || this.disposed) return;
       context.jobs = context.jobs.filter(value => value !== job);
       context.nativeWindowed = true;
       this.markLimited();
@@ -885,6 +975,7 @@ export class RasterOverview {
     for (const job of [...context.jobs]) {
       if (job.quality !== 'detail' || allowed.has(job.frame)) continue;
       this.cancelJob(job);
+      if (context !== this.context || this.disposed) return;
       context.jobs = context.jobs.filter(value => value !== job);
     }
     for (const [frame, image] of this.natives) {
