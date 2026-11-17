@@ -1,10 +1,22 @@
 import { expect, it } from 'vitest';
-import { assertWindFrameLayout, parseWindFrame, windFrameParts, windLayout, windOverviewLayout, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, type WindFrame } from './wind-data.ts';
+import { assertWindFrameLayout, overviewStrides, parseWindFrame, windFrameParts, windLayout, windOverviewLayout, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, type WindFrame } from './wind-data.ts';
 
 const shard = { sha256: 'a'.repeat(64), bytes: 1, indexSha256: 'b'.repeat(64), count: 1 };
 const frame = { version: 3, frame: 'f001', levels: 21, tileSize: 16, fineTileSize: 64,
   wind: Array(9).fill(shard), fine: Array(50).fill(shard) };
 const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+
+it('stops the overview pyramid at one chunk', () => {
+  expect(overviewStrides({ width: 204, height: 174 })).toEqual([2, 4, 8]);
+  expect(overviewStrides({ width: 1440, height: 721 })).toEqual([2, 4, 8, 16, 32, 64]);
+  expect(overviewStrides({ width: 2, height: 2 })).toEqual([2]);
+  for (const grid of [{ width: 204, height: 174 }, { width: 1440, height: 721 }, { width: 1377, height: 657 }, { width: 1799, height: 1059 }]) {
+    const strides = overviewStrides(grid);
+    const last = windOverviewLayout(grid, strides.at(-1)!);
+    expect(Math.max(last.width, last.height)).toBeLessThanOrEqual(WIND_OVERVIEW_TILE_SIZE);
+    expect(last.count).toBe(1);
+  }
+});
 
 it('admits the largest current model frame inventory within the shared byte and structure bounds', () => {
   expect(bytes(frame).length).toBeLessThan(WIND_FRAME_LIMIT);

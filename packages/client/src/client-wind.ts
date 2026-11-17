@@ -136,7 +136,7 @@ export class WindDataCache {
     return lease;
   }
 
-  horizonCost(root: string, resources: readonly { kind: string; tile: number; bytes: number }[], horizon: number): { remaining: number; fits: boolean; resource: 'numeric' | 'preparation' | null } {
+  horizonCost(root: string, resources: readonly { kind: string; tile: number; bytes: number }[], horizon: number, responseBytes = 0): { remaining: number; fits: boolean; resource: 'numeric' | 'preparation' | null } {
     const split = root.lastIndexOf('/'), prefix = root.slice(0, split + 1), frame = root.slice(split + 1);
     const expected = new Map<string, number>([['', WIND_FRAME_LIMIT]]);
     for (const resource of resources) expected.set(`/${resource.kind}/${resource.tile}`, resource.bytes);
@@ -160,7 +160,7 @@ export class WindDataCache {
     const required = horizon * [...expected.values()].reduce((sum, bytes) => sum + bytes, 0) - backed;
     const numericAvailable = this.budgetBytes - this.bytes + reclaimable;
     const sharedAvailable = this.budget ? this.budget.limit - this.budget.used + reclaimable : Infinity;
-    const resource = required > numericAvailable ? 'numeric' : required > sharedAvailable ? 'preparation' : null;
+    const resource = required > numericAvailable ? 'numeric' : required + responseBytes > sharedAvailable ? 'preparation' : null;
     return { remaining: required, fits: resource === null, resource };
   }
 
@@ -476,6 +476,11 @@ export class WindDataSource {
     return this.current ? !!this.current.overview : undefined;
   }
 
+  /** Overview stride actually loaded. Native detail has no stride. */
+  get overviewStride(): number | null {
+    return this.current?.overview?.stride ?? null;
+  }
+
   hasField(height: 'surface' | number | 'lift'): boolean {
     return !!this.current && this.current.build.expiresAtMs > Date.now() && this.fields.has(height);
   }
@@ -602,7 +607,7 @@ export class WindDataSource {
   /** Bounds actually loaded. A padded request keeps the camera rectangle when the pad exceeds one view. */
   admitted: GeographicBounds | null = null;
 
-  async load({ build, frame, bounds, core, signal }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; core?: GeographicBounds; signal?: AbortSignal }): Promise<'ready' | 'unavailable'> {
+  async load({ build, frame, bounds, core, signal, finerThan }: { build: PinnedBuild; frame: string; bounds: GeographicBounds; core?: GeographicBounds; signal?: AbortSignal; finerThan?: number }): Promise<'ready' | 'unavailable'> {
     this.controller?.abort(); this.current = undefined; this.admitted = null; this.horizonResources = undefined; this.clearPrepared(); this.generation++;
     if (this.disposed) throw new Error('Wind source is disposed');
     const controller = new AbortController(); this.controller = controller;
@@ -624,7 +629,7 @@ export class WindDataSource {
       this.active = controller;
       const abort = () => this.release();
       waiting.addEventListener('abort', abort, { once: true });
-      try { return await this.loadView(build, frame, bounds, controller, signal, core); }
+      try { return await this.loadView(build, frame, bounds, controller, signal, core, finerThan); }
       finally { waiting.removeEventListener('abort', abort); }
     } finally {
       if (this.active === controller) {
@@ -635,7 +640,7 @@ export class WindDataSource {
     }
   }
 
-  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal, core?: GeographicBounds): Promise<'ready' | 'unavailable'> {
+  private async loadView(build: PinnedBuild, frame: string, bounds: GeographicBounds, controller: AbortController, signal?: AbortSignal, core?: GeographicBounds, finerThan?: number): Promise<'ready' | 'unavailable'> {
     if (build.expiresAtMs <= Date.now() || Date.parse(build.manifest.expiresAt) !== build.expiresAtMs) return 'unavailable';
     if (this.cache.isBuildUnavailable(build.manifest.buildId)) return 'unavailable';
     if (!build.manifest.frames.slice(0, build.manifest.mapFrameCount ?? build.manifest.frames.length).some(item => item.id === frame)) return 'unavailable';
@@ -807,25 +812,53 @@ export class WindDataSource {
       return result.fits ? result.remaining : Infinity;
     };
 
-    const selectOverview = () => {
-      let selected: { overview: Overview; tasks: Array<{ kind: string; tile: number; bytes: number }> } | undefined;
-      let fallback: typeof selected;
-      let cost = Infinity, fallbackCost = Infinity, missedCost = Infinity;
-      for (const level of descriptor.overview ?? []) {
-        const layout = windOverviewLayout(native.grid, level.stride), tiles = tilesForBounds(native.grid, box, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
-        if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
-        const tasks = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
-        const total = horizonCost(tasks);
-        const candidate = {
-          overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
-          tasks
-        };
-        if (total < cost) { cost = total; selected = candidate; }
-        const single = this.cache.horizonCost(root, tasks, 1);
-        if (single.fits && single.remaining < fallbackCost) { fallbackCost = single.remaining; fallback = candidate; }
-        else if (!single.fits && single.remaining < missedCost) { missedCost = single.remaining; capacityResource = single.resource; }
+    const validExtent = (extent: GeographicBounds | undefined): extent is GeographicBounds => !!extent
+      && extent.every(Number.isFinite) && extent[1] >= -90 && extent[3] <= 90 && extent[1] <= extent[3]
+      && extent[0] >= -180 && extent[0] <= 180 && extent[2] >= -180 && extent[2] <= 180;
+    const extents = () => {
+      const list: GeographicBounds[] = [];
+      const add = (extent: GeographicBounds | undefined) => {
+        if (!validExtent(extent) || list.some(item => item.every((value, index) => value === extent[index]))) return;
+        list.push(extent);
+      };
+      add(bounds);
+      if (validExtent(core) && bounds[0] <= bounds[2] && core[0] <= core[2]) {
+        const reduced: GeographicBounds = [(bounds[0] + core[0]) / 2, (bounds[1] + core[1]) / 2, (bounds[2] + core[2]) / 2, (bounds[3] + core[3]) / 2];
+        if (core[0] >= reduced[0] && core[1] >= reduced[1] && core[2] <= reduced[2] && core[3] <= reduced[3]) add(reduced);
       }
-      return selected ?? fallback;
+      add(core);
+      return list;
+    };
+    const selectOverview = () => {
+      let selected: { overview: Overview; tasks: Array<{ kind: string; tile: number; bytes: number }>; bounds: GeographicBounds } | undefined;
+      let partial: typeof selected;
+      const levels = [...(descriptor.overview ?? [])].filter(level => finerThan === undefined || level.stride < finerThan).sort((a, b) => a.stride - b.stride);
+      for (const level of levels) {
+        const layout = windOverviewLayout(native.grid, level.stride);
+        let horizonChoice: typeof selected, partialChoice: typeof selected;
+        for (const extent of extents()) {
+          const tiles = tilesForBounds(native.grid, extent, WIND_OVERVIEW_TILE_SIZE * level.stride, level.stride * 2);
+          if (!tiles || tiles.length * layout.chunkBytes > DETAIL_MAX_BYTES) continue;
+          const tasks = tiles.map(tile => ({ kind: `overview-${level.stride}`, tile, bytes: layout.chunkBytes }));
+          const candidate = {
+            overview: { stride: level.stride, width: layout.width, height: layout.height, tilesAcross: Math.ceil(layout.width / WIND_OVERVIEW_TILE_SIZE), data: new Map<number, DataView>() },
+            tasks, bounds: extent
+          };
+          const single = this.cache.horizonCost(root, tasks, 1);
+          const incoming = tasks.reduce((sum, task) => sum + task.bytes, 0);
+          const response = Math.min(incoming, Math.max(0, single.remaining));
+          const full = this.cache.horizonCost(root, tasks, this.options.horizon ?? 1, response);
+          const partialPlan = response === 0 ? single : this.cache.horizonCost(root, tasks, 1, response);
+          if (full.fits) horizonChoice ??= candidate;
+          else if (partialPlan.fits) partialChoice ??= candidate;
+          else capacityResource = partialPlan.resource ?? full.resource ?? capacityResource;
+        }
+        if (horizonChoice) { selected = horizonChoice; break; }
+        partial ??= partialChoice;
+      }
+      const chosen = selected ?? partial;
+      if (chosen) box = chosen.bounds;
+      return chosen;
     };
 
     const fetchTasks = async (rawTasks: Array<{ kind: string; tile: number; bytes: number }>, targetOverview?: Overview) => {

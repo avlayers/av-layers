@@ -1,24 +1,24 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 
-const wind = vi.hoisted(() => ({ live: 0, limit: 3, attempts: [] as string[] }));
-vi.mock('@av/client/wind', () => ({
-  WindCapacityError: class extends Error { readonly code = 'capacity'; },
-  WindDataSource: class {
+const wind = vi.hoisted(() => ({ live: 0, loaded: 0, prepared: 0, limit: 3, kind: 'range' as 'range' | 'numeric', attempts: [] as string[] }));
+vi.mock('@av/client/wind', () => {
+  class WindCapacityError extends Error { readonly code = 'capacity'; constructor(_message?: string, readonly resource: 'numeric' | 'preparation' = 'preparation') { super('Wind cache exceeds byte budget'); } }
+  return { WindCapacityError, WindDataSource: class {
     readonly isOverview = false;
     readonly admitted = undefined;
     frame = '';
     readonly load = vi.fn(async (request: { frame: string }) => {
       wind.attempts.push(request.frame);
-      if (wind.live >= wind.limit) throw new RangeError('Wind cache exceeds byte budget');
-      wind.live++; this.frame = request.frame; return 'ready';
+      if (wind.live >= wind.limit) throw wind.kind === 'numeric' ? new WindCapacityError(undefined, 'numeric') : new RangeError('Wind cache exceeds byte budget');
+      wind.live++; wind.loaded++; this.frame = request.frame; return 'ready';
     });
     readonly dispose = vi.fn(() => { wind.live = Math.max(0, wind.live - 1); });
-    readonly prepare = vi.fn(() => ({ bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height: 'surface' as const, key: 'p' }));
+    readonly prepare = vi.fn(() => { wind.prepared++; return { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height: 'surface' as const, key: 'p' }; });
     readonly field = () => ({ sample: () => ({ u: 1, v: 1, status: 0 }) });
     readonly sample = vi.fn(() => ({ u: 1, v: 1, status: 'valid' }));
-  }
-}));
+  } };
+});
 
 import { createWindSession } from './wind-session';
 const ARMENIA = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
@@ -42,7 +42,7 @@ function session() {
   });
 }
 
-afterEach(() => { vi.useRealTimers(); wind.live = 0; wind.limit = 3; wind.attempts.length = 0; });
+afterEach(() => { vi.useRealTimers(); wind.live = 0; wind.loaded = 0; wind.prepared = 0; wind.limit = 3; wind.kind = 'range'; wind.attempts.length = 0; });
 
 it('settles on a bounded admitted window instead of evicting and reacquiring', async () => {
   vi.useFakeTimers();
@@ -54,6 +54,22 @@ it('settles on a bounded admitted window instead of evicting and reacquiring', a
   expect(view.preparation).toMatchObject({ promised: 8, admitted: 3, limited: true });
   await vi.advanceTimersByTimeAsync(20_000);
   expect(wind.attempts.length).toBe(attempts);
+  view.destroy();
+});
+
+it('prepares loaded frames while a full numeric cache blocks further fetches', async () => {
+  vi.useFakeTimers();
+  wind.kind = 'numeric';
+  const view = session();
+  view.update();
+  await vi.advanceTimersByTimeAsync(20_000);
+  const attempts = wind.attempts.length, loaded = wind.loaded;
+  expect(loaded).toBeGreaterThan(0);
+  expect(wind.prepared).toBeGreaterThanOrEqual(loaded);
+  expect(view.preparation.limited).toBe(true);
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(wind.attempts.length).toBe(attempts);
+  expect(wind.prepared).toBeGreaterThanOrEqual(loaded);
   view.destroy();
 });
 

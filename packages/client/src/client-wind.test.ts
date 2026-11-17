@@ -550,8 +550,8 @@ it('renders a bounded whole-world overview and retains wrapped seam samples', as
   const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
   expect(await source.load({ build: pinned, frame, bounds: [-180, -85, 180, 85] })).toBe('ready');
   const requests = fetcher.mock.calls.slice(1).map(([url]) => String(url));
-  expect(requests).toHaveLength(6);
-  expect(requests.every(url => url.includes('/overview-16/'))).toBe(true);
+  expect(requests).toHaveLength(18);
+  expect(requests.every(url => url.includes('/overview-8/'))).toBe(true);
   expect(requests.length * bytes.length).toBeLessThan(4 * 1024 * 1024);
   expect(source.sample(0, 179.95, 'surface')).toEqual({ status: 'valid', u: 1, v: 2 });
   expect(source.sample(0, -179.95, 20)).toEqual({ status: 'valid', u: 2, v: 4 });
@@ -673,7 +673,7 @@ it('coalesces contiguous tile spans, slices per-tile cache entries, and serves q
   fetcher.mockClear();
   const replacement = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, coalesceSpans: true });
   expect(await replacement.load({ build: pinned, frame, bounds: [-20, -20, 20, 20] })).toBe('ready');
-  expect(fetcher).not.toHaveBeenCalled();
+  expect(fetcher.mock.calls.some(([url]) => String(url).includes('/overview-2/'))).toBe(true);
   pinned.expiresAtMs = Date.now() - 1;
   expect(field.sample(75, 20).status).toBe(2);
   source.dispose(); replacement.dispose(); cache.clear();
@@ -1324,10 +1324,11 @@ it.each(['numeric', 'shared'] as const)('loads a usable selected overview when t
   try {
     expect(await source.load({ build: pinned, frame, bounds: [-128, 0, 127, 1] })).toBe('ready');
     expect(source.isOverview).toBe(true);
-    expect(fetcher.mock.calls.slice(1).map(([url]) => String(url).split('/').slice(-2).join('/'))).toEqual(['overview-4/0', 'overview-4/1']);
+    const paths = fetcher.mock.calls.slice(1).map(([url]) => String(url).split('/').slice(-2).join('/'));
+    expect(paths).toEqual(constrained === 'numeric' ? ['overview-2/0', 'overview-2/1', 'overview-2/2', 'overview-2/3'] : ['overview-4/0', 'overview-4/1']);
     expect(source.prepare('surface')).not.toBeNull();
     expect(source.field('surface').sample(0, 0)).toEqual({ status: STATUS_VALID, u: 0, v: 0 });
-    expect(cache.allocatedBytes).toBe(WIND_FRAME_LIMIT + 2 * overview.length);
+    expect(cache.allocatedBytes).toBe(WIND_FRAME_LIMIT + paths.length * overview.length);
     expect(budget.used).toBeLessThanOrEqual(budget.limit);
   } finally { source.dispose(); cache.clear(); }
   expect(budget.used).toBe(0);
@@ -1855,4 +1856,44 @@ it('chooses an already-backed finer overview when it has the lowest remaining co
     expect(fetcher).toHaveBeenCalledOnce();
     expect(source.memoryUsage().horizonNumericRemaining).toBe(0);
   } finally { source.dispose(); cache.clear(); }
+});
+
+it('selects the finest av-wrf horizon that fits and a finer core when the domain does not', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  const grid = { kind: 'lambert-conformal' as const, width: 204, height: 174, earthRadiusM: 6_370_000,
+    centralMeridianDeg: 44.5, latitudeOfOriginDeg: 40.2, standardParallel1Deg: 38.5, standardParallel2Deg: 41.8,
+    x0M: -304_500, y0M: -259_500, dxM: 3000, dyM: 3000, wrapLongitude: false as const };
+  const domain = [-180, -85, 180, 85] as const;
+  pinned.manifest.descriptors.bounds = [-180, -90, 180, 90];
+  for (const surface of pinned.manifest.surfaces) surface.grid = grid;
+  const metadata = JSON.parse(descriptor(frame));
+  metadata.levels = 41;
+  metadata.overview = [2, 4, 8].map(stride => ({ stride, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: 1, bytes: 1 }] }));
+  const overview = new Uint8Array(windOverviewLayout(grid, 2).chunkBytes);
+  const packed = encodeWindColumns(Array.from({ length: 256 }, () => ({ surface: { u: 1, v: 2 },
+    levels: Array.from({ length: metadata.levels }, (_, index) => ({ height: 100 + index, wind: { u: 1, v: 2 } })) })));
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    const path = String(url);
+    if (path.endsWith(`/data/${frame}`)) return new Response(layoutDescriptor(pinned, metadata), { headers: { 'content-type': 'application/json' } });
+    if (path.includes('/overview-')) return reply(overview);
+    return reply(path.includes('/wind/') ? packed : fine);
+  });
+  const loadAt = async (bytes: number, core?: readonly [number, number, number, number]) => {
+    const cache = new WindDataCache(bytes);
+    const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, horizon: 48, overviewForHorizon: true, coalesceSpans: false });
+    try {
+      expect(await source.load({ build: pinned, frame, bounds: [...domain], ...(core ? { core: [...core] } : {}) })).toBe('ready');
+      return { stride: source.overviewStride, admitted: source.admitted ? [...source.admitted] : null, urls: fetcher.mock.calls.map(([url]) => String(url)) };
+    } finally { source.dispose(); cache.clear(); fetcher.mockClear(); }
+  };
+  const domainFit = await loadAt(32 * 1024 * 1024);
+  expect(domainFit.stride).toBe(4);
+  expect(domainFit.urls.filter(url => url.includes('/overview-'))).toEqual(expect.arrayContaining([expect.stringContaining('/overview-4/')]));
+  expect(domainFit.urls.some(url => url.includes('/overview-2/'))).toBe(false);
+  const coarse = await loadAt(8 * 1024 * 1024);
+  expect(coarse.stride).toBe(8);
+  const core = [45.05, 40.45, 45.15, 40.55] as const;
+  const focused = await loadAt(12 * 1024 * 1024, core);
+  expect(focused.stride).toBe(2);
+  expect(focused.admitted).toEqual([...core]);
 });
