@@ -15,26 +15,44 @@ export class WindOverlay {
   private frame: string | null = null;
   private options: WindOverlayOptions = { style: 'trails', visible: true, paused: false, units: 'metric' };
   private readonly deck: WindDeck;
+  private moveRaf: number | null = null;
   private mapLost = false;
   private destroyed = false;
 
   private readonly sync = (): void => {
+    if (this.moveRaf !== null) {
+      cancelAnimationFrame(this.moveRaf);
+      this.moveRaf = null;
+    }
     if (this.destroyed || this.mapLost) return;
     try { this.deck.setOptions(this.options); } catch { /* the map is replacing its style */ }
+  };
+
+  private readonly scheduleSync = (): void => {
+    if (this.destroyed || this.mapLost || this.moveRaf !== null) return;
+    if (typeof requestAnimationFrame !== 'function') { this.sync(); return; }
+    this.moveRaf = requestAnimationFrame(() => {
+      this.moveRaf = null;
+      if (this.destroyed || this.mapLost) return;
+      try { this.deck.setOptions(this.options); } catch { /* the map is replacing its style */ }
+    });
   };
 
   private readonly contextLost = (): void => { this.mapLost = true; };
   private readonly contextRestored = (): void => {
     this.mapLost = false;
-    if (this.field) this.deck.setData(this.field, this.prepared, this.frame, this.options);
+    try { this.deck.setData(this.field, this.prepared, this.frame, this.options); } catch { /* the map is replacing its style */ }
   };
   private readonly visibility = (): void => { this.sync(); };
 
   constructor(private readonly map: Map, options: WindOverlayAllocationOptions = {}) {
     this.deck = new WindDeck(map, options.budget);
-    map.on('moveend', this.sync); map.on('resize', this.sync);
-    map.on('webglcontextlost', this.contextLost); map.on('webglcontextrestored', this.contextRestored);
-    document.addEventListener('visibilitychange', this.visibility);
+    map.on('move', this.scheduleSync);
+    map.on('moveend', this.sync);
+    map.on('resize', this.sync);
+    map.on('webglcontextlost', this.contextLost);
+    map.on('webglcontextrestored', this.contextRestored);
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.visibility);
   }
 
   get renderState(): { generation: number; frame: string | null; installedGeneration: number } {
@@ -78,9 +96,16 @@ export class WindOverlay {
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.map.off('moveend', this.sync); this.map.off('resize', this.sync);
-    this.map.off('webglcontextlost', this.contextLost); this.map.off('webglcontextrestored', this.contextRestored);
-    document.removeEventListener('visibilitychange', this.visibility);
+    if (this.moveRaf !== null) {
+      cancelAnimationFrame(this.moveRaf);
+      this.moveRaf = null;
+    }
+    this.map.off('move', this.scheduleSync);
+    this.map.off('moveend', this.sync);
+    this.map.off('resize', this.sync);
+    this.map.off('webglcontextlost', this.contextLost);
+    this.map.off('webglcontextrestored', this.contextRestored);
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.visibility);
     this.deck.destroy();
     this.releasePrepared?.(); this.releasePrepared = null;
     this.field = null; this.prepared = null; this.frame = null;

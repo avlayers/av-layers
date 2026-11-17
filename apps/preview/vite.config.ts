@@ -8,12 +8,9 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
-const shim = (name: string) => new URL(`./src/shims/${name}.ts`, import.meta.url).pathname;
-
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  resolve: { alias: { path: shim('node-path'), 'node:path': shim('node-path'), fs: shim('node-path'), 'node:fs': shim('node-path'), 'fs/promises': shim('node-path'), 'node:fs/promises': shim('node-path'), url: shim('node-path'), 'node:url': shim('node-path'), os: shim('node-path'), 'node:os': shim('node-path'), http: shim('node-path'), 'node:http': shim('node-path'), https: shim('node-path'), 'node:https': shim('node-path'), zlib: shim('node-path'), 'node:zlib': shim('node-path'), stream: shim('node-path'), 'node:stream': shim('node-path'), util: shim('node-path'), 'node:util': shim('node-path'), buffer: shim('node-path'), 'node:buffer': shim('node-path'), crypto: shim('node-path'), 'node:crypto': shim('node-path'), worker_threads: shim('node-path'), 'node:worker_threads': shim('node-path') } },
-  // CI measured 414067 B gzip startup after globe Auto selection; streaming and wind-render instrumentation adds about 300 B.
+  // Startup budget includes MapLibre GL plus the pinned @deck.gl/* and @luma.gl/* wind renderer.
   plugins: [preact(), browserBundleBudget(1_200_000, 300_000), {
     name: 'windy-plugin-assets',
     apply: 'build',

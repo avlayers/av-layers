@@ -547,7 +547,8 @@ export class RasterOverview {
     const maxActive = this.options.requestLimits?.maxActive ?? 24;
     const maxBackground = this.options.requestLimits?.maxPrefetchActive ?? 20;
     const maxPendingBytes = maxActive * MAX_TILE_BYTES;
-    const maxBackgroundBytes = (maxActive - SELECTED_PREVIEW_SLOTS) * MAX_TILE_BYTES;
+    const maxBackgroundBytes = Math.max(maxBackground, maxActive - SELECTED_PREVIEW_SLOTS) * MAX_TILE_BYTES;
+    const inFlightReserve = 16 * 1024;
     let selectedFetching = 0;
     for (const job of jobs) if (job.frame === this.selected) for (const tile of job.tiles) if (tile.state === 'fetching') selectedFetching++;
     for (const job of jobs) {
@@ -555,12 +556,12 @@ export class RasterOverview {
       if (!this.ownsJob(job, context)) continue;
       const isSelected = job.frame === this.selected;
       while (this.ownsJob(job, context) && job.tiles.some(tile => tile.state === 'waiting')) {
-        if (this.fetching >= maxActive || this.fetching * MAX_TILE_BYTES + this.compressedBytes() + MAX_TILE_BYTES > maxPendingBytes) break;
+        if (this.fetching >= maxActive || this.fetching * inFlightReserve + this.compressedBytes() + inFlightReserve > maxPendingBytes) break;
         if (isSelected) {
           if (this.compressedBytes() >= maxPendingBytes) break;
         } else {
           if (this.fetching - selectedFetching >= maxBackground) break;
-          if ((this.fetching - selectedFetching) * MAX_TILE_BYTES + this.compressedBytes(this.selected) + MAX_TILE_BYTES > maxBackgroundBytes) break;
+          if ((this.fetching - selectedFetching) * inFlightReserve + this.compressedBytes(this.selected) + inFlightReserve > maxBackgroundBytes) break;
         }
         if (!context.previewLease && !job.lease && this.options.budget) {
           const priority = isSelected ? 'foreground' : 'background';

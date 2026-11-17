@@ -15,7 +15,8 @@ export interface RasterOverlayOptions { budget?: PreparationBudget; protectedByt
 export type DetailReadiness = 'idle' | 'valid-empty' | 'complete' | 'partial' | 'failed' | 'timed-out';
 export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean; previewReadyFrames?: readonly string[]; detailReadyFrames?: readonly string[]; limited?: boolean; detailState?: DetailReadiness; cameraRevision?: number; requiredTiles?: number; loadedTiles?: number; pendingTiles?: number; erroredTiles?: number; coarseReadyFrames?: readonly string[]; detailBytesReadyFrames?: readonly string[]; detailDrawableFrames?: readonly string[] }
 const matches = (a: Selection | null, b: Selection | null): boolean => !!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame;
-const canonicalKey = (tile: { x: number; y: number; z: number } | undefined): string | null => tile ? `${tile.z}/${tile.x}/${tile.y}` : null;
+const canonicalKey = (tile: { x?: number; y?: number; z?: number } | undefined): string | null =>
+  tile && Number.isFinite(tile.z) && Number.isFinite(tile.x) && Number.isFinite(tile.y) ? `${tile.z}/${tile.x}/${tile.y}` : null;
 const STAGING_TIMEOUT_MS = 15_000;
 
 function releaseAll(actions: readonly (() => void)[]): void {
@@ -99,8 +100,16 @@ export class RasterOverlay {
         if (key) { this.loadedKeys.add(key); this.pendingKeys.delete(key); this.erroredKeys.delete(key); this.refreshDetailState(); }
       }
       if (slot === this.active) { if (recovered) this.incomplete = this.problem(slot); this.emit(); }
+      else if (matches(slot, this.requested)) queueMicrotask(() => { if (!this.disposed) { this.update(); this.emit(); } });
     }
-    if (slot !== this.active && e.sourceDataType === 'idle' && e.isSourceLoaded) queueMicrotask(() => this.abandonEmpty(slot));
+    if (slot !== this.active && e.sourceDataType === 'idle' && e.isSourceLoaded) {
+      queueMicrotask(() => {
+        if (this.disposed) return;
+        this.abandonEmpty(slot);
+        this.update();
+        this.emit();
+      });
+    }
   };
   private readonly loading = (e: MapSourceDataEvent): void => {
     const slot = this.slots.find(s => s.id === e.sourceId);
@@ -631,8 +640,9 @@ export class RasterOverlay {
     this.requiredKeys.clear(); this.loadedKeys.clear(); this.pendingKeys.clear(); this.erroredKeys.clear();
     if (!sel || this.moving || this.map.isMoving?.()) { this.detailState = 'idle'; return; }
     const maxzoom = layerMaxZoom(sel.build.manifest, sel.layer), bounds = sel.build.manifest.descriptors.bounds;
-    for (const tile of this.map.coveringTiles({ tileSize: 256, minzoom: 0, maxzoom, roundZoom: true })) {
-      const canonical = tile.canonical;
+    const covering = this.map.coveringTiles?.({ tileSize: 256, minzoom: 0, maxzoom, roundZoom: true }) ?? [];
+    for (const tile of Array.isArray(covering) ? covering : []) {
+      const canonical = tile?.canonical;
       if (!canonical) continue;
       if (bounds) {
         const n = 2 ** canonical.z, west = canonical.x / n * 360 - 180, east = (canonical.x + 1) / n * 360 - 180;
@@ -795,18 +805,18 @@ export class RasterOverlay {
     const tiles = viewportTiles({ west: bounds.getWest(), east: bounds.getEast(), south: bounds.getSouth(), north: bounds.getNorth() }, z);
     const prepared = this.slots.filter(v => v.successful && !this.problem(v) && this.tilesSettled(v));
     const warming = this.warmth.update(boundsAreaKm2(cameraBounds(this.map))), timeline = this.timelineFrames(slot);
-    if (!warming) {
+    if (warming && !this.requiredKeys.size) this.refreshRequired();
+    const useKeyedHorizon = warming && this.requiredKeys.size > 0;
+    if (!useKeyedHorizon) {
       const urls = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
-        preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: timeline.slice(0, 4) });
+        preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: warming ? timeline : timeline.slice(0, 4) });
       for (const url of new Set(urls)) void this.prefetchOne(url);
     }
     const preparedFrames = new Set(prepared.map(item => item.frame));
     for (const frame of warming ? timeline : timeline.slice(0, 4)) if (preparedFrames.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
     const template = slot.build.templates[slot.layer];
-    if (!warming || this.prefetching || !template) return;
-    if (!this.requiredKeys.size) this.refreshRequired();
+    if (!useKeyedHorizon || this.prefetching || !template) return;
     const perFrame = this.requiredKeys.size;
-    if (!perFrame) return;
     const batch = timeline.slice(this.prefetchCursor, this.prefetchCursor + Math.max(1, Math.floor(64 / Math.min(perFrame, 64))));
     if (!batch.length) return;
     this.prefetching = true; this.prefetchCursor += batch.length;

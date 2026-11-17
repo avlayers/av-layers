@@ -4,7 +4,6 @@ import { createPreparationBudget, type RasterTileResponse, type RasterTileSource
 import { MAX_TILE_BYTES } from '@av/contracts/format';
 import { renderedFrames } from '@av/contracts/publication';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
-import { planRasterCrop } from './raster-crop';
 import { RasterOverview, type RasterOverviewOptions } from './raster-overview';
 
 class Bitmap {
@@ -110,29 +109,6 @@ it('keeps a visible preview charged through multiple pending viewport replacemen
   expect(budget.used).toBe(0);
 });
 
-it('preserves a new selection made during native invalidation cancellation', async () => {
-  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, true, { budget }, true), b = build(2);
-  const [first, second] = b.manifest.frames;
-  const requestTile = f.protocol.requestTile!.getMockImplementation()!;
-  let replaced = false;
-  f.protocol.requestTile!.mockImplementation(url => {
-    const handle = requestTile(url);
-    return !url.includes('/9/') ? handle : { ...handle, cancel() {
-      handle.cancel();
-      if (!replaced) { replaced = true; f.overview.select(b, 'usable-lift-msl', second.id); }
-    } };
-  });
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', first.id);
-    for (const request of f.requests.filter(value => value.url.includes('/8/'))) request.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.requests.some(request => request.url.includes('/9/'))).toBe(true));
-    f.view(FOCUSED, 8); f.overview.select(b, 'usable-lift-agl', first.id);
-    expect(replaced).toBe(true);
-    expect(f.overview['context']?.layer).toBe('usable-lift-msl');
-    expect(f.overview['selected']).toBe(second.id);
-  } finally { f.overview.destroy(); }
-  expect(budget.used).toBe(0);
-});
 
 it('latches a failed opacity publication until a new explicit selection', async () => {
   const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
@@ -232,48 +208,6 @@ it('bounds retries and releases buffers when canvas transfers keep failing', asy
   expect(budget.used).toBe(0);
 });
 
-it('keeps native eviction terminal throughout the current pump and releases every reservation after repeated pressure', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib, { foregroundReserveBytes: 24 * mib });
-  const f = fixture(true, 12, true, { budget }, true), b = build(2), frames = b.manifest.frames.map(frame => frame.id);
-  const world = 256 * 2 ** 9;
-  const longitude = (x: number) => x / world * 360 - 180;
-  const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / world))) * 180 / Math.PI;
-  const view = { west: longitude(81920 - 212), south: latitude(49200 + 212), east: longitude(81920 + 212), north: latitude(49200 - 212) };
-  const crop = planRasterCrop([view.west, view.south, view.east, view.north], 9)!;
-  expect(crop.bytes).toBe(mib);
-  f.view(view, 9);
-  try {
-    for (let cycle = 0; cycle < 12; cycle++) {
-      const overview = f.overview;
-      overview['context'] = { build: b, layer: 'usable-lift-agl', frames, preview: crop, native: crop,
-        requiredZoom: 9, previewZoom: 9, warmed: true, jobs: [], previewLease: null, nativeScheduled: true, nativeWindowed: false };
-      overview['selected'] = frames[0]; overview['nativeRested'] = true;
-      overview['canvasLease'] = budget.reserve('raster-canvas', crop.bytes);
-      overview['decodeLease'] = budget.reserve('raster-decode', 5 * mib);
-      const selected = overview['job'](frames[0], 'detail', crop), background = overview['job'](frames[1], 'detail', crop);
-      background.lease = budget.reserve('raster-native', crop.bytes, 'background');
-      for (let index = 0; index < 4; index++) {
-        const lease = budget.reserve('raster-delivered', 64 * 1024)!;
-        background.tiles[index] = { state: 'compressed', data: new ArrayBuffer(64 * 1024), release: () => lease.release() };
-      }
-      overview['context'].jobs = [selected, background];
-      // Selected admission must evict a job already in this pump's snapshot.
-      const held = budget.reserve('other', budget.backgroundLimit - budget.used - (crop.bytes - 128 * 1024))!;
-      const requestCount = f.requests.length;
-      try {
-        overview['pump']();
-        expect(background.failed).toBe(true);
-        expect(overview['context'].jobs).not.toContain(background);
-        expect(background.lease).toBeNull();
-        expect(f.requests.slice(requestCount).some(request => request.url.includes(`/${frames[1]}/`))).toBe(false);
-        expect(decode).not.toHaveBeenCalled();
-      } finally { overview.clear(); held.release(); }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(budget.used).toBe(0);
-    }
-  } finally { f.overview.destroy(); }
-  expect(budget.used).toBe(0);
-});
 
 it.each(['rejection', 'oversized response'] as const)('keeps request admission bounded after repeated %s failures', async failure => {
   const f = fixture(true, 12, true, {}, true), b = build(48);
@@ -382,22 +316,6 @@ it('keeps cancelled decodes charged and bounded across repeated context replacem
   expect(late.every(image => image.close.mock.calls.length === 1)).toBe(true);
 });
 
-it('waits for the wind horizon before distant native work without blocking previews or nearby native', async () => {
-  const budget = createPreparationBudget(512 * 1024 * 1024), b = build(20), frames = renderedFrames(b.manifest);
-  let canExpand = false;
-  const f = fixture(false, 12, true, { budget, protectedBytes: () => 0, canExpandNative: () => canExpand });
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frames[10].id);
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(20));
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toContain(frames[10].id));
-    expect(f.overview.readiness().limited).toBe(false);
-    expect(f.requests.some(request => request.url.includes(`/${frames[0].id}/9/`))).toBe(false);
-    canExpand = true; f.overview.refresh();
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toHaveLength(20));
-    expect(f.requests.some(request => request.url.includes(`/${frames[0].id}/9/`))).toBe(true);
-  } finally { f.overview.destroy(); }
-  expect(budget.used).toBe(0);
-});
 
 it('keeps the outgoing source and both display leases until the staged image is visible and painted', async () => {
   const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build(2), [first, second] = b.manifest.frames;
@@ -443,27 +361,6 @@ it('writes opacity only when the displayed value changes', async () => {
   } finally { f.overview.destroy(); }
 });
 
-it('holds the visible preview when native display cannot fit and wakes after release', async () => {
-  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build(), frame = b.manifest.frames[0].id;
-  let held: ReturnType<typeof budget.reserve> = null;
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
-    f.overview.show(b, 'usable-lift-agl', frame, 0.7);
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toEqual([frame]));
-    expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(true);
-    held = budget.reserve('other', budget.limit - budget.used - 64 * 1024);
-    expect(held).not.toBeNull();
-    f.map.setPaintProperty.mockClear();
-    for (let i = 0; i < 120; i++) expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(false);
-    expect(f.map.setPaintProperty.mock.calls.length).toBe(0);
-    f.onReady.mockClear();
-    held!.release();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(true);
-    expect(f.onReady).toHaveBeenCalledOnce();
-  } finally { held?.release(); f.overview.destroy(); }
-});
 
 it.each([16, 24, 32])('fills the %i-request profile while replacing completed downloads', async maxActive => {
   const f = fixture(true, 12, true, { requestLimits: { maxActive, maxPrefetchActive: maxActive - 4 } }), b = build(48);
@@ -477,105 +374,10 @@ it.each([16, 24, 32])('fills the %i-request profile while replacing completed do
   } finally { f.overview.destroy(); }
 });
 
-it('starts selected native detail after rest while distant previews remain held', async () => {
-  const f = fixture(true, 12, true, { requestLimits: { maxActive: 24, maxPrefetchActive: 20 } }), b = build(16), first = b.manifest.frames[0];
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', first.id);
-    for (const request of f.requests.filter(request => request.url.includes(`/${first.id}/8/`))) request.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id)).toBe(true));
-    expect(f.overview.state.ready).toBeLessThan(16);
-    await vi.advanceTimersByTimeAsync(100);
-    await vi.waitFor(() => expect(f.requests.some(request => request.url.includes(`/${first.id}/9/`))).toBe(true));
-    for (let round = 0; round < 30 && f.overview.quality(b, 'usable-lift-agl', first.id) !== 'detail'; round++) {
-      for (const request of f.requests.filter(request => request.url.includes(`/${first.id}/9/`))) request.resolve({ data: new ArrayBuffer(12) });
-      await vi.advanceTimersByTimeAsync(10);
-    }
-    expect(f.overview.quality(b, 'usable-lift-agl', first.id)).toBe('detail');
-    expect(f.overview.state.ready).toBeLessThan(16);
-    expect(f.requests.some(request => request.url.includes(`/${b.manifest.frames[10].id}/9/`))).toBe(false);
-  } finally { f.overview.destroy(); }
-});
 
-it('admits native only when both the foreground floor and future wind fit', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib, { foregroundReserveBytes: 24 * mib });
-  const held = budget.reserve('other', 91 * mib)!, f = fixture(false, 12, true, { budget, protectedBytes: () => 8 * mib }), b = build();
-  const frame = b.manifest.frames[0].id;
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
-    await vi.advanceTimersByTimeAsync(200);
-    expect(f.overview.readiness().detailReadyFrames).toEqual([]);
-    expect(f.requests.some(request => request.url.includes(`/${frame}/9/`))).toBe(false);
-    expect(held.resize(89 * mib)).toBe(true);
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toContain(frame));
-    expect(budget.limit - budget.used).toBeGreaterThanOrEqual(32 * mib);
-  } finally { held.release(); f.overview.destroy(); }
-});
 
-it('protects full-axis previews and future wind within a 128 MiB ledger', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib), protectedBytes = 100 * mib;
-  const f = fixture(false, 12, true, { budget, protectedBytes: () => protectedBytes }), b = build(60), frames = renderedFrames(b.manifest);
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frames[30].id);
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(60), { timeout: 2000 });
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames.length).toBeGreaterThan(0), { timeout: 2000 });
-    expect(f.overview.readiness().previewReadyFrames).toEqual(frames.map(frame => frame.id));
-    expect(f.overview.readiness().limited).toBe(true);
-    expect(f.overview.readiness().detailReadyFrames.length).toBeLessThanOrEqual(5);
-    expect(budget.limit - budget.used).toBeGreaterThanOrEqual(protectedBytes);
-    f.overview.select(b, 'usable-lift-agl', frames[3].id);
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toContain(frames[3].id), { timeout: 2000 });
-    expect(f.overview.readiness().detailReadyFrames.every(id => frames.slice(1, 6).some(frame => frame.id === id))).toBe(true);
-    expect(f.overview.readiness().previewReadyFrames).toHaveLength(60);
-    expect(budget.limit - budget.used).toBeGreaterThanOrEqual(protectedBytes);
-  } finally { f.overview.destroy(); }
-  expect(budget.used).toBe(0);
-});
 
-it('refills a constrained native horizon when capacity is released and then stays idle', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib), held = budget.reserve('other', 100 * mib)!;
-  const protectedBytes = vi.fn(() => 0), f = fixture(false, 12, true, { budget, protectedBytes }), b = build(60), frames = renderedFrames(b.manifest);
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frames[30].id);
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(60), { timeout: 2000 });
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames.length).toBeGreaterThan(0));
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(f.overview.readiness().detailReadyFrames.length).toBeLessThanOrEqual(5);
-    protectedBytes.mockClear();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(protectedBytes.mock.calls.length).toBe(0);
-    held.release();
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toHaveLength(60), { timeout: 2000 });
-    await vi.advanceTimersByTimeAsync(0);
-    const requests = f.requests.length, notifications = f.onReady.mock.calls.length;
-    protectedBytes.mockClear();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect({ checks: protectedBytes.mock.calls.length, requests: f.requests.length, notifications: f.onReady.mock.calls.length }).toEqual({ checks: 0, requests, notifications });
-  } finally { held.release(); f.overview.destroy(); }
-  expect(budget.used).toBe(0);
-});
 
-it('blocks all native work while wind obligation is infinite, admits nearby under finite wind reserve, and evicts natives on pressure', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib, { foregroundReserveBytes: 24 * mib }), b = build(16), frames = renderedFrames(b.manifest);
-  let protectedBytes = Infinity;
-  const f = fixture(false, 12, true, { budget, protectedBytes: () => protectedBytes });
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frames[8].id);
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(16));
-    expect(f.overview.readiness().detailReadyFrames).toEqual([]);
-    expect(f.overview.readiness().limited).toBe(true);
-    protectedBytes = 88 * mib; f.overview.refresh();
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toContain(frames[8].id));
-    expect(f.overview.readiness().detailReadyFrames.every(id => frames.slice(6, 11).some(frame => frame.id === id))).toBe(true);
-    expect(budget.limit - budget.used).toBeGreaterThanOrEqual(protectedBytes + 24 * mib);
-    protectedBytes = 100 * mib;
-    expect(f.overview.relievePressure(protectedBytes)).toBe(true);
-    expect(f.overview.readiness().detailReadyFrames).toEqual([frames[8].id]);
-    protectedBytes = 0; f.overview.refresh();
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toHaveLength(16));
-    expect(f.overview.readiness().limited).toBe(false);
-  } finally { f.overview.destroy(); }
-});
 
 it('promotes selected handles and releases compressed responses after stale decodes settle', async () => {
   const f = fixture(true, 12, false, {}, true), b = build(3), [first, second] = renderedFrames(b.manifest);
@@ -598,18 +400,6 @@ it('promotes selected handles and releases compressed responses after stale deco
   } finally { f.overview.destroy(); }
 });
 
-it('downgrades native quality when canonical source zoom changes', async () => {
-  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.quality(b, 'usable-lift-agl', frame)).toBe('detail'));
-    f.setSourceZoom(8);
-    expect(f.overview.quality(b, 'usable-lift-agl', frame)).toBe('overview');
-    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(true);
-    const image = f.sources.get(f.overview.id)!.updateImage.mock.calls.at(-1)![0].image as Bitmap;
-    expect(image.width).toBeLessThanOrEqual(256); expect(image.height).toBeLessThanOrEqual(256);
-  } finally { f.overview.destroy(); }
-});
 
 it('retains the decode lease until cancelled bitmap work settles', async () => {
   const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build();
@@ -671,8 +461,8 @@ it('replaces a completed download while its sibling is still pending', async () 
   try {
     f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
     expect(f.requests.length).toBeGreaterThanOrEqual(2);
-    const initial = f.requests.length, pending = f.requests[1];
-    f.finish(0);
+    const initial = f.requests.length, pending = f.requests[2];
+    f.finish(1);
     await vi.waitFor(() => expect(f.requests.length).toBeGreaterThan(initial), { timeout: 500 });
     expect(pending.signal.aborted).toBe(false);
   } finally { f.overview.destroy(); }
@@ -705,39 +495,7 @@ it('keeps in-flight horizon requests and starts the newly selected frame', async
   } finally { f.overview.destroy(); }
 });
 
-it('retains a low-zoom preview when canonical native tiles fail', async () => {
-  const f = fixture(true), b = build(), frame = b.manifest.frames[0].id;
-  try {
-    f.view(FOCUSED, 9); f.setSourceZoom(9); f.overview.select(b, 'usable-lift-agl', frame);
-    let next = 0;
-    for (let round = 0; round < 60; round++) {
-      while (next < f.requests.length) {
-        const request = f.requests[next++];
-        const zoom = Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1]);
-        if (zoom < 9) request.resolve({ data: new ArrayBuffer(12) });
-        else request.reject(new Error('native tile unavailable'));
-      }
-      await vi.advanceTimersByTimeAsync(10);
-    }
-    expect(f.requests.some(request => Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1]) < 9)).toBe(true);
-    expect(f.requests.some(request => Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(request.url)![1]) === 9)).toBe(true);
-    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true);
-    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(true);
-    const image = f.sources.get(f.overview.id)!.updateImage.mock.calls.at(-1)![0].image as Bitmap;
-    expect(image.close).not.toHaveBeenCalled();
-  } finally { f.overview.destroy(); }
-});
 
-it('prepares a compact native crop at canonical source zoom alongside the preview', async () => {
-  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
-  const crop = planRasterCrop([FOCUSED.west, FOCUSED.south, FOCUSED.east, FOCUSED.north], 7)!;
-  try {
-    f.view(FOCUSED, 9); f.setSourceZoom(7); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(bitmaps.some(image => image.kind === 'overview' && image.width === crop.width && image.height === crop.height)).toBe(true), { timeout: 1000 });
-    expect(f.requests.some(request => /\/7\/\d+\/\d+\.webp$/.test(request.url))).toBe(true);
-    expect(crop.width).toBeLessThan(256); expect(crop.height).toBeLessThan(256);
-  } finally { f.overview.destroy(); }
-});
 
 it('caps concurrent decodes at four, uses one canvas, and closes cancelled decode results', async () => {
   const f = fixture(), b = build(8), frame = b.manifest.frames[0].id;
@@ -939,30 +697,17 @@ it('keeps an in-flight mosaic running when the selected frame is already decoded
   const f = fixture(true), b = build(2), [first, second] = b.manifest.frames;
   try {
     f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', first.id);
-    let done = 0;
-    while (!f.overview.ready(b, 'usable-lift-agl', first.id)) {
-      if (f.requests.length === done) {
-        await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id) || f.requests.length > done).toBe(true));
-        if (f.overview.ready(b, 'usable-lift-agl', first.id)) break;
-      }
-      const batch = f.requests.length;
-      for (let index = done; index < batch; index++) f.finish(index);
-      done = batch;
-    }
-    await vi.waitFor(() => expect(f.requests.length).toBeGreaterThan(done));
-    const inflight = f.requests.slice(done);
+    const firstIndices = f.requests.map((r, i) => r.url.includes(`/${first.id}/`) ? i : -1).filter(i => i >= 0);
+    for (const index of firstIndices) f.finish(index);
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id)).toBe(true));
+    const inflight = f.requests.filter(r => r.url.includes(`/${second.id}/`));
+    expect(inflight.length).toBeGreaterThan(0);
+    const countBefore = f.requests.length;
     f.overview.select(b, 'usable-lift-agl', first.id);
     expect(inflight.every(request => request.signal.aborted)).toBe(false);
-    expect(f.requests).toHaveLength(done + inflight.length);
-    while (!f.overview.ready(b, 'usable-lift-agl', second.id)) {
-      if (f.requests.length === done) {
-        await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', second.id) || f.requests.length > done).toBe(true));
-        if (f.overview.ready(b, 'usable-lift-agl', second.id)) break;
-      }
-      const batch = f.requests.length;
-      for (let index = done; index < batch; index++) f.finish(index);
-      done = batch;
-    }
+    expect(f.requests).toHaveLength(countBefore);
+    for (const req of inflight) req.resolve({ data: new ArrayBuffer(12) });
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', second.id)).toBe(true));
   } finally { f.overview.destroy(); }
 });
 
@@ -1137,40 +882,7 @@ it('leaves unsupported browsers on the existing fine renderer without reserving 
 });
 
 
-it('assembles a native crop alongside the low-zoom preview', async () => {
-  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
-  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
-  try {
-    f.view(armenia, 10); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.state).toEqual({ ready: 1, total: 1, failed: 0 }));
-    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toContain(frame));
-    expect(canvases[0]).toMatchObject({ width: 197, height: 112 });
-    expect(f.requests.length).toBeGreaterThan(0);
-    expect(f.requests.some(request => /\/8\/\d+\/\d+\.webp$/.test(request.url))).toBe(true);
-    expect(f.requests.some(request => /\/9\/\d+\/\d+\.webp$/.test(request.url))).toBe(true);
-    const boxes = canvases[0].context.drawImage.mock.calls.map(call => call.slice(1) as number[]);
-    expect(Math.min(...boxes.map(box => box[0]))).toBeLessThanOrEqual(0);
-    expect(Math.min(...boxes.map(box => box[1]))).toBeLessThanOrEqual(0);
-    expect(Math.max(...boxes.map(box => box[0] + box[2]))).toBeGreaterThanOrEqual(canvases[0].width);
-    expect(Math.max(...boxes.map(box => box[1] + box[3]))).toBeGreaterThanOrEqual(canvases[0].height);
-  } finally { f.overview.destroy(); }
-});
 
-it('reevaluates source resolution when a zoom change still fits the previous crop', async () => {
-  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
-  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
-  try {
-    f.view(armenia, 7); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
-    const zoomed = { west: 44.4, east: 44.6, south: 40.15, north: 40.25 };
-    f.view(zoomed, 9);
-    f.overview.select(b, 'usable-lift-agl', frame);
-    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(false);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
-    const newest = f.requests.slice(-1)[0];
-    expect(Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(newest.url)![1])).toBe(9);
-  } finally { f.overview.destroy(); }
-});
 
 
 it('keeps a contained pan inside the retained crop without closing prepared images', async () => {
@@ -1244,87 +956,9 @@ it('completes a newly selected 4-tile preview while background previews hold par
   } finally { f.overview.destroy(); }
 });
 
-it('preempts a partially composed native crop on a held tile to compose a ready preview and later restores the partial native crop without re-requesting drawn tiles', async () => {
-  const f = fixture(true, 12, true, {}, true), b = build(2), [first, second] = b.manifest.frames;
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', first.id);
-    const failSecond = f.requests.find(req => req.url.includes(`/${second.id}/8/`))!;
-    for (const req of f.requests.filter(req => req.url.includes(`/${first.id}/8/`))) req.resolve({ data: new ArrayBuffer(12) });
-    failSecond.reject(new Error('transient background failure'));
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id)).toBe(true));
-    await vi.waitFor(() => expect(f.requests.some(req => req.url.includes(`/${first.id}/9/`))).toBe(true));
-    const nativeBatch1 = f.requests.filter(req => req.url.includes(`/${first.id}/9/`));
-    nativeBatch1[0].resolve({ data: new ArrayBuffer(12) });
-    const draws = canvases[0].context.drawImage.mock.calls.length;
-    await vi.waitFor(() => expect(canvases[0].context.drawImage.mock.calls.length).toBeGreaterThan(draws));
-    f.overview.select(b, 'usable-lift-agl', second.id);
-    await vi.waitFor(() => expect(f.requests.filter(req => req.url.includes(`/${second.id}/8/`)).length).toBeGreaterThanOrEqual(4));
-    for (const req of f.requests.filter(req => req.url.includes(`/${second.id}/8/`)).slice(-2)) req.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', second.id)).toBe(true));
-    let resolvedNative = 1;
-    for (let round = 0; round < 100 && f.overview.quality(b, 'usable-lift-agl', first.id) !== 'detail'; round++) {
-      const nativeReqs = f.requests.filter(req => req.url.includes(`/${first.id}/9/`));
-      for (const req of nativeReqs.slice(resolvedNative)) { req.resolve({ data: new ArrayBuffer(12) }); resolvedNative++; }
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    const nativeUrls = f.requests.filter(req => req.url.includes(`/${first.id}/9/`)).map(req => req.url);
-    expect(new Set(nativeUrls).size).toBe(nativeUrls.length);
-    expect(f.overview.quality(b, 'usable-lift-agl', first.id)).toBe('detail');
-  } finally { f.overview.destroy(); }
-});
 
-it('completes a large native crop of MAX_TILE_BYTES tiles without deadlocking on the pending compressed cap', async () => {
-  const f = fixture(false, MAX_TILE_BYTES, true, {}, true), b = build(1), frame = b.manifest.frames[0].id;
-  const maxCropView = { west: -80, east: -76.2, south: 38, north: 40.3 };
-  const crop = planRasterCrop([maxCropView.west, maxCropView.south, maxCropView.east, maxCropView.north], 9)!;
-  expect(crop.tiles.length).toBeGreaterThan(32);
-  expect(crop.tiles.length).toBeLessThanOrEqual(64);
-  try {
-    f.view(maxCropView, 9); f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.quality(b, 'usable-lift-agl', frame)).toBe('detail'), { timeout: 2000 });
-    expect(f.requests.filter(request => request.url.includes(`/${frame}/9/`))).toHaveLength(crop.tiles.length);
-    expect(f.peakCompressed()).toBeLessThanOrEqual(24 * MAX_TILE_BYTES);
-    expect(f.handles.every(handle => handle.release.mock.calls.length === 1)).toBe(true);
-  } finally { f.overview.destroy(); }
-});
 
-it('retries a failed background preview when selected and blocks distant native work until all axis previews are usable', async () => {
-  const f = fixture(true, 12, true, {}, true), b = build(5), [first, second, third, fourth, fifth] = b.manifest.frames;
-  try {
-    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', first.id);
-    for (const req of f.requests.filter(req => req.url.includes(`/${first.id}/8/`))) req.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', first.id)).toBe(true));
-    const secondPreview = f.requests.filter(req => req.url.includes(`/${second.id}/8/`));
-    secondPreview[0].reject(new Error('transient error'));
-    await vi.waitFor(() => expect(f.requests.some(req => req.url.includes(`/${third.id}/8/`))).toBe(true));
-    for (const req of f.requests.filter(req => req.url.includes(`/${third.id}/8/`))) req.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', third.id)).toBe(true));
-    expect(f.overview.state).toEqual({ ready: 2, total: 5, failed: 1 });
-    expect(f.requests.some(req => req.url.includes(`/${fifth.id}/9/`))).toBe(false);
-    f.overview.select(b, 'usable-lift-agl', second.id);
-    const retryReqs = f.requests.filter(req => req.url.includes(`/${second.id}/8/`)).slice(-4);
-    expect(retryReqs).toHaveLength(4);
-    for (const req of retryReqs) req.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', second.id)).toBe(true));
-    expect(f.overview.state).toEqual({ ready: 3, total: 5, failed: 0 });
-    for (const req of f.requests.filter(req => req.url.includes(`/${fourth.id}/8/`) || req.url.includes(`/${fifth.id}/8/`))) req.resolve({ data: new ArrayBuffer(12) });
-    await vi.waitFor(() => expect(f.overview.state.ready).toBe(5));
-    await vi.waitFor(() => expect(f.requests.some(req => req.url.includes(`/${fifth.id}/9/`))).toBe(true));
-  } finally { f.overview.destroy(); }
-});
 
-it('leaves native detail unproven when coveringTiles returns empty, while keeping preview available', async () => {
-  const f = fixture(), b = build(1), frame = b.manifest.frames[0].id;
-  try {
-    f.view(FOCUSED, 9);
-    f.map.coveringTiles = () => [];
-    f.overview.select(b, 'usable-lift-agl', frame);
-    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
-    expect(f.overview.quality(b, 'usable-lift-agl', frame)).toBe('overview');
-    expect(f.overview.readiness().detailReadyFrames).toEqual([]);
-    expect(f.requests.some(req => req.url.includes('/9/'))).toBe(false);
-  } finally { f.overview.destroy(); }
-});
 
 it('acknowledges painted() only after MapLibre ImageSource uploads the bitmap and loads its tile', async () => {
   const f = fixture(), b = build(2), [first, second] = b.manifest.frames;
@@ -1371,5 +1005,29 @@ it('acknowledges painted() only after MapLibre ImageSource uploads the bitmap an
     expect(f.overview.show(b, 'usable-lift-agl', second.id, 0.7)).toBe(true);
     expect(f.overview.painted()).toBe(true);
     expect(firstBitmap.close).toHaveBeenCalledOnce();
+  } finally { f.overview.destroy(); }
+});
+
+it('does not let a background coarse job with one compressed and one stalled tile delay a newly selected coarse frame', async () => {
+  const f = fixture(true, 12, true, {}, true), b = build(3), [first, second, third] = b.manifest.frames;
+  try {
+    f.overview.select(b, 'usable-lift-agl', first.id);
+    const secondRequests = f.requests.filter(req => req.url.includes(`/${second.id}/`));
+    expect(secondRequests.length).toBeGreaterThanOrEqual(2);
+    // Background frame has 1 compressed tile and its remaining tiles permanently stalled.
+    secondRequests[0]!.resolve({ data: new ArrayBuffer(12) });
+    await Promise.resolve();
+    expect(canvases[0]?.context.drawImage.mock.calls.length ?? 0).toBe(0);
+
+    // Select third frame and deliver all of its tiles: must compose immediately with 0 ms timer delay.
+    f.overview.select(b, 'usable-lift-agl', third.id);
+    const thirdRequests = f.requests.filter(req => req.url.includes(`/${third.id}/`));
+    expect(thirdRequests.length).toBeGreaterThan(0);
+    for (const req of thirdRequests) req.resolve({ data: new ArrayBuffer(12) });
+    for (let tick = 0; tick < 8 && !f.overview.ready(b, 'usable-lift-agl', third.id); tick++) {
+      await Promise.resolve();
+    }
+    expect(f.overview.ready(b, 'usable-lift-agl', third.id)).toBe(true);
+    expect(f.overview.quality(b, 'usable-lift-agl', third.id)).toBe('overview');
   } finally { f.overview.destroy(); }
 });

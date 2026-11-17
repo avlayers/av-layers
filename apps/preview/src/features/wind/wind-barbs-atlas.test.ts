@@ -4,7 +4,7 @@ import { WindBarbAtlas } from './wind-barbs-atlas';
 
 const context = {
   lineCap: '', lineJoin: '', lineWidth: 1, strokeStyle: '', fillStyle: '',
-  save() {}, restore() {}, translate() {}, beginPath() {}, arc() {}, stroke() {}, fill() {}, moveTo() {}, lineTo() {}, closePath() {}
+  save() {}, restore() {}, translate() {}, clearRect() {}, beginPath() {}, arc() {}, stroke() {}, fill() {}, moveTo() {}, lineTo() {}, closePath() {}
 };
 const canvas = () => ({ width: 0, height: 0, getContext: () => context, toDataURL: () => 'data:image/png;base64,' });
 
@@ -12,7 +12,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 it('builds calm, hemisphere, and full-range WMO barb icons without clamping', () => {
   vi.stubGlobal('document', { createElement: canvas });
-  vi.stubGlobal('Path2D', class {});
+  vi.stubGlobal('Path2D', class { moveTo() {} lineTo() {} closePath() {} });
   const atlas = new WindBarbAtlas();
   expect(Object.keys(atlas.mapping)).toHaveLength(113);
   expect(atlas.key(0, false)).toBe('calm');
