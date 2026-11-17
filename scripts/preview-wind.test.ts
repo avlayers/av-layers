@@ -79,12 +79,12 @@ it('models the published RRFS layout and computes viewport tiles using the clien
   expect(windLayout(fine.width, fine.height, 64).chunkBytes).toBe(40960);
   for (const frame of frames) {
     const json = JSON.stringify(fixture.descriptor(frame.id));
-    expect(Buffer.byteLength(json)).toBe(5196);
+    expect(Buffer.byteLength(json)).toBe(5614);
     const descriptor = parseWindFrame(new TextEncoder().encode(json));
     expect(() => assertWindFrameLayout(descriptor, { native, fine })).not.toThrow();
     expect(descriptor.wind.reduce((total, shard) => total + shard.count, 0)).toBe(5624);
     expect(descriptor.fine.reduce((total, shard) => total + shard.count, 0)).toBe(1476);
-    expect(descriptor.overview?.map(level => [level.stride, level.shards[0].count])).toEqual([[2, 493], [4, 135], [8, 40], [16, 12]]);
+    expect(descriptor.overview?.map(level => [level.stride, level.shards[0].count])).toEqual([[2, 493], [4, 135], [8, 40], [16, 12], [32, 4], [64, 1]]);
   }
   const lat = 40, lon = -100, world = 512 * 2 ** 8.17, y = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2;
   const latitude = (value: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * value))) * 180 / Math.PI;
@@ -101,8 +101,8 @@ it('models the published RRFS layout and computes viewport tiles using the clien
   };
   const source = new WindDataSource('https://api.test', { fetchImpl });
   expect(await source.load({ build, frame: 'f001', bounds })).toBe('ready');
-  expect(Object.keys(requested)).toEqual(['overview-4']);
-  expect(requested['overview-4'].length).toBe(1);
+  expect(Object.keys(requested)).toEqual(['overview-2']);
+  expect(requested['overview-2'].length).toBe(4);
   expect(source.sample(lat, lon, 1500).status).toBe('valid');
   expect(source.sample(lat, lon, 1500).u).toBeCloseTo(fixture.expected('f001', lat, lon, 1500)!.u, 4);
   source.dispose();
@@ -136,12 +136,12 @@ it('matches the published GFS layout and plans the supplied viewport through the
   expect(windLayout(fine.width, fine.height, 64).chunkBytes).toBe(40960);
   for (const frame of build.manifest.frames) {
     const json = JSON.stringify(fixture.descriptor(frame.id));
-    expect(Buffer.byteLength(json)).toBe(8158);
+    expect(Buffer.byteLength(json)).toBe(8576);
     const descriptor = parseWindFrame(new TextEncoder().encode(json));
     expect(() => assertWindFrameLayout(descriptor, { native, fine })).not.toThrow();
     expect(descriptor.wind.map(shard => shard.count)).toEqual([512, 503]);
     expect(descriptor.fine.map(shard => shard.count)).toEqual([...Array(9).fill(512), 59]);
-    expect(descriptor.overview?.map(level => [level.stride, level.shards[0].count, windOverviewLayout(native, level.stride).chunkBytes])).toEqual([[2, 276, 110592], [4, 72, 110592], [8, 18, 110592], [16, 6, 110592]]);
+    expect(descriptor.overview?.map(level => [level.stride, level.shards[0].count, windOverviewLayout(native, level.stride).chunkBytes])).toEqual([[2, 276, 110592], [4, 72, 110592], [8, 18, 110592], [16, 6, 110592], [32, 2, 110592], [64, 1, 110592]]);
   }
   const lat = 40.4895, lon = 45.1123, world = 512 * 2 ** 8.17, y = (1 - Math.asinh(Math.tan(lat * Math.PI / 180)) / Math.PI) / 2;
   const latitude = (value: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * value))) * 180 / Math.PI;
@@ -180,15 +180,15 @@ it('matches the published GFS layout and plans the supplied viewport through the
   source.dispose();
   expect(measureWindCall('grid', false, () => source.prepare(1500), () => source.hasPrepared(1500), record)).toBeNull();
   expect(outcomeMetrics).toEqual(['wind-grid-uncached-failed', 'wind-grid-uncached-null']);
-  for (const [stride, expectedCount] of [[2, 4], [4, 2], [8, 1]] as const) {
+  for (const cap of [2, 4, 8]) {
     const overviewTiles: number[] = [];
     const overviewFetch: typeof fetch = async url => {
       const parts = new URL(String(url)).pathname.split('/'), data = parts.indexOf('data'), frame = parts[data + 1], kind = parts[data + 2];
-      if (!kind) { const descriptor = fixture.descriptor(frame)!; return Response.json({ ...descriptor, overview: descriptor.overview.filter(level => level.stride <= stride) }); }
+      if (!kind) { const descriptor = fixture.descriptor(frame)!; return Response.json({ ...descriptor, overview: descriptor.overview.filter(level => level.stride <= cap) }); }
       if (kind === 'wind') return new Response(null, { status: 404 });
       const [first, last = first] = parts[data + 3].split('-').map(Number);
       const indices = Array.from({ length: last - first + 1 }, (_, index) => first + index);
-      if (kind === `overview-${stride}`) overviewTiles.push(...indices);
+      if (kind === 'overview-2') overviewTiles.push(...indices);
       const chunks = indices.map(index => fixture.chunk(frame, kind, index));
       if (chunks.some(chunk => !chunk)) return new Response(null, { status: 404 });
       return new Response(Uint8Array.from(Buffer.concat(chunks as Uint8Array[])), { headers: { 'content-type': 'application/octet-stream' } });
@@ -196,7 +196,8 @@ it('matches the published GFS layout and plans the supplied viewport through the
     const overview = new WindDataSource('https://api.test', { fetchImpl: overviewFetch });
     expect(await overview.load({ build, frame: 'f004', bounds })).toBe('ready');
     expect(overview.isOverview).toBe(true);
-    expect(overviewTiles).toHaveLength(expectedCount);
+    expect(overview.overviewStride).toBe(2);
+    expect(overviewTiles).toHaveLength(4);
     expect(overview.sample(lat, lon, 1500).status).toBe('valid');
     expect(overview.sample(lat, lon, 450).status).toBe('unavailable');
     overview.dispose();
