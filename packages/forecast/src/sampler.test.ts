@@ -1,6 +1,6 @@
 import { INDEXED_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { LAYERS, prepareGridGeometry, setBit, sparseCoverageFromDense, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
+import { LAYERS, prepareGridGeometry, setBit, sparseCoverageFromDense, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PARCEL_CROSSING, SUPPORT_PROFILE_TOP, type CoverageMask, type Grid } from '@av/contracts';
 import { cellsFromRange, MAX_PREPARED_SAMPLES, packCells, planSample, prepareGridSampling, preparePointSampling, sampleCells, sampleGrid, samplingCovered, unpackCells } from './sampler.js';
 const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false };
 describe('scalar sampling', () => {
@@ -293,5 +293,15 @@ describe('point sampling', () => {
       expect(prepared).toEqual(paired);
       expect(prepared.status).not.toBe(STATUS_OUTSIDE);
     }
+  });
+});
+
+describe('stored weather scalars', () => {
+  it('returns the stored cloud and CAPE value at a native grid node', () => {
+    const field = { values: Float32Array.of(0, 100, 250, Number.NaN), flags: Uint8Array.of(0, 0, 0, STATUS_UNAVAILABLE) };
+    expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'cloud-cover-total', undefined, false)).toMatchObject({ value: 0, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1 - 1e-11, 1 - 1e-11, 'cloud-cover-low', undefined, false)).toMatchObject({ value: 100, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1e-11, 1e-11, 'cape-jkg', undefined, false)).toMatchObject({ value: 250, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1e-11, 1 - 1e-11, 'cape-jkg', undefined, false)).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
   });
 });

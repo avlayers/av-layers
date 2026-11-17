@@ -137,6 +137,12 @@ export function isLayerId(value: string): value is LayerId {
 export function layerSurface(layer: LayerId): 'native' | 'fine' {
   return FINE_LAYER_SET.has(layer) ? 'fine' : 'native';
 }
+export function publishesNativeProfiles(layers: readonly LayerId[]): boolean {
+  return layers.some(id => {
+    const entry = LAYER_REGISTRY[id];
+    return entry.surface === 'native' && 'delivery' in entry.spec && entry.spec.delivery === 'samples-only';
+  });
+}
 export function renderedLayers(layers: readonly LayerId[], descriptors?: Readonly<Record<string, Pick<LayerSpec, 'delivery'>>>): LayerId[] {
   return layers.filter(id => descriptors ? descriptors[id]?.delivery !== 'samples-only' : DEFAULT_RENDERED_SET.has(id));
 }

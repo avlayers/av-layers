@@ -38,6 +38,31 @@ times and `layers` selects returned scalar channels while `derived` retains the
 cell's complete soaring diagnostics. See [sampling and profiles](../../docs/data.md#time-and-retention).
 Point routes default to the first frame. For complete timelines, page the
 frames or use `frame=all` with a layer subset that fits the value budget.
+
+```bash
+api_base='https://windy-av-api-production.jdorrance.workers.dev'
+forecast_model='icon-eu'
+
+forecast_build=$(
+  curl -fsS "$api_base/v1/models/$forecast_model/latest?expand=manifest" |
+  jq -er '.manifest.buildId'
+)
+
+curl -fsS --get \
+  "$api_base/v1/models/$forecast_model/runs/$forecast_build/sample" \
+  --data-urlencode 'lat=40.4895' \
+  --data-urlencode 'lon=44.6174' \
+  --data-urlencode 'frame=all' \
+  --data-urlencode 'layers=precip-rate,cloud-cover-total,cloud-cover-low,cape-jkg' |
+  jq .
+```
+
+The four-field query fits the current 40- and 48-frame builds. `maxSampleValues`
+is 256 point × frame × field values, so a longer frame list needs
+`ApiClient.fieldSeries`, which pages the manifest frame order inside that
+budget. Layer descriptors carry each model's `definition`; sample values stay
+the number and status. Resolve one build, then keep that `buildId` for the
+series.
 See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.
 
 `/provenance` serves the run receipt or frame index; `?frame=f001` selects a

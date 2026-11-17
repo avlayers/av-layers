@@ -82,6 +82,15 @@ Return a [`NormalizedFrame`](../packages/forecast/src/inputs.ts) ordered by
    [serving budgets](serving-budgets.md), and run `pnpm docs:generate` and
    `pnpm verify`.
 
+A direct weather scalar publishes a `definition` from
+[field-definitions.ts](../packages/contracts/src/field-definitions.ts), passes
+`acceptDirectScalar`, and matches the source binding checked during
+acquisition. Historical whole-domain descriptors remain in
+[historical-descriptors.ts](../packages/contracts/src/historical-descriptors.ts)
+and [historical-registry.json](../packages/contracts/src/historical-registry.json).
+Deploy the reader that accepts those frozen descriptors before publishing a
+build whose descriptors include `definition`.
+
 For changes to existing descriptors or grids, verify retained manifests against
 the candidate Worker. See the [reader cutover checks](hardening-plan.md#gate-reader-removal-on-retention-and-recoverability).
 

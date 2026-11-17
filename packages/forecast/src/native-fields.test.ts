@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { CLOUD_SUPPORT_MASK, LAYER_IDS, STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID,
-  setBit, sparseCoverageFromDense, sparseCoverageLookup, type CoverageMask, type Grid } from '@av/contracts';
+  setBit, sparseCoverageFromDense, sparseCoverageLookup, type CoverageMask, type Grid, type LayerId } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { deriveFrame } from './frame.js';
 import { prepareNativeProfiles } from './native-fields.js';
@@ -155,4 +155,41 @@ it('reuses the checked profile index across independently borrowed frame records
   expect(() => reader.forFrame(mutated)).toThrow('prepared index');
   expect(() => reader.forFrame({ ...next, activeIndices: next.activeIndices.subarray(1) })).toThrow('prepared index');
   expect(() => reader.forFrame({ ...next, grid: { ...next.grid, width: 33 } })).toThrow('prepared index');
+});
+
+it('keeps zero, missing, and out-of-range weather scalars independent of precipitation', () => {
+  const { frame, mask, coverage } = fixture(3);
+  frame.auxSurface!.cloudTotalPct!.values.set([0, 100, 100.1, Number.NaN]);
+  frame.auxSurface!.cloudTotalPct!.missing.set([0, 0, 0, 1]);
+  frame.auxSurface!.cloudLowPct!.values.set([100, -1e-4, -1, 40]);
+  frame.auxSurface!.capeJkg!.values.set([0, 1e7, -1, 12]);
+  frame.precipitationMmPerHour![2] = -5;
+  frame.missing.precipitation![3] = 1;
+  const scalarRejections: Partial<Record<LayerId, number>> = {};
+  const fields = deriveFrame(frame, mask, { layers: ['cloud-cover-total', 'cloud-cover-low', 'cape-jkg', 'precip-rate'], nativeCoverage: coverage, scalarRejections });
+  const slot = (ordinal: number) => {
+    const index = frame.activeIndices[ordinal]!;
+    return sparseCoverageLookup(coverage, index % 32, Math.floor(index / 32))!.offset;
+  };
+  expect(fields['cloud-cover-total']!.values[slot(0)]).toBe(0);
+  expect(fields['cloud-cover-total']!.flags[slot(0)] & STATUS_MASK).toBe(STATUS_VALID);
+  expect(fields['cloud-cover-total']!.values[slot(1)]).toBe(100);
+  expect(fields['cloud-cover-total']!.flags[slot(1)] & STATUS_MASK).toBe(STATUS_VALID);
+  expect(fields['cloud-cover-total']!.flags[slot(2)] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  expect(fields['cloud-cover-total']!.flags[slot(3)] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  expect(fields['cloud-cover-low']!.flags[slot(0)] & STATUS_MASK).toBe(STATUS_VALID);
+  expect(fields['cloud-cover-low']!.values[slot(1)]).toBeCloseTo(-1e-4, 8);
+  expect(fields['cloud-cover-low']!.flags[slot(2)] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  expect(fields['cape-jkg']!.values[slot(0)]).toBe(0);
+  expect(fields['cape-jkg']!.values[slot(1)]).toBe(1e7);
+  expect(fields['cape-jkg']!.flags[slot(1)] & STATUS_MASK).toBe(STATUS_VALID);
+  expect(fields['cape-jkg']!.flags[slot(2)] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  expect(scalarRejections['cloud-cover-total']).toBe(1);
+  expect(scalarRejections['cloud-cover-low']).toBe(1);
+  expect(scalarRejections['cape-jkg']).toBe(1);
+  expect(scalarRejections['precip-rate']).toBe(1);
+  expect(fields['precip-rate']!.values[0]).toBe(3);
+  expect(fields['precip-rate']!.flags[0]).toBe(STATUS_VALID);
+  expect(fields['precip-rate']!.flags[frame.activeIndices[2]!] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
+  expect(fields['precip-rate']!.flags[frame.activeIndices[3]!] & STATUS_MASK).toBe(STATUS_UNAVAILABLE);
 });

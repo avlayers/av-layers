@@ -74,6 +74,8 @@ export interface DeriveFrameOptions extends ColumnDerivationOptions {
   readonly minimumRateMmPerHour?: number;
   readonly diagnostics?: FrameDiagnostics;
   readonly nativeCoverage?: SparseCoverage;
+  /** Finite output cells rejected by a physical bound, keyed by layer. */
+  readonly scalarRejections?: Partial<Record<LayerId, number>>;
 }
 
 function field(mask: CoverageMask): GridField {
@@ -270,6 +272,9 @@ export function deriveFrame(
     if (precipitation) {
       const rain = read(frame.precipitationMmPerHour!, frame.missing.precipitation!, i);
       const rainStatus = precipitationRateStatus(rain, minimumRateMmPerHour);
+      if (options?.scalarRejections && Number.isFinite(rain) && rainStatus === STATUS_UNAVAILABLE && getBit(mask.output, index)) {
+        options.scalarRejections['precip-rate'] = (options.scalarRejections['precip-rate'] ?? 0) + 1;
+      }
       precipitation.values[index] = rainStatus === STATUS_UNAVAILABLE ? NaN : rain;
       precipitation.flags[index] = rainStatus;
     }
@@ -311,5 +316,6 @@ export function deriveFrame(
     }
 
   }
+  if (options?.scalarRejections && native) Object.assign(options.scalarRejections, native.rejections);
   return result;
 }

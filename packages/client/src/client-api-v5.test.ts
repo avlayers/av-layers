@@ -135,6 +135,33 @@ describe('ApiClient v5 pinning', () => {
     expect(Object.keys(build.templates)).toEqual(manifest.layers);
   });
 
+  it('requests a known field from a manifest that appends a sample-only scalar', async () => {
+    const payload = structuredClone(latestPayload()) as {
+      manifest: {
+        layers: string[];
+        descriptors: { layers: Record<string, Record<string, unknown>>; methods: Record<string, { outputs: string[] }> };
+        surfaces: Array<{ kind: string; layers: string[]; samples: { channelCount: number } }>;
+      };
+    };
+    const id = 'cloud-cover-mid';
+    const methodId = 'native-middle-cloud-v1';
+    payload.manifest.descriptors.methods[methodId] = { outputs: [id] };
+    payload.manifest.descriptors.layers[id] = {
+      ...payload.manifest.descriptors.layers['precip-rate']!, id, label: 'Middle cloud', quantity: 'cloud-cover-middle', units: '%',
+      methodId, delivery: 'samples-only', palette: undefined, definition: { version: 1, id: 'sample-middle-cloud-v1', kind: 'cloud-cover' }
+    };
+    payload.manifest.layers.push(id);
+    const native = payload.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    native.layers.push(id);
+    native.samples.channelCount = 2;
+    const { client: api } = client(() => payload);
+    const build = await api.latest('gfs');
+    expect(build.manifest.layers).toContain('precip-rate');
+    expect(build.manifest.layers).not.toContain(id);
+    expect(build.extraScalars?.[0]).toMatchObject({ id, surfaceId: 'native', descriptor: { definition: { id: 'sample-middle-cloud-v1' } } });
+    expect(build.manifest.surfaces.find(surface => surface.kind === 'native')!.samples.channelCount).toBe(1);
+  });
+
   it('requires every rendered layer template', async () => {
     const payload = nativeLatestPayload(); delete payload.templates!['precip-rate'];
     const { client: api } = client(() => payload);

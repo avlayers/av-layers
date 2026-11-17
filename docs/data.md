@@ -11,8 +11,21 @@ and point queries evaluate the same grids and interpolation rules.
   `model-AGL` for native model ground or `terrain-AGL` for the prepared surface
   elevation. Current fine grids use Copernicus GLO-90, a digital surface model
   that includes vegetation and buildings.
-- `precip-rate`: mean precipitation rate over the frame's trailing interval in
-  millimetres per hour.
+- `precip-rate`: liquid-water-equivalent interval mean in mm/h. GFS and RRFS
+  recover accumulated `APCP`; ICON-EU recovers accumulated `TOT_PREC`; av-wrf
+  publishes the producer window rate `precip_mm_hr`.
+- `cloud-cover-total` and `cloud-cover-low`: cloud cover in percent. Finite
+  values from 0 through 100 are valid, including a boundary tolerance of
+  0.0001. The stored sample keeps the original number. A value farther outside
+  that range is unavailable.
+- `cape-jkg`: CAPE in J/kg. Zero and every larger finite value are valid. A
+  negative value beyond the same boundary tolerance is unavailable.
+
+Missing cells stay unavailable and the sample value is null. An unavailable
+cloud field leaves precipitation and CAPE on their own statuses. These four
+fields remain available on night frames. Each model's layer descriptor carries
+a `definition` for the source parameter, level, parcel, or producer contract.
+Samples carry the value and status.
 
 Each build's manifest descriptors list its available layers and delivery.
 [Native fields](../packages/contracts/src/layers.ts) add lift, flux,
@@ -71,8 +84,12 @@ column for each output cell before terrain refinement and point interpolation.
 and source intervals.
 Current products emit native weather and profiles through the complete
 selected horizon, including night. Precipitation retains its trailing interval
-at night. `mapFrameCount` selects the tiles and fine-lift
-prefix; retained builds may expose later native samples and profiles.
+at night. GFS and RRFS hour 27 covers f026–f027: the precipitation rate is the
+one-hour mean recovered from the reset-bucket accumulation, and an amount for
+that frame is the rate multiplied by one hour. From hour 123 the GFS source
+interval is three hours, and the amount uses that duration. `mapFrameCount`
+selects the tiles and fine-lift prefix; retained builds may expose later native
+samples and profiles.
 Retained `regional-daylight` builds follow the [daylight selection rule](science.md#input-fields),
 including its all-dark fallback.
 

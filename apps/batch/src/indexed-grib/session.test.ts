@@ -94,7 +94,7 @@ it('writes every normalized GFS field into the supplied shared slot with identic
 });
 
 it('acquires only configured auxiliary fields and retains their caller-owned shared buffers', async () => {
-  const configured = indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream,
+  const configured = indexedSource({ ...INDEXED_PRODUCT, layers: [...INDEXED_PRODUCT.layers, 'cloud-cover-total'], upstream: { ...INDEXED_PRODUCT.upstream,
     parameters: { ...profile.upstream.parameters, TCDC: [6, 1, '%'], UGRD: [2, 2, 'm/s'], VGRD: [2, 3, 'm/s'] },
     auxSurface: { cloudTotalPct: { variable: 'TCDC', level: 'entire atmosphere', unit: '%', scale: 10, surface: [10, 0] } },
     auxLevels: { uWindMps: { variable: 'UGRD', unit: 'm/s' }, vWindMps: { variable: 'VGRD', unit: 'm/s' } }
@@ -118,7 +118,7 @@ it('acquires only configured auxiliary fields and retains their caller-owned sha
 });
 
 it.each([false, true])('normalizes geometric vertical velocity with same-level temperature and humidity configured=%s', async moist => {
-  const configured = indexedSource({ ...INDEXED_PRODUCT, upstream: { ...INDEXED_PRODUCT.upstream,
+  const configured = indexedSource({ ...INDEXED_PRODUCT, layers: [...INDEXED_PRODUCT.layers, 'cloud-cover-total'], upstream: { ...INDEXED_PRODUCT.upstream,
     parameters: { ...profile.upstream.parameters, DZDT: [2, 9, 'm/s'] },
     auxLevels: { omegaPaS: { variable: 'DZDT', unit: 'Pa/s', conversion: 'geometric-w-to-omega' },
       ...(moist ? { spfhKgKg: { variable: 'SPFH', unit: 'kg/kg' } } : {}) }

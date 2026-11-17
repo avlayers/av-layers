@@ -101,6 +101,46 @@
               "layers": {
                 "additionalProperties": {
                   "properties": {
+                    "definition": {
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "maxLength": 128,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "number"
+                          }
+                        ]
+                      },
+                      "properties": {
+                        "id": {
+                          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)+-v[1-9][0-9]*$",
+                          "type": "string"
+                        },
+                        "kind": {
+                          "maxLength": 32,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "version": {
+                          "enum": [
+                            1
+                          ],
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "id",
+                        "kind"
+                      ],
+                      "type": "object"
+                    },
                     "delivery": {
                       "enum": [
                         "tiles-and-samples",

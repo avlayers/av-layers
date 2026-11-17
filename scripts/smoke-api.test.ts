@@ -3,7 +3,7 @@ import { DEFAULT_PRODUCT, PRODUCTS } from '@av/contracts/models';
 import { createWholeDomainDescriptors, estimateProfileResponseBytes, layerSurface, MAX_POINT_RESPONSE_BYTES, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import { ApiClient, type PinnedBuild } from '@av/client';
 import { fixtureBuild, fixtureManifestV5 } from '../tests/forecast-fixture.js';
-import { verifyApiDeployment, verifyPublishedForecast, probeApi, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
+import { verifyApiDeployment, verifyPublishedForecast, probeApi, probeWeatherScalars, readResponseBytes, validateHealthContract, verifyWorkerReadiness } from './smoke-api';
 
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
@@ -422,4 +422,26 @@ it.each([false, true])('pages native profiles and records tile metrics with fron
   expect(profile.mock.calls.flatMap(([, request]) => request.frames)).toEqual(frames.map(frame => frame.id));
   for (const [, request] of profile.mock.calls) expect(estimateProfileResponseBytes(request.frames!.length, 21, request.layers!.length)).toBeLessThanOrEqual(MAX_POINT_RESPONSE_BYTES);
   expect(samples).toHaveBeenCalledWith(build, expect.objectContaining({ frames: [frames.at(-1)!.id], points: [expect.any(Object), expect.any(Object)] }));
+});
+
+it('accepts zero and missing weather samples from one pinned build', async () => {
+  const manifest = fixtureManifestV5({ layers: ['precip-rate', 'cloud-cover-total', 'cloud-cover-low', 'cape-jkg'] });
+  const build: PinnedBuild = { manifest, templates: {}, expiresAtMs: Date.parse(manifest.expiresAt) };
+  type WeatherSample = { frames: Array<{ layers: Record<string, { status: string; value: number | null }> }> };
+  const sample = vi.fn(async (): Promise<WeatherSample> => ({ frames: [{ layers: Object.fromEntries(['precip-rate', 'cloud-cover-total', 'cloud-cover-low', 'cape-jkg'].map(layer => [layer, { status: 'valid', value: 0 }])) }] }));
+  const fieldSeries = vi.fn(async (): Promise<WeatherSample> => ({ frames: [{ layers: {
+    'precip-rate': { status: 'valid', value: 0 },
+    'cloud-cover-total': { status: 'unavailable', value: null },
+    'cloud-cover-low': { status: 'valid', value: 100 },
+    'cape-jkg': { status: 'unavailable', value: null }
+  } }] }));
+  const client = { sample, fieldSeries } as unknown as ApiClient;
+  await probeWeatherScalars(client, build);
+  for (const layer of ['precip-rate', 'cloud-cover-total', 'cloud-cover-low', 'cape-jkg'] as const) delete manifest.descriptors.layers[layer].definition;
+  await probeWeatherScalars(client, build);
+  fieldSeries.mockResolvedValueOnce({ frames: [{ layers: { 'precip-rate': { status: 'valid', value: null }, 'cloud-cover-total': { status: 'valid', value: 1 }, 'cloud-cover-low': { status: 'valid', value: 1 }, 'cape-jkg': { status: 'valid', value: 1 } } }] });
+  await expect(probeWeatherScalars(client, build)).rejects.toThrow('valid sample has no number');
+  const broken = structuredClone(manifest);
+  broken.descriptors.layers['cape-jkg'].definition = { version: 1, id: '', kind: 'cape', parcel: 'surface-based', sourceParameter: 'CAPE', instantaneous: true };
+  await expect(probeWeatherScalars(client, { ...build, manifest: broken })).rejects.toThrow('incomplete');
 });

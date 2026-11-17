@@ -1,11 +1,12 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
 import { gridToGeographic } from '@av/contracts/geometry';
 import { renderedLayers, SUPPORT_MASK, type LayerId } from '@av/contracts/layers';
-import { catalogSchema, getProvenanceReference, latestV5Schema, sampleResponseV5Schema, type CatalogModelEntry, type ModelId } from '@av/contracts/publication';
+import { catalogSchema, clientLatestSchema, getProvenanceReference, sampleResponseV5Schema, type CatalogModelEntry, type ModelId } from '@av/contracts/publication';
+import { projectClientManifest } from '@av/contracts/manifest-client';
 import { estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, MAX_SAMPLE_POINTS, multiPointSampleResponseSchema,
   profileResponseSchema, type MultiPointSampleResponse, type ProfileResponse } from '@av/contracts/point-products';
 import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
-import { createPointSeriesLoader } from './client-point.ts';
+import { createPointSeriesLoader, fieldSeriesPages } from './client-point.ts';
 import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
 import { ForecastCapacityError, schedulerFetchBudget } from './client-request-scheduler.ts';
 
@@ -268,13 +269,16 @@ export class ApiClient {
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const parsed = await this.getJson('latest', `/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal, value => latestV5Schema.safeParse(value));
+    const parsed = await this.getJson('latest', `/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal, value => clientLatestSchema.safeParse(value));
     if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
     const raw = parsed.data;
     const pointer = raw.pointer;
     if (pointer.model !== model) throw new InvalidApiResponseError('pointer model does not match request');
-    const manifestRaw = raw.manifest;
-    if (!manifestRaw) throw new InvalidApiResponseError('expanded manifest is missing');
+    if (raw.manifest === undefined) throw new InvalidApiResponseError('expanded manifest is missing');
+    let projected: ReturnType<typeof projectClientManifest>;
+    try { projected = projectClientManifest(raw.manifest); }
+    catch (error) { throw new InvalidApiResponseError(error instanceof Error ? error.message : 'latest response does not match contract schema'); }
+    const manifestRaw = projected.manifest;
     if (manifestRaw.model !== model) throw new InvalidApiResponseError('manifest model does not match request');
     if (manifestRaw.buildId !== pointer.latestBuildId) throw new InvalidApiResponseError('manifest build is not the pinned pointer build');
     try { getProvenanceReference(manifestRaw); } catch { throw new InvalidApiResponseError('manifest provenance is inconsistent'); }
@@ -289,7 +293,8 @@ export class ApiClient {
     return {
       manifest: manifestRaw,
       templates,
-      expiresAtMs: expiryTime(manifestRaw.expiresAt)
+      expiresAtMs: expiryTime(manifestRaw.expiresAt),
+      ...(projected.extraScalars.length ? { extraScalars: projected.extraScalars } : {})
     };
   }
 
@@ -326,6 +331,24 @@ export class ApiClient {
     this.validateSampleSurfaces(this.sampleSurfaces(build), payload);
     this.validateSample(build, request, expectedFrames, layers, payload);
     return payload;
+  }
+
+  async fieldSeries(build: PinnedBuild, request: SampleRequest & { layers: readonly LayerId[] }): Promise<SamplePayload> {
+    const frames = request.frames === undefined || request.frames === 'all' ? build.manifest.frames.map(frame => frame.id) : [...request.frames];
+    const pages = fieldSeriesPages(frames, request.layers.length, build.manifest.descriptors.maxSampleValues);
+    if (!pages.length) throw new RangeError('Field series requires a frame');
+    const order = new Map(frames.map((id, index) => [id, index]));
+    let payload: SamplePayload | undefined;
+    const collected: SamplePayload['frames'][number][] = [];
+    for (const page of pages) {
+      request.signal?.throwIfAborted();
+      const part = await this.sample(build, { ...request, frames: page });
+      payload ??= part;
+      collected.push(...part.frames);
+    }
+    collected.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+    if (!payload) throw new RangeError('Field series requires a frame');
+    return { ...payload, frames: collected };
   }
 
   async samples(build: PinnedBuild, request: MultiPointSampleRequest): Promise<MultiPointSampleResponse> {

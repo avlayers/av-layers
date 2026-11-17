@@ -1,6 +1,7 @@
 import z from 'zod';
 import { MAX_GRID_CELLS, regularLatLonGridSchema, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
+import { assertSplitWeatherBindings, requiredAuxiliaryFields, selectConfiguredFields } from '@av/forecast/direct-scalars';
 
 const field = z.object({ field: z.string().min(1), kind: z.enum(['time-invariant', 'single-level', 'model-level']),
   parameter: z.tuple([z.number().int(), z.number().int()]),
@@ -40,6 +41,10 @@ export function splitSource(model: ModelDefinition) {
   for (const [fields, u, v] of [[upstream.auxSurface, 'u10mMps', 'v10mMps'], [upstream.auxLevels, 'uWindMps', 'vWindMps']] as const) {
     if (Object.hasOwn(fields ?? {}, u) !== Object.hasOwn(fields ?? {}, v)) throw new Error('Auxiliary Split GRIB wind components must be configured together');
   }
+  assertSplitWeatherBindings(model.modelId, upstream);
+  const required = requiredAuxiliaryFields(model.layers);
+  upstream.auxSurface = selectConfiguredFields(upstream.auxSurface, required.surface);
+  upstream.auxLevels = selectConfiguredFields(upstream.auxLevels, required.levels);
   const coreFields = Object.values(upstream.fields).filter(value => value !== undefined);
   const configuredFields = [...coreFields, ...Object.values(upstream.auxSurface ?? {}), ...Object.values(upstream.auxLevels ?? {}),
     ...(upstream.nativeGrid ? [upstream.nativeGrid.latitude, upstream.nativeGrid.longitude] : [])];

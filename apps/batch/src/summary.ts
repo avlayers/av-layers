@@ -5,7 +5,8 @@ export function summarizeFields(
   fields: Partial<Record<LayerId, GridField>>,
   mask: CoverageMask,
   outputIndices = coverageIndices(mask).output,
-  layers: readonly LayerId[] = LAYER_IDS.filter(layer => fields[layer] !== undefined)
+  layers: readonly LayerId[] = LAYER_IDS.filter(layer => fields[layer] !== undefined),
+  invalidCounts?: Partial<Record<LayerId, number>>
 ) {
   return Object.fromEntries(layers.map(layer => {
     const field = fields[layer];
@@ -25,6 +26,6 @@ export function summarizeFields(
       if (flags & SUPPORT_PROFILE_TOP) counts.profileTop++;
       if (flags & SUPPORT_PBL_CLOSURE) counts.pblClosure++;
     }
-    return [layer, { ...counts, min: counts.valid ? min : null, max: counts.valid ? max : null, mean: counts.valid ? total / counts.valid : null }];
+    return [layer, { ...counts, invalidValues: invalidCounts?.[layer] ?? 0, noValidOutput: counts.valid === 0, min: counts.valid ? min : null, max: counts.valid ? max : null, mean: counts.valid ? total / counts.valid : null }];
   }));
 }

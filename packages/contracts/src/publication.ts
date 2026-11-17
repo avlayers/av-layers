@@ -123,6 +123,7 @@ export const manifestV5Schema = manifestV5BaseSchema.superRefine((manifest, ctx)
 });
 export type ManifestV5 = z.infer<typeof manifestV5Schema>;
 export const latestV5Schema = z.object({ pointer: modelPointerSchema, manifest: manifestV5Schema.optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
+export const clientLatestSchema = z.object({ pointer: modelPointerSchema, manifest: z.unknown().optional(), templates: z.record(z.string(), z.string()).optional(), freshness: freshnessSchema });
 
 const sampleValueV5Schema = z.strictObject({ value: z.number().finite().nullable(), status: sampleStatusSchema,
   support: z.number().int(), interpolated: z.boolean(), surfaceId: modelIdSchema });

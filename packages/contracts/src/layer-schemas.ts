@@ -8,10 +8,16 @@ export const paletteIdSchema = z.enum(PALETTE_IDS);
 
 
 export const paletteSchema = z.object({ id: z.string().min(1), edges: z.array(z.number().finite()).min(1).max(256), colors: z.array(z.string().regex(/^#[a-fA-F0-9]{6}([a-fA-F0-9]{2})?$/)).min(1).max(256), units: z.string(), noLiftColor: z.string().optional(), transparentBelow: z.number().finite().optional(), provisional: z.boolean().optional(), interpolation: z.enum(PALETTE_INTERPOLATIONS).optional() });
+const fieldDefinitionWireSchema = z.object({
+  version: z.literal(1),
+  id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)+-v[1-9][0-9]*$/),
+  kind: z.string().min(1).max(32)
+}).catchall(z.union([z.string().min(1).max(128), z.boolean(), z.number().finite()]));
 const layerProperties = {
   kind: z.literal('scalar'), label: z.string().min(1), quantity: z.string().min(1), units: z.string().min(1),
   verticalReference: z.enum(['MSL', 'model-AGL', 'terrain-AGL', 'surface', 'pressure-level']), timeSupport: z.enum(['valid-time', 'interval-mean', 'interval-maximum', 'interval-flux-endpoint-profile']),
   methodId: methodIdSchema, palette: paletteIdSchema.optional(), delivery: z.enum(['tiles-and-samples', 'samples-only']).optional(),
+  definition: fieldDefinitionWireSchema.optional(),
   supportsNoLift: z.boolean(), supportsLiftFlags: z.boolean(),
   noLiftSampleValue: z.number().finite().nullable(), zeroOnNoLiftInterpolation: z.boolean(), hideNonPositiveValues: z.boolean()
 };

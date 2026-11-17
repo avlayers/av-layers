@@ -1,6 +1,7 @@
 import z from 'zod';
 import type { ArrayMetadata } from 'zarrita';
 import { modelIdSchema, type ModelDefinition } from '@av/contracts';
+import { assertWrfWeatherDefinitions } from '@av/forecast/direct-scalars';
 import type { AuxField, ModelLevelFrame } from '@av/forecast/inputs';
 import contract from '../../../../packages/contracts/schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 import { createAuxiliaryTargets, createNormalizedFrameTarget, type NormalizedFrameTarget, type ResolvableForecastProvider } from '../provider.js';
@@ -62,6 +63,13 @@ async function readField(run: WrfRun, field: typeof contract.fields[number], ind
 export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecastProvider {
   const upstream = z.strictObject({ protocol: z.literal('wrf-zarr-v3'), provider: z.string().min(1), modelId: modelIdSchema.optional() }).parse(model.upstream);
   if (model.capabilities.verticalCoordinate !== 'model-levels' || model.capabilities.maxVerticalLevels > contract.maxVerticalLevels) throw new Error('WRF requires model-level columns');
+  const fieldName = (target: string) => contract.fields.find(field => field.target === target)?.name;
+  assertWrfWeatherDefinitions(model.modelId, {
+    capeParcelDefinition: contract.capeParcelDefinition,
+    lowCloudDefinition: contract.lowCloudDefinition,
+    precipitationField: fieldName('precipitationMmPerHour') ?? '',
+    totalCloudField: fieldName('auxSurface.cloudTotalPct') ?? ''
+  });
   return {
     id: model.source.configurationId, provider: upstream.provider, maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,
     auxiliarySurfaceFields: surfaceIds.length, auxiliaryLevelFields: levelIds.length,
