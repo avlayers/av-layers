@@ -793,7 +793,7 @@ export class WindDataSource {
         const init: RequestInit = { signal: reqSig, redirect: 'error' };
         if (this.options.request) {
           handle = this.options.request({ url, kind: type === 'application/json' ? 'json' : 'wind', priority: foreground ? 'foreground' : 'background', maxResponseBytes: limit,
-            ...(type === 'application/json' ? {} : { expectedResponseBytes: limit }),
+            ...(type === 'application/json' ? {} : { exactResponseBytes: limit }),
             ...(responseLease && this.budget ? { responseLease: { budget: this.budget, lease: responseLease } } : {}), init });
           responseLease = undefined;
           pending.handles.add(handle);
@@ -807,8 +807,8 @@ export class WindDataSource {
         if (res.status === 404) { await res.body?.cancel(); return null; }
         if (res.status === 502 || res.status === 503 || res.status === 504) { await res.body?.cancel(); throw new WindTransientError(`Transient numeric response ${res.status}`); }
         if (!res.ok || res.headers.get('content-type')?.split(';')[0] !== type) { await res.body?.cancel(); throw new Error('Invalid numeric response'); }
-        const declared = res.headers.get('content-length');
-        if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
+        const declared = res.headers.get('content-length'), identity = (res.headers.get('content-encoding') ?? 'identity') === 'identity';
+        if (declared !== null && identity && (!/^\d+$/.test(declared) || Number(declared) > limit)) { await res.body?.cancel(); throw new Error('Numeric response exceeds budget'); }
         if (!res.body) throw new Error('Numeric response is empty');
         const reader = res.body.getReader();
         let cancellation: Promise<void> | undefined;
@@ -829,7 +829,7 @@ export class WindDataSource {
             }
           }
         } finally { reqSig.removeEventListener('abort', abort); await (cancellation ?? reader.cancel().catch(() => {})); reader.releaseLock(); }
-        if (declared !== null && used !== Number(declared)) throw new Error('Numeric response length mismatch');
+        if (declared !== null && (res.headers.get('content-encoding') ?? 'identity') === 'identity' && used !== Number(declared)) throw new Error('Numeric response length mismatch');
         this.cache.clearFailure(url);
         return used;
       } catch (error) {

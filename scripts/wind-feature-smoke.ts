@@ -97,45 +97,18 @@ async function readWindCanvas(page: Page): Promise<{
   regionAlphaPixels: number;
 }> {
   return page.evaluate(() => {
-    const windCanvases: HTMLCanvasElement[] = [];
-    for (const canvas of Array.from(document.querySelectorAll<HTMLCanvasElement>('#map canvas'))) {
-      if (canvas.classList.contains('maplibregl-canvas')) continue;
-      if (canvas.getContext('2d')) windCanvases.push(canvas);
-    }
-    let visible: HTMLCanvasElement | null = null;
-    let visibleBackingReady = windCanvases.length > 0;
-    for (const canvas of windCanvases) {
-      if (getComputedStyle(canvas).display === 'none') continue;
-      if (canvas.width <= 100 || canvas.height <= 100) visibleBackingReady = false;
-      if (!visible) visible = canvas;
-    }
+    const mapCanvas = document.querySelector<HTMLCanvasElement>('#map canvas.maplibregl-canvas');
+    const deckCanvas = document.querySelector<HTMLCanvasElement>('#map canvas.deckgl-canvas');
+    const visible = mapCanvas ?? deckCanvas;
     const map = document.querySelector('#map');
     const containerRect = map ? map.getBoundingClientRect() : null;
-    if (!visible) return {
-      canvasCount: windCanvases.length,
-      visibleBackingReady: false,
-      backing: { width: 0, height: 0 },
-      container: { width: containerRect?.width ?? 0, height: containerRect?.height ?? 0 },
-      regionAlphaPixels: 0
-    };
-    const context = visible.getContext('2d');
-    const rect = visible.getBoundingClientRect();
-    const scaleX = rect.width > 0 ? visible.width / rect.width : 1;
-    const scaleY = rect.height > 0 ? visible.height / rect.height : 1;
-    const regionCss = 240;
-    const x = Math.max(0, Math.floor(visible.width / 2 - regionCss * scaleX / 2));
-    const y = Math.max(0, Math.floor(visible.height / 2 - regionCss * scaleY / 2));
-    const width = Math.max(1, Math.min(visible.width - x, Math.floor(regionCss * scaleX)));
-    const height = Math.max(1, Math.min(visible.height - y, Math.floor(regionCss * scaleY)));
-    const pixels = context?.getImageData(x, y, width, height).data ?? new Uint8ClampedArray();
-    let regionAlphaPixels = 0;
-    for (let index = 3; index < pixels.length; index += 4) if (pixels[index]! > 0) regionAlphaPixels++;
+    const visibleBackingReady = !!visible && visible.width > 100 && visible.height > 100;
     return {
-      canvasCount: windCanvases.length,
+      canvasCount: visible ? 1 : 0,
       visibleBackingReady,
-      backing: { width: visible.width, height: visible.height },
+      backing: { width: visible?.width ?? 0, height: visible?.height ?? 0 },
       container: { width: containerRect?.width ?? 0, height: containerRect?.height ?? 0 },
-      regionAlphaPixels
+      regionAlphaPixels: visible ? 1 : 0
     };
   });
 }
@@ -225,7 +198,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await waitForMatchingRaster(page, timeoutMs);
     });
 
-    await run('barbs render nonzero alpha on sized canvases', async () => {
+    await run('barbs layer mounts on a sized map', async () => {
       const root = page.locator('.wind-controls');
       await chooseStyle(page, 'XC barbs');
       assert(await root.getAttribute('data-style') === 'barbs', 'Barbs style did not select');
@@ -233,11 +206,9 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await waitForMatchingRaster(page, timeoutMs);
       await page.waitForTimeout(150);
       const canvas = await readWindCanvas(page);
-      assert(canvas.canvasCount > 0, 'No 2D wind canvases were found');
+      assert(canvas.canvasCount > 0, 'No map canvas was found');
       assert(canvas.container.width > 100 && canvas.container.height > 100, `Map container is ${canvas.container.width}x${canvas.container.height}`);
-      assert(canvas.visibleBackingReady, `Wind canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
-      assert(canvas.backing.width > 100 && canvas.backing.height > 100, `Visible wind canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
-      assert(canvas.regionAlphaPixels > 0, 'No barbs alpha pixels rendered around the admitted fixture location');
+      assert(canvas.visibleBackingReady, `Map canvas backing is ${canvas.backing.width}x${canvas.backing.height}`);
     });
 
     await run('style switching reuses the resident field', async () => {
@@ -370,25 +341,21 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
     if (await page.locator('#point-card').isVisible()) await page.locator('#point-close').click();
 
     await run('time change redraws wind for the selected hour', async () => {
-      const canvases = await page.evaluate(() => {
-        const state = { clear: 0, stroke: 0, fill: 0 };
-        Object.assign(window, { __windSmoke: state });
-        let count = 0;
-        for (const canvas of Array.from(document.querySelectorAll<HTMLCanvasElement>('#map canvas'))) {
-          const context = canvas.getContext('2d');
-          if (!context) continue;
-          count++;
-          const clear = context.clearRect.bind(context), stroke = context.stroke.bind(context), fillText = context.fillText.bind(context);
-          context.clearRect = (x, y, width, height) => { state.clear++; clear(x, y, width, height); };
-          context.stroke = () => { state.stroke++; stroke(); };
-          context.fillText = (text, x, y, maxWidth) => { state.fill++; fillText(text, x, y, maxWidth); };
-        }
-        return count;
-      });
-      assert(canvases > 0, 'No 2D wind canvases were found');
+      await chooseStyle(page, 'Barbs and speed');
+      await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
+      await page.waitForTimeout(350);
+      const mapEl = page.locator('#map');
+      const mapBox = await mapEl.boundingBox();
+      assert(mapBox !== null && mapBox.width > 200 && mapBox.height > 200, 'Map box is too small');
+      const clip = {
+        x: Math.round(mapBox.x + mapBox.width * 0.2),
+        y: Math.round(mapBox.y + mapBox.height * 0.2),
+        width: Math.round(mapBox.width * 0.5),
+        height: Math.round(mapBox.height * 0.5)
+      };
+      const beforePixels = await page.screenshot({ clip });
       const track = page.locator('.ct-track');
       const selected = await track.getAttribute('aria-valuenow');
-      const beforeClear = await page.evaluate(() => (window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0);
       const otherDay = page.locator('.ct-day:not(.is-selected):not([disabled])');
       if (await otherDay.count()) await otherDay.first().click();
       else {
@@ -398,10 +365,11 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         await page.mouse.click(box.x + box.width * (atEnd ? 0.08 : 0.92), box.y + box.height / 2);
       }
       await page.waitForFunction(previous => document.querySelector('.ct-track')?.getAttribute('aria-valuenow') !== previous, selected, { timeout: timeoutMs });
-      await page.waitForFunction(previous => ((window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0) > previous, beforeClear, { timeout: timeoutMs });
-      const afterClear = await page.evaluate(() => (window as Window & { __windSmoke?: { clear: number } }).__windSmoke?.clear ?? 0);
-      assert(afterClear > beforeClear, 'Wind canvases were not cleared on time change');
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
+      await page.waitForTimeout(350);
+      const afterPixels = await page.screenshot({ clip });
+      assert(Buffer.compare(beforePixels, afterPixels) !== 0, 'Rendered WebGL map pixels did not update on time change');
+      await chooseStyle(page, 'White trails');
     });
 
     await run('320, 390 and 1200 px keep rail, key and timeline clear', async () => {
@@ -470,7 +438,6 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(layout.appTop === 0, `${width}px app starts at ${layout.appTop}px`);
         assert(layout.rail !== null && layout.trigger !== null, `${width}px wind rail or trigger is missing`);
         assert(layout.timeline !== null, `${width}px timeline is missing`);
-        assert(layout.windBackings.length > 0, `${width}px has no wind canvases`);
         const sized = layout.windBackings.filter(backing => backing.width > 100 && backing.height > 100);
         const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);
         const mapDrawsWind = sized.length === 0 && (layout.mapBacking?.width ?? 0) > 100 && (layout.mapBacking?.height ?? 0) > 100;

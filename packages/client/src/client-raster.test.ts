@@ -431,7 +431,7 @@ it('promotes the physical request when a queued source becomes interactive', asy
   let tileFetches = 0;
   const pending: Array<{ url: string; resolve: (response: Response) => void }> = [];
   const scheduler = createForecastRequestScheduler({
-    maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxBackgroundActive: 6, maxBackgroundBytes: 2 * 1024 * 1024,
+    maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxBackgroundActive: 6, maxBackgroundBytes: 32 * 1024,
     fetchImpl: vi.fn((input: RequestInfo | URL) => new Promise<Response>(resolve => {
       const url = String(input);
       if (url.includes('/tiles/')) tileFetches++;
@@ -643,7 +643,7 @@ it('releases raster body reservation after invalid data and retries after budget
   const scheduler = createForecastRequestScheduler({ fetchImpl });
   const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
   try {
-    await expect(protocol.requestTile(tile()).response).rejects.toThrow('Raster preparation budget exhausted');
+    await expect(protocol.requestTile(tile()).response).rejects.toThrow('budget exhausted');
     expect(budget.snapshot()).toEqual({ other: 13 });
     blocker.release();
     fetchImpl.mockImplementationOnce(async () => new Response(new Uint8Array(12), { headers: { 'content-type': 'image/webp', 'content-length': '12' } }));
@@ -721,4 +721,143 @@ it('settles the scheduler and releases the reader and budget when raster allocat
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(budget.used).toBe(0);
   } finally { vi.unstubAllGlobals(); protocol.dispose(); scheduler.dispose(); }
+});
+
+function watchedBudget(limit: number) {
+  const budget = createPreparationBudget(limit), peaks: number[] = [];
+  const reserve = budget.reserve.bind(budget);
+  budget.reserve = (category, bytes, priority) => { const lease = reserve(category, bytes, priority); peaks.push(budget.used); return lease; };
+  return { budget, peaks };
+}
+
+const bigWebp = (bytes: number) => {
+  const data = new Uint8Array(bytes);
+  data.set([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]);
+  return data;
+};
+
+it.each([true, false])('streams a valid 40 KiB tile when the declared length is %s', async declared => {
+  const data = bigWebp(40 * 1024);
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(data, { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100', ...(declared ? { 'content-length': String(data.length) } : {}) } }));
+  const protocol = setup({ fetchImpl });
+  const result = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+  expect(result.data.byteLength).toBe(data.length);
+  expect(protocol.stats()).toMatchObject({ cachedBytes: data.length, cachedTiles: 1 });
+});
+
+it('reserves the next raster capacity while the previous buffer is still held', async () => {
+  const { budget, peaks } = watchedBudget(4 * 1024 * 1024);
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ start(value) { stream = value; } }), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const protocol = setupSources({ fetchImpl, budget });
+  const handle = protocol.requestTile(tile());
+  await vi.waitFor(() => expect(budget.snapshot()['raster-compressed']).toBe(16 * 1024));
+  stream.enqueue(bigWebp(20 * 1024));
+  await vi.waitFor(() => expect(budget.snapshot()['raster-compressed']).toBe(32 * 1024));
+  stream.enqueue(bigWebp(20 * 1024));
+  await vi.waitFor(() => expect(budget.snapshot()['raster-compressed']).toBe(64 * 1024));
+  stream.close();
+  const result = await handle.response;
+  const deltas = peaks.map(value => value - 1024 * 1024);
+  expect(deltas).toContain(48 * 1024);
+  expect(deltas).toContain(96 * 1024);
+  expect(deltas).toContain(104 * 1024);
+  result.release(); protocol.evictBuild();
+  expect(budget.used).toBe(0);
+});
+
+it('aborts a background stream that cannot reserve growth capacity', async () => {
+  const budget = createPreparationBudget(40 * 1024), data = bigWebp(40 * 1024);
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(data, { headers: { 'content-type': 'image/webp' } }));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 4 });
+  const protocol = setup({ request: spec => scheduler.request(spec), budget });
+  try {
+    await expect(protocol.prefetch(tile())).rejects.toThrow('budget exhausted');
+    expect(budget.used).toBe(0);
+  } finally { scheduler.dispose(); }
+});
+
+it('releases a partial raster reservation when the reader is cancelled mid-body', async () => {
+  const budget = createPreparationBudget(4 * 1024 * 1024);
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), { headers: { 'content-type': 'image/webp' } }));
+  const protocol = setupSources({ fetchImpl, budget });
+  const handle = protocol.requestTile(tile());
+  await vi.waitFor(() => expect(budget.snapshot()['raster-compressed']).toBe(16 * 1024));
+  controller.enqueue(bigWebp(20 * 1024));
+  await vi.waitFor(() => expect(budget.snapshot()['raster-compressed']).toBe(32 * 1024));
+  protocol.dispose();
+  await expect(handle.response).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.waitFor(() => expect(budget.used).toBe(0));
+});
+
+it('keeps reusable cached tiles when a small streamed tile fits the admission watermark', async () => {
+  const data = bigWebp(200 * 1024), fetchImpl = vi.fn<typeof fetch>(async () => new Response(data, { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const budget = createPreparationBudget(1_700_000), scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 4 });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    for (let i = 0; i < 4; i++) await protocol.load({ url: protocol.url(tile(i)) }, new AbortController());
+    expect(protocol.stats()).toMatchObject({ cachedTiles: 4, cachedBytes: 4 * 200 * 1024 });
+    await protocol.load({ url: protocol.url(tile(9)) }, new AbortController());
+    expect(protocol.stats().cachedTiles).toBe(5);
+    await protocol.load({ url: protocol.url(tile(0)) }, new AbortController());
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('keeps cached tiles when background admission cannot succeed after eviction', async () => {
+  const data = bigWebp(200 * 1024), fetchImpl = vi.fn<typeof fetch>(async () => new Response(data, { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const budget = createPreparationBudget(128 * 1024 * 1024, { foregroundReserveBytes: 24 * 1024 * 1024 });
+  const scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 8 });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    await protocol.load({ url: protocol.url(tile(0)) }, new AbortController());
+    expect(protocol.stats().cachedTiles).toBe(1);
+    const blocker = budget.reserve('other', 105 * 1024 * 1024)!, controller = new AbortController();
+    const prefetch = protocol.prefetch(tile(9), controller.signal);
+    await vi.waitFor(() => expect(scheduler.stats().queued).toBe(1));
+    controller.abort();
+    await expect(prefetch).rejects.toMatchObject({ name: 'AbortError' });
+    expect(protocol.stats().cachedTiles).toBe(1);
+    blocker.release();
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('evicts a reusable tile when that makes admission possible', async () => {
+  const small = bigWebp(64 * 1024), tiny = bigWebp(12 * 1024);
+  let calls = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(++calls === 1 ? small : tiny, { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const budget = createPreparationBudget(512 * 1024), scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 4 });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    await protocol.load({ url: protocol.url(tile(0)) }, new AbortController());
+    const blocker = budget.reserve('other', 440 * 1024)!;
+    expect(budget.limit - budget.used).toBe(8 * 1024);
+    const result = await protocol.requestTile(tile(1)).response;
+    expect(result.data.byteLength).toBe(tiny.byteLength);
+    result.release();
+    expect(protocol.stats().cachedTiles).toBe(1);
+    blocker.release();
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('reconsiders cache eviction for a queued request after capacity is released', async () => {
+  const small = bigWebp(8 * 1024), tiny = bigWebp(12 * 1024);
+  let calls = 0;
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(++calls === 1 ? small : tiny, { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const budget = createPreparationBudget(512 * 1024), scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 4 });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    await protocol.load({ url: protocol.url(tile(0)) }, new AbortController());
+    const blocker = budget.reserve('other', 500 * 1024)!;
+    expect(budget.limit - budget.used).toBe(4 * 1024);
+    const pending = protocol.requestTile(tile(1)).response;
+    await vi.waitFor(() => expect(scheduler.stats().queued).toBe(1));
+    blocker.resize(480 * 1024);
+    const result = await pending;
+    expect(result.data.byteLength).toBe(tiny.byteLength);
+    result.release();
+    expect(protocol.stats().cachedTiles).toBe(1);
+    blocker.release();
+  } finally { protocol.dispose(); scheduler.dispose(); }
 });

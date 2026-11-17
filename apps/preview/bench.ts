@@ -2,9 +2,11 @@ import { Map as PreviewMap, type MapOptions } from 'maplibre-gl';
 import { recognizeViewport, TILE_SIZE, type BenchLayer, type PixelProbe } from '../../scripts/preview-pixels';
 import { matchesWind, measureWindCall } from '../../scripts/preview-observe';
 import { boundsAreaKm2, cameraBounds } from './src/features/map/viewport-policy';
+import { createBufferAccounting, type BufferMemory } from './gpu-buffers';
 export * from 'maplibre-gl';
 
 interface TextureMemory { bytes: number; peakBytes: number; rasterBytes: number; peakRasterBytes: number; textures: number; peakTextures: number }
+interface GpuMemory extends TextureMemory, BufferMemory {}
 interface InputSample { index: number; targetFrame: string; layer: BenchLayer; inputAt: number; inputEpochMs: number; finishedEpochMs: number | null; sceneMs: number | null; firstCorrectMs: number | null; detailedMs: number | null; combinedMs: number | null; combinedRasterFrame: string | null; combinedWind: WindObservation | null; paintedWindFrames: (string | null)[]; windReadyAtInput: string[]; rasterReadyAtInput: RasterReadiness; targetReadyAtInput: boolean; outcome: 'pending' | 'superseded' | 'combined' | 'detail' | 'scene-only' | 'timeout'; timedOut: boolean; renders: number; pixels?: number[][]; sources: number }
 interface WindObservation { frame: string; height: 'surface' | number | 'lift'; sample: { status: string; u: number | null; v: number | null } }
 interface RasterReadiness { preview: string[]; native: string[] }
@@ -26,11 +28,11 @@ export interface PreviewBench {
   area(targetKm2: number): void;
   center(longitude: number, latitude: number): void;
   settled(): boolean;
-  snapshot(): { sources: number; peakSources: number; renderer: string; frames: string[]; canonicalZoom: number | null; memory: TextureMemory; decoded: ReturnType<typeof decodedMemory.snapshot>; initialFirstCorrectMs: number | null; initialDetailedMs: number | null; overviewReady: number; overviewTotal: number; viewportQuality: 'overview' | 'detail' | null; selectedIndex: number; displayedIndex: number; wind: WindObservation | null; windReady: string[]; rasterReady: RasterReadiness; mismatchedWindRenders: number; width: number; height: number };
+  snapshot(): { sources: number; peakSources: number; renderer: string; frames: string[]; canonicalZoom: number | null; memory: GpuMemory; decoded: ReturnType<typeof decodedMemory.snapshot>; initialFirstCorrectMs: number | null; initialDetailedMs: number | null; overviewReady: number; overviewTotal: number; viewportQuality: 'overview' | 'detail' | null; selectedIndex: number; displayedIndex: number; wind: WindObservation | null; windReady: string[]; rasterReady: RasterReadiness; mismatchedWindRenders: number; renderedWindFrame: string | null; renderedSceneGeneration: number | null; width: number; height: number };
   pan(longitude: number): void;
   resetPeaks(): void;
 }
-declare global { interface Window { bench: PreviewBench; __benchObserver?: 'instrumented' | 'control'; __benchWindState?: () => { installed: WindObservation | null; ready: string[]; height?: string | number; preparation?: unknown; memory?: unknown }; __benchRasterReady?: () => RasterReadiness; __benchTimelineSelected?: (index: number) => void; __benchTimelinePosition?: (index: number) => { day: string; x: number; y: number } | null; __benchSceneCommit?: (index: number, frame: string) => void; __benchRecord?: (name: string, milliseconds: number) => void; __benchWindCall?: (kind: 'grid' | 'sampler', cached: boolean | null, call: () => unknown, built: () => boolean | null) => unknown; __benchBudgetId?: () => number; __benchManaged?: (id: number, limit: number, used: number, category: string, categoryBytes: number) => void } }
+declare global { interface Window { bench: PreviewBench; __benchObserver?: 'instrumented' | 'control'; __benchWindState?: () => { installed: WindObservation | null; rendered?: { generation: number; frame: string | null; installedGeneration: number } | null; ready: string[]; height?: string | number; preparation?: unknown; memory?: unknown }; __benchRasterReady?: () => RasterReadiness; __benchTimelineSelected?: (index: number) => void; __benchTimelinePosition?: (index: number) => { day: string; x: number; y: number } | null; __benchSceneCommit?: (index: number, frame: string) => void; __benchRecord?: (name: string, milliseconds: number) => void; __benchWindCall?: (kind: 'grid' | 'sampler', cached: boolean | null, call: () => unknown, built: () => boolean | null) => unknown; __benchBudgetId?: () => number; __benchManaged?: (id: number, limit: number, used: number, category: string, categoryBytes: number) => void } }
 
 const control = window.__benchObserver === 'control';
 const telemetry: Telemetry = { metrics: {}, observer: {}, managed: {}, axisFirstObservedMs: { raster: null, native: null, wind: null, combined: null }, longTasks: { supported: false, count: 0, totalMs: 0, maxMs: 0 }, animation: { callbacks: 0, gapsOver50Ms: 0, estimatedMissed60Hz: 0, maxGapMs: 0 } };
@@ -133,6 +135,9 @@ function textureAccounting(): { snapshot(): TextureMemory; resetPeaks(): void } 
 }
 const memory = textureAccounting();
 
+const buffers = createBufferAccounting([WebGLRenderingContext.prototype, WebGL2RenderingContext.prototype]);
+
+
 function decodedAccounting() {
   interface Allocation { kind: 'bitmap' | 'canvas'; bytes: number }
   const tracked = new WeakMap<object, Allocation>();
@@ -193,6 +198,7 @@ export class Map extends PreviewMap {
 function installBench(map: PreviewMap): void {
   const time = document.querySelector<HTMLInputElement>('#time')!;
   const canvas = map.getCanvas(), gl = canvas.getContext('webgl2')!;
+  canvas.addEventListener('webglcontextlost', () => buffers.forget(gl));
   if (!gl) throw new Error('WebGL2 is required by the benchmark');
   const debug = gl.getExtension('WEBGL_debug_renderer_info');
   const renderer = debug ? String(gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) : String(gl.getParameter(gl.RENDERER));
@@ -279,8 +285,10 @@ function installBench(map: PreviewMap): void {
     const match = recognizeViewport(probes, layer, opacity, transparent, frames.length, detailZoom);
     viewportQuality = match?.index === Number(time.value) ? match.quality : null;
     if (!match) return;
-    const observed = window.__benchWindState?.().installed ?? null;
-    if (wind && observed && observed.frame !== frames[match.index]) mismatchedWindRenders++;
+    const windState = window.__benchWindState?.(), observed = windState?.installed ?? null, rendered = windState?.rendered;
+    const renderedSupported = rendered !== undefined, renderCurrent = !!rendered && rendered.generation >= rendered.installedGeneration;
+    const windFrameMatches = renderedSupported ? !!rendered && renderCurrent && rendered.frame === frames[match.index] : observed?.frame === frames[match.index];
+    if (wind && (observed || rendered) && !windFrameMatches) mismatchedWindRenders++;
     if (displayedIndex !== match.index && match.index !== Number(time.value)) staleFramePaints++;
     displayedIndex = match.index;
     if (match.index === Number(time.value) && !time.disabled) {
@@ -288,12 +296,12 @@ function installBench(map: PreviewMap): void {
       if (match.quality === 'detail') { initialDetailedMs ??= performance.now(); readyResolve(); }
     }
     if (waiting?.sample.index === match.index && sceneIndex === match.index && waiting.sample.layer === layer) {
-      const windFrame = observed?.frame ?? null;
+      const windFrame = renderedSupported ? (renderCurrent ? rendered?.frame ?? null : null) : observed?.frame ?? null;
       if (!waiting.sample.paintedWindFrames.includes(windFrame)) waiting.sample.paintedWindFrames.push(windFrame);
       waiting.sample.firstCorrectMs ??= performance.now() - waiting.sample.inputAt;
       waiting.sample.pixels = probes.map(probe => [...probe.pixel]);
       const expected = expectedWind[match.index];
-      if (wind && matchesWind(observed, frames[match.index], 1500, expected) && waiting.sample.combinedMs === null) {
+      if (wind && windFrameMatches && matchesWind(observed, frames[match.index], 1500, expected) && waiting.sample.combinedMs === null) {
         waiting.sample.combinedMs = performance.now() - waiting.sample.inputAt;
         waiting.sample.combinedRasterFrame = frames[match.index]; waiting.sample.combinedWind = structuredClone(observed);
       }
@@ -332,8 +340,8 @@ function installBench(map: PreviewMap): void {
       return samples.slice(start);
     },
     settled() { return !waiting && (control || viewportQuality === 'detail') && map.loaded() && map.areTilesLoaded() && !map.isMoving(); },
-    snapshot() { const started = performance.now(); try { const timeline = document.querySelector<HTMLElement>('#timeline-status'), windState = window.__benchWindState?.(); const zooms = map.coveringTiles({ tileSize: 256, minzoom: 0, maxzoom: 9, roundZoom: true }).map(tile => tile.canonical.z); return { sources: sources(), peakSources, renderer, frames, canonicalZoom: zooms.length ? Math.max(...zooms) : null, memory: memory.snapshot(), decoded: decodedMemory.snapshot(), initialFirstCorrectMs, initialDetailedMs, overviewReady: Number(timeline?.dataset.ready ?? 0), overviewTotal: Number(timeline?.dataset.total ?? 0), viewportQuality, selectedIndex: Number(time.value), displayedIndex, wind: windState?.installed ?? null, windReady: windState?.ready ?? [], rasterReady: window.__benchRasterReady?.() ?? { preview: [], native: [] }, mismatchedWindRenders, width: canvas.width, height: canvas.height }; } finally { observerCost(started, 'snapshot'); } },
+    snapshot() { const started = performance.now(); try { const timeline = document.querySelector<HTMLElement>('#timeline-status'), windState = window.__benchWindState?.(), rendered = windState?.rendered ?? null; const zooms = map.coveringTiles({ tileSize: 256, minzoom: 0, maxzoom: 9, roundZoom: true }).map(tile => tile.canonical.z); return { sources: sources(), peakSources, renderer, frames, canonicalZoom: zooms.length ? Math.max(...zooms) : null, memory: { ...memory.snapshot(), ...buffers.snapshot() }, decoded: decodedMemory.snapshot(), initialFirstCorrectMs, initialDetailedMs, overviewReady: Number(timeline?.dataset.ready ?? 0), overviewTotal: Number(timeline?.dataset.total ?? 0), viewportQuality, selectedIndex: Number(time.value), displayedIndex, wind: windState?.installed ?? null, windReady: windState?.ready ?? [], rasterReady: window.__benchRasterReady?.() ?? { preview: [], native: [] }, mismatchedWindRenders, renderedWindFrame: rendered?.frame ?? null, renderedSceneGeneration: rendered?.generation ?? null, width: canvas.width, height: canvas.height }; } finally { observerCost(started, 'snapshot'); } },
     pan(longitude) { map.jumpTo({ center: [longitude, 40] }); },
-    resetPeaks() { peakSources = sources(); memory.resetPeaks(); }
+    resetPeaks() { peakSources = sources(); memory.resetPeaks(); buffers.resetPeaks(); }
   };
 }

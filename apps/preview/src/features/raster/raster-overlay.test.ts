@@ -762,7 +762,7 @@ it('restores the rested overview after wind stops consuming the viewport budget'
   vi.stubGlobal('OffscreenCanvas', Canvas);
   vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 256, height: 256, close() {} })));
   vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
-  const f = fixture(300, true), b = build();
+  const f = fixture(210, true), b = build();
   try {
     f.setZoom(4);
     f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
@@ -773,7 +773,7 @@ it('restores the rested overview after wind stops consuming the viewport budget'
 });
 
 it('detaches an active fine source or falls back to overview when resize lease growth fails under a shared budget', async () => {
-  const mib = 1024 * 1024, budget = createPreparationBudget(100 * mib);
+  const mib = 1024 * 1024, budget = createPreparationBudget(30 * mib);
   const f = fixture(1, false, { budget }), b = build(), frame = b.manifest.frames[0].id;
   try {
     f.overlay.select(b, 'usable-lift-agl', frame);

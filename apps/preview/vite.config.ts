@@ -10,8 +10,8 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  // Measured 414252 B gzip startup after the Virginia 1 km model option.
-  plugins: [preact(), browserBundleBudget(414_350, 33_000), {
+  // Startup budget includes MapLibre GL plus the pinned @deck.gl/* and @luma.gl/* wind renderer.
+  plugins: [preact(), browserBundleBudget(1_200_000, 300_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {

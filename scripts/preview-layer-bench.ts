@@ -85,7 +85,7 @@ function summarize(samples: Sample[]) {
   return { inputs: samples.length, targetReady: ready.length, targetCold: samples.length - ready.length, timeouts: samples.filter(sample => sample.outcome === 'timeout').length, superseded: samples.filter(sample => sample.outcome === 'superseded').length,
     sceneDelivery: times('sceneMs'), firstCorrectViewport: times('firstCorrectMs'), detailedViewport: times('detailedMs'), combinedInstalled: times('combinedMs'), readyCombinedInstalled: times('combinedMs', ready), maxSources: Math.max(0, ...samples.map(sample => sample.sources)) };
 }
-const harnessInputs = ['scripts/preview-layer-bench.ts', 'scripts/preview-pixels.ts', 'scripts/preview-wind.ts', 'scripts/preview-hash.ts', 'scripts/preview-observe.ts', 'apps/preview/bench.ts', 'apps/batch/src/webp.ts', 'tests/client-point-fixture.ts', 'tests/forecast-fixture.ts', 'scripts/fixtures/manifest.contract.json', 'scripts/fixtures/gfs-wind-layout.json', 'scripts/fixtures/rrfs-wind-layout.json', 'package.json', 'pnpm-lock.yaml'];
+const harnessInputs = ['scripts/preview-layer-bench.ts', 'scripts/preview-pixels.ts', 'scripts/preview-wind.ts', 'scripts/preview-hash.ts', 'scripts/preview-observe.ts', 'apps/preview/bench.ts', 'apps/preview/gpu-buffers.ts', 'apps/batch/src/webp.ts', 'tests/client-point-fixture.ts', 'tests/forecast-fixture.ts', 'scripts/fixtures/manifest.contract.json', 'scripts/fixtures/gfs-wind-layout.json', 'scripts/fixtures/rrfs-wind-layout.json', 'package.json', 'pnpm-lock.yaml'];
 async function harnessHash() {
   const hash = createHash('sha256');
   for (const file of harnessInputs) hash.update(file).update(await readFile(join(root, file)));
@@ -268,7 +268,7 @@ try {
           if (name === 'changed' && wind) {
             const begin = 'windSession = createWindSession({', end = 'replacementFailed: () => view.overlay.value.replacementFailed\n    });';
             if (code.split(begin).length !== 2 || code.split(end).length !== 2) throw new Error('Public wind session observer anchor is missing or ambiguous');
-            code = code.replace(end, `${end} window.__benchWindState = () => { const session = windSession, height = intent().windHeight, installed = session?.installed; return { height, ready: session ? [...session.ready].filter(([, heights]) => heights.has(height)).map(([frame]) => frame) : [], preparation: session?.preparation, memory: session?.memory, installed: installed ? { frame: installed.frame, height: installed.height, sample: installed.source.sample(${viewport.lat}, ${viewport.lon}, installed.height), isOverview: installed.isOverview } : null }; };`);
+            code = code.replace(end, `${end} window.__benchWindState = () => { const session = windSession, height = intent().windHeight, installed = session?.installed; return { height, ready: session ? [...session.ready].filter(([, heights]) => heights.has(height)).map(([frame]) => frame) : [], preparation: session?.preparation, memory: session?.memory, rendered: windOverlay?.renderState ?? null, installed: installed ? { frame: installed.frame, height: installed.height, sample: installed.source.sample(${viewport.lat}, ${viewport.lon}, installed.height), isOverview: installed.isOverview } : null }; };`);
           }
           return code;
         } },

@@ -200,6 +200,7 @@ export interface PreviewRasterSource {
   minzoom: number;
   maxzoom: number;
   attribution: string;
+  bounds?: readonly [number, number, number, number];
 }
 
 export interface PreviewRasterLayer {
@@ -344,16 +345,32 @@ export function planViewportPrefetch(options: {
   return [...urls];
 }
 
-export function previewRasterSource(template: string | undefined, frame: string, maxNativeZoom: number, attribution: string): PreviewRasterSource {
+export function previewRasterSource(template: string | undefined, frame: string, maxNativeZoom: number, attribution: string, bounds?: readonly [number, number, number, number]): PreviewRasterSource & { bounds?: [number, number, number, number] } {
   if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0) throw new RangeError('maxNativeZoom must be a non-negative integer');
+  let canonicalBounds: [number, number, number, number] | undefined;
+  if (bounds) {
+    const [west, south, east, north] = bounds;
+    const span = east >= west ? east - west : east + 360 - west;
+    if ([west, south, east, north].every(Number.isFinite) && span > 0 && span <= 360 && south >= -90 && north <= 90 && south < north) {
+      const canonicalWest = ((west + 180) % 360 + 360) % 360 - 180;
+      const canonicalEast = canonicalWest + span;
+      if (span === 360) canonicalBounds = [-180, south, 180, north];
+      else if (canonicalEast <= 180) canonicalBounds = [canonicalWest, south, canonicalEast, north];
+    }
+  }
   return {
     type: 'raster',
     tiles: [frameTileUrl(template, frame)],
     tileSize: RASTER_TILE_SIZE,
     minzoom: 0,
     maxzoom: maxNativeZoom,
-    attribution
+    attribution,
+    ...(canonicalBounds ? { bounds: canonicalBounds } : {})
   };
+}
+
+export function previewRasterSourceKey(source: PreviewRasterSource): string {
+  return JSON.stringify(source);
 }
 
 export function previewRasterLayer(opacity = DEFAULT_OPACITY): PreviewRasterLayer {

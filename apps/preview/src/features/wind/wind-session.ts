@@ -30,7 +30,7 @@ export interface WindSessionOptions {
   readonly selectedPending?: (pending: boolean) => void;
   readonly relieveDisplay?: () => boolean;
   readonly overlay: { setWindActive(active: boolean, resident: boolean): void };
-  readonly field: { install?(field: WindField, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap'): void; setField(field: WindField, mode: 'replace' | 'swap'): void; setPrepared(prepared: WindPreparedGrid | null): void; clear(): void };
+  readonly field: { install?(field: WindField, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap', frame?: string | null): void; setField(field: WindField, mode: 'replace' | 'swap', frame?: string | null): void; setPrepared(prepared: WindPreparedGrid | null, frame?: string | null): void; clear(): void };
   readonly publish: {
     status(status: WindStatus): void;
     quality(overview: boolean): void;
@@ -276,11 +276,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
           return { ...sample, status };
         }
       };
-      if (field.install) field.install(sampler, prepared, 'replace');
+      if (field.install) field.install(sampler, prepared, 'replace', job.frame);
       else {
-        field.setField(sampler, 'replace');
+        field.setField(sampler, 'replace', job.frame);
         if (!current()) return false;
-        field.setPrepared(prepared);
+        field.setPrepared(prepared, job.frame);
       }
       if (!current()) return false;
       installed = job; installedHeight = height;

@@ -5,7 +5,7 @@ vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn(), Map: vi.fn(function () { 
 
 it('uses the bounded per-source tile cache on every memory class', () => {
   createMap({ container: {} as HTMLElement, offlineFixture: true, camera: null });
-  expect(maplibregl.Map).toHaveBeenCalledWith(expect.objectContaining({ maxTileCacheSize: 48 }));
+  expect(maplibregl.Map).toHaveBeenCalledWith(expect.objectContaining({ maxTileCacheSize: 24, maxTileCacheZoomLevels: 2 }));
 });
 
 function camera(lng: number) {

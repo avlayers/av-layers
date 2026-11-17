@@ -19,8 +19,12 @@ export interface ForecastRequestSpec {
   url: string;
   priority: RequestPriority;
   kind: 'raster' | 'wind' | 'json';
+  /** Hard ceiling for the response body. */
   maxResponseBytes: number;
-  expectedResponseBytes?: number;
+  /** Known numeric size; the response must match exactly. */
+  exactResponseBytes?: number;
+  /** Admission reservation until the declared length or streamed bytes grow it. */
+  initialReserveBytes?: number;
   init?: RequestInit;
   responseLease?: { budget: PreparationBudget; lease: PreparationLease };
 }
@@ -37,6 +41,7 @@ export interface ForecastRequestHandle {
 }
 
 const HEADER_RESERVE_BYTES = 1024 * 1024;
+const INITIAL_RESERVE_BYTES = 16 * 1024;
 const MAX_IN_FLIGHT_BYTES = 32 * 1024 * 1024;
 const BACKGROUND_BYTES = 2 * 1024 * 1024;
 const FOREGROUND_RESERVE_ACTIVE = 2;
@@ -108,14 +113,15 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     }
   }
 
-  function schedule(input: RequestInfo | URL, init: RequestInit | undefined, spec?: { foreground: boolean; maxResponseBytes: number; expectedResponseBytes?: number; responseLease?: PreparationLease }): ForecastRequestHandle {
+  function schedule(input: RequestInfo | URL, init: RequestInit | undefined, spec?: { foreground: boolean; maxResponseBytes: number; exactResponseBytes?: number; initialReserveBytes?: number; responseLease?: PreparationLease }): ForecastRequestHandle {
     const signal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
     let settleResponse!: () => void, resolveResponse!: (value: Response) => void, rejectResponse!: (reason: unknown) => void;
     const settled = new Promise<void>(resolve => { settleResponse = resolve; });
     const response = new Promise<Response>((resolve, reject) => { resolveResponse = resolve; rejectResponse = reject; });
     const controller = new AbortController();
-    const bodyLimit = spec ? (spec.expectedResponseBytes && spec.expectedResponseBytes > 0 ? spec.expectedResponseBytes : spec.maxResponseBytes) : maxInFlightBytes;
-    const taskReserve = spec ? bodyLimit : options.budget ? 1024 : HEADER_RESERVE_BYTES;
+    const bodyLimit = spec ? spec.maxResponseBytes : maxInFlightBytes;
+    const exact = spec?.exactResponseBytes;
+    const taskReserve = spec ? Math.min(spec.responseLease?.bytes ?? exact ?? spec.initialReserveBytes ?? INITIAL_RESERVE_BYTES, bodyLimit) : options.budget ? 1024 : HEADER_RESERVE_BYTES;
     let foreground = spec?.foreground ?? (init as RequestInit & { priority?: string } | undefined)?.priority !== 'low';
     let started = false, finished = false, delivered = false, heldBytes = 0, backgroundHeld = false;
     let lease: PreparationLease | null = spec?.responseLease ?? null;
@@ -125,7 +131,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
 
     const charge = (next: number) => {
-      const capped = spec ? Math.min(next, taskReserve) : next;
+      const capped = spec ? Math.min(next, bodyLimit) : next;
       const delta = capped - heldBytes;
       if (bodyBytes + delta > maxInFlightBytes) throw new ForecastCapacityError('capacity', 'Response exceeds in-flight budget');
       if (backgroundHeld && (backgroundBytes + delta > maxBackgroundBytes || bodyBytes + delta + reserveBytes > maxInFlightBytes)) throw new ForecastCapacityError('capacity', 'Background response exceeds in-flight budget');
@@ -171,7 +177,7 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     function externalAbort() { controller.abort(signal?.reason); }
     function promote() {
       if (foreground || finished) return;
-      foreground = true;
+      foreground = true; lease?.promote?.();
       if (backgroundHeld) {
         backgroundActive--; backgroundBytes -= heldBytes; backgroundHeld = false;
       }
@@ -196,18 +202,40 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
           }
           const declared = fetched.headers.get('content-length');
           const length = declared !== null && /^\d+$/.test(declared) ? Number(declared) : null;
-          if (length !== null && spec && length > bodyLimit) {
-            await fetched.body?.cancel(controller.signal.reason).catch(() => {});
-            throw new ForecastCapacityError('capacity', 'Response exceeds its admitted size');
+          const encoding = fetched.headers.get('content-encoding'), identity = encoding === 'identity';
+          let successful = false;
+          try {
+            if (length !== null && spec && identity && length > bodyLimit) {
+              if (fetched.ok) throw new ForecastCapacityError('capacity', 'Response exceeds its admitted size');
+              await fetched.body?.cancel(controller.signal.reason).catch(() => {});
+              finish();
+              const empty = new Response(null, { status: fetched.status, statusText: fetched.statusText, headers: fetched.headers });
+              Object.defineProperties(empty, { url: { value: fetched.url }, redirected: { value: fetched.redirected }, type: { value: fetched.type } });
+              resolveResponse(empty); return;
+            }
+            successful = fetched.ok;
+            if (spec && exact !== undefined && successful) {
+              if (length !== null && identity && length !== exact) throw new ForecastCapacityError('capacity', 'Response does not match its exact size');
+              charge(exact);
+            } else if (spec) {
+              if (length !== null && identity && successful) charge(length);
+            } else if (length !== null && identity) charge(Math.min(length, taskReserve));
+          } catch (error) {
+            await fetched.body?.cancel(error).catch(() => {});
+            throw error;
           }
-          const encoding = fetched.headers.get('content-encoding');
-          if (length !== null && encoding === 'identity' && !spec) charge(Math.min(length, taskReserve));
           pump();
           if (controller.signal.aborted) {
             await fetched.body?.cancel(controller.signal.reason).catch(() => {});
             finish(); return;
           }
-          if (!fetched.body) { finish(); resolveResponse(fetched); return; }
+          if (!fetched.body) {
+            if (successful && exact !== undefined && exact > 0) {
+              const error = new ForecastCapacityError('capacity', 'Response does not match its exact size');
+              finish(); rejectResponse(error); return;
+            }
+            finish(); resolveResponse(fetched); return;
+          }
           reader = fetched.body.getReader();
           const body = new ReadableStream<Uint8Array>({
             start(value) { streamController = value; },
@@ -215,7 +243,15 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
               try {
                 const result = await reader!.read();
                 if (finished || cancellation || controller.signal.aborted) return;
-                if (result.done) { reader!.releaseLock(); finish(); value.close(); return; }
+                if (result.done) {
+                  if (successful && exact !== undefined && consumed !== exact) {
+                    const error = new ForecastCapacityError('capacity', 'Response does not match its exact size');
+                    value.error(error);
+                    await cancelReader(error);
+                    return;
+                  }
+                  reader!.releaseLock(); finish(); value.close(); return;
+                }
                 consumed += result.value.length;
                 if (consumed > bodyLimit) {
                   const error = new ForecastCapacityError('capacity', 'Response body exceeds its admitted size');
@@ -223,7 +259,13 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
                   await cancelReader(error);
                   return;
                 }
-                if (!spec && consumed > heldBytes) {
+                if (successful && exact !== undefined && consumed > exact) {
+                  const error = new ForecastCapacityError('capacity', 'Response body exceeds its admitted size');
+                  value.error(error);
+                  await cancelReader(error);
+                  return;
+                }
+                if (consumed > heldBytes) {
                   try { charge(consumed); }
                   catch (error) { value.error(error); await cancelReader(error); return; }
                 }
@@ -298,21 +340,25 @@ export function createForecastRequestScheduler(options: SchedulerOptions = {}) {
     fetch: scheduledFetch,
     request(spec: ForecastRequestSpec): ForecastRequestHandle {
       if (!Number.isSafeInteger(spec.maxResponseBytes) || spec.maxResponseBytes <= 0
-        || (spec.expectedResponseBytes !== undefined && (!Number.isSafeInteger(spec.expectedResponseBytes) || spec.expectedResponseBytes < 0 || spec.expectedResponseBytes > spec.maxResponseBytes))) {
+        || (spec.exactResponseBytes !== undefined && (!Number.isSafeInteger(spec.exactResponseBytes) || spec.exactResponseBytes < 0 || spec.exactResponseBytes > spec.maxResponseBytes))
+        || (spec.initialReserveBytes !== undefined && (!Number.isSafeInteger(spec.initialReserveBytes) || spec.initialReserveBytes <= 0 || spec.initialReserveBytes > spec.maxResponseBytes))) {
         throw new ForecastCapacityError('configuration', 'Invalid forecast request size');
       }
       const bound = spec.priority === 'foreground' ? (maxInFlightBytes ?? MAX_IN_FLIGHT_BYTES)
         : Math.min(maxBackgroundBytes, maxInFlightBytes === undefined ? maxBackgroundBytes : Math.max(0, maxInFlightBytes - reserveBytes));
-      if (spec.maxResponseBytes > bound) throw new ForecastCapacityError('capacity', 'Forecast request exceeds its class bound');
-      if (options.budget && (spec.expectedResponseBytes || spec.maxResponseBytes) > options.budget.limit) throw new ForecastCapacityError('capacity', 'Forecast request exceeds preparation budget');
+      const precharged = spec.responseLease?.lease.bytes;
+      const taskReserve = precharged ?? Math.min(spec.exactResponseBytes ?? spec.initialReserveBytes ?? INITIAL_RESERVE_BYTES, spec.maxResponseBytes);
+      if (taskReserve > bound) throw new ForecastCapacityError('capacity', 'Forecast request exceeds its class bound');
+      if (precharged !== undefined && precharged !== (spec.exactResponseBytes ?? spec.maxResponseBytes)) throw new ForecastCapacityError('configuration', 'Invalid forecast response lease');
+      if (options.budget && taskReserve > options.budget.limit) throw new ForecastCapacityError('capacity', 'Forecast request exceeds preparation budget');
       let responseLease: PreparationLease | undefined;
       if (spec.responseLease) {
-        if (!options.budget || spec.responseLease.budget !== options.budget || spec.responseLease.lease.bytes !== (spec.expectedResponseBytes || spec.maxResponseBytes)) throw new ForecastCapacityError('configuration', 'Invalid forecast response lease');
+        if (!options.budget || spec.responseLease.budget !== options.budget) throw new ForecastCapacityError('configuration', 'Invalid forecast response lease');
         responseLease = options.budget.transfer(spec.responseLease.lease) ?? undefined;
         if (!responseLease) throw new ForecastCapacityError('configuration', 'Invalid forecast response lease');
       }
       return schedule(spec.url, { ...spec.init, priority: spec.priority === 'background' ? 'low' : 'high' } as RequestInit,
-        { foreground: spec.priority === 'foreground', maxResponseBytes: spec.maxResponseBytes, expectedResponseBytes: spec.expectedResponseBytes, responseLease });
+        { foreground: spec.priority === 'foreground', maxResponseBytes: spec.maxResponseBytes, exactResponseBytes: spec.exactResponseBytes, initialReserveBytes: spec.initialReserveBytes, responseLease });
     },
     setForegroundPending(epoch: number, pending: boolean) {
       if (!Number.isSafeInteger(epoch) || epoch < 0) throw new RangeError('Invalid foreground epoch');

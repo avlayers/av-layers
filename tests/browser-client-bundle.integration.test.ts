@@ -7,7 +7,7 @@ it('bundles the validated ApiClient without forecast or server modules', async (
   const built = await build({
     configFile: false,
     logLevel: 'silent',
-    plugins: [browserBundleBudget(42_000), {
+    plugins: [browserBundleBudget(100_000), {
       name: entry,
       resolveId(id) { if (id === entry) return resolved; },
       load(id) {

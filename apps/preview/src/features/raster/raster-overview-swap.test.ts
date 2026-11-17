@@ -445,7 +445,7 @@ it('stays on the resident overview while playing and refines after pause', () =>
 });
 
 it.each([false, true])('keeps one fine source within a large viewport budget (overview ready: %s)', async ready => {
-  const f = fixture(80);
+  const f = fixture(120);
   try {
     const b = await f.initial(), [first, second] = b.manifest.frames;
     if (ready) f.overview().warm(second.id);
@@ -485,7 +485,7 @@ it.each(['clear', 'expire', 'build', 'layer'] as const)('invalidates an unpainte
 });
 
 it('disables overview residency when one visible fine source consumes its reserved budget', async () => {
-  const f = fixture(177);
+  const f = fixture(200);
   try {
     const b = await f.initial(), [first, second] = b.manifest.frames;
     expect(f.state()).toMatchObject({ overviewReady: 0, overviewTotal: 0 });

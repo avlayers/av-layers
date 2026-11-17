@@ -3,6 +3,8 @@ import { ForecastCapacityError, type ForecastRequestHandle, type ForecastRequest
 import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
 export { createForecastRequestScheduler } from './client-request-scheduler.ts';
 
+const INITIAL_TILE_RESERVE = 16 * 1024;
+
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }
 export interface RasterTileHandle {
@@ -23,7 +25,7 @@ export interface RasterTileProtocol {
   setBuildExpiry(buildId: string, expiresAtMs: number): void;
   prefetch(tileUrl: string, signal?: AbortSignal): Promise<void>;
   evictBuild(buildId?: string): void;
-  stats(): { cacheHits: number; cacheMisses: number; cachedBytes: number; cachedTiles: number; coalesced: number };
+  stats(): { cacheHits: number; cacheMisses: number; cachedBytes: number; cachedTiles: number; coalesced: number; cacheEvictionGeneration: number };
   dispose(): void;
 }
 export interface RasterTileSourceProtocol extends RasterTileProtocol {
@@ -129,7 +131,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   const queued: TileTask[] = [], active = new Set<TileTask>(), tasks = new Map<string, TileTask>();
   const cache = new Map<string, TileEntry>(), buildExpiry = new Map<string, number>();
   const foreground: SourceGroup = { interactive: true }, background: SourceGroup = { interactive: false };
-  let disposed = false, cachedBytes = 0, retainedBytes = 0, cacheHits = 0, cacheMisses = 0, coalesced = 0, order = 0, consumers = 0, dispatchSuspended = false;
+  let disposed = false, cachedBytes = 0, retainedBytes = 0, cacheHits = 0, cacheMisses = 0, coalesced = 0, order = 0, consumers = 0, dispatchSuspended = false, cacheEvictionGeneration = 0;
 
   function validate(url: string, template: boolean): string {
     if (url.length > 4096) throw new Error('Raster URL exceeds budget');
@@ -144,7 +146,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   }
   function dropCache(url: string): void {
     const entry = cache.get(url);
-    if (entry) { cachedBytes -= entry.response.data.byteLength; retainedBytes -= entry.weight; entry.response.release(); }
+    if (entry) { cachedBytes -= entry.response.data.byteLength; retainedBytes -= entry.weight; entry.response.release(); cacheEvictionGeneration++; }
     cache.delete(url);
   }
   function pruneCache(): void {
@@ -239,28 +241,39 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     if (!response.body || (length !== null && (!/^\d+$/.test(length) || size > MAX_TILE_BYTES)) || response.headers.get('content-type')?.split(';')[0] !== 'image/webp') {
       await response?.body?.cancel().catch(() => {}); throw new Error('Invalid raster response type or size');
     }
-    const reader = response.body.getReader();
-    let lease = reserve('raster-compressed', length === null ? MAX_TILE_BYTES : size, interactive(task));
+    const reader = response.body.getReader(), capacity = length === null ? 16 * 1024 : Math.max(12, size);
+    let lease = reserve('raster-compressed', capacity, interactive(task));
     if (options.budget && !lease) { await reader.cancel().catch(() => {}); reader.releaseLock(); throw new ForecastCapacityError('capacity', 'Raster preparation budget exhausted'); }
     let cancellation: Promise<void> | undefined;
     const abort = () => { cancellation ??= reader.cancel(signal.reason).catch(() => {}); };
     signal.addEventListener('abort', abort, { once: true });
-    let used = 0, chunks = 0;
+    let buffer: Uint8Array, used = 0, chunks = 0;
     try {
-      const buffer = new Uint8Array(length === null ? MAX_TILE_BYTES : size);
+      buffer = new Uint8Array(capacity);
       while (true) {
         signal.throwIfAborted();
         const result = await reader.read(); signal.throwIfAborted();
         if (result.done) break;
-        if (++chunks > 65536 || used + result.value.length > buffer.length) throw new Error('Raster response exceeds byte budget');
-        buffer.set(result.value, used); used += result.value.length;
+        const next = used + result.value.length;
+        if (++chunks > 65536 || next > MAX_TILE_BYTES || (length !== null && next > size)) throw new Error('Raster response exceeds byte budget');
+        if (next > buffer.length) {
+          let grown = buffer.length;
+          while (grown < next) grown = Math.min(MAX_TILE_BYTES, grown * 2);
+          const nextLease = reserve('raster-compressed', grown, interactive(task));
+          if (options.budget && !nextLease) throw new ForecastCapacityError('capacity', 'Raster preparation budget exhausted');
+          let nextBuffer: Uint8Array;
+          try { nextBuffer = new Uint8Array(grown); } catch (error) { nextLease?.release(); throw error; }
+          nextBuffer.set(buffer.subarray(0, used));
+          lease?.release(); lease = nextLease; buffer = nextBuffer;
+        }
+        buffer.set(result.value, used); used = next;
       }
       if (used < 12 || (length !== null && used !== size) || buffer[0] !== 82 || buffer[1] !== 73 || buffer[2] !== 70 || buffer[3] !== 70 || buffer[8] !== 87 || buffer[9] !== 69 || buffer[10] !== 66 || buffer[11] !== 80) throw new Error('Invalid WebP tile');
-      if (used === buffer.byteLength) { const result = { data: buffer.buffer, lease }; lease = null; return result; }
+      if (used === buffer.byteLength) { const result = { data: buffer.buffer as ArrayBuffer, lease }; lease = null; return result; }
       const compact = reserve('raster-compressed', used, interactive(task));
       if (options.budget && !compact) throw new ForecastCapacityError('capacity', 'Raster preparation budget exhausted');
       let data: ArrayBuffer;
-      try { data = buffer.slice(0, used).buffer; } catch (error) { compact?.release(); throw error; }
+      try { data = buffer.slice(0, used).buffer as ArrayBuffer; } catch (error) { compact?.release(); throw error; }
       lease?.release(); lease = null;
       return { data, lease: compact };
     } finally {
@@ -278,12 +291,25 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       try {
         try {
         if (options.request) {
-          while (options.budget && options.budget.limit >= MAX_TILE_BYTES && cache.size && options.budget.limit - options.budget.used < MAX_TILE_BYTES) dropCache(cache.keys().next().value!);
+          if (options.budget && options.budget.limit >= INITIAL_TILE_RESERVE && cache.size) {
+            const priority = foreground ? 'foreground' : 'background';
+            const free = (priority === 'foreground' ? options.budget.limit : options.budget.backgroundLimit) - options.budget.used;
+            if (free < INITIAL_TILE_RESERVE && free + cachedBytes >= INITIAL_TILE_RESERVE) {
+              while (cache.size && !options.budget.canReserve(INITIAL_TILE_RESERVE, priority)) dropCache(cache.keys().next().value!);
+            }
+          }
           const handle = options.request({ url: task.url, priority: foreground ? 'foreground' : 'background', kind: 'raster', maxResponseBytes: MAX_TILE_BYTES, init: { redirect: 'error', headers: { accept: 'image/webp' } } });
           task.handle = handle;
-          const cancel = () => handle.cancel(signal.reason);
+          const cancel = () => handle.cancel(signal.reason), requestPriority = foreground ? 'foreground' : 'background';
+          const release = options.budget?.onRelease(() => {
+            if (handle.started) return;
+            const free = (requestPriority === 'foreground' ? options.budget!.limit : options.budget!.backgroundLimit) - options.budget!.used;
+            if (free < INITIAL_TILE_RESERVE && free + cachedBytes >= INITIAL_TILE_RESERVE) {
+              while (cache.size && !options.budget!.canReserve(INITIAL_TILE_RESERVE, requestPriority)) dropCache(cache.keys().next().value!);
+            }
+          });
           signal.addEventListener('abort', cancel, { once: true });
-          try { response = await handle.response; } finally { signal.removeEventListener('abort', cancel); if (response === undefined) task.handle = undefined; }
+          try { response = await handle.response; } finally { release?.(); signal.removeEventListener('abort', cancel); if (response === undefined) task.handle = undefined; }
         } else {
           responseLease = reserve('response', MAX_TILE_BYTES, interactive(task));
           if (options.budget && !responseLease) throw new ForecastCapacityError('capacity', 'Raster response budget exhausted');
@@ -432,7 +458,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       if (until <= Date.now()) evictBuild(build);
     },
     evictBuild,
-    stats() { pruneCache(); return { cacheHits, cacheMisses, cachedBytes, cachedTiles: cache.size, coalesced }; },
+    stats() { pruneCache(); return { cacheHits, cacheMisses, cachedBytes, cachedTiles: cache.size, coalesced, cacheEvictionGeneration }; },
     dispose() { disposed = true; evictBuild(); }
   };
 }

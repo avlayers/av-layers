@@ -27,8 +27,12 @@ Reload the page to pick up a newly published build (subject to the API's
 
 Auto selects the finest available forecast covering the map center and time.
 A globe view, or a map without a location, selects GFS when that build is available.
-Builds with numeric wind support trails and WMO/ICAO knot-feathered barbs with
-`km/h` or `mph` speed labels at the selected height.
+Builds with numeric wind render GPU particles through `weatherlayers-gl` and
+WMO/ICAO knot-feathered barbs through `@deck.gl/layers` (`IconLayer` in the map
+plane, upright `TextLayer` labels). The barb atlas covers calm plus 5–280 kt in
+both hemispheres and generates on-demand icons above 280 kt. Overlays share
+MapLibre's WebGL2 context (`MapLibreOverlay`, interleaved) and re-attach on
+`style.load`. Speed labels show `km/h` or `mph` at the selected height.
 The basemap is the XC Skies Natural shaded-relief raster, with the roads and
 place labels XC Skies draws above it. Retina displays request the `@2x` tiles.
 The offline fixture keeps the neutral background.
@@ -40,8 +44,10 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`414,350 B` gzip) and lazy
-(`33,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
+[Build checks](vite.config.ts) bound startup (`1,200,000 B` gzip) and lazy
+(`300,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
+The startup cap reserves the pinned `@deck.gl/*`, `@luma.gl/*` and `weatherlayers-gl`
+renderer set.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. The km/mi control sets units.
@@ -62,7 +68,9 @@ prefix offer a 24-hour point view.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
 - [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
-- [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session, controls, trails and barbs.
+- [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
+- [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl/WeatherLayers particles, map-plane barbs and labels.
+- [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
 - [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
 - [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.
@@ -95,7 +103,11 @@ Use `--channel chrome` for installed Chrome and inspect the recorded WebGL rende
 The [benchmark](../../scripts/preview-layer-bench.ts) loads each revision’s actual
 preview UI and serves patterned lossless WebP over HTTP/2 with controlled latency.
 Nine framebuffer probes verify time, layer and position, recording first-correct
-and fully detailed views separately. Cold and warmed 40-frame sweeps dispatch
+and fully detailed views separately. GPU accounting reports texture and buffer
+storage; wind verification reads the frame and generation recorded by the deck.gl
+`onAfterRender` pass, not the submitted field state. Readiness reports
+`coarseReadyFrames`, `detailBytesReadyFrames` and `detailDrawableFrames`
+separately. Cold and warmed 40-frame sweeps dispatch
 every 60 or 120 ms; settled steps include the point card.
 
 Use `--scenario cold --delay-ms 250` or `500` to measure slower tile responses.
