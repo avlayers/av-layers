@@ -1897,3 +1897,90 @@ it('selects the finest av-wrf horizon that fits and a finer core when the domain
   expect(focused.stride).toBe(2);
   expect(focused.admitted).toEqual([...core]);
 });
+
+it.each(['surface', 500, 'lift'] as const)('yields during %s preparation and preserves synchronous bytes and retained ownership', async height => {
+  vi.useFakeTimers();
+  const pinned = build(), frame = pinned.manifest.frames[0]!.id, budget = createPreparationBudget(1024 * 1024);
+  const cache = new WindDataCache(WIND_NUMERIC_BYTES, WIND_WINDOW_ENTRIES, budget);
+  const fetcher: typeof fetch = async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } })
+    : reply(String(url).includes('/wind/') ? wind : fine);
+  const first = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  const second = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  try {
+    await Promise.all([first, second].map(source => source.load({ build: pinned, frame, bounds })));
+    const expected = first.prepare(height, 32)!;
+    const samples = vi.spyOn(second, 'sample');
+    const pending = second.prepareAsync(height, { size: 32 });
+    expect(samples.mock.calls.length).toBeGreaterThan(0);
+    expect(samples.mock.calls.length).toBeLessThanOrEqual(8 * 32);
+    expect(second.hasPrepared(height, 32)).toBe(false);
+    await vi.runAllTimersAsync();
+    const prepared = (await pending)!;
+    expect(prepared.data).toEqual(expected.data);
+    expect(prepared.bounds).toEqual(expected.bounds);
+    expect(prepared.data.some(byte => byte !== 0)).toBe(true);
+    expect(second.prepare(height, 32)).toBe(prepared);
+    expect(await second.prepareAsync(height, { size: 32 })).toBe(prepared);
+    const release = prepared.retain!();
+    first.dispose(); second.dispose(); cache.clear();
+    expect(budget.used).toBe(prepared.data.byteLength);
+    release(); release();
+    expect(budget.used).toBe(0);
+  } finally { first.dispose(); second.dispose(); cache.clear(); }
+});
+
+it.each(['abort', 'height', 'cached height', 'load', 'dispose'] as const)('releases unfinished preparation immediately on %s and never commits its stale grid', async reason => {
+  vi.useFakeTimers();
+  const pinned = build(), frame = pinned.manifest.frames[0]!.id, budget = createPreparationBudget(1024 * 1024);
+  const cache = new WindDataCache(WIND_NUMERIC_BYTES, WIND_WINDOW_ENTRIES, budget);
+  const fetcher: typeof fetch = async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } })
+    : reply(String(url).includes('/wind/') ? wind : fine);
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  try {
+    await source.load({ build: pinned, frame, bounds });
+    const cached = reason === 'cached height' ? source.prepare(500, 16) : null;
+    const controller = new AbortController();
+    const pending = source.prepareAsync('surface', { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(budget.snapshot()['wind-prepared']).toBe(128 * 128 * 4 + (cached?.data.byteLength ?? 0));
+    let replacement: Promise<unknown> | undefined;
+    if (reason === 'abort') controller.abort();
+    else if (reason === 'height' || reason === 'cached height') replacement = source.prepareAsync(500, { size: 16 });
+    else if (reason === 'load') replacement = source.load({ build: pinned, frame, bounds });
+    else source.dispose();
+    expect(budget.snapshot()['wind-prepared'] ?? 0).toBe(reason === 'height' || reason === 'cached height' ? 16 * 16 * 4 : 0);
+    await vi.runAllTimersAsync();
+    await rejected; await replacement;
+    expect(source.hasPrepared('surface')).toBe(false);
+    source.dispose(); cache.clear();
+    expect(budget.used).toBe(0);
+  } finally { source.dispose(); cache.clear(); }
+});
+
+it('trims historical heights while retaining current fields and borrowed grid leases', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0]!.id, budget = createPreparationBudget(1024 * 1024);
+  const cache = new WindDataCache(WIND_NUMERIC_BYTES, WIND_WINDOW_ENTRIES, budget);
+  const fetcher: typeof fetch = async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } })
+    : reply(String(url).includes('/wind/') ? wind : fine);
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache });
+  try {
+    await source.load({ build: pinned, frame, bounds });
+    const old = source.prepare('surface', 16)!, release = old.retain!();
+    source.field('surface'); source.prepare(500, 16); const current = source.field(500);
+    source.prepare(1000, 16); source.field(1000);
+    source.trimHeights(500);
+    expect(source.hasPrepared(500, 16)).toBe(true);
+    expect(source.hasPrepared('surface', 16)).toBe(false);
+    expect(source.hasField('surface')).toBe(false);
+    expect(source.hasField(1000)).toBe(false);
+    expect(source.field(500)).toBe(current);
+    expect(budget.snapshot()['wind-prepared']).toBe(2 * 16 * 16 * 4);
+    expect(budget.snapshot()['wind-sampler']).toBe(8192 * 17);
+    release();
+    expect(budget.snapshot()['wind-prepared']).toBe(16 * 16 * 4);
+    source.dispose(); cache.clear(); expect(budget.used).toBe(0);
+  } finally { source.dispose(); cache.clear(); }
+});

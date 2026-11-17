@@ -41,28 +41,39 @@ function fixture(width = 256, height = 256, containerHeight = height, budget?: P
     project: ([lon, lat]: number[]) => ({ x: (lon + 45) * width / 90, y: (45 - lat) * height / 90 }),
     unproject: ([x, y]: number[]) => ({ lng: x * 90 / width - 45, lat: 45 - y * 90 / height })
   };
-  let allocations = 0, layer: CustomLayerInterface | null = null;
+  let allocations = 0, addedLayers = 0, lost = false, lostClears = 0, layer: CustomLayerInterface | null = null;
+  const uploads: ArrayBufferView[] = [];
+  let drawGl = () => {}, restoreGl = () => {}, removeGl = () => {};
   if (useGl) {
     const enums = new globalThis.Map<string, number>();
     const gl = new Proxy({} as WebGL2RenderingContext, {
       get(_target, property) {
         const key = String(property);
         if (/^[A-Z0-9_]+$/.test(key)) { if (!enums.has(key)) enums.set(key, enums.size + 1); return enums.get(key); }
-        if (key === 'getParameter') return (value: number) => value === gl.MAX_TEXTURE_SIZE ? 4096 : value === gl.COLOR_CLEAR_VALUE ? [0, 0, 0, 0] : value === gl.COLOR_WRITEMASK ? [true, true, true, true] : null;
+        if (key === 'isContextLost') return () => lost;
+        if (key === 'getParameter') return (value: number) => lost ? null : value === gl.MAX_TEXTURE_SIZE ? 4096 : value === gl.COLOR_CLEAR_VALUE ? [0, 0, 0, 0] : value === gl.COLOR_WRITEMASK ? [true, true, true, true] : value === gl.VIEWPORT ? [0, 0, width, height] : null;
         if (key === 'getExtension' || key.startsWith('create')) return () => ({});
         if (key === 'getShaderParameter' || key === 'getProgramParameter') return () => true;
         if (key === 'checkFramebufferStatus') return () => gl.FRAMEBUFFER_COMPLETE;
         if (key === 'isEnabled') return () => false;
-        if (key === 'texImage2D') return () => { allocations++; };
+        if (key === 'texImage2D') return (...args: unknown[]) => { allocations++; if (ArrayBuffer.isView(args[8])) uploads.push(args[8]); };
+        if (key === 'clear') return () => { if (lost) lostClears++; };
         return () => {};
       }
     });
     Object.assign(map, {
-      addLayer(value: CustomLayerInterface) { layer = value; value.onAdd!(map as unknown as Map, gl); },
+      addLayer(value: CustomLayerInterface) { addedLayers++; layer = value; value.onAdd!(map as unknown as Map, gl); },
       getLayer: () => layer,
       removeLayer() { layer?.onRemove?.(map as unknown as Map, gl); layer = null; },
       getStyle: () => ({ layers: [{ id: 'av-wind-particles' }] }), moveLayer() {}, once() {}, isStyleLoaded: () => true, triggerRepaint() {}
     });
+    drawGl = () => { layer!.prerender!(gl, { modelViewProjectionMatrix: new Float32Array(16) } as never); layer!.render!(gl, {} as never); };
+    removeGl = () => { layer?.onRemove?.(map as unknown as Map, gl); layer = null; };
+    restoreGl = () => {
+      lost = false;
+      if (layer) layer.onAdd!(map as unknown as Map, gl); else emit('styledata');
+      emit('webglcontextrestored'); emit('styledata'); emit('idle');
+    };
   }
   let next = 0;
   vi.stubGlobal('document', doc);
@@ -72,7 +83,8 @@ function fixture(width = 256, height = 256, containerHeight = height, budget?: P
   const overlay = new WindOverlay(map as unknown as Map, { budget });
   const tick = (time: number) => { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback(time)); };
   const emit = (name: string) => handlers.get(name)?.forEach(handler => handler());
-  return { overlay, canvases, frames, tick, emit, handlers, doc, map, allocations: () => allocations };
+  return { overlay, canvases, frames, tick, emit, handlers, doc, map, uploads, drawGl, restoreGl, allocations: () => allocations,
+    loseGl: (dropLayer = false) => { lost = true; if (dropLayer) removeGl(); emit('webglcontextlost'); }, addedLayers: () => addedLayers, lostClears: () => lostClears };
 }
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
@@ -95,6 +107,37 @@ it('keeps real overlay GL and canvas pressure relief stable until wind admission
   expect(wind).not.toBeNull();
   wind!.release(); other.release(); f.overlay.destroy();
   expect(budget.used).toBe(0);
+});
+
+it.each([false, true])('restores latest matching wind after GL loss with custom layer removed: %s', async dropLayer => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(800, 600, 600, budget, true);
+  await Promise.resolve();
+  f.overlay.setOptions({ style: 'hybrid' });
+  const grid = (height: 'surface' | number, key: string) => ({ bounds: [-45, -45, 45, 45] as [number, number, number, number], data: new Uint8Array(128 * 128 * 4), size: 128, height, key });
+  const first = grid('surface', 'first'), intermediate = grid(500, 'intermediate'), latest = grid(1500, 'latest');
+  f.overlay.install({ sample: () => ({ status: 0, u: 10, v: 0 }) }, first); f.drawGl();
+  f.loseGl(dropLayer);
+  expect(f.frames.size).toBe(0);
+  expect(() => f.overlay.clear()).not.toThrow();
+  expect(() => f.overlay.install({ sample: () => ({ status: 0, u: 5, v: 0 }) }, intermediate)).not.toThrow();
+  expect(() => f.overlay.install({ sample: () => ({ status: 0, u: 20, v: 0 }) }, latest)).not.toThrow();
+  expect(f.lostClears()).toBe(0);
+  f.canvases[1].context.fillText.mockClear(); f.uploads.length = 0;
+  f.restoreGl(); await Promise.resolve();
+  f.drawGl(); f.drawGl();
+  expect(f.uploads.filter(data => data === latest.data)).toHaveLength(1);
+  expect(f.uploads).not.toContain(first.data);
+  expect(f.uploads).not.toContain(intermediate.data);
+  expect(f.canvases[1].context.fillText).toHaveBeenCalledWith('72', expect.any(Number), expect.any(Number));
+  expect(f.addedLayers()).toBe(dropLayer ? 2 : 1);
+  expect(f.frames.size).toBe(1);
+  f.loseGl();
+  expect(() => f.overlay.destroy()).not.toThrow();
+  f.overlay.destroy();
+  expect(f.frames.size).toBe(0);
+  expect(budget.used).toBe(0);
+  expect(f.canvases.every(canvas => canvas.removed && canvas.width === 0 && canvas.height === 0)).toBe(true);
+  expect([...f.handlers.values()].every(handlers => handlers.size === 0)).toBe(true);
 });
 
 it('bounds canvas backing at 128 MiB, retains clear ownership, and recovers on release', async () => {

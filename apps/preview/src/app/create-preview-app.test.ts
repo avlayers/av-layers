@@ -3,15 +3,22 @@ import { fixtureBuild } from '../../../../tests/forecast-fixture';
 import type { PreparationBudget } from '@av/client';
 import type { CompactTimelineOptions } from '../features/timeline/timeline-controller';
 import type { PointSessionOptions } from '../features/point/point-session';
+import type { WindControlsOptions } from '../features/wind/wind-controls';
+import type { BrowserLifecycleOptions } from '../platform/browser-lifecycle';
 import type { OverlayState, RasterOverlayOptions } from '../features/raster/raster-overlay';
 import { emptyOverlay } from '../stores/app-store';
 
-const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, rasterOptions: null as RasterOverlayOptions | null, windInstalled: null as unknown, windStaged: null as unknown, windMemory: vi.fn(() => ({ horizonNumericRemaining: 4096 })), windHorizonRemaining: vi.fn(() => 4096) }));
+const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, rasterOptions: null as RasterOverlayOptions | null, windInstalled: null as unknown, windStaged: null as unknown, windMemory: vi.fn(() => ({ horizonNumericRemaining: 4096 })), windHorizonRemaining: vi.fn(() => 4096), windDestroy: vi.fn(), rasterDestroy: vi.fn(), overlayDestroy: vi.fn(), schedulerDispose: vi.fn(), windControls: null as WindControlsOptions | null, windClear: vi.fn(), rasterClear: vi.fn(), locationReset: vi.fn(), lifecycle: null as BrowserLifecycleOptions | null }));
 
 vi.mock('@av/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@av/client')>();
   return {
     ...actual,
+    createForecastRequestScheduler(...args: Parameters<typeof actual.createForecastRequestScheduler>) {
+      const scheduler = actual.createForecastRequestScheduler(...args), dispose = scheduler.dispose;
+      scheduler.dispose = () => { mocks.schedulerDispose(); dispose(); };
+      return scheduler;
+    },
     createPreparationBudget(...args: Parameters<typeof actual.createPreparationBudget>) {
       const budget = actual.createPreparationBudget(...args);
       mocks.budget = budget;
@@ -34,19 +41,19 @@ vi.mock('../features/lazy', () => ({
     mocks.point = session;
     return session;
   },
-  createWindControls: () => ({ state: { visible: false }, setUnits() {}, setStatus() {}, setQuality() {}, setState() {}, destroy() {} })
+  createWindControls: (_host: unknown, options: WindControlsOptions) => { mocks.windControls = options; return { state: { visible: false }, setUnits() {}, setStatus() {}, setQuality() {}, setState() {}, destroy() {} }; }
 }));
 vi.mock('../features/map/map-controller', () => ({
   createMap: () => map,
   createMapCamera: () => ({ home: { lat: 40, lng: -100 }, followsPlace: () => false, sync: () => ({ center: map.getCenter(), changed: false }), offsetMinutes: () => 0, scale: () => ({ width: 1, text: '' }), focusRegion() {} }),
   maplibregl: { GPUInitializationError: class extends Error {} }
 }));
-vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void, _fetch: unknown, _request: unknown, options: RasterOverlayOptions) { mocks.overlayState = onState; mocks.rasterOptions = options; } select() {} prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() {} destroy() {} } }));
+vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void, _fetch: unknown, _request: unknown, options: RasterOverlayOptions) { mocks.overlayState = onState; mocks.rasterOptions = options; } select() {} prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() { mocks.rasterClear(); } destroy() { mocks.rasterDestroy(); } } }));
 vi.mock('../features/map/coverage-seam', () => ({ CoverageSeam: class { sync() {} markReady() {} destroy() {} } }));
-vi.mock('../features/wind/wind-overlay', () => ({ WindOverlay: class { setOptions() {} clear() {} destroy() {} } }));
-vi.mock('../features/wind/wind-session', () => ({ createWindSession: () => ({ ready: new Map(), preparation: { limited: false }, resident: false, get installed() { return mocks.windInstalled; }, get staged() { return mocks.windStaged; }, get memory() { return mocks.windMemory(); }, get horizonNumericRemaining() { return mocks.windHorizonRemaining(); }, clear() {}, destroy() {}, update() {}, reconcile: mocks.reconcileWind, setPlaying() {}, heightChanged() {}, beforeRasterReveal() {} }) }));
-vi.mock('../features/location/location-controller', () => ({ createLocationController: () => ({ locate() {}, reset() {}, dispose() {} }) }));
-vi.mock('../platform/browser-lifecycle', () => ({ installBrowserLifecycle() {} }));
+vi.mock('../features/wind/wind-overlay', () => ({ WindOverlay: class { setOptions() {} clear() {} destroy() { mocks.overlayDestroy(); } } }));
+vi.mock('../features/wind/wind-session', () => ({ createWindSession: () => ({ ready: new Map(), preparation: { limited: false }, resident: false, get installed() { return mocks.windInstalled; }, get staged() { return mocks.windStaged; }, get memory() { return mocks.windMemory(); }, get horizonNumericRemaining() { return mocks.windHorizonRemaining(); }, clear() { mocks.windClear(); }, destroy() { mocks.windDestroy(); }, update() {}, reconcile: mocks.reconcileWind, setPlaying() {}, heightChanged() {}, beforeRasterReveal() {} }) }));
+vi.mock('../features/location/location-controller', () => ({ createLocationController: () => ({ locate() {}, reset() { mocks.locationReset(); }, dispose() {} }) }));
+vi.mock('../platform/browser-lifecycle', () => ({ installBrowserLifecycle(options: BrowserLifecycleOptions) { mocks.lifecycle = options; } }));
 vi.mock('../features/timeline/timeline-controller', () => ({
   createCompactTimeline(_host: unknown, options: CompactTimelineOptions) {
     timelineOptions = options;
@@ -69,12 +76,12 @@ let map: {
   center: { lat: number; lng: number };
 };
 
-async function harness() {
+async function harness(wind = false) {
   const handlers = new Map<string, (...args: never[]) => void>();
   map = {
     center: { lat: 40, lng: -100 },
     on(type, handler) { handlers.set(type, handler); }, once(type, handler) { handlers.set(type, handler); },
-    getCenter() { return this.center; }, getZoom: () => 6, getContainer: () => ({}), remove() {},
+    getCenter() { return this.center; }, getZoom: () => 6, getContainer: () => ({}), remove: vi.fn(),
     fire(type, event = {}) { handlers.get(type)?.(event as never); }
   };
   const location = { pathname: '/', search: '?model=auto&wind=0&lat=40&lon=-100&z=6' };
@@ -92,11 +99,14 @@ async function harness() {
   vi.stubGlobal('navigator', {});
   const root = { querySelector: (selector: string) => hosts.get(selector) ?? null } as unknown as HTMLElement;
   const build = fixtureBuild({ mapFrameCount: 2, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
+  if (wind) build.manifest.mapData = { sha256: 'a'.repeat(64), bytes: 1 };
   const frames = build.manifest.frames;
   const requests: { resolve: (result: unknown) => void; signal: AbortSignal }[] = [];
   mocks.resolveAutoBuild.mockReset().mockImplementation((_api, options: { signal: AbortSignal }) => new Promise(resolve => requests.push({ resolve, signal: options.signal })));
   mocks.point = null; mocks.pointOptions = null; mocks.overlayState = null; mocks.rasterOptions = null; mocks.windInstalled = null; mocks.windStaged = null; cancelled = null;
   mocks.windMemory.mockClear(); mocks.windHorizonRemaining.mockClear();
+  mocks.windDestroy.mockReset(); mocks.rasterDestroy.mockReset(); mocks.overlayDestroy.mockReset(); mocks.schedulerDispose.mockReset(); mocks.windControls = null;
+  mocks.windClear.mockReset(); mocks.rasterClear.mockReset(); mocks.locationReset.mockReset(); mocks.lifecycle = null;
   const app = createPreviewApp();
   app.start(root);
   map.fire('style.load');
@@ -104,6 +114,7 @@ async function harness() {
   await vi.waitFor(() => expect(app.store.view.forecast.value.selectedFrame).toBe(frames[0]!.id));
   map.fire('click', { lngLat: { lat: 40, lng: -100 } });
   await vi.waitFor(() => expect(mocks.point?.current).toBeTruthy());
+  if (wind) await vi.waitFor(() => expect(mocks.windControls).not.toBeNull());
   writes.length = 0;
   return { app, build, frames, requests, writes, location };
 }
@@ -114,6 +125,52 @@ function pointSelect(id: string): void {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); });
+
+it('keeps wind gesture URL writes on the final control commit', async () => {
+  const test = await harness(true);
+  const control = mocks.windControls!;
+  control.onChange({ style: 'hybrid', visible: true, paused: false, height: 1500 });
+  control.onChange({ style: 'hybrid', visible: true, paused: false, height: 2000 });
+  expect(test.app.store.view.intent.value.windHeight).toBe(2000);
+  expect(test.writes).toHaveLength(0);
+  control.onCommit!();
+  expect(test.writes).toHaveLength(1);
+  expect(new URLSearchParams(test.location.search).get('wheight')).toBe('2000');
+  test.app.dispose();
+});
+
+it('finishes application cleanup when wind destruction fails', async () => {
+  const test = await harness(), error = new Error('Lost graphics context');
+  const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mocks.windDestroy.mockImplementationOnce(() => { throw error; });
+  try {
+    expect(() => test.app.dispose()).not.toThrow();
+    expect(mocks.overlayDestroy).toHaveBeenCalledTimes(1);
+    expect(mocks.rasterDestroy).toHaveBeenCalledTimes(1);
+    expect(mocks.schedulerDispose).toHaveBeenCalledTimes(1);
+    expect(map.remove).toHaveBeenCalledTimes(1);
+    expect(report).toHaveBeenCalledWith('Preview cleanup failed', error);
+    test.app.dispose();
+    expect(mocks.windDestroy).toHaveBeenCalledTimes(1);
+    expect(mocks.schedulerDispose).toHaveBeenCalledTimes(1);
+  } finally { report.mockRestore(); }
+});
+
+it('suspends outstanding work for BFCache even when clearing graphics fails', async () => {
+  const test = await harness(), error = new Error('Lost graphics context');
+  map.fire('moveend');
+  const request = test.requests.at(-1)!;
+  const report = vi.spyOn(console, 'error').mockImplementation(() => {});
+  mocks.windClear.mockImplementationOnce(() => { throw error; });
+  try {
+    expect(() => mocks.lifecycle!.onPageHide({ persisted: true } as PageTransitionEvent)).not.toThrow();
+    expect(request.signal.aborted).toBe(true);
+    expect(mocks.locationReset).toHaveBeenCalled();
+    expect(mocks.rasterClear).toHaveBeenCalled();
+    expect(report).toHaveBeenCalledWith('Preview cleanup failed', error);
+    expect(map.remove).not.toHaveBeenCalled();
+  } finally { test.app.dispose(); report.mockRestore(); }
+});
 
 it('preserves selected response and processing headroom during speculative admission', async () => {
   const test = await harness();

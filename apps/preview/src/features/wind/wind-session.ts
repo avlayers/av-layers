@@ -54,6 +54,8 @@ interface WindJob extends WindView {
   done: Promise<void>;
 }
 interface Failure { attempts: number; retryAt: number | null }
+interface WindPreparation { job: WindJob; height: WindHeight; controller: AbortController }
+interface WindUpgrade { job: WindJob; source: WindDataSource; controller: AbortController; view: string; height: WindHeight }
 
 export interface WindSession {
   update(): void;
@@ -81,10 +83,12 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const parked = new Map<string, WindJob>();
   const inflight = new Set<WindJob>();
   let build: PinnedBuild | null = null, installed: WindJob | null = null, installedHeight: WindHeight = 'surface';
+  let displayFailure: { job: WindJob; height: WindHeight } | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null, timerAt = 0, preparationTimer: ReturnType<typeof setTimeout> | null = null, expiryTimer: ReturnType<typeof setTimeout> | null = null, upgradeTimer: ReturnType<typeof setTimeout> | null = null;
   let destroyed = false, numericBlocked = false, acquisitionBlocked = false, preparationBlocked = false, direction = 1, lastFrame: string | null = null, viewKey = '';
   let blockedNumericBytes = 0, blockedSharedBytes = 0, pending: boolean | undefined, upgradeKey = '';
-  let upgradeSource: WindDataSource | null = null;
+  let preparing: WindPreparation | null = null, upgrade: WindUpgrade | null = null;
+  let upgradeBlocked: { resource: 'numeric' | 'preparation'; bytes: number } | null = null;
   const narrowPlans = new Set<string>();
   const isCapacity = (error: unknown) => error instanceof WindCapacityError || (error instanceof Error && ('code' in error && error.code === 'capacity' || error instanceof RangeError && /byte budget/.test(error.message)));
   const sharedBytes = () => options.budget?.used ?? options.cache.allocatedBytes;
@@ -98,13 +102,19 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     return `${frame}:${camera.join(',')}:${padded.join(',')}`;
   };
   const coversJob = (job: WindJob, camera = cameraBounds(map)) => job.build === state().build && coversBounds(job.bounds, camera);
+  const trimHistory = () => {
+    const height = state().height;
+    for (const job of [...jobs.values(), ...parked.values()]) job.source.trimHeights?.(height);
+    upgrade?.source.trimHeights(height);
+  };
   const capacity = (frame: string, error: unknown, phase: 'acquisition' | 'preparation') => {
     const numeric = phase === 'acquisition' && error instanceof WindCapacityError && error.resource === 'numeric';
-    options.cache.evictUnreferenced?.();
     const beforeNumeric = options.cache.allocatedBytes, beforeShared = sharedBytes();
+    options.cache.evictUnreferenced?.();
+    if (!numeric) trimHistory();
     const prior = parked.entries().next().value;
     const selectedReady = usableAt(selected());
-    if (prior || frame === state().selectedFrame || !selectedReady) {
+    if (sharedBytes() >= beforeShared && (prior || frame === state().selectedFrame || !selectedReady)) {
       const distant = [...ordered()].reverse().map(key => jobs.get(key)).find(job => job && job.frame !== frame && job !== installed && job.status === 'ready');
       const victim = prior?.[1] ?? distant;
       if (victim) {
@@ -151,7 +161,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   }
   function schedule(delay = 0): void {
     const at = Date.now() + Math.max(0, delay);
-    if (destroyed || timer !== null && timerAt <= at) return;
+    if (destroyed || !build || timer !== null && timerAt <= at) return;
     if (timer !== null) clearTimeout(timer);
     timerAt = at;
     timer = setTimeout(() => { timer = null; pump(); }, Math.max(0, delay));
@@ -163,23 +173,44 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (upgradeTimer !== null) clearTimeout(upgradeTimer);
     timer = preparationTimer = expiryTimer = upgradeTimer = null;
   }
+  function cancelPreparation(): void {
+    const previous = preparing; preparing = null;
+    previous?.controller.abort();
+  }
+  function cancelUpgrade(): void {
+    if (upgradeTimer !== null) { clearTimeout(upgradeTimer); upgradeTimer = null; }
+    const previous = upgrade; upgrade = null;
+    previous?.controller.abort(); previous?.source.dispose();
+    upgradeKey = ''; upgradeBlocked = null;
+  }
   function clearField(): void {
-    field.clear(); installed = null; publish.displayed(false); publish.quality(false); publish.pointWind();
+    installed = null;
+    try { field.clear(); }
+    finally { publish.displayed(false); publish.quality(false); publish.pointWind(); }
+  }
+  function clearPresentation(job: WindJob | undefined, height: WindHeight): void {
+    try { clearField(); }
+    catch { if (job) displayFailure = { job, height }; }
   }
   function dispose(job: WindJob): void {
-    if (installed === job) clearField();
-    job.controller.abort();
-    job.source.dispose();
+    if (displayFailure?.job === job) displayFailure = null;
+    if (preparing?.job === job) cancelPreparation();
+    if (upgrade?.job === job) cancelUpgrade();
+    try { if (installed === job) clearPresentation(job, installedHeight); }
+    finally { job.controller.abort(); job.source.dispose(); }
   }
   function reset(): void {
-    cancelTimers();
-    clearField();
-    for (const job of jobs.values()) dispose(job);
-    for (const job of parked.values()) dispose(job);
-    parked.clear();
-    upgradeSource?.dispose(); upgradeSource = null; upgradeKey = ''; narrowPlans.clear();
-    jobs.clear(); failures.clear(); releaseLimit(); build = null; lastFrame = null; viewKey = '';
-    setPending(false); options.overlay.setWindActive(false, false); publish.status('unavailable'); publish.reservation();
+    cancelTimers(); cancelPreparation(); cancelUpgrade();
+    try { clearField(); }
+    finally {
+      for (const job of jobs.values()) dispose(job);
+      for (const job of parked.values()) dispose(job);
+      cancelTimers();
+      parked.clear(); narrowPlans.clear();
+      displayFailure = null;
+      jobs.clear(); failures.clear(); releaseLimit(); build = null; lastFrame = null; viewKey = '';
+      setPending(false); options.overlay.setWindActive(false, false); publish.status('unavailable'); publish.reservation();
+    }
   }
   function ordered(): string[] {
     const s = state();
@@ -192,9 +223,9 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     });
   }
   function prepare(job: WindJob, height: WindHeight): boolean {
+    if (!usableAt(job)) return false;
     if (readyAt(job, height)) return true;
-    try {
-      const prepared = job.source.prepare?.(height);
+    const complete = (prepared: WindPreparedGrid | null | undefined) => {
       if (!prepared) {
         if (jobs.get(job.frame) === job) { jobs.delete(job.frame); dispose(job); recordFailure(job.frame); }
         return false;
@@ -203,14 +234,38 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       job.heights.add(height);
       failures.delete(job.frame);
       return true;
-    } catch (error) {
+    };
+    const failed = (error: unknown) => {
       if (isCapacity(error)) { capacity(job.frame, error, 'preparation'); return false; }
       if (jobs.get(job.frame) === job) { jobs.delete(job.frame); dispose(job); recordFailure(job.frame); }
       return false;
+    };
+    if (job.source.hasPrepared?.(height)) {
+      try { return complete(job.source.prepare(height)); } catch (error) { return failed(error); }
     }
+    if (preparing?.job === job && preparing.height === height) return false;
+    if (preparing) {
+      if (job !== selected() && preparing.height === height) return false;
+      cancelPreparation();
+    }
+    const task: WindPreparation = { job, height, controller: new AbortController() };
+    preparing = task;
+    let completed = false;
+    const current = () => preparing === task && !destroyed && !task.controller.signal.aborted
+      && jobs.get(job.frame) === job && state().height === height && usableAt(job);
+    void job.source.prepareAsync(height, { signal: task.controller.signal }).then(prepared => {
+      if (current()) { completed = true; complete(prepared); }
+    }).catch(error => { if (current()) { completed = true; failed(error); } }).finally(() => {
+      if (preparing !== task && !completed) return;
+      if (preparing === task) preparing = null;
+      if (destroyed || build !== job.build || !active()) return;
+      reconcile(); schedule(); schedulePreparation();
+    });
+    return false;
   }
   function install(job: WindJob, height: WindHeight): boolean {
-    if (!readyAt(job, height)) return false;
+    const current = () => !destroyed && build === job.build && selected() === job && state().height === height;
+    if (!current() || !readyAt(job, height) || displayFailure?.job === job && displayFailure.height === height) return false;
     try {
       const prepared = job.source.prepare(height);
       if (!prepared) return false;
@@ -222,33 +277,46 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         }
       };
       if (field.install) field.install(sampler, prepared, 'replace');
-      else { field.setField(sampler, 'replace'); field.setPrepared(prepared); }
+      else {
+        field.setField(sampler, 'replace');
+        if (!current()) return false;
+        field.setPrepared(prepared);
+      }
+      if (!current()) return false;
       installed = job; installedHeight = height;
+      displayFailure = null;
       publish.displayed(true); publish.quality(job.source.isOverview === true); publish.pointWind();
       return true;
     } catch (error) {
-      if (!isCapacity(error)) throw error;
-      capacity(job.frame, error, 'preparation'); return false;
+      if (!current()) return false;
+      if (isCapacity(error)) capacity(job.frame, error, 'preparation');
+      else {
+        displayFailure = { job, height };
+        try { clearField(); } catch { /* Keep failed presentation detached while healthy data stays retained. */ }
+      }
+      return false;
     }
   }
   function reconcile(): void {
     if (destroyed) return;
     const s = state(), raster = options.displayedRaster(), job = selected();
-    if (installed && (installedHeight !== s.height || !usableAt(installed))) clearField();
+    if (installed && (installedHeight !== s.height || !usableAt(installed))) clearPresentation(job, s.height);
     const matches = !!raster && raster.build === s.build && raster.frame === s.selectedFrame;
     if (matches && usableAt(job, s.height) && job && (installed !== job || installedHeight !== s.height)) {
-      if (installed) clearField();
+      if (installed) clearPresentation(job, s.height);
       install(job, s.height);
     }
+    if (destroyed || build !== s.build) return;
     const available = usableAt(job, s.height);
     const failure = s.selectedFrame ? failures.get(s.selectedFrame) : undefined;
+    const displayFailed = displayFailure?.job === job && displayFailure?.height === s.height;
     setPending(active() && !available && !blocked() && (!failure || job?.status === 'loading'));
-    publish.status(options.replacementFailed() || failure ? 'unavailable' : available ? 'ready' : active() ? 'loading' : 'unavailable');
+    publish.status(options.replacementFailed() || failure || displayFailed ? 'unavailable' : available ? 'ready' : active() ? 'loading' : 'unavailable');
     options.overlay.setWindActive(active(), jobs.size > 0);
     publish.reservation();
   }
   function schedulePreparation(): void {
-    if (destroyed || preparationTimer !== null || preparationBlocked) return;
+    if (destroyed || !build || preparationTimer !== null || preparationBlocked || preparing) return;
     preparationTimer = setTimeout(() => {
       preparationTimer = null;
       if (!active()) return;
@@ -300,12 +368,12 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (destroyed || build !== job.build || !active()) return;
       if (controller.signal.aborted) { schedule(); return; }
       const current = selected();
-      if (current?.status === 'ready') prepare(current, state().height);
+      if (!preparationBlocked && current?.status === 'ready') prepare(current, state().height);
       reconcile(); schedule(); schedulePreparation();
     });
   }
   function scheduleUpgrade(): void {
-    if (upgradeTimer !== null || upgradeSource || destroyed || admissionBlocked()) return;
+    if (upgradeTimer !== null || upgrade || destroyed || admissionBlocked()) return;
     const job = selected(), stride = job?.status === 'ready' ? job.source.overviewStride : null;
     if (!job || typeof stride !== 'number') return;
     const key = `${job.build.manifest.buildId}:${job.frame}:${stride}:${cameraBounds(map).join(',')}`;
@@ -323,41 +391,38 @@ export function createWindSession(options: WindSessionOptions): WindSession {
         cache: options.cache as WindDataCache, budget: options.budget, priority: 'background',
         horizon: renderedFrames(job.build.manifest).length, overviewForHorizon: true, coalesceSpans: true
       });
-      upgradeSource = source;
-      void source.load({ build: job.build, frame: job.frame, bounds, core, finerThan: stride }).then(status => {
-        if (upgradeSource !== source || destroyed || selected()?.source !== job.source) {
-          source.dispose(); if (upgradeSource === source) upgradeSource = null; return;
-        }
-        const admitted = source.admitted, camera = cameraBounds(map);
-        const finer = status === 'ready' && !!admitted && coversBounds(admitted, camera) && !(source.isOverview && (source.overviewStride == null || source.overviewStride >= stride));
-        if (!finer) { source.dispose(); upgradeSource = null; return; }
-        const height = state().height;
+      const attempt: WindUpgrade = { job, source, controller: new AbortController(), view: viewKey, height: state().height };
+      upgrade = attempt;
+      const relevant = () => upgrade === attempt && !destroyed && !attempt.controller.signal.aborted
+        && selected() === job && viewKey === attempt.view && state().height === attempt.height;
+      void (async () => {
+        let adopted = false, failure: 'numeric' | 'preparation' | null = null;
         try {
-          if (!source.prepare(height) || !source.field(height)) { source.dispose(); upgradeSource = null; return; }
+          const status = await source.load({ build: job.build, frame: job.frame, bounds, core, finerThan: stride, signal: attempt.controller.signal });
+          if (!relevant()) return;
+          const admitted = source.admitted, camera = cameraBounds(map);
+          const finer = status === 'ready' && !!admitted && coversBounds(admitted, camera)
+            && !(source.isOverview && (source.overviewStride == null || source.overviewStride >= stride));
+          if (!finer) return;
+          const prepared = await source.prepareAsync(attempt.height, { signal: attempt.controller.signal });
+          if (!relevant() || !prepared || !coversBounds(admitted, cameraBounds(map)) || !source.field(attempt.height)) return;
+          const replacement: WindJob = { zoom: map.getZoom(), build: job.build, frame: job.frame, bounds: [...admitted] as Bounds, controller: attempt.controller, source, status: 'ready', heights: new Set([attempt.height]), done: Promise.resolve() };
+          source.promote();
+          jobs.set(job.frame, replacement); upgrade = null; adopted = true; upgradeBlocked = null;
+          dispose(job);
+          reconcile(); schedule(); schedulePreparation();
         } catch (error) {
-          if (isCapacity(error)) { preparationBlocked = true; blockedSharedBytes = sharedBytes(); }
-          source.dispose(); upgradeSource = null; return;
+          if (relevant() && isCapacity(error)) failure = error instanceof WindCapacityError && error.resource === 'numeric' ? 'numeric' : 'preparation';
+        } finally {
+          if (upgrade === attempt) upgrade = null;
+          if (!adopted) source.dispose();
+          if (failure) upgradeBlocked = { resource: failure, bytes: failure === 'numeric' ? options.cache.allocatedBytes : sharedBytes() };
         }
-        const replacement: WindJob = { zoom: map.getZoom(), build: job.build, frame: job.frame, bounds: [...admitted] as Bounds, controller: new AbortController(), source, status: 'ready', heights: new Set([height]), done: Promise.resolve() };
-        const previous = jobs.get(job.frame);
-        jobs.set(job.frame, replacement); upgradeSource = null;
-        if (previous && previous !== replacement) {
-          if (installed === previous) clearField();
-          dispose(previous);
-        }
-        if (!installed) install(replacement, height);
-        reconcile();
-      }, error => {
-        if (upgradeSource === source) upgradeSource = null;
-        source.dispose();
-        if (!isCapacity(error) || destroyed) return;
-        if (error instanceof WindCapacityError && error.resource === 'numeric') { numericBlocked = true; blockedNumericBytes = options.cache.allocatedBytes; }
-        else { acquisitionBlocked = true; blockedSharedBytes = sharedBytes(); }
-      });
+      })();
     }, 150);
   }
   function pump(): void {
-    if (!active()) { setPending(false); return; }
+    if (build !== state().build || !active()) { setPending(false); return; }
     const s = state(), frames = ordered(), current = selected();
     if (!current && s.selectedFrame) {
       const failure = failures.get(s.selectedFrame);
@@ -383,6 +448,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   }
   function update(): void {
     if (destroyed) return;
+    displayFailure = null;
     const s = state();
     if (!active() || !s.build || !s.selectedFrame) { reset(); return; }
     const camera = cameraBounds(map);
@@ -400,6 +466,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     build = s.build;
     const nextView = `${map.getZoom()}:${camera.join(',')}`;
     if (viewKey && viewKey !== nextView) {
+      cancelUpgrade();
       failures.clear();
       if (narrowPlans.size > 32) narrowPlans.clear();
       if (![...jobs.values(), ...parked.values()].some(job => coversJob(job, camera))) releaseAdmission();
@@ -412,7 +479,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     for (const [frame, job] of [...jobs]) {
       if (covers(job)) continue;
       jobs.delete(frame);
-      if (installed === job) clearField();
+      if (preparing?.job === job) cancelPreparation();
+      if (installed === job) clearPresentation(job, installedHeight);
       if (job.status === 'ready' && job.build === s.build && !restored.has(frame)) {
         const previous = parked.get(frame);
         if (previous && previous !== job) dispose(previous);
@@ -426,6 +494,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       parked.delete(frame); jobs.set(frame, job);
     }
     if (lastFrame !== s.selectedFrame) {
+      cancelUpgrade();
       const previousSource = lastFrame ? jobs.get(lastFrame)?.source as (WindDataSource & { setPriority?: (priority: 'foreground' | 'background') => void }) | undefined : undefined;
       previousSource?.setPriority?.('background');
       const frames = renderedFrames(s.build.manifest).map(frame => frame.id), previous = lastFrame ? frames.indexOf(lastFrame) : -1, next = frames.indexOf(s.selectedFrame);
@@ -445,7 +514,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     pump();
   }
   const released = () => {
-    if (destroyed || !blocked()) return;
+    if (destroyed) return;
+    if (upgradeBlocked && (upgradeBlocked.resource === 'numeric' ? options.cache.allocatedBytes : sharedBytes()) < upgradeBlocked.bytes) {
+      upgradeBlocked = null; upgradeKey = ''; schedule();
+    }
+    if (!blocked()) return;
     const evicted = options.cache.evictUnreferenced?.() ?? 0;
     let wakeAdmission = false, wakePreparation = false;
     if (numericBlocked && options.cache.allocatedBytes < blockedNumericBytes && (evicted > 0 || options.cache.allocatedBytes < blockedNumericBytes)) {
@@ -466,10 +539,12 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     heightChanged(previous) {
       const s = state();
       if (previous === s.height || destroyed) return;
+      displayFailure = null;
       if (preparationTimer !== null) { clearTimeout(preparationTimer); preparationTimer = null; }
+      cancelPreparation(); cancelUpgrade();
       failures.clear(); releaseLimit();
-      if (installed && installedHeight !== s.height) clearField();
       const job = selected();
+      if (installed && installedHeight !== s.height) clearPresentation(job, s.height);
       if (job?.status === 'ready') prepare(job, s.height);
       reconcile(); schedule(); schedulePreparation();
     },
@@ -477,8 +552,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (destroyed) return;
       const s = state(), camera = cameraBounds(map);
       if (installed && installed.build === target.build && installed.frame === target.frame && installedHeight === s.height && coversBounds(installed.bounds, camera)) return;
-      clearField();
       const job = selected();
+      clearPresentation(job, s.height);
       if (active() && target.build === s.build && target.frame === s.selectedFrame && job && coversBounds(job.bounds, camera) && usableAt(job, s.height)) install(job, s.height);
     },
     get ready() {
@@ -514,8 +589,11 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     get installed() { return installed ? { build: installed.build, frame: installed.frame, source: installed.source, height: installedHeight, isOverview: installed.source.isOverview === true } : null; },
     destroy() {
       if (destroyed) return;
-      reset(); destroyed = true; unsubscribe?.();
-      if ('onRelease' in options.cache) options.cache.onRelease = null;
+      try { reset(); }
+      finally {
+        destroyed = true; unsubscribe?.();
+        if ('onRelease' in options.cache) options.cache.onRelease = null;
+      }
     }
   };
 }

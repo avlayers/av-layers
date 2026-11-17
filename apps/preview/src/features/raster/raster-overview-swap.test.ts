@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { Map } from 'maplibre-gl';
+import { removeProtocol, type Map } from 'maplibre-gl';
 import type { PinnedBuild, RasterTileSourceProtocol, RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
@@ -101,12 +101,58 @@ function fixture(coveringCount = 1, options: RasterOverlayOptions = {}) {
     await complete(fine(build.manifest.frames[0].id)!);
     return build;
   };
-  return { overlay, sources, opacity, loaded, states, paints, emit, fine, complete, state, painted, initial, setCoveringCount: (count: number) => { coveringCount = count; }, overview: () => overviews.at(-1)! };
+  return { overlay, map, handlers, sources, opacity, loaded, states, paints, emit, fine, complete, state, painted, initial, setCoveringCount: (count: number) => { coveringCount = count; }, overview: () => overviews.at(-1)! };
 }
 beforeEach(() => {
   vi.useFakeTimers(); vi.setSystemTime(Date.parse('2026-10-30T00:00:00Z')); overviews.length = 0;
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
+
+it.each([
+  ['clear', 'overview'], ['destroy', 'overview'], ['clear', 'slot'], ['destroy', 'slot']
+] as const)('completes %s ownership cleanup after a %s removal error', async (action, failure) => {
+  const budget = createPreparationBudget(256 * 1024 * 1024), f = fixture(1, { budget }), b = await f.initial();
+  const error = new Error('Original removal failed'), later = new Error('Later removal failed');
+  const protocol = f.overlay['protocol']!, overview = f.overlay['overview']!;
+  const protocolDispose = vi.spyOn(protocol, 'dispose'), overviewDestroy = vi.spyOn(overview, 'destroy');
+  const transports = f.overlay['slots'].map(slot => vi.spyOn(slot.transport, 'dispose'));
+  expect(transports.length).toBeGreaterThan(0);
+  expect(budget.used).toBeGreaterThan(0);
+  if (failure === 'overview') {
+    const clear = overview.clear.bind(overview);
+    vi.spyOn(overview, 'clear').mockImplementationOnce(() => { clear(); throw error; });
+  }
+  const removeLayer = f.map.removeLayer;
+  vi.spyOn(f.map, 'removeLayer').mockImplementationOnce(id => { removeLayer(id); throw failure === 'slot' ? error : later; });
+  if (action === 'destroy') {
+    const off = f.map.off;
+    vi.spyOn(f.map, 'off').mockImplementationOnce((event, callback) => { off(event, callback); throw later; });
+  }
+  try {
+    expect(() => action === 'destroy' ? f.overlay.destroy() : f.overlay.clear(true)).toThrow(error);
+    expect(protocolDispose).toHaveBeenCalledOnce();
+    expect(overviewDestroy).toHaveBeenCalledOnce();
+    expect(removeProtocol).toHaveBeenCalledWith(protocol.scheme);
+    expect(transports.every(dispose => dispose.mock.calls.length === 1)).toBe(true);
+    expect(f.overlay['slots']).toHaveLength(0);
+    expect(f.overlay['protocol']).toBeNull();
+    expect(f.overlay['overview']).toBeNull();
+    expect(f.state()).toMatchObject({ requested: null, displayed: null });
+    expect(f.sources.size).toBe(0);
+    expect(budget.used).toBe(0);
+    const listeners = () => [...f.handlers.values()].reduce((count, callbacks) => count + callbacks.size, 0);
+    if (action === 'destroy') {
+      expect(listeners()).toBe(0);
+      expect(() => f.overlay.destroy()).not.toThrow();
+      expect(protocolDispose).toHaveBeenCalledOnce();
+    } else {
+      expect(listeners()).toBeGreaterThan(0);
+      await f.initial(b);
+      expect(f.state().displayed?.frame).toBe(b.manifest.frames[0].id);
+    }
+  } finally { f.overlay.destroy(); }
+  expect(budget.used).toBe(0);
+});
 
 it('reveals after a hidden upload and publishes only after the visible paint', async () => {
   const beforeReveal = vi.fn(), f = fixture(1, { beforeReveal });
@@ -125,6 +171,36 @@ it('reveals after a hidden upload and publishes only after the visible paint', a
     expect(f.state().displayed?.frame).toBe(first.id);
     f.emit('render');
     expect(f.state().displayed?.frame).toBe(second.id);
+  } finally { f.overlay.destroy(); }
+});
+
+it.each(['detail', 'empty'] as const)('restores the %s raster and wind boundary when an overview reveal fails', async previous => {
+  const beforeReveal = vi.fn(), f = fixture(1, { beforeReveal });
+  try {
+    const b = previous === 'detail' ? await f.initial() : fixtureBuild(), [first, second] = b.manifest.frames;
+    const next = previous === 'detail' ? second : first;
+    if (previous === 'empty') f.overlay.select(b, 'usable-lift-agl', next.id);
+    const overview = f.overview() as OverviewDouble & { show(build: PinnedBuild, layer: LayerId, frame: string, opacity: number): boolean };
+    const show = overview.show.bind(overview);
+    let failed = false;
+    Object.assign(overview, { show(build: PinnedBuild, layer: LayerId, frame: string, opacity: number) {
+      if (failed) return false;
+      if (frame === next.id && opacity > 0) { failed = true; return false; }
+      return show(build, layer, frame, opacity);
+    } });
+    beforeReveal.mockClear(); overview.warm(next.id);
+    f.overlay.select(b, 'usable-lift-agl', next.id);
+    for (let paint = 0; paint < 25; paint++) f.emit('render');
+    if (previous === 'detail') {
+      expect(beforeReveal.mock.calls.map(([selection]) => selection.frame)).toEqual([next.id, first.id]);
+      expect(f.state().displayed?.frame).toBe(first.id);
+      expect(f.opacity.get(f.fine(first.id)!)).toBe(0.7);
+      expect(f.painted()).toEqual([{ frame: first.id, quality: 'detail', opacity: 0.7 }]);
+    } else {
+      expect(beforeReveal).not.toHaveBeenCalled();
+      expect(f.state().displayed).toBeNull();
+      expect(f.painted()).toEqual([]);
+    }
   } finally { f.overlay.destroy(); }
 });
 

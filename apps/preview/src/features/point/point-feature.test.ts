@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import { formatPlaceTime, longitudeOffsetHours, type GeoPoint, type PinnedBuild, type PointSeriesContext } from '@av/client';
 
@@ -8,6 +8,7 @@ vi.mock('../lazy', () => ({ createPointSession: lazy.createPointSession }));
 import { createPointFeature, type PointWind } from './point-feature';
 
 const point: GeoPoint = { lat: 40, lon: -100 };
+afterEach(() => vi.unstubAllGlobals());
 
 function expectedStamp(build: PinnedBuild, frame: string): string {
   const validTime = build.manifest.frames.find(candidate => candidate.id === frame)!.validTime;
@@ -51,12 +52,58 @@ async function harness() {
     publish
   });
   return {
-    build, sample, publish, feature,
+    build, sample, publish, feature, session,
     setWind(next: PointWind | null) { wind = next; }
   };
 }
 
 describe('point map wind readout', () => {
+  it.each(['close', 'suspend', 'dispose'] as const)('cancels a lazy point open on %s before it can start requests', async action => {
+    const test = await harness();
+    lazy.createPointSession.mockClear();
+    const pending = test.feature.open(point);
+    const importing = test.feature.pending;
+    test.feature[action]();
+    expect(test.feature.pending).toBe(false);
+    await pending;
+    expect(test.session.open).not.toHaveBeenCalled();
+    expect(test.publish.horizon).not.toHaveBeenCalled();
+    expect(importing).toBe(true);
+    expect(test.feature.pending).toBe(false);
+    if (action === 'dispose') {
+      expect(lazy.createPointSession).not.toHaveBeenCalled();
+      await test.feature.open(point);
+      expect(lazy.createPointSession).not.toHaveBeenCalled();
+    } else {
+      await test.feature.open(point);
+      expect(test.session.open).toHaveBeenCalledOnce();
+    }
+    test.feature.dispose();
+  });
+
+  it('dismisses a pending lazy open outside the map before requests can start', async () => {
+    class NodeStub { contains(node: unknown) { return node === this; } }
+    vi.stubGlobal('Node', NodeStub);
+    const test = await harness(), map = new NodeStub() as unknown as Element, outside = new NodeStub() as unknown as Node;
+    const pending = test.feature.open(point);
+    test.feature.dismiss(map, map);
+    expect(test.feature.pending).toBe(true);
+    test.feature.dismiss(outside, map);
+    expect(test.feature.pending).toBe(false);
+    await pending;
+    expect(test.session.open).not.toHaveBeenCalled();
+    expect(test.publish.horizon).not.toHaveBeenCalled();
+    test.feature.dispose();
+  });
+
+  it('allows only the newest click waiting on the lazy session to open', async () => {
+    const test = await harness(), next = { lat: 41, lon: -99 };
+    const first = test.feature.open(point), second = test.feature.open(next);
+    await Promise.all([first, second]);
+    expect(test.session.open).toHaveBeenCalledExactlyOnceWith(next);
+    test.feature.dispose();
+  });
+
   it('keeps the native label and sampling', async () => {
     const test = await harness();
     await test.feature.open(point);

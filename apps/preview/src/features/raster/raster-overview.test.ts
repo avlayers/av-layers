@@ -75,6 +75,313 @@ beforeEach(() => {
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+it.each(['addSource', 'addLayer'] as const)('rolls back display admission when %s fails', async operation => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build();
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+    const before = budget.used;
+    f.map[operation].mockImplementationOnce(() => { throw new Error('Map publication failed'); });
+    expect(f.overview.show(b, 'usable-lift-agl', b.manifest.frames[0].id, 0.7)).toBe(false);
+    expect(budget.used).toBe(before);
+    expect(f.sources.size).toBe(0);
+    expect(f.layers.size).toBe(0);
+  } finally { f.overview.destroy(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(budget.used).toBe(0);
+});
+
+it('keeps a visible preview charged through multiple pending viewport replacements', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, true, { budget }, true), b = build(2);
+  const frame = b.manifest.frames[0].id;
+  try {
+    f.view(LOCAL, 4); f.overview.select(b, 'usable-lift-agl', frame);
+    for (const request of f.requests) request.resolve({ data: new ArrayBuffer(12) });
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(2));
+    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(true);
+    const shown = f.overview['shown']!, pixels = shown.bitmap.width * shown.bitmap.height * 4;
+    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview['heldLease']?.bytes).toBe(pixels);
+    f.view({ west: 40, east: 41, south: 40, north: 41 }, 9); f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview['shown']).toBe(shown);
+    expect(f.overview['heldLease']?.bytes).toBe(pixels);
+    expect(budget.snapshot()['raster-preview']).toBe(2 * 256 * 256 * 4 + pixels);
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it('preserves a new selection made during native invalidation cancellation', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, true, { budget }, true), b = build(2);
+  const [first, second] = b.manifest.frames;
+  const requestTile = f.protocol.requestTile!.getMockImplementation()!;
+  let replaced = false;
+  f.protocol.requestTile!.mockImplementation(url => {
+    const handle = requestTile(url);
+    return !url.includes('/9/') ? handle : { ...handle, cancel() {
+      handle.cancel();
+      if (!replaced) { replaced = true; f.overview.select(b, 'usable-lift-msl', second.id); }
+    } };
+  });
+  try {
+    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', first.id);
+    for (const request of f.requests.filter(value => value.url.includes('/8/'))) request.resolve({ data: new ArrayBuffer(12) });
+    await vi.waitFor(() => expect(f.requests.some(request => request.url.includes('/9/'))).toBe(true));
+    f.view(FOCUSED, 8); f.overview.select(b, 'usable-lift-agl', first.id);
+    expect(replaced).toBe(true);
+    expect(f.overview['context']?.layer).toBe('usable-lift-msl');
+    expect(f.overview['selected']).toBe(second.id);
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it('latches a failed opacity publication until a new explicit selection', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+    f.overview.show(b, 'usable-lift-agl', frame, 0);
+    f.map.setPaintProperty.mockClear().mockImplementationOnce(() => { throw new Error('Paint failed'); });
+    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(false);
+    expect(f.overview['opacities'].get(f.overview.id)).toBe(0);
+    const calls = f.map.setPaintProperty.mock.calls.length;
+    for (let paint = 0; paint < 25; paint++) expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(false);
+    expect(f.map.setPaintProperty).toHaveBeenCalledTimes(calls);
+    f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview.show(b, 'usable-lift-agl', frame, 0.7)).toBe(true);
+    expect(f.map.setPaintProperty).toHaveBeenCalledTimes(calls + 1);
+    expect(f.overview['opacities'].get(f.overview.id)).toBe(0.7);
+  } finally { f.overview.destroy(); }
+});
+
+it('keeps the previous image visible when a staged reveal fails and render callbacks repeat', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build(2);
+  const [first, second] = b.manifest.frames;
+  try {
+    f.overview.select(b, 'usable-lift-agl', first.id);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(2));
+    expect(f.overview.show(b, 'usable-lift-agl', first.id, 0.7)).toBe(true);
+    const previous = f.overview['shown']!, before = budget.used;
+    f.overview.select(b, 'usable-lift-agl', second.id);
+    expect(f.overview.show(b, 'usable-lift-agl', second.id, 0)).toBe(true);
+    const stagedBytes = budget.used;
+    f.map.setPaintProperty.mockImplementationOnce(() => { throw new Error('Stage reveal failed'); });
+    expect(f.overview.show(b, 'usable-lift-agl', second.id, 0.7)).toBe(false);
+    const mutations = f.map.setPaintProperty.mock.calls.length;
+    for (let paint = 0; paint < 25; paint++) {
+      expect(f.overview.show(b, 'usable-lift-agl', second.id, 0.7)).toBe(false);
+      f.overview.painted();
+    }
+    expect(f.map.setPaintProperty).toHaveBeenCalledTimes(mutations);
+    expect(f.overview['visibleId']).toBe(f.overview.id);
+    expect(f.overview['opacities'].get(f.overview.id)).toBe(0.7);
+    expect(f.overview['opacities'].get(`${f.overview.id}-stage`)).toBe(0);
+    expect(previous.bitmap.close).not.toHaveBeenCalled();
+    expect(budget.used).toBe(stagedBytes);
+    expect(stagedBytes).toBeGreaterThan(before);
+    f.overview.select(b, 'usable-lift-agl', second.id);
+    expect(f.overview.show(b, 'usable-lift-agl', second.id, 0.7)).toBe(true);
+    expect(f.overview.painted()).toBe(true);
+    expect(f.sources.has(f.overview.id)).toBe(false);
+  } finally { f.overview.destroy(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(budget.used).toBe(0);
+});
+
+it('finishes destruction after a map source removal fails', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }, true), b = build();
+  f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+  await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+  f.overview.show(b, 'usable-lift-agl', b.manifest.frames[0].id, 0.7);
+  f.map.removeLayer.mockImplementationOnce(() => { throw new Error('Layer removal failed'); });
+  expect(() => f.overview.destroy()).toThrow('Layer removal failed');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.transport.dispose).toHaveBeenCalledOnce();
+  expect(f.map.removeSource).toHaveBeenCalled();
+  expect(canvases[0].width).toBe(0);
+  expect(canvases[0].height).toBe(0);
+  expect(budget.used).toBe(0);
+});
+
+it.each(['clear', 'transfer'] as const)('fails a canvas %s at its owning job and recovers through the bounded preview retry', async operation => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }, true), b = build();
+  const frame = b.manifest.frames[0].id;
+  const method = operation === 'transfer' ? vi.spyOn(canvases[0], 'transferToImageBitmap') : canvases[0].context.clearRect;
+  method.mockImplementationOnce(() => { throw new Error('Canvas operation failed'); });
+  try {
+    f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+    expect(f.requests).toHaveLength(8);
+    expect(f.handles.every(handle => handle.release.mock.calls.length === 1)).toBe(true);
+  } finally { f.overview.destroy(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(budget.used).toBe(0);
+});
+
+it('bounds retries and releases buffers when canvas transfers keep failing', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }, true), b = build();
+  vi.spyOn(canvases[0], 'transferToImageBitmap').mockImplementation(() => { throw new Error('Canvas unavailable'); });
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(f.overview.state).toEqual({ ready: 0, total: 1, failed: 1 });
+    expect(f.requests).toHaveLength(12);
+    expect(f.handles.every(handle => handle.release.mock.calls.length === 1)).toBe(true);
+    expect(f.overview['decodeLease']).toBeNull();
+  } finally { f.overview.destroy(); }
+  await vi.advanceTimersByTimeAsync(0);
+  expect(budget.used).toBe(0);
+});
+
+it('keeps native eviction terminal throughout the current pump and releases every reservation after repeated pressure', async () => {
+  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib, { foregroundReserveBytes: 24 * mib });
+  const f = fixture(true, 12, true, { budget }, true), b = build(2), frames = b.manifest.frames.map(frame => frame.id);
+  const world = 256 * 2 ** 9;
+  const longitude = (x: number) => x / world * 360 - 180;
+  const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / world))) * 180 / Math.PI;
+  const view = { west: longitude(81920 - 212), south: latitude(49200 + 212), east: longitude(81920 + 212), north: latitude(49200 - 212) };
+  const crop = planRasterCrop([view.west, view.south, view.east, view.north], 9)!;
+  expect(crop.bytes).toBe(mib);
+  f.view(view, 9);
+  try {
+    for (let cycle = 0; cycle < 12; cycle++) {
+      const overview = f.overview;
+      overview['context'] = { build: b, layer: 'usable-lift-agl', frames, preview: crop, native: crop,
+        requiredZoom: 9, previewZoom: 9, warmed: true, jobs: [], previewLease: null, nativeScheduled: true, nativeWindowed: false };
+      overview['selected'] = frames[0]; overview['nativeRested'] = true;
+      overview['canvasLease'] = budget.reserve('raster-canvas', crop.bytes);
+      overview['decodeLease'] = budget.reserve('raster-decode', 5 * mib);
+      const selected = overview['job'](frames[0], 'detail', crop), background = overview['job'](frames[1], 'detail', crop);
+      background.lease = budget.reserve('raster-native', crop.bytes, 'background');
+      for (let index = 0; index < 4; index++) {
+        const lease = budget.reserve('raster-delivered', 64 * 1024)!;
+        background.tiles[index] = { state: 'compressed', data: new ArrayBuffer(64 * 1024), release: () => lease.release() };
+      }
+      overview['context'].jobs = [selected, background];
+      // Selected admission must evict a job already in this pump's snapshot.
+      const held = budget.reserve('other', budget.backgroundLimit - budget.used - (crop.bytes - 128 * 1024))!;
+      const requestCount = f.requests.length;
+      try {
+        overview['pump']();
+        expect(background.failed).toBe(true);
+        expect(overview['context'].jobs).not.toContain(background);
+        expect(background.lease).toBeNull();
+        expect(f.requests.slice(requestCount).some(request => request.url.includes(`/${frames[1]}/`))).toBe(false);
+        expect(decode).not.toHaveBeenCalled();
+      } finally { overview.clear(); held.release(); }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(budget.used).toBe(0);
+    }
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it.each(['rejection', 'oversized response'] as const)('keeps request admission bounded after repeated %s failures', async failure => {
+  const f = fixture(true, 12, true, {}, true), b = build(48);
+  const settled = new Set<typeof f.requests[number]>();
+  const pending = () => f.requests.filter(request => !request.signal.aborted && !settled.has(request));
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(pending()).toHaveLength(24);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const request = pending()[0];
+      settled.add(request);
+      if (failure === 'rejection') request.reject(new Error('request failed'));
+      else request.resolve({ data: new ArrayBuffer(MAX_TILE_BYTES + 1) });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pending().length).toBeLessThanOrEqual(24);
+      expect(f.overview['fetching']).toBe(pending().length);
+    }
+    const selected = b.manifest.frames[0].id;
+    expect(pending().filter(request => !request.url.includes(`/${selected}/`)).length).toBeLessThanOrEqual(20);
+  } finally { f.overview.destroy(); }
+  expect(f.overview['fetching']).toBe(0);
+});
+
+it('stops a failed pump when its synchronous error callback replaces the context', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, true, { budget }, true), b = build(48);
+  f.protocol.requestTile!.mockImplementationOnce(() => { throw new Error('request failed synchronously'); });
+  f.onReady.mockImplementationOnce(() => f.overview.select(b, 'usable-lift-msl', b.manifest.frames[1].id));
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = f.requests.filter(request => !request.signal.aborted);
+    expect(pending).toHaveLength(24);
+    expect(pending.every(request => request.url.includes('/usable-lift-msl/'))).toBe(true);
+    expect(f.overview['fetching']).toBe(pending.length);
+    expect(f.overview.ready(b, 'usable-lift-agl', b.manifest.frames[0].id)).toBe(false);
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it('cancels a handle returned after synchronous context replacement and releases its late response', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, false, { budget }, true), b = build(48);
+  const requestTile = f.protocol.requestTile!.getMockImplementation()!;
+  f.protocol.requestTile!.mockImplementationOnce(url => {
+    const handle = requestTile(url);
+    f.overview.select(b, 'usable-lift-msl', b.manifest.frames[1].id);
+    return handle;
+  });
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    expect(f.requests[0].signal.aborted).toBe(true);
+    expect(f.requests.filter(request => !request.signal.aborted)).toHaveLength(24);
+    f.requests[0].resolve({ data: new ArrayBuffer(12) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.handles[0].release).toHaveBeenCalledOnce();
+    expect(decode).not.toHaveBeenCalled();
+    expect(f.overview['fetching']).toBe(24);
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it.each(['request failure', 'clear', 'viewport reset'] as const)('preserves a context started synchronously during %s cancellation', async cause => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(true, 12, true, { budget }, true), b = build(48);
+  const requestTile = f.protocol.requestTile!.getMockImplementation()!;
+  f.protocol.requestTile!.mockImplementationOnce(url => {
+    const handle = requestTile(url);
+    return { ...handle, cancel() {
+      handle.cancel();
+      f.overview.select(b, 'usable-lift-msl', b.manifest.frames[1].id);
+    } };
+  });
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    if (cause === 'request failure') f.requests[1].reject(new Error('request failed'));
+    else if (cause === 'clear') f.overview.clear();
+    else {
+      f.view(FOCUSED, 9);
+      f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    }
+    await vi.advanceTimersByTimeAsync(0);
+    const pending = f.requests.filter(request => !request.signal.aborted && request !== f.requests[1]);
+    expect(pending).toHaveLength(cause === 'viewport reset' ? 22 : 24);
+    expect(pending.every(request => request.url.includes('/usable-lift-msl/'))).toBe(true);
+    expect(f.overview['fetching']).toBe(pending.length);
+  } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it('keeps cancelled decodes charged and bounded across repeated context replacement', async () => {
+  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib), f = fixture(false, 12, true, { budget }, true), b = build(4);
+  const pending: ((image: Bitmap) => void)[] = [];
+  decode.mockImplementation(() => new Promise(resolve => pending.push(resolve)));
+  try {
+    f.overview.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
+    await vi.waitFor(() => expect(pending).toHaveLength(4));
+    for (let cycle = 0; cycle < 12; cycle++) {
+      f.overview.clear();
+      f.overview.select(b, cycle % 2 ? 'usable-lift-agl' : 'usable-lift-msl', b.manifest.frames[cycle % 4].id);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pending).toHaveLength(4);
+      expect(budget.snapshot()['raster-decode']).toBe(5 * mib);
+    }
+  } finally { f.overview.destroy(); }
+  const late = pending.map(() => new Bitmap('tile'));
+  pending.forEach((resolve, index) => resolve(late[index]));
+  await vi.waitFor(() => expect(budget.used).toBe(0));
+  expect(late.every(image => image.close.mock.calls.length === 1)).toBe(true);
+});
+
 it('waits for the wind horizon before distant native work without blocking previews or nearby native', async () => {
   const budget = createPreparationBudget(512 * 1024 * 1024), b = build(20), frames = renderedFrames(b.manifest);
   let canExpand = false;

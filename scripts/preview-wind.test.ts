@@ -8,6 +8,42 @@ import { configureGfsWindGrid, configureRrfsWindGrid, previewWindFixture } from 
 import { measureWindCall } from './preview-observe';
 import golden from './fixtures/gfs-wind-layout.json' with { type: 'json' };
 
+it('serves all 48 AV-WRF frames with the pilot Lambert geometry and 41 vertical levels', async () => {
+  const hours = Array.from({ length: 48 }, (_, index) => index < 36 ? index + 1 : 39 + (index - 36) * 3);
+  const frames = fixtureProfileBuild({ frameHours: hours, mapFrameCount: 48 }).manifest.frames;
+  const build = fixtureBuild({ model: 'av-wrf', frames, mapFrameCount: 48 });
+  build.expiresAtMs = Date.now() + 60000; build.manifest.expiresAt = new Date(build.expiresAtMs).toISOString();
+  const fixture = previewWindFixture(build.manifest, 'av-wrf');
+  const native = build.manifest.surfaces.find(surface => surface.kind === 'native')!.grid;
+  const fine = build.manifest.surfaces.find(surface => surface.kind === 'fine')!.grid;
+  expect(native.kind).toBe('lambert-conformal');
+  expect([native.width, native.height, fine.width, fine.height]).toEqual([204, 174, 407, 347]);
+  expect(frames.at(-1)?.id).toBe('f072');
+  for (const frame of frames) {
+    const descriptor = parseWindFrame(new TextEncoder().encode(JSON.stringify(fixture.descriptor(frame.id))));
+    expect(descriptor.levels).toBe(41);
+    expect(descriptor.windMask).toBeUndefined();
+    expect(() => assertWindFrameLayout(descriptor, { native, fine })).not.toThrow();
+  }
+  const fetchImpl: typeof fetch = async url => {
+    const parts = new URL(String(url)).pathname.split('/'), data = parts.indexOf('data'), frame = parts[data + 1], kind = parts[data + 2];
+    if (!kind) return Response.json(fixture.descriptor(frame));
+    const [first, last = first] = parts[data + 3].split('-').map(Number);
+    const chunks = Array.from({ length: last - first + 1 }, (_, index) => fixture.chunk(frame, kind, first + index));
+    if (chunks.some(chunk => !chunk)) return new Response(null, { status: 404 });
+    return new Response(Uint8Array.from(Buffer.concat(chunks as Uint8Array[])), { headers: { 'content-type': 'application/octet-stream' } });
+  };
+  const source = new WindDataSource('https://api.test', { fetchImpl });
+  for (const frame of ['f001', 'f072']) {
+    expect(await source.load({ build, frame, bounds: [45, 40.4, 45.2, 40.6] })).toBe('ready');
+    const sample = source.sample(40.4895, 45.1123, 1500);
+    expect(sample.status).toBe('valid');
+    expect(sample.u).toBeCloseTo(fixture.expected(frame, 40.4895, 45.1123, 1500)!.u, 4);
+    expect(await source.prepareAsync(1500)).not.toBeNull();
+  }
+  source.dispose();
+});
+
 it('serves valid frame-specific wind for native and overview sampling', async () => {
   const build = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 2 });
   build.expiresAtMs = Date.now() + 60_000;

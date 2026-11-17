@@ -24,6 +24,17 @@ export interface WindPreparedGrid {
   readonly key: string;
   readonly retain?: () => () => void;
 }
+export interface WindPreparationOptions {
+  readonly signal?: AbortSignal;
+  readonly size?: number;
+}
+interface WindPreparationTask {
+  readonly height: 'surface' | number | 'lift';
+  readonly controller: AbortController;
+  step(): boolean;
+  finish(): WindPreparedGrid;
+  cancel(reason?: unknown): void;
+}
 export interface WindSample { status: WindStatus; u: number | null; v: number | null }
 interface Overview { stride: number; width: number; height: number; tilesAcross: number; data: Map<number, DataView> }
 const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null });
@@ -35,6 +46,7 @@ const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8, UNAVAILABLE_BUILD_TTL_MS = 
 const REQUEST_TIMEOUT_MS = 15_000, FIELD_SLOTS = 8192;
 const DEMOTED_REQUEST = Symbol('demoted wind request');
 const DEFAULT_PREPARED_GRID_SIZE = 128;
+const PREPARATION_SLICE_MS = 4, PREPARATION_SLICE_ROWS = 8;
 export const WIND_FIELD_SAMPLER_BYTES = FIELD_SLOTS * 17;
 export const WIND_PREPARED_GRID_BYTES = DEFAULT_PREPARED_GRID_SIZE * DEFAULT_PREPARED_GRID_SIZE * 4;
 const OUTSIDE_WIND = decodePackedWindChunk(encodeWindColumns([null], 1));
@@ -434,6 +446,7 @@ export class WindDataSource {
   private readonly cache: WindDataCache;
   private readonly held = new Set<CachedBytes>();
   private readonly preparedGrids = new Map<string, { grid: WindPreparedGrid; release(): void }>();
+  private preparing?: WindPreparationTask;
   private readonly preparedUsage = { bytes: 0 };
   private readonly fields = new Map<string | number, { field: ReturnType<WindDataSource['field']>; dispose(): void }>();
   private readonly budget?: PreparationBudget;
@@ -542,11 +555,55 @@ export class WindDataSource {
   }
 
   prepare(height: 'surface' | number | 'lift', size = DEFAULT_PREPARED_GRID_SIZE): WindPreparedGrid | null {
+    const task = this.beginPreparation(height, size);
+    if (!task || !('step' in task)) return task;
+    try {
+      while (task.step()) { /* The synchronous API completes every row in this turn. */ }
+      return task.finish();
+    } finally { task.cancel(); }
+  }
+
+  /** Yield between small row batches; a new preparation, load or disposal cancels unfinished work. */
+  async prepareAsync(height: 'surface' | number | 'lift', options: WindPreparationOptions = {}): Promise<WindPreparedGrid | null> {
+    options.signal?.throwIfAborted();
+    const task = this.beginPreparation(height, options.size ?? DEFAULT_PREPARED_GRID_SIZE);
+    if (!task || !('step' in task)) return task;
+    const abort = () => task.cancel(options.signal?.reason);
+    options.signal?.addEventListener('abort', abort, { once: true });
+    try {
+      let started = performance.now(), rows = 0;
+      while (task.step()) {
+        if (++rows < PREPARATION_SLICE_ROWS && performance.now() - started < PREPARATION_SLICE_MS) continue;
+        await new Promise<void>((resolve, reject) => {
+          const signal = task.controller.signal;
+          const cancelled = () => { clearTimeout(timer); signal.removeEventListener('abort', cancelled); reject(signal.reason); };
+          const timer = setTimeout(() => { signal.removeEventListener('abort', cancelled); resolve(); }, 0);
+          signal.addEventListener('abort', cancelled, { once: true });
+          if (signal.aborted) cancelled();
+        });
+        rows = 0; started = performance.now();
+      }
+      return task.finish();
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
+      task.cancel();
+    }
+  }
+
+  /** Reclaim historical heights while retaining the active height across the timeline. */
+  trimHeights(height: 'surface' | number | 'lift'): void {
+    if (this.preparing && this.preparing.height !== height) this.preparing.cancel();
+    for (const [key, item] of this.preparedGrids) if (item.grid.height !== height) { item.release(); this.preparedGrids.delete(key); }
+    for (const [key, item] of this.fields) if (key !== height) { item.dispose(); this.fields.delete(key); }
+  }
+
+  private beginPreparation(height: 'surface' | number | 'lift', size: number): WindPreparedGrid | WindPreparationTask | null {
     const current = this.current;
     if (!current || current.build.expiresAtMs <= Date.now()) return null;
     if (!Number.isSafeInteger(size) || size < 1 || size > 1024) throw new RangeError('Invalid wind preparation size');
     if (height !== 'surface' && height !== 'lift' && (!Number.isFinite(height) || height < 0)) throw new RangeError('Invalid AGL height');
     const key = `${this.generation}:${height}:${size}`;
+    this.preparing?.cancel();
     const cached = this.preparedGrids.get(key);
     if (cached) return cached.grid;
     if (this.preparedGrids.size >= 4) {
@@ -563,27 +620,50 @@ export class WindDataSource {
       if (--references === 0) { this.preparedUsage.bytes -= data.byteLength; lease?.release(); }
     };
     const [west, south, east, north] = preparedBounds(current.bounds);
-    const span = east - west;
-    try { for (let y = 0; y < size; y++) {
-      const lat = south + (north - south) * (y + 0.5) / size;
-      for (let x = 0; x < size; x++) {
-        const sample = this.sample(lat, normalizeLon(west + span * (x + 0.5) / size), height);
-        if (sample.status !== 'valid' || sample.u === null || sample.v === null) continue;
-        const offset = (y * size + x) * 4;
-        data[offset] = encodeWindByte(sample.u); data[offset + 1] = encodeWindByte(sample.v); data[offset + 3] = 255;
-      }
-    } } catch (error) { release(); throw error; }
+    const span = east - west, generation = this.generation, controller = new AbortController();
+    let row = 0, settled = false;
     const grid: WindPreparedGrid = { bounds: [west, south, east, north], data, size, height, key, retain: () => {
       if (!references) throw new Error('Wind prepared grid is released');
       references++;
       let retained = true;
       return () => { if (retained) { retained = false; release(); } };
     } };
-    this.preparedGrids.set(key, { grid, release });
-    return grid;
+    const check = () => {
+      controller.signal.throwIfAborted();
+      if (this.current !== current || this.generation !== generation || current.build.expiresAtMs <= Date.now()) throw new DOMException('Wind preparation superseded', 'AbortError');
+    };
+    const task: WindPreparationTask = {
+      height, controller,
+      step: () => {
+        check();
+        const lat = south + (north - south) * (row + 0.5) / size;
+        for (let x = 0; x < size; x++) {
+          const sample = this.sample(lat, normalizeLon(west + span * (x + 0.5) / size), height);
+          if (sample.status !== 'valid' || sample.u === null || sample.v === null) continue;
+          const offset = (row * size + x) * 4;
+          data[offset] = encodeWindByte(sample.u); data[offset + 1] = encodeWindByte(sample.v); data[offset + 3] = 255;
+        }
+        return ++row < size;
+      },
+      finish: () => {
+        check(); settled = true;
+        this.preparedGrids.set(key, { grid, release });
+        if (this.preparing === task) this.preparing = undefined;
+        return grid;
+      },
+      cancel: reason => {
+        if (settled) return;
+        settled = true; controller.abort(reason ?? new DOMException('Wind preparation cancelled', 'AbortError'));
+        release();
+        if (this.preparing === task) this.preparing = undefined;
+      }
+    };
+    this.preparing = task;
+    return task;
   }
 
   private clearPrepared(): void {
+    this.preparing?.cancel();
     for (const item of this.preparedGrids.values()) item.release();
     this.preparedGrids.clear();
   }

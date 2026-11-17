@@ -2,6 +2,28 @@ export interface PointerTrace { epochMs: number; playhead: number; scene: number
 export interface PointerAction { kind: 'day-switch' | 'scrub' | 'gesture-end'; requested: number; before: PointerTrace; after: PointerTrace }
 export interface PointerInput { index: number; targetFrame: string; inputEpochMs: number; outcome: string }
 export interface SceneEvent { index: number; frame: string; epochMs: number }
+interface NumericWind { u: number; v: number }
+export interface ObservedWind { frame: string; height: string | number; sample: { status: string; u: number | null; v: number | null } }
+
+export function matchesWind(observed: ObservedWind | null, frame: string, height: number, expected: NumericWind | null | undefined): boolean {
+  return !!observed && observed.frame === frame && observed.height === height && observed.sample.status === 'valid' && !!expected
+    && observed.sample.u !== null && observed.sample.v !== null && Math.abs(observed.sample.u - expected.u) < 0.03 && Math.abs(observed.sample.v - expected.v) < 0.03;
+}
+
+export async function waitForPreviewRecovery<T extends { selectedIndex: number; displayedIndex: number; viewportQuality: 'overview' | 'detail' | null; wind: ObservedWind | null }>(
+  read: () => Promise<{ state: T; height: string | number | null }>, target: { index: number; frame: string; height: number; wind: NumericWind | null }, observerMode: 'instrumented' | 'control', timeoutMs = 15000
+) {
+  const started = Date.now(), deadline = started + timeoutMs;
+  while (true) {
+    const observation = await read(), { state, height } = observation;
+    const recovery = { selected: state.selectedIndex === target.index, height: height === target.height,
+      raster: observerMode === 'control' ? null : state.displayedIndex === target.index && state.viewportQuality === 'detail',
+      wind: matchesWind(state.wind, target.frame, target.height, target.wind) };
+    const recovered = Object.values(recovery).every(value => value !== false);
+    if (recovered || Date.now() >= deadline) return { ...observation, recovery, recovered, elapsedMs: Date.now() - started };
+    await new Promise(resolve => setTimeout(resolve, Math.min(100, deadline - Date.now())));
+  }
+}
 
 export function correlatePointerActions<T extends PointerInput>(actions: PointerAction[], inputs: T[], commits: SceneEvent[], endEpochMs: number, frames: string[]) {
   return actions.map(action => {

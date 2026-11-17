@@ -368,7 +368,7 @@ export function createPreviewApp(): PreviewApp {
     writeUrl('replace');
   }
 
-  function commandSetWind(state: { style: import('../features/wind/wind-model').WindStyle; visible: boolean; paused: boolean; height: import('../features/wind/wind-model').WindHeight }): void {
+  function commandSetWind(state: { style: import('../features/wind/wind-model').WindStyle; visible: boolean; paused: boolean; height: import('../features/wind/wind-model').WindHeight }, commit = true): void {
     const previousHeight = intent().windHeight;
     if (state.visible !== lastControlVisible) { lastControlVisible = state.visible; writer.intent({ windVisibleOverride: state.visible }); }
     writer.intent({
@@ -378,7 +378,7 @@ export function createPreviewApp(): PreviewApp {
     syncWindReservation();
     windOverlay?.setOptions({ ...state, units: intent().units });
     windSession?.heightChanged(previousHeight);
-    updateWind(); writeUrl('replace');
+    updateWind(); if (commit) writeUrl('replace');
   }
 
   const commands: PreviewCommands = {
@@ -462,7 +462,8 @@ export function createPreviewApp(): PreviewApp {
       if (windControls || destroyed) return;
       windControls = createWindControls(windHost, {
         initial: { style: intent().windStyle, visible: intent().windVisible, height: intent().windHeight },
-        onChange: state => commandSetWind(state)
+        onChange: state => commandSetWind(state, false),
+        onCommit: () => writeUrl('replace')
       });
       lastControlVisible = windControls.state.visible;
       windControls.setUnits(intent().units);
@@ -604,16 +605,18 @@ export function createPreviewApp(): PreviewApp {
     void forecastSession.load(initial.intent.model);
 
     function pageHide(event: PageTransitionEvent): void {
-      windCache.clear(); windSession?.clear(); locationController?.reset();
-      resumeModel = event.persisted ? forecastSession.suspend() : null;
-      const pointInterrupted = event.persisted && pointFeature?.pending;
-      if (pointInterrupted) {
-        pointFeature?.suspend();
-        writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' });
-      } else if (!event.persisted) pointFeature?.close();
-      overlay?.clear(true);
-      if (event.persisted) return;
-      disposePermanently();
+      if (!event.persisted) { disposePermanently(); return; }
+      const pointInterrupted = pointFeature?.pending;
+      cleanup([
+        () => { resumeModel = forecastSession.suspend(); },
+        () => windSession?.clear(), () => windCache.clear(), () => locationController?.reset(),
+        () => {
+          if (!pointInterrupted) return;
+          try { pointFeature?.suspend(); }
+          finally { writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' }); }
+        },
+        () => overlay?.clear(true)
+      ]);
     }
 
     function pageShow(event: PageTransitionEvent): void {
@@ -626,7 +629,6 @@ export function createPreviewApp(): PreviewApp {
   }
 
   function showMapFailure(error: unknown): void {
-    lifecycle.abort(); forecastSession.dispose();
     writer.forecast({ mapFailed: true, pendingModel: null });
     writer.notices({
       error: error instanceof maplibregl.GPUInitializationError
@@ -634,19 +636,27 @@ export function createPreviewApp(): PreviewApp {
         : `Map initialization failed: ${error instanceof Error ? error.message : String(error)}`,
       freshness: ''
     });
-    closePoint(); windSession?.clear(); locationController?.reset();
+    writer.point({ open: false });
     disposePermanently();
   }
 
   function disposePermanently(): void {
     if (destroyed) return;
     destroyed = true;
-    forecastSession.dispose();
-    lifecycle.abort();
-    timeline?.destroy(); windControls?.destroy(); locationController?.dispose(); pointFeature?.dispose();
-    windSession?.destroy(); windOverlay?.destroy(); seam?.destroy(); overlay?.destroy(); forecastScheduler.dispose();
-    map?.remove();
+    cleanup([
+      () => forecastSession.dispose(), () => lifecycle.abort(),
+      () => timeline?.destroy(), () => windControls?.destroy(), () => locationController?.dispose(),
+      () => pointFeature?.dispose(), () => pointSeries.close(), () => windSession?.destroy(),
+      () => windOverlay?.destroy(), () => windCache.clear(), () => seam?.destroy(),
+      () => overlay?.destroy(), () => forecastScheduler.dispose(), () => map?.remove()
+    ]);
     timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = overlay = null; map = null;
+  }
+
+  function cleanup(releases: readonly (() => void)[]): void {
+    for (const release of releases) {
+      try { release(); } catch (error) { console.error('Preview cleanup failed', error); }
+    }
   }
 
   return { store, commands, start, dispose: disposePermanently };

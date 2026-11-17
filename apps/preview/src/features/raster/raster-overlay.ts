@@ -14,6 +14,14 @@ export interface RasterOverlayOptions { budget?: PreparationBudget; protectedByt
 export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean; previewReadyFrames?: readonly string[]; detailReadyFrames?: readonly string[]; limited?: boolean }
 const matches = (a: Selection | null, b: Selection | null): boolean => !!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame;
 
+function releaseAll(actions: readonly (() => void)[]): void {
+  let failed = false, failure: unknown;
+  for (const action of actions) {
+    try { action(); } catch (error) { if (!failed) { failed = true; failure = error; } }
+  }
+  if (failed) throw failure;
+}
+
 /** Owns the displayed raster and a bounded prepared window; dispose with the map. */
 export class RasterOverlay {
   private protocol: RasterTileSourceProtocol | null = null;
@@ -308,15 +316,22 @@ export class RasterOverlay {
   }
 
   clear(dispose = false): void {
-    this.cancelRefinement(); this.clearOverview();
-    const ids = new Set(this.slots.map(s => s.build.manifest.buildId));
-    this.cancelPrefetch();
+    this.cancelRefinement(); this.cancelFocus();
+    const slots = this.slots, overview = this.overview, protocol = this.protocol;
+    const ids = new Set(slots.map(s => s.build.manifest.buildId));
     if (this.expiryTimer !== null) { clearTimeout(this.expiryTimer); this.expiryTimer = null; }
-    for (const s of [...this.slots]) this.drop(s);
+    this.slots = []; this.active = this.pendingPaint = null;
+    this.pendingOverview = this.coarse = this.overviewRevealed = null;
     this.requested = this.preferred = null; this.warmFailed = []; this.direction = undefined; this.sourceLimits.clear();
-    for (const id of ids) this.protocol?.evictBuild(id);
-    if (dispose && this.protocol) { this.overview?.destroy(); this.overview = null; this.protocol.dispose(); removeProtocol(this.protocol.scheme); this.protocol = null; }
-    this.incomplete = this.replacementFailed = this.retryEmpty = this.limited = false; this.emit();
+    if (dispose) { this.overview = null; this.protocol = null; }
+    this.incomplete = this.replacementFailed = this.retryEmpty = this.limited = false;
+    releaseAll([
+      () => this.cancelPrefetch(), () => overview?.clear(),
+      ...slots.map(slot => () => this.drop(slot)),
+      ...[...ids].map(id => () => protocol?.evictBuild(id)),
+      ...(dispose ? [() => overview?.destroy(), () => protocol?.dispose(), () => { if (protocol) removeProtocol(protocol.scheme); }] : []),
+      () => this.emit()
+    ]);
   }
 
   relievePressure(requiredBytes = 1): boolean {
@@ -332,9 +347,10 @@ export class RasterOverlay {
   }
 
   destroy(): void {
-    this.disposed = true; this.unsubscribeBudget?.(); this.unsubscribeBudget = null;
-    this.cancelFocus(); this.clear(true);
-    for (const [ev, fn] of this.events) this.map.off(ev as never, fn as never);
+    if (this.disposed) return;
+    this.disposed = true;
+    const unsubscribe = this.unsubscribeBudget; this.unsubscribeBudget = null;
+    releaseAll([() => unsubscribe?.(), () => this.clear(true), ...this.events.map(([ev, fn]) => () => { this.map.off(ev as never, fn as never); })]);
   }
 
   private update(): void {
@@ -375,9 +391,15 @@ export class RasterOverlay {
 
   private revealOverview(next: Selection): void {
     if (matches(this.overviewRevealed, next)) return;
-    if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
+    const previous = this.coarse ?? this.active, changed = !matches(previous, next);
+    if (previous && changed) this.options.beforeReveal?.(next);
+    if (!this.overview?.show(next.build, next.layer, next.frame, this.opacity)) {
+      this.pendingOverview = null;
+      if (previous && changed) this.options.beforeReveal?.(previous);
+      return;
+    }
+    if (!previous) this.options.beforeReveal?.(next);
     this.overviewRevealed = next;
-    this.overview?.show(next.build, next.layer, next.frame, this.opacity);
     for (const s of this.slots) this.map.setPaintProperty(s.id, 'raster-opacity', 0);
   }
 
@@ -483,13 +505,17 @@ export class RasterOverlay {
     this.prefetched = false;
   }
   private drop(slot: Slot): void {
-    if (slot === this.pendingPaint) this.cancelPaint();
     this.slots = this.slots.filter(v => v !== slot);
     if (this.active === slot) this.active = null;
-    if (this.map.getLayer(slot.id)) this.map.removeLayer(slot.id);
-    if (this.map.getSource(slot.id)) this.map.removeSource(slot.id);
-    slot.transport.dispose();
-    slot.lease?.release();
+    releaseAll([
+      () => {
+        if (slot !== this.pendingPaint) return;
+        try { this.cancelPaint(); } finally { if (this.pendingPaint === slot) this.pendingPaint = null; }
+      },
+      () => { if (this.map.getLayer(slot.id)) this.map.removeLayer(slot.id); },
+      () => { if (this.map.getSource(slot.id)) this.map.removeSource(slot.id); },
+      () => slot.transport.dispose(), () => { slot.lease?.release(); slot.lease = null; }
+    ]);
   }
   private emit(): void {
     const displayed = this.coarse ?? this.active, st = this.overview?.state, readiness = this.overview?.readiness?.();

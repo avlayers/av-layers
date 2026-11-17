@@ -55,14 +55,16 @@ export interface PointFeature {
 /** Point presentation, lazy Windgram lifetime and dependent map-wind readout. */
 export function createPointFeature(options: PointFeatureOptions): PointFeature {
   let session: PointSession | null = null, creating: Promise<void> | null = null;
+  let disposed = false, openIntent: object | null = null;
   const body = (): HTMLElement | null => options.root()?.querySelector('#point-body') ?? null;
   const meta = (): HTMLElement | null => options.root()?.querySelector('#meta') ?? null;
   const status = (text = ''): void => options.publish.status(text);
 
   async function ensure(): Promise<void> {
-    if (session) return;
+    if (session || disposed) return;
     creating ??= (async () => {
       const { createPointSession } = await import('../lazy');
+      if (disposed) return;
       session = createPointSession({
         series: options.series,
         body,
@@ -86,10 +88,13 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
         }
       });
     })();
-    try { await creating; } catch { creating = null; }
+    const pending = creating;
+    try { await pending; } catch { /* A later open can retry the lazy import. */ }
+    finally { if (creating === pending) creating = null; }
   }
 
   function syncWind(): void {
+    if (disposed) return;
     const wind = options.getWind(), context = session?.current;
     if (!wind || !context || context.build !== wind.build || session?.frameId !== wind.frame) { options.publish.wind(''); return; }
     const validTime = wind.build.manifest.frames.find(frame => frame.id === wind.frame)?.validTime;
@@ -104,12 +109,20 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
 
   return {
     async open(point) {
-      await ensure();
-      await session?.open(point);
-      const horizon = options.getBuild() ? pointSeriesSelection(options.getBuild()!).frames.length !== options.getBuild()!.manifest.frames.length : false;
-      options.publish.horizon(horizon, options.getBuild()?.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours');
+      if (disposed) return;
+      const intent = {}; openIntent = intent;
+      try {
+        await ensure();
+        if (disposed || openIntent !== intent) return;
+        await session?.open(point);
+        if (disposed || openIntent !== intent) return;
+        const horizon = options.getBuild() ? pointSeriesSelection(options.getBuild()!).frames.length !== options.getBuild()!.manifest.frames.length : false;
+        options.publish.horizon(horizon, options.getBuild()?.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours');
+      } finally { if (openIntent === intent) openIntent = null; }
     },
     close() {
+      if (disposed) return;
+      openIntent = null;
       session?.close();
       meta()?.replaceChildren();
       for (const id of ['#point-settings', '#point-build-details']) { const node = options.root()?.querySelector<HTMLDetailsElement>(id); if (node) node.open = false; }
@@ -118,9 +131,14 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     followMapFrame(frameId) { session?.followMapFrame(frameId); session?.updateSelection(); syncWind(); },
     syncWind,
     async setHorizon(horizon) { await session?.loadRange(); void horizon; },
-    suspend() { session?.suspend(); },
-    dispose() { session?.dispose(); },
-    get pending() { return Boolean(session?.pending); },
+    suspend() { openIntent = null; session?.suspend(); },
+    dispose() {
+      if (disposed) return;
+      disposed = true; openIntent = null;
+      const previous = session; session = null;
+      previous?.dispose();
+    },
+    get pending() { return !disposed && Boolean(openIntent || session?.pending); },
     get current() { return session?.current ?? null; },
     get frameId() { return session?.frameId ?? null; },
     refreshDiagnostics() {
@@ -128,7 +146,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
       if (container && build && session?.current && !container.children.length) renderBuildDetails(container, build, session.current.point.lon);
     },
     dismiss(target, mapContainer) {
-      if (!session?.current || !(target instanceof Node) || mapContainer.contains(target)) return;
+      if ((!session?.current && !this.pending) || !(target instanceof Node) || mapContainer.contains(target)) return;
       const controls = ['#point-card', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
       if (controls.some(selector => options.root()?.querySelector(selector)?.contains(target))) return;
       this.close();

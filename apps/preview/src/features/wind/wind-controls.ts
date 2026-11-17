@@ -10,6 +10,7 @@ export type { WindControlState, WindHeight, WindStatus, WindStyle, WindUnits } f
 
 export interface WindControlsOptions {
   onChange(state: WindControlState): void;
+  onCommit?(): void;
   initial?: Partial<Pick<WindControlState, 'style' | 'visible' | 'height'>>;
 }
 
@@ -63,6 +64,8 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   };
   let fixedHeight = typeof state.height === 'number' ? state.height : stored?.fixedHeight ?? STOPS[0];
   let units: WindUnits = 'metric', status: WindStatus = 'ready', overview = false, destroyed = false;
+  let delivered = state, committed = state, committedFixedHeight = fixedHeight, changeRequest: number | null = null;
+  let pendingCommit = false;
 
   const root = el('div', 'wind-controls'), menu = el('div', 'wind-controls-menu'), trigger = btn('wind-controls-trigger');
   attr(trigger, { 'aria-haspopup': 'dialog', 'aria-controls': 'wind-controls-popup' });
@@ -111,7 +114,29 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   root.append(menu, statusLine, rail); parent.appendChild(root);
 
   const snapshot = (): WindControlState => Object.freeze({ ...state });
-  const notify = (commit: boolean): void => { if (commit) persist(state, fixedHeight); options.onChange(snapshot()); };
+  const sameState = (a: WindControlState, b: WindControlState) => a.height === b.height && a.style === b.style && a.visible === b.visible && a.paused === b.paused;
+  const cancelChange = (): void => {
+    if (changeRequest !== null) doc.defaultView?.cancelAnimationFrame(changeRequest);
+    changeRequest = null;
+  };
+  const notify = (commit: boolean): void => {
+    if (destroyed) return;
+    cancelChange();
+    if (!sameState(state, delivered)) { delivered = state; pendingCommit = true; options.onChange(snapshot()); }
+    if (destroyed) return;
+    const changed = !sameState(state, committed);
+    if (commit && (changed || pendingCommit || fixedHeight !== committedFixedHeight)) {
+      const publish = changed || pendingCommit;
+      committed = state; committedFixedHeight = fixedHeight; pendingCommit = false; persist(state, fixedHeight);
+      if (publish) options.onCommit?.();
+    }
+  };
+  const queueChange = (): void => {
+    if (changeRequest !== null) return;
+    const view = doc.defaultView;
+    if (!view?.requestAnimationFrame || !view.cancelAnimationFrame) { notify(false); return; }
+    changeRequest = view.requestAnimationFrame(() => { changeRequest = null; notify(false); });
+  };
 
   function renderStatus(): void {
     attr(root, { 'data-status': status, 'data-quality': overview ? 'overview' : 'detail' });
@@ -182,18 +207,31 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   pause.addEventListener('click', () => { if (!destroyed && !pause.disabled) { state = { ...state, paused: !state.paused }; render(); notify(true); } });
   lift.addEventListener('click', () => selectHeight('lift'));
   surface.addEventListener('click', () => selectHeight('surface'));
-  let parked: 'surface' | 'lift' | null = null;
-  const parkedIndex = () => parked === 'lift' ? STOPS.length - 1 : parked === 'surface' ? 0 : -1;
-  range.addEventListener('pointerdown', () => { parked = state.height === 'lift' || state.height === 'surface' ? state.height : null; });
-  range.addEventListener('pointercancel', () => { parked = null; });
-  range.addEventListener('input', () => {
-    const index = Number(range.value);
-    if (!Number.isInteger(index) || index < 0 || index >= STOPS.length || index === parkedIndex()) return;
-    parked = null;
-    fixedHeight = STOPS[index]; state = { ...state, height: fixedHeight }; renderHeight(); notify(false);
+  let rangeGesture: { id: number; parked: 'surface' | 'lift' | null; cancelled: boolean } | null = null;
+  const parkedIndex = () => rangeGesture?.parked === 'lift' ? STOPS.length - 1 : rangeGesture?.parked === 'surface' ? 0 : -1;
+  range.addEventListener('pointerdown', event => {
+    if (destroyed || !event.isPrimary || event.button !== 0 || rangeGesture && !rangeGesture.cancelled) return;
+    rangeGesture = { id: event.pointerId, parked: state.height === 'lift' || state.height === 'surface' ? state.height : null, cancelled: false };
   });
-  range.addEventListener('change', () => persist(state, fixedHeight));
-  range.addEventListener('pointerup', () => { parked = null; selectHeight(fixedHeight); });
+  range.addEventListener('input', () => {
+    if (destroyed) return;
+    if (rangeGesture?.cancelled) { renderHeight(); return; }
+    const index = Number(range.value);
+    if (!Number.isInteger(index) || index < 0 || index >= STOPS.length || index === parkedIndex() || state.height === STOPS[index]) return;
+    if (rangeGesture) rangeGesture.parked = null;
+    fixedHeight = STOPS[index]; state = { ...state, height: fixedHeight }; renderHeight(); queueChange();
+  });
+  range.addEventListener('change', () => { if (!rangeGesture?.cancelled) notify(true); });
+  const onRangeEnd = (event: PointerEvent): void => {
+    const gesture = rangeGesture;
+    if (!gesture || gesture.id !== event.pointerId) return;
+    rangeGesture = null;
+    if (destroyed || gesture.cancelled) return;
+    if (event.type === 'pointerup' && gesture.parked !== null && state.height === gesture.parked) selectHeight(fixedHeight);
+    else notify(true);
+  };
+  range.addEventListener('pointerup', onRangeEnd); range.addEventListener('pointercancel', onRangeEnd);
+  doc.addEventListener('pointerup', onRangeEnd, true); doc.addEventListener('pointercancel', onRangeEnd, true);
 
   let focusPending = false, focusAtDismiss: Element | null = null;
   const onPointerUp = (): void => {
@@ -222,17 +260,22 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
     setQuality(next: boolean) { if (!destroyed && overview !== next) { overview = next; renderStatus(); } },
     setState(next) {
       if (destroyed) return;
+      cancelChange();
+      if (rangeGesture) rangeGesture.cancelled = true;
       const height = next.height !== undefined ? (typeof next.height === 'number' ? storedStop(next.height) ?? fixedHeight : next.height) : state.height;
       if (typeof height === 'number') fixedHeight = height;
       state = { ...state, ...(next.style ? { style: next.style } : {}), ...(next.visible !== undefined ? { visible: next.visible } : {}), height };
+      delivered = committed = state; committedFixedHeight = fixedHeight; pendingCommit = false;
       render();
     },
     setUnits(next: WindUnits) { units = next === 'imperial' ? 'imperial' : 'metric'; renderHeight(); },
     destroy() {
       if (destroyed) return;
-      destroyed = true; focusPending = false;
+      cancelChange();
+      destroyed = true; focusPending = false; rangeGesture = null;
       doc.removeEventListener('pointerdown', onOutside, true); doc.removeEventListener('pointerup', onPointerUp, true);
       doc.removeEventListener('pointercancel', onPointerUp, true); doc.removeEventListener('keydown', onKeydown);
+      doc.removeEventListener('pointerup', onRangeEnd, true); doc.removeEventListener('pointercancel', onRangeEnd, true);
       root.remove();
     }
   };

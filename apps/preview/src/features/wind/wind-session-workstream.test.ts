@@ -83,6 +83,7 @@ vi.mock('@av/client/wind', () => {
       return { bounds: [0, 0, 1, 1] as [number, number, number, number], data: new Uint8Array(4), size: 1, height, key: `${this.frame}:${height}` };
     }
     hasPrepared(height: WindHeight): boolean { return this.prepared.has(height); }
+    async prepareAsync(height: WindHeight) { return this.prepare(height); }
     hasField(height: WindHeight): boolean { return this.fields.has(height); }
     field(height: WindHeight) {
       if (wind.fieldCapacity) throw new RangeError('Wind cache exceeds byte budget');

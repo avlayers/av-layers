@@ -102,3 +102,19 @@ The JSON records source fingerprints, per-input latency, preparation and workloa
 bytes, retained heap, textures and native image pixels. Repeated pans and time
 changes measure retention; adjacent PNGs show the final views. See the measured
 results for accounting scope and the transparency smoke command.
+
+Exercise altitude changes, pans and zoom changes while scrubbing across the full
+forecast, then check that a final sweep still delivers:
+
+```sh
+pnpm bench:preview --variant changed --scenario interaction --model av-wrf --repeats 3 --mobile --device-memory 2 --out output/preview-interaction.json
+```
+
+`av-wrf` uses the pilot Lambert grids, 41 synthetic vertical levels and 48 frames
+through hour 72. GFS and RRFS use 40 frames. `--mobile` selects a 390 by 844 viewport
+at DPR 3; `--device-memory` supplies the browser memory hint. Run on real mobile
+hardware separately. The report records each round, retained memory, long tasks
+and final recovery delivery; async wind preparation metrics include yield time.
+Recovery waits up to 15 seconds for the last frame at 1500 m and its expected
+numeric wind. Instrumented mode also requires a detailed raster observation;
+control mode reports raster verification as unavailable.

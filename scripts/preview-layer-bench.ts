@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createServer as createVite } from 'vite';
 import { chromium, type Page } from 'playwright';
+import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { fixtureBuild, fixtureLatest } from '../tests/forecast-fixture.ts';
 import { fixturePointFetch, fixtureProfileBuild } from '../tests/client-point-fixture.ts';
 import { encodeWebp } from '../apps/batch/src/webp.ts';
@@ -18,23 +19,24 @@ import type { PreviewBench } from '../apps/preview/bench.ts';
 import { DETAIL_ZOOM, TILE_SIZE, fixturePixel } from './preview-pixels';
 import { configureGfsWindGrid, configureRrfsWindGrid, previewWindFixture } from './preview-wind';
 import { previewSourceHash } from './preview-hash';
-import { correlatePointerActions } from './preview-observe';
+import { correlatePointerActions, waitForPreviewRecovery } from './preview-observe';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url))), args = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const index = args.indexOf(name); return index < 0 ? fallback : args[index + 1]; };
-const baseline = option('--baseline', 'main'), repeats = Number(option('--repeats', '30')), tileDelayMs = Number(option('--delay-ms', '40'));
 const output = resolve(option('--out', 'output/preview-layer-bench.json')), channel = option('--channel', ''), scenario = option('--scenario', 'all');
-const variant = option('--variant', 'both'), frameCount = Number(option('--frames', '40'));
-const focused = scenario === 'viewport-warm' || scenario === 'contention' || scenario === 'pointer-smoke' || scenario === 'device-sim';
+const baseline = option('--baseline', 'main'), repeats = Number(option('--repeats', scenario === 'interaction' ? '3' : '30')), tileDelayMs = Number(option('--delay-ms', '40'));
+const model = option('--model', 'gfs'), mobile = args.includes('--mobile');
+const variant = option('--variant', 'both'), frameCount = Number(option('--frames', model === 'av-wrf' ? '48' : '40'));
+const focused = scenario === 'viewport-warm' || scenario === 'contention' || scenario === 'pointer-smoke' || scenario === 'device-sim' || scenario === 'interaction';
 const opacity = Number(option('--opacity', '1')), transparent = args.includes('--transparent'), wind = args.includes('--wind') || focused;
-const model = option('--model', 'gfs'), dpr = Number(option('--dpr', '1')), deviceMemory = Number(option('--device-memory', '4'));
-const viewport = focused ? { width: 1394, height: 1032, dpr, lat: model === 'rrfs' ? 40 : 40.4895, lon: model === 'rrfs' ? -100 : 45.1123, zoom: 8.17 } : { width: 1920, height: 1080, dpr, lat: 40, lon: -100, zoom: 7.15 };
+const dpr = Number(option('--dpr', mobile ? '3' : '1')), deviceMemory = Number(option('--device-memory', '4'));
+const viewport = focused ? { width: mobile ? 390 : 1394, height: mobile ? 844 : 1032, dpr, lat: model === 'rrfs' ? 40 : 40.4895, lon: model === 'rrfs' ? -100 : 45.1123, zoom: 8.17 } : { width: 1920, height: 1080, dpr, lat: 40, lon: -100, zoom: 7.15 };
 const detailZoom = focused ? 9 : DETAIL_ZOOM;
 const warmMs = Number(option('--warm-ms', '30000'));
 const observerMode = option('--observer', 'instrumented');
 const forecastRequests = Number(option('--forecast-requests', process.env.VITE_FORECAST_REQUESTS ?? '24'));
-if (!Number.isInteger(repeats) || repeats < 1 || repeats > 200 || !Number.isInteger(tileDelayMs) || tileDelayMs < 0 || tileDelayMs > 1000 ||
-  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke', 'viewport-warm', 'contention', 'pointer-smoke', 'device-sim'].includes(scenario) || (focused && frameCount !== 40) || !['gfs', 'rrfs'].includes(model) || (model === 'rrfs' && !focused) || ![1, 2].includes(dpr) || ![2, 4, 8].includes(deviceMemory) || !Number.isInteger(warmMs) || warmMs < 0 || warmMs > 300000 || ![16, 24, 32].includes(forecastRequests) || !['instrumented', 'control'].includes(observerMode) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
+if (!Number.isInteger(repeats) || repeats < 1 || repeats > (scenario === 'interaction' ? 30 : 200) || !Number.isInteger(tileDelayMs) || tileDelayMs < 0 || tileDelayMs > 1000 ||
+  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke', 'viewport-warm', 'contention', 'pointer-smoke', 'device-sim', 'interaction'].includes(scenario) || (focused && frameCount !== (model === 'av-wrf' ? 48 : 40)) || !['gfs', 'rrfs', 'av-wrf'].includes(model) || ((model !== 'gfs' || mobile) && !focused) || ![1, 2, 3].includes(dpr) || ![2, 4, 8].includes(deviceMemory) || !Number.isInteger(warmMs) || warmMs < 0 || warmMs > 300000 || ![16, 24, 32].includes(forecastRequests) || !['instrumented', 'control'].includes(observerMode) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
 await mkdir(dirname(output), { recursive: true });
 const scratch = await mkdtemp(join(tmpdir(), 'av-preview-bench-')), baselineRoot = join(scratch, 'baseline');
 const workspacePackages = new Map<string, Record<string, string>>();
@@ -97,13 +99,14 @@ const fixtureSourceDirectories = ['packages/contracts', 'packages/forecast', 'pa
 const fixtureSourceBeforeSha256 = await sourceHash(root, fixtureSourceDirectories, false);
 const baselineFixtureSourceSha256 = await sourceHash(baselineRoot, fixtureSourceDirectories, false);
 if (variant !== 'changed' && fixtureSourceBeforeSha256 !== baselineFixtureSourceSha256) throw new Error('Server fixture workspace dependencies differ from baseline; cannot claim isolated baseline');
-const axis = fixtureProfileBuild({ frameHours: Array.from({ length: frameCount }, (_, index) => focused && index >= 24 ? 27 + (index - 24) * 3 : index + 1), mapFrameCount: frameCount });
-const build = model === 'rrfs' ? fixtureBuild({ model: 'rrfs', frames: axis.manifest.frames, mapFrameCount: frameCount }) : axis;
-if (model === 'rrfs') configureRrfsWindGrid(build.manifest); else if (focused) configureGfsWindGrid(build.manifest);
+const hourlyFrames = model === 'av-wrf' ? 36 : 24;
+const axis = fixtureProfileBuild({ frameHours: Array.from({ length: frameCount }, (_, index) => focused && index >= hourlyFrames ? hourlyFrames + 3 + (index - hourlyFrames) * 3 : index + 1), mapFrameCount: frameCount });
+const build = model === 'rrfs' || model === 'av-wrf' ? fixtureBuild({ model, frames: axis.manifest.frames, mapFrameCount: frameCount }) : axis;
+if (model === 'rrfs') configureRrfsWindGrid(build.manifest); else if (model === 'gfs' && focused) configureGfsWindGrid(build.manifest);
 build.manifest.expiresAt = new Date(Date.now() + 86400000).toISOString();
 build.expiresAtMs = Date.parse(build.manifest.expiresAt);
 if (wind) build.manifest.mapData = { sha256: 'a'.repeat(64), bytes: 1 };
-const windFixture = previewWindFixture(build.manifest, model === 'rrfs' ? 'rrfs' : focused);
+const windFixture = previewWindFixture(build.manifest, model === 'rrfs' || model === 'av-wrf' ? model : focused);
 await encodeWebp(new Uint8Array(TILE_SIZE * TILE_SIZE * 4));
 const browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
 const results = [];
@@ -252,7 +255,7 @@ try {
         } },
         { name: 'observe-timeline', enforce: 'pre', transform(code, id) {
           if (!id.endsWith('/features/timeline/timeline-controller.ts')) return;
-          const render = 'function render(): void {';
+          const render = code.includes('function render(width = trackWidth()): void {') ? 'function render(width = trackWidth()): void {' : 'function render(): void {';
           const anchor = '  const stopPlayback = () => {';
           if (code.split(render).length !== 2 || code.split(anchor).length !== 2 || !code.includes('function currentScale(width: number)')) throw new Error('Timeline observer anchor is missing or ambiguous');
           return code.replace(render, `${render} window.__benchTimelineSelected?.(selectedIndex);`).replace(anchor, `  window.__benchTimelinePosition = (index: number) => { const frame = frames[index]; if (!frame) return null; const local = localTimeFromMs(Date.parse(frame.validTime), offsetMinutes); const rect = track.getBoundingClientRect(); if (!local || !rect.width) return null; return { day: local.day, x: rect.left + minuteToX(currentScale(rect.width), local.hour * 60 + local.minute), y: rect.top + rect.height / 2 }; };\n${anchor}`);
@@ -284,6 +287,7 @@ try {
         { name: 'observe-wind-cost', enforce: 'pre', transform(code, id) {
           if (!id.endsWith('/client-wind.ts')) return;
           if (!code.includes('export class WindDataSource') || !code.includes('  prepare(height:') || !code.includes('  field(height:')) throw new Error('Wind cost observer anchors are missing');
+          if (code.includes('  async prepareAsync(')) code += `\n{ const original = WindDataSource.prototype.prepareAsync; WindDataSource.prototype.prepareAsync = async function (...args) { const start = performance.now(); try { return await original.apply(this, args); } finally { window.__benchRecord?.('wind-grid-async-elapsed', performance.now() - start); } }; }`;
           return `${code}\nfor (const name of ['prepare', 'field'] as const) { const original = WindDataSource.prototype[name] as (...args: never[]) => unknown; (WindDataSource.prototype as unknown as Record<string, unknown>)[name] = function (this: WindDataSource, ...args: never[]) { const state = () => name === 'prepare' ? this.hasPrepared(args[0], args[1]) : 'hasField' in this ? this.hasField(args[0]) : null; const cached = state(); return window.__benchWindCall ? window.__benchWindCall(name === 'prepare' ? 'grid' : 'sampler', cached, () => original.apply(this, args), state) : original.apply(this, args); }; }`;
         } },
         { name: 'observe-managed-budget', enforce: 'pre', transform(code, id) {
@@ -331,7 +335,7 @@ try {
       const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: viewport.dpr });
       const page = await context.newPage();
       await page.addInitScript(mode => { window.__benchObserver = mode; }, observerMode as 'instrumented' | 'control');
-      if (scenario === 'device-sim') await page.addInitScript(memory => { Object.defineProperty(navigator, 'deviceMemory', { value: memory, configurable: true }); }, deviceMemory);
+      if (scenario === 'device-sim' || scenario === 'interaction') await page.addInitScript(memory => { Object.defineProperty(navigator, 'deviceMemory', { value: memory, configurable: true }); }, deviceMemory);
       page.on('pageerror', error => { if (!errors.includes(error.message)) errors.push(error.message); });
       const navigation: string[] = [], consoleErrors: string[] = [];
       page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigation.push(frame.url()); });
@@ -376,7 +380,7 @@ try {
       const actions = correlatePointerActions([...(day.action ? [day.action] : []), { kind: 'scrub', requested: index, before, after }], inputs, commits, after.epochMs + 0.001, build.manifest.frames.map(frame => frame.id));
       return { requested: index, selected: (await page.evaluate(() => window.bench.snapshot())).selectedIndex, inputs, commits, actions };
     }
-    async function pointerSweep(page: Page, indices: number[]) {
+    async function pointerSweep(page: Page, indices: number[], intervalMs = 120) {
       const start = await page.evaluate(() => window.bench.pointerStart()), first = await page.evaluate(() => window.bench.trace()), actions: Action[] = [];
       let day = '';
       for (const index of indices) {
@@ -387,18 +391,29 @@ try {
           const next = await pointerDay(page, index); day = next.position.day;
           if (next.action) actions.push(next.action);
           await page.mouse.move(next.position.x, next.position.y);
-          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.down(); await delay(120);
+          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.down(); await delay(intervalMs);
           actions.push({ kind: 'scrub', requested: index, before, after: await page.evaluate(() => window.bench.trace()) });
         } else {
           const next = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
           if (!next) throw new Error(`Timeline position unavailable for ${index}`);
-          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.move(next.x, next.y); await delay(120);
+          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.move(next.x, next.y); await delay(intervalMs);
           actions.push({ kind: 'scrub', requested: index, before, after: await page.evaluate(() => window.bench.trace()) });
         }
       }
       if (day) { const before = await page.evaluate(() => window.bench.trace()); await page.mouse.up(); actions.push({ kind: 'gesture-end', requested: indices.at(-1)!, before, after: await page.evaluate(() => window.bench.trace()) }); }
       const inputs = await page.evaluate(start => window.bench.pointerEnd(start), start), end = await page.evaluate(() => window.bench.trace()), commits = await page.evaluate(start => window.bench.sceneEvents(start), first.sceneCount);
       return { inputs, commits, actions: correlatePointerActions(actions, inputs, commits, end.epochMs + 0.001, build.manifest.frames.map(frame => frame.id)) };
+    }
+    async function windHeight(page: Page, height: number) {
+      const index = WIND_HEIGHTS.findIndex(stop => stop === height);
+      if (index < 0) throw new Error(`Unsupported wind height ${height}`);
+      await page.evaluate(index => {
+        const input = document.querySelector<HTMLInputElement>('.wind-controls-range');
+        if (!input) throw new Error('Wind height control unavailable');
+        input.value = String(index);
+        input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, index);
+      if (await page.evaluate(() => window.bench.camera().height) !== height) throw new Error(`Wind height did not commit ${height}`);
     }
     const samples: Record<string, Sample[]> = {}, summary: Record<string, unknown> = {}, memoryPlateau = [];
     let environment, finalEnvironment, initialHeap, finalHeap;
@@ -446,11 +461,7 @@ try {
             steps.push({ label, previous, after, hostActionElapsedMs, moveEndEvents: after.camera.moveEnds - previous.camera.moveEnds,
               selectedReady: !!selected && (raster.preview.includes(selected) || raster.native.includes(selected)) && after.state.windReady.includes(selected), transport: since(before) });
           };
-          for (const height of [500, 2000, 1500]) await record(`warming-height-${height}`, async () => page.evaluate(height => {
-            const input = document.querySelector<HTMLInputElement>('.wind-controls-range'); if (!input) throw new Error('Wind height control unavailable');
-            const stops = [100, 250, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000], index = stops.indexOf(height);
-            input.value = String(index); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
-          }, height));
+          for (const height of [500, 2000, 1500]) await record(`warming-height-${height}`, () => windHeight(page, height));
           const warmStart = Date.now(); let ready = false;
           while (Date.now() - warmStart < warmMs) {
             const state = await page.evaluate(() => window.bench.snapshot());
@@ -458,11 +469,7 @@ try {
             if (ready) break;
             await delay(250);
           }
-          for (const height of [500, 2000, 1500]) await record(`${ready ? 'after-ready' : 'after-bounded-wait'}-height-${height}`, async () => page.evaluate(height => {
-            const input = document.querySelector<HTMLInputElement>('.wind-controls-range'); if (!input) throw new Error('Wind height control unavailable');
-            const stops = [100, 250, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]; input.value = String(stops.indexOf(height));
-            input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
-          }, height));
+          for (const height of [500, 2000, 1500]) await record(`${ready ? 'after-ready' : 'after-bounded-wait'}-height-${height}`, () => windHeight(page, height));
           for (const area of [80000, 110000, 140000, 110000, 80000]) await record(`area-${area}`, async () => page.evaluate(area => window.bench.area(area), area), 900);
           const original = (await page.evaluate(() => window.bench.camera())).center;
           await record('pan-away', async () => page.evaluate(([lon, lat]) => window.bench.center(lon + 0.08, lat), original), 900);
@@ -470,6 +477,51 @@ try {
           finalEnvironment = await page.evaluate(() => window.bench.snapshot());
           summary.deviceSim = { simulated: true, deviceMemoryHint: await page.evaluate(() => (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null), dpr: await page.evaluate(() => devicePixelRatio), initial, waitMs: Date.now() - warmStart, fullAxisReadyBeforeSecondHeightSequence: ready,
             boundsAreaOwner: 'viewport-policy.ts boundsAreaKm2(cameraBounds(map))', steps, telemetry: await page.evaluate(() => window.bench.telemetry()), expiryClock: 'not simulated' };
+        } finally { await context.close(); }
+      }
+      if (scenario === 'interaction') {
+        const { context, page, initial } = await openPage();
+        try {
+          environment = initial.state;
+          const cdp = await context.newCDPSession(page), steps: unknown[] = [];
+          await cdp.send('HeapProfiler.collectGarbage'); initialHeap = await cdp.send('Runtime.getHeapUsage');
+          const original = (await page.evaluate(() => window.bench.camera())).center;
+          const start = count(), inputStart = await page.evaluate(() => window.bench.pointerStart());
+          for (let round = 0; round < repeats; round++) {
+            let day: string | null = null;
+            for (let step = 0; step < frameCount; step++) {
+              const index = round % 2 ? frameCount - 1 - step : step;
+              if (step % 6 === 0) {
+                await windHeight(page, [500, 2000, 1500, 4000][(round + step / 6) % 4]);
+                await page.evaluate(({ area, center }) => { window.bench.area(area); window.bench.center(center[0], center[1]); }, {
+                  area: [8000, 80000, 140000, 600000][(round + step / 6) % 4],
+                  center: [original[0] + (step % 12 ? 0.08 : 0), original[1]]
+                });
+              }
+              const position = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
+              if (!position) throw new Error(`Timeline position unavailable for ${index}`);
+              if (position.day !== day) {
+                if (day) await page.mouse.up();
+                const next = await pointerDay(page, index); day = next.position.day;
+                await page.mouse.move(next.position.x, next.position.y); await page.mouse.down();
+              } else await page.mouse.move(position.x, position.y);
+            }
+            if (day) await page.mouse.up();
+            steps.push({ round, camera: await page.evaluate(() => window.bench.camera()), state: await page.evaluate(() => window.bench.snapshot()), telemetry: await page.evaluate(() => window.bench.telemetry()) });
+          }
+          await windHeight(page, 1500);
+          await page.evaluate(([lon, lat]) => { window.bench.center(lon, lat); window.bench.area(80000); }, original);
+          samples.interaction = attributeInputs(await page.evaluate(start => window.bench.pointerEnd(start), inputStart));
+          const settled = await quiet(page, warmMs, false);
+          const finalSweep = await pointerSweep(page, Array.from({ length: frameCount }, (_, index) => index), 16);
+          samples.recoverySweep = attributeInputs(finalSweep.inputs);
+          const finalIndex = frameCount - 1, finalFrame = build.manifest.frames[finalIndex].id;
+          const delivery = await waitForPreviewRecovery(() => page.evaluate(() => ({ state: window.bench.snapshot(), height: window.bench.camera().height })),
+            { index: finalIndex, frame: finalFrame, height: 1500, wind: windFixture.expected(finalFrame, viewport.lat, viewport.lon, 1500) }, observerMode as 'instrumented' | 'control');
+          await cdp.send('HeapProfiler.collectGarbage'); finalHeap = await cdp.send('Runtime.getHeapUsage');
+          finalEnvironment = delivery.state;
+          summary.interaction = { simulated: true, initial, steps, settled, transport: since(start), recoverySweep: finalSweep.actions,
+            recovery: delivery.recovery, recovered: delivery.recovered, recoveryWaitMs: delivery.elapsedMs, final: finalEnvironment, telemetry: await page.evaluate(() => window.bench.telemetry()) };
         } finally { await context.close(); }
       }
       if (scenario === 'viewport-warm') {
@@ -519,7 +571,9 @@ try {
           while (active === 0 && Date.now() < deadline) await delay(25);
           const selectionAttemptAt = Date.now(), activeAtAttempt = active, before = count();
           faultsEnabled = true;
-          const jump = await pointerJump(page, 35), result = jump.inputs.findLast(sample => sample.index === 35) ?? null;
+          const index = build.manifest.frames.findIndex(frame => frame.id === 'f060');
+          if (index < 0) throw new Error('Contention target f060 is missing');
+          const jump = await pointerJump(page, index), result = jump.inputs.findLast(sample => sample.index === index) ?? null;
           await delay(15000);
           finalEnvironment = await page.evaluate(() => window.bench.snapshot());
           samples.contention = attributeInputs(jump.inputs);
@@ -591,10 +645,10 @@ try {
   const fixtureSourceAfterSha256 = await sourceHash(root, fixtureSourceDirectories, false);
   if (fixtureSourceAfterSha256 !== fixtureSourceBeforeSha256) throw new Error('Server fixture workspace dependencies changed during capture');
   await writeFile(output, JSON.stringify({ capturedAt: new Date().toISOString(), scope: 'Instrumented mode samples nine framebuffer probes for raster identity; wind identity is installed state and a numeric sample, not blended GPU pixels. Control mode disables framebuffer probes and pixel identity, but retains readiness, scene, allocation and sampled RAF observers. Pixel-verified latency is INSTRUMENTED and no overhead is subtracted. Stale paint observations are sampled and cannot prove absence between probes. Synthetic range inputs bypass compact timeline gestures. Scene commits are correlated until the next selection; same-frame generation identity is not observable. Ready means cached viewport-covering raster preview or native plus a prepared grid and valid raw numeric wind sample at the selected height; changed also requires a cached field sampler. Historical baseline lacks reusable per-frame field samplers, so only its currently installed field qualifies. Per-input transport is attributed by frame and wall-clock interval; it does not prove causal request priority. Route starts, server finish events and queued body bytes are attributed independently; browser received bytes are unavailable.',
-    fixtureLimitations: model === 'rrfs' ? 'Numeric values, terrain and frame axis are synthetic; RRFS 26-level grid, masks and shard layout model the published 20261116T012413Z-be57ad09-4ea7-4c22-b515-d2d72a6880bb f001 descriptor for all frames. Other published frame layouts were not verified. No real GRIB, integrity or device performance is implied.' : focused ? 'Numeric wind values and terrain are synthetic; 22-level GFS grids, tile masks, packed chunk sizes and shard counts follow the published 20261116T130646Z-59ac4a14-2907-4ce5-998a-80baf7a60c99 f004 layout. No real GRIB values, real network behavior, native feasibility, GPU execution or device performance are implied.' : 'Synthetic three-level wind validates decoding and identity only; real GFS acquisition costs and native-horizon feasibility remain unverified.',
+    fixtureLimitations: model === 'av-wrf' ? 'AV-WRF uses the shared pilot Lambert geometry (204x174 native, 407x347 fine), 41 synthetic vertical levels and all 48 frames through hour 72. Wind values, terrain and full-grid coverage are synthetic; production masks, GRIB values, network behavior and device performance are not measured.' : model === 'rrfs' ? 'Numeric values, terrain and frame axis are synthetic; RRFS 26-level grid, masks and shard layout model the published 20261116T012413Z-be57ad09-4ea7-4c22-b515-d2d72a6880bb f001 descriptor for all frames. Other published frame layouts were not verified. No real GRIB, integrity or device performance is implied.' : focused ? 'Numeric wind values and terrain are synthetic; 22-level GFS grids, tile masks, packed chunk sizes and shard counts follow the published 20261116T130646Z-59ac4a14-2907-4ce5-998a-80baf7a60c99 f004 layout. No real GRIB values, real network behavior, native feasibility, GPU execution or device performance are implied.' : 'Synthetic three-level wind validates decoding and identity only; real GFS acquisition costs and native-horizon feasibility remain unverified.',
     fixtureDigestPolicy: 'All synthetic descriptor shard SHA-256 and indexSha256 fields are stable, frame/kind/shard-specific NON-INTEGRITY placeholders, not content hashes; other synthetic manifest digests are also placeholders. Only URL-keyed client cache behavior is exercised. No content integrity or production digest semantics are tested.',
     telemetryScope: 'Scheduler queue and body settlement are timed inside scheduler; body settlement includes cancellation and is not server response completion. Decode is createImageBitmap promise elapsed time, not decoder CPU. Canvas draw, successful retained wind builds and display install are synchronous call durations; GL upload is CPU API submission time across map contexts, not GPU execution. Managed peaks are per ledger and limited to the first 16 ledgers; baseline has no ledger. Full-axis times are first observations sampled every 250ms since navigation, not guaranteed completion instants. Observer elapsed time includes synchronous GL readback stalls and readiness/snapshot loops; percentiles use the most recent 4096 samples. Animation is sampled in 500ms windows every 5s; skipped callbacks are estimates at an assumed 60Hz, not hardware dropped-frame counts. Long tasks require browser support. Control mode is not instrumentation-free.',
-    observerMode, model, simulatedDevice: scenario === 'device-sim' ? { dpr, deviceMemoryHint: deviceMemory } : null, tileDelayMs, repeats, scenario, frameCount, frames: build.manifest.frames, opacity, transparent, wind, viewport, detailZoom, warmMs: focused ? warmMs : undefined, sourceDirectories, harnessInputs, harnessBeforeSha256, harnessAfterSha256, fixtureSourceDirectories, fixtureSourceBeforeSha256, fixtureSourceAfterSha256, baselineFixtureSourceSha256, node: process.version,
+    observerMode, model, simulatedDevice: scenario === 'device-sim' || scenario === 'interaction' ? { dpr, deviceMemoryHint: deviceMemory, mobileViewport: mobile } : null, tileDelayMs, repeats, scenario, frameCount, frames: build.manifest.frames, opacity, transparent, wind, viewport, detailZoom, warmMs: focused ? warmMs : undefined, sourceDirectories, harnessInputs, harnessBeforeSha256, harnessAfterSha256, fixtureSourceDirectories, fixtureSourceBeforeSha256, fixtureSourceAfterSha256, baselineFixtureSourceSha256, node: process.version,
     memoryScope: 'GPU texture allocations include mip levels/pool. Weak native-pixel tracking counts unclosed/unfinished ImageBitmap decodes and canvas backing dimensions; pending Blob decode size assumes the fixture 256px tile. Driver overhead, workers and default framebuffer remain outside these logical byte counts. CDP heap follows forced GC.',
     channel: channel || 'headless-shell', browser: browser.version(), results }, null, 2) + '\n');
   console.log(`Report: ${output}`);
