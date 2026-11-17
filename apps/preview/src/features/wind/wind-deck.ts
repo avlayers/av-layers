@@ -122,7 +122,7 @@ export class WindDeck {
         image: { data: this.preparedImage(this.prepared), width: this.prepared.size, height: this.prepared.size },
         imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'LINEAR', imageSmoothing: 1,
         bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 64, speedFactor: 0.8, fps: 30,
-        width: 1.2, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
+        width: 1.8, animate: !this.options.paused && !document.hidden, opacity: 0.95, color: [255, 255, 255]
       })] : []),
       ...(barbs ? [
         new IconLayer<BarbFeature>({
