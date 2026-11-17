@@ -1,5 +1,39 @@
 # Preview timeline performance
 
+## 17 November 2026 regression repair
+
+PR #127 (`1d209eb`) made a settled overview write its opacity during every map
+render. MapLibre schedules a style/source update for that public setter even
+when the value is unchanged. Its synchronous image-source notifications also
+reentered image installation before ownership had transferred.
+
+Overview source notifications now coalesce after installation. Settled images
+and unchanged opacity leave the map alone. Preparation wakes on useful work,
+selection, budget release and lifecycle events. Wind admission reads the
+selected source's horizon estimate, retains a pan margin, and admits a usable
+selected overview when the whole horizon exceeds capacity. Numeric-cache
+pressure waits for numeric capacity; speculative work preserves the display.
+Same-frame viewport replacements compare image identity, and a native image
+that cannot obtain display memory leaves its preview visible. Real capacity
+release resumes deferred display and expands a constrained native horizon.
+
+Regression tests exercise the real raster overlay and overview together:
+
+| Check | PR #127 | Repaired |
+| --- | ---: | ---: |
+| Paint-property writes in 120 settled render/idle pairs | 240 | 0 |
+| Preparation-budget checks in those pairs | 480 | 0 |
+| Nested image updates with synchronous source events | 2 | 0 |
+| Source memory-accounting calls per admission query, 40 prepared times | 41 | 1 |
+
+The source-event fixture caps recursion to keep the failing test bounded.
+These are operation counts. Browser frame times and GPU pixel behavior remain
+release checks; the isolated browser could not open the local verification
+page under its URL policy. The live merged page reproduced preparation stalls,
+capacity errors, a blank map and unresponsive controls.
+
+## Earlier viewport measurements
+
 Viewport overviews showed all 39 requested times during both cold desktop sweeps
 at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.

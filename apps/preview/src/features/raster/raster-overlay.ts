@@ -47,10 +47,19 @@ export class RasterOverlay {
   private selectedPending = false;
   private pendingSelection: Selection | null = null;
   private limited = false;
+  private overviewUpdateQueued = false;
 
   private readonly data = (e: MapSourceDataEvent): void => {
     if (this.overview && (this.overview.ownsSource?.(e.sourceId) ?? e.sourceId === this.overview.id)) {
-      this.update(); this.emit(); return;
+      // ImageSource.updateImage emits synchronously before show finishes its ownership transfer.
+      if (!this.overviewUpdateQueued) {
+        this.overviewUpdateQueued = true;
+        queueMicrotask(() => {
+          this.overviewUpdateQueued = false;
+          if (!this.disposed) { this.update(); this.emit(); }
+        });
+      }
+      return;
     }
     const slot = this.slots.find(s => s.id === e.sourceId);
     if (!slot) return;
@@ -329,7 +338,8 @@ export class RasterOverlay {
   }
 
   private update(): void {
-    this.refresh();
+    const now = Date.now();
+    if ((this.coarse && this.coarse.build.expiresAtMs <= now) || this.slots.some(slot => slot.build.expiresAtMs <= now)) this.refresh();
     if (this.pendingOverview) {
       if (this.overview?.canPaint?.() !== false) this.revealOverview(this.pendingOverview);
       return;
@@ -364,10 +374,9 @@ export class RasterOverlay {
   }
 
   private revealOverview(next: Selection): void {
-    if (!matches(this.overviewRevealed, next)) {
-      if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
-      this.overviewRevealed = next;
-    }
+    if (matches(this.overviewRevealed, next)) return;
+    if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
+    this.overviewRevealed = next;
     this.overview?.show(next.build, next.layer, next.frame, this.opacity);
     for (const s of this.slots) this.map.setPaintProperty(s.id, 'raster-opacity', 0);
   }
@@ -375,7 +384,7 @@ export class RasterOverlay {
   private stageOverview(): boolean {
     const next = this.requested;
     if (!next || this.moving || this.map.isMoving?.() || !this.overview?.ready(next.build, next.layer, next.frame)) return false;
-    if (matches(this.coarse, next) && !this.overview.needsUpgrade?.(next.build, next.layer, next.frame)) { this.overview.show(next.build, next.layer, next.frame, this.opacity); return true; }
+    if (matches(this.coarse, next) && !this.overview.needsUpdate?.(next.build, next.layer, next.frame)) return true;
     if (matches(this.pendingOverview, next)) {
       if (this.overview.canPaint?.() !== false) this.revealOverview(next);
       return true;

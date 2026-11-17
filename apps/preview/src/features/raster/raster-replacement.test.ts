@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { Map } from 'maplibre-gl';
+import { createPreparationBudget } from '@av/client';
 import { fixtureBuild } from '../../../../../tests/forecast-fixture';
-import { RasterOverlay, type OverlayState } from './raster-overlay';
+import { RasterOverlay, type OverlayState, type RasterOverlayOptions } from './raster-overlay';
 
 vi.mock('maplibre-gl', () => ({ addProtocol: vi.fn(), removeProtocol: vi.fn() }));
 class Bitmap {
@@ -27,35 +28,92 @@ beforeEach(() => {
 });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-function fixture() {
+function fixture(options: RasterOverlayOptions = {}, synchronousSourceData = false) {
   const handlers = new globalThis.Map<string, Set<(event: never) => void>>();
   const sources = new globalThis.Map<string, unknown>(), opacity = new globalThis.Map<string, number>(), loaded = new Set<string>();
+  const installedImages = new globalThis.Map<string, Bitmap>();
   const states: OverlayState[] = [];
-  let moving = false, zoom = 4, bounds = WIDE;
-  const map = {
-    on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
-    off: (name: string, listener: (event: never) => void) => handlers.get(name)?.delete(listener),
-    addSource: (id: string, source: unknown) => sources.set(id, { ...(source as object), updateImage: vi.fn(), setCoordinates: vi.fn() }), getSource: (id: string) => sources.get(id), removeSource: (id: string) => sources.delete(id),
-    addLayer: (layer: { id: string; paint: Record<string, number> }) => opacity.set(layer.id, layer.paint['raster-opacity']),
-    getLayer: (id: string) => opacity.has(id), removeLayer: (id: string) => opacity.delete(id),
-    setPaintProperty: (id: string, _property: string, value: number) => opacity.set(id, value),
-    isSourceLoaded: (id: string) => loaded.has(id), isMoving: () => moving, getZoom: () => zoom,
-    getCanvas: () => ({ clientWidth: 800, clientHeight: 600 }), getCenter: () => ({ lng: 0, lat: 0 }),
-    coveringTiles: (options?: { minzoom?: number; maxzoom?: number }) => [{ canonical: { z: Math.max(options?.minzoom ?? 0, Math.min(options?.maxzoom ?? 22, Math.round(zoom))) } }],
-    getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north })
-  };
-  const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state));
+  let moving = false, zoom = 4, bounds = WIDE, updatingImage = false, reentrantUpdates = 0;
   const emit = (name: string, event: object = {}) => {
     if (name === 'movestart') moving = true;
     if (name === 'moveend') moving = false;
     for (const handler of handlers.get(name) ?? []) handler(event as never);
   };
-  return { overlay, states, emit, setZoom: (value: number) => { zoom = value; }, setBounds: (value: typeof bounds) => { bounds = value; }, markLoaded: (id: string) => loaded.add(id) };
+  const map = {
+    on: (name: string, listener: (event: never) => void) => { const set = handlers.get(name) ?? new Set(); set.add(listener); handlers.set(name, set); },
+    off: (name: string, listener: (event: never) => void) => handlers.get(name)?.delete(listener),
+    addSource: (id: string, source: unknown) => sources.set(id, { ...(source as object), updateImage: vi.fn((options: { image: Bitmap }) => {
+      installedImages.set(id, options.image);
+      if (!synchronousSourceData) return;
+      if (updatingImage) { reentrantUpdates++; return; }
+      updatingImage = true;
+      try {
+        emit('sourcedata', { sourceId: id, sourceDataType: 'content' });
+        emit('sourcedata', { sourceId: id, sourceDataType: 'metadata' });
+      } finally { updatingImage = false; }
+    }), setCoordinates: vi.fn() }), getSource: (id: string) => sources.get(id), removeSource: (id: string) => sources.delete(id),
+    addLayer: (layer: { id: string; paint: Record<string, number> }) => opacity.set(layer.id, layer.paint['raster-opacity']),
+    getLayer: (id: string) => opacity.has(id), removeLayer: (id: string) => opacity.delete(id),
+    setPaintProperty: vi.fn((id: string, _property: string, value: number) => opacity.set(id, value)),
+    isSourceLoaded: (id: string) => loaded.has(id), isMoving: () => moving, getZoom: () => zoom,
+    getCanvas: () => ({ clientWidth: 800, clientHeight: 600 }), getCenter: () => ({ lng: 0, lat: 0 }),
+    coveringTiles: (options?: { minzoom?: number; maxzoom?: number }) => [{ canonical: { z: Math.max(options?.minzoom ?? 0, Math.min(options?.maxzoom ?? 22, Math.round(zoom))) } }],
+    getBounds: () => ({ getWest: () => bounds.west, getEast: () => bounds.east, getSouth: () => bounds.south, getNorth: () => bounds.north })
+  };
+  const overlay = new RasterOverlay(map as unknown as Map, 'https://api.test', 0.7, state => states.push(state), undefined, undefined, options);
+  return { overlay, map, states, emit, reentrantUpdates: () => reentrantUpdates, displayedImage: () => installedImages.get([...opacity].find(([, value]) => value > 0)?.[0] ?? ''), setZoom: (value: number) => { zoom = value; }, setBounds: (value: typeof bounds) => { bounds = value; }, markLoaded: (id: string) => loaded.add(id) };
 }
 
 async function settle(view: ReturnType<typeof fixture>, rounds = 200) {
   for (let i = 0; i < rounds; i++) { await vi.advanceTimersByTimeAsync(5); view.emit('idle'); view.emit('render'); }
 }
+
+it('leaves a settled overview idle across repeated map render and idle events', async () => {
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => new Bitmap()));
+  const protectedBytes = vi.fn(() => 0), budget = createPreparationBudget(256 * 1024 * 1024);
+  const view = fixture({ budget, protectedBytes }), build = fixtureBuild(), frame = build.manifest.frames[0]!.id;
+  try {
+    view.overlay.select(build, 'usable-lift-agl', frame);
+    await settle(view);
+    expect(view.states.at(-1)).toMatchObject({ quality: 'overview', overviewReady: 8 });
+    const published = view.states.length;
+    view.map.setPaintProperty.mockClear(); protectedBytes.mockClear();
+    for (let i = 0; i < 120; i++) { view.emit('render'); view.emit('idle'); }
+    expect({ writes: view.map.setPaintProperty.mock.calls.length, preparationChecks: protectedBytes.mock.calls.length }).toEqual({ writes: 0, preparationChecks: 0 });
+    expect(view.states).toHaveLength(published);
+  } finally { view.overlay.destroy(); }
+});
+
+it('coalesces synchronous image source events after image ownership has settled', async () => {
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => new Bitmap()));
+  const view = fixture({}, true), build = fixtureBuild(), [first, second] = build.manifest.frames;
+  try {
+    view.overlay.select(build, 'usable-lift-agl', first.id);
+    await settle(view);
+    view.overlay.select(build, 'usable-lift-agl', second.id);
+    await settle(view, 10);
+    expect(view.reentrantUpdates()).toBe(0);
+    expect(view.states.at(-1)).toMatchObject({ displayed: { frame: second.id }, quality: 'overview', overviewReady: 8 });
+  } finally { view.overlay.destroy(); }
+});
+
+it('replaces a same-frame overview after the viewport crop changes', async () => {
+  vi.stubGlobal('createImageBitmap', vi.fn(async () => new Bitmap()));
+  const view = fixture(), build = fixtureBuild(), frame = build.manifest.frames[0].id;
+  try {
+    view.overlay.select(build, 'usable-lift-agl', frame);
+    await settle(view);
+    const previous = view.displayedImage();
+    expect(previous).toBeDefined();
+    view.emit('movestart');
+    view.setBounds({ west: 0, east: 160, south: -50, north: 50 });
+    view.emit('moveend');
+    await settle(view);
+    expect(view.states.at(-1)).toMatchObject({ displayed: { frame }, quality: 'overview', overviewReady: 8 });
+    expect(view.displayedImage()).toBeDefined();
+    expect(view.displayedImage()).not.toBe(previous);
+  } finally { view.overlay.destroy(); }
+});
 
 it('keeps the replacement frame axis alive through render and idle while decode is pending', async () => {
   vi.stubGlobal('createImageBitmap', vi.fn(async () => new Bitmap()));

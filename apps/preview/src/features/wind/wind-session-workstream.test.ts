@@ -15,6 +15,7 @@ const wind = vi.hoisted(() => ({
     settled: boolean;
     fields: Set<string | number>;
     fieldBuilds: number;
+    memoryCalls: number;
   }>,
   deferred: false,
   unavailable: new Set<string>(),
@@ -29,14 +30,20 @@ const wind = vi.hoisted(() => ({
   overview: false
 }));
 
-vi.mock('@av/client/wind', () => ({
-  WindCapacityError: class extends Error { readonly code = 'capacity'; },
+vi.mock('@av/client/wind', () => {
+  class WindCapacityError extends Error {
+    readonly code = 'capacity';
+    constructor(readonly resource: 'numeric' | 'preparation') { super('Wind cache exceeds byte budget'); }
+  }
+  return {
+  WindCapacityError,
   WindDataSource: class {
     frame = '';
     disposed = 0;
     readonly prepared = new Set<string | number>();
     readonly fields = new Set<string | number>();
     fieldBuilds = 0;
+    memoryCalls = 0;
     readonly requests: Array<{ frame: string; bounds: number[]; core?: number[]; signal: AbortSignal; startedAt: number }> = [];
     readonly admitted = undefined;
     readonly isOverview = wind.overview;
@@ -54,7 +61,7 @@ vi.mock('@av/client/wind', () => ({
     load(request: { frame: string; bounds: number[]; core?: number[]; signal: AbortSignal }): Promise<'ready' | 'unavailable'> {
       this.frame = request.frame; this.requests.push({ ...request, startedAt: Date.now() });
       if (wind.numericLimit) {
-        if (wind.numericUsed + wind.numericChunk > wind.numericLimit) return Promise.reject(new RangeError('Wind cache exceeds byte budget'));
+        if (wind.numericUsed + wind.numericChunk > wind.numericLimit) return Promise.reject(new WindCapacityError('numeric'));
         const lease = this.budget?.reserve('wind-numeric', wind.numericChunk);
         if (this.budget && !lease) return Promise.reject(new RangeError('Wind cache exceeds byte budget'));
         this.lease = lease ?? null; this.numeric = wind.numericChunk; wind.numericUsed += this.numeric;
@@ -83,8 +90,9 @@ vi.mock('@av/client/wind', () => ({
       return { sample: () => ({ u: height === 500 ? 5 : 1, v: 2, status: 0 }) };
     }
     sample(_lat: number, _lon: number, _height: WindHeight) { return { u: 1, v: 2, status: 'valid' }; }
+    memoryUsage() { this.memoryCalls++; return { preparedBytes: 0, fieldSamplerBytes: 0, numericBytes: 0, horizonNumericRemaining: 4096 }; }
   }
-}));
+}; });
 
 import { createWindSession, type WindSession } from './wind-session';
 
@@ -141,6 +149,21 @@ it.each([false, true])('warms every rendered frame across days for a wide viewpo
   await vi.advanceTimersByTimeAsync(20_000);
   expect(new Set(wind.sources.flatMap(source => source.requests.map(request => request.frame)))).toEqual(new Set(f.frames));
   expect(wind.sources[0]!.frame).toBe(f.frames[0]);
+});
+
+it('reads horizon protection without scanning every prepared frame', async () => {
+  vi.useFakeTimers();
+  const f = harness(), frames = f.build.manifest.frames;
+  const first = frames[0]!;
+  while (frames.length < 40) frames.push({ ...first, id: `horizon-${frames.length}`, validTime: new Date(Date.parse(first.validTime) + frames.length * 3_600_000).toISOString() });
+  f.build.manifest.mapFrameCount = frames.length;
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(f.session.ready.size).toBe(40);
+  for (const source of wind.sources) source.memoryCalls = 0;
+  expect(f.session.horizonNumericRemaining).toBe(4096);
+  expect(wind.sources.reduce((count, source) => count + source.memoryCalls, 0)).toBe(1);
+  expect(wind.sources.find(source => source.frame === f.state.selectedFrame)!.memoryCalls).toBe(1);
 });
 
 it('runs six independent frame loads through the shared scheduler', async () => {
@@ -233,7 +256,33 @@ it('passes the actual camera as core before the optional pan halo', async () => 
   f.session.update();
   const request = wind.sources[0]!.requests[0]!;
   expect(request.core).toEqual([44, 40, 45, 41]);
-  expect(request.bounds).toEqual(request.core);
+  expect(request.bounds[0]).toBeLessThan(44);
+  expect(request.bounds[1]).toBeLessThan(40);
+  expect(request.bounds[2]).toBeGreaterThan(45);
+  expect(request.bounds[3]).toBeGreaterThan(41);
+});
+
+it('keeps installed wind and prepared days during a short pan inside the retained halo', async () => {
+  vi.useFakeTimers();
+  const f = harness();
+  f.setBounds({ west: 44.4, east: 44.5, south: 40.1, north: 40.2 });
+  f.setRaster({ build: f.build, frame: f.frames[0]! });
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(1_000);
+  const sources = [...wind.sources], installed = f.session.installed, ready = f.session.preparation.ready;
+  expect(ready).toBe(f.frames.length);
+  expect(installed).not.toBeNull();
+  f.field.clear.mockClear(); f.field.install.mockClear();
+  f.setBounds({ west: 44.41, east: 44.51, south: 40.11, north: 40.21 });
+  f.session.reconcile();
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(f.session.installed).toEqual(installed);
+  expect(f.session.preparation.ready).toBe(ready);
+  expect(wind.sources).toEqual(sources);
+  expect(sources.some(source => source.disposed > 0)).toBe(false);
+  expect(f.field.clear).not.toHaveBeenCalled();
+  expect(f.field.install).not.toHaveBeenCalled();
 });
 
 it('keeps native profiles and prepares the selected height first, then the full axis', async () => {
@@ -577,13 +626,48 @@ it('releases a rejected capacity reservation before re-admitting on a real relea
 it('retries wind admission after display pressure relief', async () => {
   vi.useFakeTimers();
   const f = harness();
-  wind.capacityFrame = f.frames[1]!;
+  wind.capacityFrame = f.frames[0]!;
   f.relieveDisplay.mockImplementation(() => { wind.capacityAvailable = true; return true; });
   f.session.update();
   await vi.advanceTimersByTimeAsync(1_000);
   expect(f.relieveDisplay).toHaveBeenCalled();
-  expect(f.session.ready.get(f.frames[1]!)?.has('surface')).toBe(true);
+  expect(f.session.ready.get(f.frames[0]!)?.has('surface')).toBe(true);
   expect(wind.reserved).toBe(0);
+});
+
+it.each(['numeric', 'speculative'] as const)('settles %s capacity pressure without degrading the display', async kind => {
+  vi.useFakeTimers();
+  const f = harness();
+  f.setRaster({ build: f.build, frame: f.frames[0]! });
+  if (kind === 'numeric') wind.numericLimit = 1;
+  else wind.capacityFrame = f.frames[1]!;
+  let reliefs = 0;
+  f.relieveDisplay.mockImplementation(() => ++reliefs <= 3);
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(f.session.preparation.limited).toBe(true);
+  expect(f.relieveDisplay).not.toHaveBeenCalled();
+  const attempts = wind.sources.length;
+  await vi.advanceTimersByTimeAsync(20_000);
+  expect(wind.sources).toHaveLength(attempts);
+  if (kind === 'speculative') expect(f.session.installed?.frame).toBe(f.frames[0]);
+});
+
+it('keeps numeric admission blocked when only renderer memory is released', async () => {
+  vi.useFakeTimers();
+  const budget = createPreparationBudget(128 * 1024 * 1024);
+  const renderer = budget.reserve('raster', 1024 * 1024)!;
+  const f = harness(false, budget);
+  wind.numericLimit = 1;
+  f.session.update();
+  await vi.advanceTimersByTimeAsync(1_000);
+  const attempts = wind.sources.length;
+  expect(f.session.preparation.limited).toBe(true);
+  renderer.release();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(f.session.preparation.limited).toBe(true);
+  expect(wind.sources).toHaveLength(attempts);
+  expect(f.relieveDisplay).not.toHaveBeenCalled();
 });
 
 it.each(['numeric cache', 'shared budget'] as const)('reclaims distant retained frames for a cold selection under %s pressure', async kind => {

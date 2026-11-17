@@ -1308,6 +1308,31 @@ it('accounts for shared-budget pressure and restores native quality after releas
   } finally { first.dispose(); second.dispose(); blocker.release(); cache.clear(); }
 });
 
+it.each(['numeric', 'shared'] as const)('loads a usable selected overview when the full horizon exceeds the %s budget', async constrained => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  pinned.manifest.descriptors.bounds = [-128, 0, 127, 1];
+  for (const surface of pinned.manifest.surfaces) Object.assign(surface.grid, { width: 256, height: 1, lon0: -128 });
+  const metadata = JSON.parse(descriptor(frame));
+  metadata.overview = [2, 4].map(stride => ({ stride, shards: [{ sha256: 'e'.repeat(64), indexSha256: 'f'.repeat(64), count: 1, bytes: 1 }] }));
+  const overview = new Uint8Array(32 * 32 * WIND_OVERVIEW_CELL_BYTES);
+  const fetcher = vi.fn<typeof fetch>(async url => String(url).endsWith(`/data/${frame}`)
+    ? new Response(layoutDescriptor(pinned, metadata), { headers: { 'content-type': 'application/json' } })
+    : reply(overview));
+  const budget = createPreparationBudget(constrained === 'shared' ? 512 * 1024 : WIND_WINDOW_BYTES);
+  const cache = new WindDataCache(constrained === 'numeric' ? 512 * 1024 : WIND_WINDOW_BYTES, WIND_WINDOW_ENTRIES, budget);
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, horizon: 40, overviewForHorizon: true });
+  try {
+    expect(await source.load({ build: pinned, frame, bounds: [-128, 0, 127, 1] })).toBe('ready');
+    expect(source.isOverview).toBe(true);
+    expect(fetcher.mock.calls.slice(1).map(([url]) => String(url).split('/').slice(-2).join('/'))).toEqual(['overview-4/0', 'overview-4/1']);
+    expect(source.prepare('surface')).not.toBeNull();
+    expect(source.field('surface').sample(0, 0)).toEqual({ status: STATUS_VALID, u: 0, v: 0 });
+    expect(cache.allocatedBytes).toBe(WIND_FRAME_LIMIT + 2 * overview.length);
+    expect(budget.used).toBeLessThanOrEqual(budget.limit);
+  } finally { source.dispose(); cache.clear(); }
+  expect(budget.used).toBe(0);
+});
+
 it('counts shared pending horizon backing once even with several source leases', async () => {
   const pinned = build(), frame = pinned.manifest.frames[0].id, other = `${frame}-other`;
   pinned.manifest.frames.push({ ...pinned.manifest.frames[0], id: other });

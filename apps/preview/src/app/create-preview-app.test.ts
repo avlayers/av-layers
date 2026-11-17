@@ -3,10 +3,10 @@ import { fixtureBuild } from '../../../../tests/forecast-fixture';
 import type { PreparationBudget } from '@av/client';
 import type { CompactTimelineOptions } from '../features/timeline/timeline-controller';
 import type { PointSessionOptions } from '../features/point/point-session';
-import type { OverlayState } from '../features/raster/raster-overlay';
+import type { OverlayState, RasterOverlayOptions } from '../features/raster/raster-overlay';
 import { emptyOverlay } from '../stores/app-store';
 
-const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, windInstalled: null as unknown }));
+const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, rasterOptions: null as RasterOverlayOptions | null, windInstalled: null as unknown, windStaged: null as unknown, windMemory: vi.fn(() => ({ horizonNumericRemaining: 4096 })), windHorizonRemaining: vi.fn(() => 4096) }));
 
 vi.mock('@av/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@av/client')>();
@@ -41,10 +41,10 @@ vi.mock('../features/map/map-controller', () => ({
   createMapCamera: () => ({ home: { lat: 40, lng: -100 }, followsPlace: () => false, sync: () => ({ center: map.getCenter(), changed: false }), offsetMinutes: () => 0, scale: () => ({ width: 1, text: '' }), focusRegion() {} }),
   maplibregl: { GPUInitializationError: class extends Error {} }
 }));
-vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void) { mocks.overlayState = onState; } select() {} prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() {} destroy() {} } }));
+vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void, _fetch: unknown, _request: unknown, options: RasterOverlayOptions) { mocks.overlayState = onState; mocks.rasterOptions = options; } select() {} prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() {} destroy() {} } }));
 vi.mock('../features/map/coverage-seam', () => ({ CoverageSeam: class { sync() {} markReady() {} destroy() {} } }));
 vi.mock('../features/wind/wind-overlay', () => ({ WindOverlay: class { setOptions() {} clear() {} destroy() {} } }));
-vi.mock('../features/wind/wind-session', () => ({ createWindSession: () => ({ ready: new Map(), preparation: { limited: false }, resident: false, get installed() { return mocks.windInstalled; }, clear() {}, destroy() {}, update() {}, reconcile: mocks.reconcileWind, setPlaying() {}, heightChanged() {}, beforeRasterReveal() {} }) }));
+vi.mock('../features/wind/wind-session', () => ({ createWindSession: () => ({ ready: new Map(), preparation: { limited: false }, resident: false, get installed() { return mocks.windInstalled; }, get staged() { return mocks.windStaged; }, get memory() { return mocks.windMemory(); }, get horizonNumericRemaining() { return mocks.windHorizonRemaining(); }, clear() {}, destroy() {}, update() {}, reconcile: mocks.reconcileWind, setPlaying() {}, heightChanged() {}, beforeRasterReveal() {} }) }));
 vi.mock('../features/location/location-controller', () => ({ createLocationController: () => ({ locate() {}, reset() {}, dispose() {} }) }));
 vi.mock('../platform/browser-lifecycle', () => ({ installBrowserLifecycle() {} }));
 vi.mock('../features/timeline/timeline-controller', () => ({
@@ -95,7 +95,8 @@ async function harness() {
   const frames = build.manifest.frames;
   const requests: { resolve: (result: unknown) => void; signal: AbortSignal }[] = [];
   mocks.resolveAutoBuild.mockReset().mockImplementation((_api, options: { signal: AbortSignal }) => new Promise(resolve => requests.push({ resolve, signal: options.signal })));
-  mocks.point = null; mocks.pointOptions = null; mocks.overlayState = null; mocks.windInstalled = null; cancelled = null;
+  mocks.point = null; mocks.pointOptions = null; mocks.overlayState = null; mocks.rasterOptions = null; mocks.windInstalled = null; mocks.windStaged = null; cancelled = null;
+  mocks.windMemory.mockClear(); mocks.windHorizonRemaining.mockClear();
   const app = createPreviewApp();
   app.start(root);
   map.fire('style.load');
@@ -130,6 +131,18 @@ it('preserves selected response and processing headroom during speculative admis
   } finally {
     processing?.release(); responses?.release(); overflow?.release(); background?.release(); test.app.dispose();
   }
+});
+
+it('checks raster admission without collecting whole-horizon wind diagnostics', async () => {
+  const test = await harness();
+  Object.assign(test.build.manifest, { mapData: { sha256: 'a', bytes: 1 } });
+  mocks.windStaged = { build: test.build, frame: test.frames[0]!.id, height: 'surface' };
+  test.app.commands.setWind({ style: 'hybrid', visible: true, paused: false, height: 'surface' });
+  mocks.windMemory.mockClear(); mocks.windHorizonRemaining.mockClear();
+  for (let index = 0; index < 120; index++) expect(mocks.rasterOptions!.protectedBytes!()).toBeGreaterThan(4096);
+  expect(mocks.windHorizonRemaining).toHaveBeenCalledTimes(120);
+  expect(mocks.windMemory).not.toHaveBeenCalled();
+  test.app.dispose();
 });
 
 it('reconciles wind coverage during camera movement before move end', async () => {

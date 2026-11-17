@@ -118,6 +118,46 @@ it('keeps the outgoing source and both display leases until the staged image is 
   expect(budget.used).toBe(0);
 });
 
+it('writes opacity only when the displayed value changes', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  try {
+    f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+    f.overview.show(b, 'usable-lift-agl', frame, 0.7);
+    f.map.setPaintProperty.mockClear();
+    for (let i = 0; i < 120; i++) f.overview.show(b, 'usable-lift-agl', frame, 0.7);
+    expect(f.map.setPaintProperty.mock.calls.length).toBe(0);
+    f.overview.show(b, 'usable-lift-agl', frame, 0.4);
+    expect(f.map.setPaintProperty).toHaveBeenCalledExactlyOnceWith(f.overview.id, 'raster-opacity', 0.4);
+    f.overview.hide();
+    f.map.setPaintProperty.mockClear();
+    for (let i = 0; i < 120; i++) f.overview.hide();
+    expect(f.map.setPaintProperty.mock.calls.length).toBe(0);
+  } finally { f.overview.destroy(); }
+});
+
+it('holds the visible preview when native display cannot fit and wakes after release', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024), f = fixture(false, 12, true, { budget }), b = build(), frame = b.manifest.frames[0].id;
+  let held: ReturnType<typeof budget.reserve> = null;
+  try {
+    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(1));
+    f.overview.show(b, 'usable-lift-agl', frame, 0.7);
+    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toEqual([frame]));
+    expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(true);
+    held = budget.reserve('other', budget.limit - budget.used - 64 * 1024);
+    expect(held).not.toBeNull();
+    f.map.setPaintProperty.mockClear();
+    for (let i = 0; i < 120; i++) expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(false);
+    expect(f.map.setPaintProperty.mock.calls.length).toBe(0);
+    f.onReady.mockClear();
+    held!.release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.overview.needsUpdate(b, 'usable-lift-agl', frame)).toBe(true);
+    expect(f.onReady).toHaveBeenCalledOnce();
+  } finally { held?.release(); f.overview.destroy(); }
+});
+
 it.each([16, 24, 32])('fills the %i-request profile while replacing completed downloads', async maxActive => {
   const f = fixture(true, 12, true, { requestLimits: { maxActive, maxPrefetchActive: maxActive - 4 } }), b = build(48);
   try {
@@ -182,6 +222,29 @@ it('protects full-axis previews and future wind within a 128 MiB ledger', async 
     expect(f.overview.readiness().previewReadyFrames).toHaveLength(60);
     expect(budget.limit - budget.used).toBeGreaterThanOrEqual(protectedBytes);
   } finally { f.overview.destroy(); }
+  expect(budget.used).toBe(0);
+});
+
+it('refills a constrained native horizon when capacity is released and then stays idle', async () => {
+  const mib = 1024 * 1024, budget = createPreparationBudget(128 * mib), held = budget.reserve('other', 100 * mib)!;
+  const protectedBytes = vi.fn(() => 0), f = fixture(false, 12, true, { budget, protectedBytes }), b = build(60), frames = renderedFrames(b.manifest);
+  try {
+    f.view(FOCUSED, 9); f.overview.select(b, 'usable-lift-agl', frames[30].id);
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(60), { timeout: 2000 });
+    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames.length).toBeGreaterThan(0));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(f.overview.readiness().detailReadyFrames.length).toBeLessThanOrEqual(5);
+    protectedBytes.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(protectedBytes.mock.calls.length).toBe(0);
+    held.release();
+    await vi.waitFor(() => expect(f.overview.readiness().detailReadyFrames).toHaveLength(60), { timeout: 2000 });
+    await vi.advanceTimersByTimeAsync(0);
+    const requests = f.requests.length, notifications = f.onReady.mock.calls.length;
+    protectedBytes.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect({ checks: protectedBytes.mock.calls.length, requests: f.requests.length, notifications: f.onReady.mock.calls.length }).toEqual({ checks: 0, requests, notifications });
+  } finally { held.release(); f.overview.destroy(); }
   expect(budget.used).toBe(0);
 });
 

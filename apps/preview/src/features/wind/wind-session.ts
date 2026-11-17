@@ -4,7 +4,7 @@ import { renderedFrames } from '@av/contracts/publication';
 import { type WindDataCache, type WindPreparedGrid, WindCapacityError, WindDataSource } from '@av/client/wind';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import type { MapBoundsPort, Bounds } from '../map/viewport-policy';
-import { cameraBounds, coversBounds } from '../map/viewport-policy';
+import { cameraBounds, coversBounds, windBounds } from '../map/viewport-policy';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
 
@@ -65,6 +65,7 @@ export interface WindSession {
   readonly ready: ReadonlyMap<string, ReadonlySet<WindHeight>>;
   readonly staged: { build: PinnedBuild; frame: string; height: WindHeight } | null;
   readonly failed: ReadonlyMap<string, { attempts: number; retryAt: number | null }>;
+  readonly horizonNumericRemaining: number | null;
   readonly memory: { numericBytes: number; preparedBytes: number; fieldSamplerBytes: number; horizonNumericRemaining: number | null; budgetUsed: number; budgetLimit: number | null };
   readonly displayed: boolean;
   readonly resident: boolean;
@@ -81,11 +82,12 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const inflight = new Set<WindJob>();
   let build: PinnedBuild | null = null, installed: WindJob | null = null, installedHeight: WindHeight = 'surface';
   let timer: ReturnType<typeof setTimeout> | null = null, timerAt = 0, preparationTimer: ReturnType<typeof setTimeout> | null = null, expiryTimer: ReturnType<typeof setTimeout> | null = null;
-  let destroyed = false, limited = false, blockedBytes = 0, direction = 1, lastFrame: string | null = null, viewKey = '';
+  let destroyed = false, limited = false, blockedBytes = 0, blockedNumeric = false, direction = 1, lastFrame: string | null = null, viewKey = '';
   let pending: boolean | undefined;
   const isCapacity = (error: unknown) => error instanceof WindCapacityError || (error instanceof Error && ('code' in error && error.code === 'capacity' || error instanceof RangeError && /byte budget/.test(error.message)));
-  const bytes = () => options.budget?.used ?? options.cache.allocatedBytes;
-  const capacity = (frame: string) => {
+  const bytes = () => blockedNumeric ? options.cache.allocatedBytes : options.budget?.used ?? options.cache.allocatedBytes;
+  const capacity = (frame: string, error: unknown) => {
+    blockedNumeric = error instanceof WindCapacityError && error.resource === 'numeric';
     let reclaimed = false;
     const prior = parked.entries().next().value;
     if (prior || frame === state().selectedFrame) {
@@ -97,7 +99,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       }
     }
     options.cache.evictUnreferenced?.();
-    limited = !(reclaimed || options.relieveDisplay?.()); blockedBytes = bytes();
+    const displayCanHelp = frame === state().selectedFrame && !blockedNumeric;
+    limited = !(reclaimed || displayCanHelp && options.relieveDisplay?.()); blockedBytes = bytes();
     if (!limited) schedule();
   };
   const active = () => {
@@ -167,7 +170,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       failures.delete(job.frame);
       return true;
     } catch (error) {
-      if (isCapacity(error)) { capacity(job.frame); return false; }
+      if (isCapacity(error)) { capacity(job.frame, error); return false; }
       jobs.delete(job.frame); dispose(job); recordFailure(job.frame); return false;
     }
   }
@@ -190,7 +193,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       return true;
     } catch (error) {
       if (!isCapacity(error)) throw error;
-      capacity(job.frame); return false;
+      capacity(job.frame, error); return false;
     }
   }
   function reconcile(): void {
@@ -229,7 +232,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   function start(frame: string, foreground: boolean): void {
     const s = state();
     if (!s.build || inflight.size >= 8) return;
-    const bounds = cameraBounds(map), controller = new AbortController();
+    const bounds = windBounds(map, options.lowMemory), core = cameraBounds(map), controller = new AbortController();
     const source = new WindDataSource(options.apiBaseUrl, {
       fetchImpl: foreground ? options.scheduler.fetch : (input, init) => options.scheduler.fetch(input, { ...init, priority: 'low' } as RequestInit),
       ...(options.scheduler.request ? { request: (spec: ForecastRequestSpec) => options.scheduler.request!(spec) } : {}),
@@ -238,7 +241,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     });
     const job: WindJob = { zoom: map.getZoom(), build: s.build, frame, bounds, controller, source, status: 'loading', heights: new Set(), done: Promise.resolve() };
     jobs.set(frame, job); inflight.add(job);
-    job.done = source.load({ build: job.build, frame, bounds, core: bounds, signal: controller.signal }).then(status => {
+    job.done = source.load({ build: job.build, frame, bounds, core, signal: controller.signal }).then(status => {
       if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
       if (status === 'ready') {
         job.status = 'ready';
@@ -250,7 +253,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
       jobs.delete(frame); source.dispose();
       if (isCapacity(error)) {
-        capacity(frame);
+        capacity(frame, error);
       } else recordFailure(frame);
     }).finally(() => {
       inflight.delete(job);
@@ -370,6 +373,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     },
     get staged() { const s = state(), job = selected(); return job && usableAt(job, s.height) ? { build: job.build, frame: job.frame, height: s.height } : null; },
     get failed() { return new Map(failures); },
+    get horizonNumericRemaining() { return selected()?.source.memoryUsage?.().horizonNumericRemaining ?? null; },
     get memory() {
       let preparedBytes = 0, fieldSamplerBytes = 0;
       for (const job of jobs.values()) {
