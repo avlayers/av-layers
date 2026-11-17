@@ -24,7 +24,6 @@ describe('weather field definitions', () => {
     const wrfLow = weatherFieldDefinition('av-wrf', 'cloud-cover-low');
     expect(wrfCape?.kind === 'cape' ? wrfCape.producerDefinition : undefined).toBe(contract.capeParcelDefinition);
     expect(wrfLow?.kind === 'cloud-cover' ? wrfLow.algorithmId : undefined).toBe(contract.lowCloudDefinition);
-    expect(weatherFieldDefinition('wrf-armenia-pilot-dwd-1km', 'precip-rate')).toEqual(weatherFieldDefinition('av-wrf', 'precip-rate'));
   });
 
   it('keeps historical descriptors stable when the live registry changes', () => {
