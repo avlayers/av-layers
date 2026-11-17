@@ -6,7 +6,7 @@ import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import type { Map } from 'maplibre-gl';
 import type { WindPreparedGrid } from '@av/client/wind';
 import type { PreparationBudget, PreparationLease } from '@av/client';
-import { BARB_ICON_SIZE, CALM_BARB_KEY, WindBarbAtlas } from './wind-barbs-atlas';
+import { BARB_ICON_SIZE, WindBarbAtlas } from './wind-barbs-atlas';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindDeckOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
@@ -38,10 +38,7 @@ export class WindDeck {
   constructor(private readonly map: Map, private readonly budget?: PreparationBudget) {
     this.atlasUrl = this.atlas.canvas.toDataURL('image/png');
     this.lease = budget?.reserve('wind-display-gl', DISPLAY_BYTES, 'foreground') ?? null;
-    try {
-      this.overlay = new MapLibreOverlay({ interleaved: true, layers: [], onAfterRender: () => { this.renderedGeneration = this.installedGeneration; }, onError: () => {} });
-      map.addControl(this.overlay);
-    } catch { this.overlay = null; }
+    this.overlay = this.mount(true) ?? this.mount(false);
     map.on('style.load', this.restore);
   }
 
@@ -93,6 +90,13 @@ export class WindDeck {
     try { if (!this.map.hasControl(this.overlay)) this.map.addControl(this.overlay); } catch { /* style replacement in progress */ }
   };
 
+  private mount(interleaved: boolean): MapLibreOverlay | null {
+    try {
+      const overlay = new MapLibreOverlay({ interleaved, layers: [], onAfterRender: () => { this.renderedGeneration = this.installedGeneration; }, onError: () => {} });
+      this.map.addControl(overlay); return overlay;
+    } catch { return null; }
+  }
+
   private render(): void {
     if (!this.overlay) return;
     const visible = this.options.visible, barbs = visible && this.options.style !== 'trails', trails = visible && this.options.style !== 'barbs';
@@ -104,7 +108,7 @@ export class WindDeck {
         image: { data: this.prepared.data, width: this.prepared.size, height: this.prepared.size },
         imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'NEAREST',
         bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 32, speedFactor: 0.6,
-        width, height, animate: !this.options.paused, opacity: 0.9, color: [255, 255, 255]
+        width, height, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
       })] : []),
       ...(barbs ? [
         new IconLayer<BarbFeature>({
@@ -113,7 +117,7 @@ export class WindDeck {
           getSize: BARB_ICON_SIZE, sizeUnits: 'pixels', billboard: false, pickable: false
         }),
         ...(dynamicFeatures.length ? [new IconLayer<BarbFeature>({
-          id: 'av-wind-barbs-dynamic', data: dynamicFeatures, iconAtlas: this.atlas.dynamicCanvas.toDataURL('image/png'), iconMapping: this.atlas.dynamicMapping,
+          id: 'av-wind-barbs-dynamic', data: dynamicFeatures, iconAtlas: this.atlas.dynamicUrl, iconMapping: this.atlas.dynamicMapping,
           getIcon: feature => feature.icon, getPosition: feature => feature.position, getAngle: feature => feature.angle,
           getSize: BARB_ICON_SIZE, sizeUnits: 'pixels', billboard: false, pickable: false
         })] : []),
@@ -149,4 +153,3 @@ export class WindDeck {
   }
 }
 
-export { CALM_BARB_KEY };

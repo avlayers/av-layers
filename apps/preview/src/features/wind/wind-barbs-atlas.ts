@@ -31,14 +31,6 @@ function drawIcon(ctx: CanvasRenderingContext2D, speedKt: number, southern: bool
   ctx.restore();
 }
 
-function mappingFor(columns: number): { mapping: BarbMapping; slots: number } {
-  const mapping: BarbMapping = {};
-  for (let index = 0; index < columns * columns; index++) {
-    mapping[`slot${index}`] = { x: (index % columns) * ICON, y: Math.floor(index / columns) * ICON, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
-  }
-  return { mapping, slots: columns * columns };
-}
-
 export class WindBarbAtlas {
   readonly canvas: HTMLCanvasElement;
   readonly mapping: BarbMapping = {};
@@ -48,7 +40,7 @@ export class WindBarbAtlas {
   private readonly dynamicCtx: CanvasRenderingContext2D;
   private next = 0;
   private dynamicNext = 0;
-  private readonly keys = new Map<string, string>();
+  dynamicUrl = '';
 
   constructor() {
     this.canvas = document.createElement('canvas'); this.canvas.width = SIZE; this.canvas.height = SIZE;
@@ -76,7 +68,7 @@ export class WindBarbAtlas {
     const x = (slot % columns) * ICON, y = Math.floor(slot / columns) * ICON;
     drawIcon(dynamic ? this.dynamicCtx : this.ctx, speedKt, southern, x, y);
     (dynamic ? this.dynamicMapping : this.mapping)[key] = { x, y, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
-    this.keys.set(key, dynamic ? 'dynamic' : 'static');
+    if (dynamic) this.dynamicUrl = this.dynamicCanvas.toDataURL('image/png');
   }
 
   private dynamic(speedKt: number, southern: boolean): string {
@@ -86,4 +78,4 @@ export class WindBarbAtlas {
   }
 }
 
-export { ICON as BARB_ICON_SIZE, CALM as CALM_BARB_KEY };
+export { ICON as BARB_ICON_SIZE };

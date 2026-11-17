@@ -24,7 +24,10 @@ export class WindOverlay {
   };
 
   private readonly contextLost = (): void => { this.mapLost = true; };
-  private readonly contextRestored = (): void => { this.mapLost = false; this.install(this.field, this.prepared, 'replace', this.frame); };
+  private readonly contextRestored = (): void => {
+    this.mapLost = false;
+    if (this.field) this.deck.setData(this.field, this.prepared, this.frame, this.options);
+  };
   private readonly visibility = (): void => { this.sync(); };
 
   constructor(private readonly map: Map, options: WindOverlayAllocationOptions = {}) {
