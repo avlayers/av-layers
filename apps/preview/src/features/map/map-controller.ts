@@ -19,6 +19,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
     container: options.container,
     center: options.camera?.center ?? [0, 20], zoom: options.camera?.zoom ?? 2,
     maxTileCacheSize: RASTER_PAN_TILES,
+    maxTileCacheZoomLevels: 2,
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : naturalBasemapStyle(window.devicePixelRatio)

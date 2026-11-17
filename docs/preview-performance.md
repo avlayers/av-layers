@@ -44,14 +44,12 @@ at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
-bundle (MapLibre GL, XC Skies natural basemap, raster previews, and numeric wind
-overlay) at **416,000 B gzip** and each lazy chunk (the on-demand `@av/windgram`
-renderer) at **33,000 B gzip**. The 16 November 2026 baseline measured
-391,946 B startup and 27,336 B lazy; full-horizon preparation measured
-402,953 B startup and 30,006 B lazy, so both caps were raised by that measured
-delta. The publication reader measured 413,919 B startup on CI. Globe Auto
-selection measured 414,067 B, and the streaming and wind-render instrumentation
-measured about 414 kB, so the startup cap is 416,000 B. The timeline
+bundle (MapLibre GL, XC Skies natural basemap, raster previews, numeric wind, and
+the pinned `@deck.gl/*`/`@luma.gl/*`/`weatherlayers-gl` renderer set) at
+**1,200,000 B gzip** and each lazy chunk (the on-demand `@av/windgram` renderer)
+at **300,000 B gzip**. The windy plugin build is capped at **250,000 B gzip**.
+The 16 November 2026 baseline measured 391,946 B startup and 27,336 B lazy before
+the renderer migration. The timeline
 figures below remain the 13 November capture.
 
 ```sh
@@ -77,10 +75,12 @@ The full workload includes preparation, 30 settled steps, continuous sweeps,
 point-card steps, layer switches and eight alternating pans with distant times.
 
 Benchmark reports now include GPU buffer storage beside textures and read wind
-verification from the WebGL render pass (`renderedWindFrame`,
+verification from the deck.gl `onAfterRender` pass (`renderedWindFrame`,
 `renderedSceneGeneration`), so a stale canvas increments
-`mismatchedWindRenders` even when field submission succeeded. The captures below
-predate that instrumentation and remain the 13 November fixture run.
+`mismatchedWindRenders` even when field submission succeeded. Readiness separates
+`coarseReadyFrames`, `detailBytesReadyFrames` and `detailDrawableFrames`. The
+captures below predate that instrumentation and remain the 13 November fixture
+run.
 
 Captured 13 November 2026, 17:17–17:42 UTC: Node 22.23.4, Chrome 157.0.8103.79,
 MapLibre 6.16.0, Apple M4 Max Metal through ANGLE. Viewport: 1920 × 1080, scale 1,

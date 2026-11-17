@@ -1,0 +1,10 @@
+const normalize = (value: string) => value.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+export const sep = '/';
+export const join = (...parts: string[]) => normalize(parts.filter(Boolean).join('/'));
+export const dirname = (value: string) => normalize(value).replace(/\/[^/]*$/, '') || '.';
+export const basename = (value: string) => value.split('/').pop() ?? '';
+export const extname = (value: string) => { const name = basename(value), index = name.lastIndexOf('.'); return index > 0 ? name.slice(index) : ''; };
+export const resolve = (...parts: string[]) => join(...parts);
+export const isAbsolute = (value: string) => value.startsWith('/');
+export const relative = (from: string, to: string) => to.startsWith(from) ? to.slice(from.length).replace(/^\//, '') : to;
+export default { sep, join, dirname, basename, extname, resolve, isAbsolute, relative };

@@ -40,8 +40,9 @@ combined work across all grids selected by a request.
   protocol keeps 16 inner requests active. A tile that has returned HTTP 200 is
   stored in the compressed cache when its caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using
-  [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 48
-  offscreen tiles per source. Devices that report at most 4 GiB keep MapLibre's
+  [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 24
+  pan tiles and each uploaded 256² RGBA8 mipmapped tile at 349,524 B plus 16,384 B
+  transient decode per source, and a once-per-map 50-texture pool at 16.67 MiB. Devices that report at most 4 GiB keep MapLibre's
   forecast tile cache at 16 entries; other devices leave that cache at MapLibre's
   default. A rested view keeps every map frame of numeric wind in a 128 MiB,
   4,096-entry cache. Devices that report at most 4 GiB keep the 8 MiB, 256-entry
@@ -76,14 +77,12 @@ combined work across all grids selected by a request.
   the selected layer before additional fine sources. A pan keeps a covering overview.
   A camera rest outside the padded view waits 400 ms before replacing it.
   Movement during that wait keeps the previous images. Layer, build, and expiry
-  changes release decoded overviews. Unsupported browsers retain the raster-only
+  changes release decoded overviews. Browsers without WebGL2 keep the raster-only
   path. Background warming prepares each acquired frame's 128×128 RGBA lattice
   (64 KiB per height) on the main thread; selection uploads it instead of
-  resampling the native grid. The canvas and CPU paths keep the 700 ms field
-  blend. Preview draws those trails through the map WebGL context when a float
-  color target is available. Each trail target matches the map drawing buffer. The 2D trail
-  canvas is 1×1 while those targets are allocated. The 2D canvas draws the
-  trails when that float target is absent.
+  resampling the native grid. The GPU particle layer keeps the 700 ms field blend;
+  deck.gl/WeatherLayers draws trails, map-plane barbs and upright labels in
+  MapLibre's WebGL2 context.
   The timeline reports how many rested frames are decoded.
   MapLibre's texture pool and browser allocations are separate; the
   [input benchmark](preview-performance.md) records retained texture storage.

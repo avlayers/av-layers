@@ -1,11 +1,14 @@
 import type { Map } from 'maplibre-gl';
-import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
+import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { WIND_FIELD_SAMPLER_BYTES, WIND_NUMERIC_BYTES, WIND_PREPARED_GRID_BYTES } from '@av/client/wind';
 
 export { WIND_FIELD_SAMPLER_BYTES, WIND_PREPARED_GRID_BYTES };
 
 export const RASTER_CACHE_TILES = 16;
-export const RASTER_PAN_TILES = 48;
+export const RASTER_PAN_TILES = 24;
+export const RASTER_MIPMAPPED_TILE_BYTES = 349_524;
+export const RASTER_TRANSIENT_TILE_BYTES = 16_384;
+export const MAP_TEXTURE_POOL_RESERVE_BYTES = 50 * RASTER_MIPMAPPED_TILE_BYTES;
 export const MAX_RASTER_SOURCES = 4;
 export const WIND_TRAIL_PIXELS = 2 * 1024 * 1024;
 export const WIND_TRAIL_WIDTH = 1.45;
@@ -44,24 +47,20 @@ export function preparationBudgetBytes(deviceMemory?: number, validatedHighMemor
   return (validatedHighMemory && Number.isFinite(deviceMemory) && deviceMemory! > 4 ? 512 : 256) * 1024 * 1024;
 }
 
-export function rasterRendererPoolBytes(map: Pick<Map, 'coveringTiles'>, maxzoom: number): number {
+export function rasterSourceBytes(map: Pick<Map, 'coveringTiles'>, maxzoom: number): number {
   const visible = map.coveringTiles ? map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true }).length : 64;
-  return (visible + RASTER_PAN_TILES) * (MAX_TILE_BYTES + 2 * RASTER_TILE_SIZE ** 2 * 4);
+  return (visible + RASTER_PAN_TILES) * (RASTER_MIPMAPPED_TILE_BYTES + RASTER_TRANSIENT_TILE_BYTES);
 }
 
 const retainedBytes = (windActive: boolean, numericResident = windActive): number =>
-  VIEWPORT_BYTES - (windActive ? WIND_RESERVE_BYTES : numericResident ? WIND_NUMERIC_BYTES : 0);
+  VIEWPORT_BYTES - MAP_TEXTURE_POOL_RESERVE_BYTES - (windActive ? WIND_RESERVE_BYTES : numericResident ? WIND_NUMERIC_BYTES : 0);
 
 /** Admit a prepared window using covering tiles plus offscreen cache allowance, reclaiming freed canvas/wind memory. */
 export function rasterSourceLimit(map: Pick<Map, 'coveringTiles'>, maxzoom: number, overview = false, windActive = true, numericResident = windActive): number {
   if (!map.coveringTiles) return 0;
-  return Math.max(0, Math.min(MAX_RASTER_SOURCES - (overview ? 2 : 0), Math.floor((retainedBytes(windActive, numericResident) - (overview ? OVERVIEW_BYTES : 0)) / sourceBytes(map, maxzoom))));
+  return Math.max(0, Math.min(MAX_RASTER_SOURCES - (overview ? 2 : 0), Math.floor((retainedBytes(windActive, numericResident) - (overview ? OVERVIEW_BYTES : 0)) / rasterSourceBytes(map, maxzoom))));
 }
 
 export function canRetainRasterOverview(map: Pick<Map, 'coveringTiles'>, maxzoom: number, windActive = true, numericResident = windActive): boolean {
-  return !!map.coveringTiles && sourceBytes(map, maxzoom) + OVERVIEW_BYTES <= retainedBytes(windActive, numericResident);
-}
-
-function sourceBytes(map: Pick<Map, 'coveringTiles'>, maxzoom: number): number {
-  return (map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true }).length + RASTER_PAN_TILES) * RASTER_TILE_SIZE ** 2 * 4;
+  return !!map.coveringTiles && rasterSourceBytes(map, maxzoom) + OVERVIEW_BYTES <= retainedBytes(windActive, numericResident);
 }

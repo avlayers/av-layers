@@ -18,3 +18,4 @@ catalog:
 # https://github.com/advisories/GHSA-g3hv-75wg-m249
 overrides:
   "minimatch@^10": "11.0.1"
+  "@types/node": "22.19.15"
