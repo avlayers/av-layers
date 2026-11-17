@@ -2,7 +2,7 @@ import { STATUS_VALID } from '@av/contracts/layers';
 import { createHash } from 'node:crypto';
 import { prepareGridGeometry } from '@av/contracts/geometry';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE } from '@av/contracts';
-import { WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, decodeTileMask, windLayout, windOverviewLayout } from '@av/contracts/wind-data';
+import { WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, decodeTileMask, overviewStrides, windLayout, windOverviewLayout } from '@av/contracts/wind-data';
 import { encodeWindColumns } from '@av/forecast/wind';
 import type { ManifestV5 } from '@av/contracts/publication';
 import golden from './fixtures/gfs-wind-layout.json' with { type: 'json' };
@@ -51,7 +51,7 @@ export function previewWindFixture(manifest: ManifestV5, globalGfs: boolean | 'r
     const placeholder = (field: string) => createHash('sha256').update(`non-integrity-preview-fixture/${frame}/${kind}/${page}/${field}`).digest('hex');
     return { sha256: placeholder('shard'), indexSha256: placeholder('index'), count: length, bytes: length * chunkBytes };
   });
-  const strides = globalGfs ? [2, 4, 8, 16] : [2, 4, 8, 16, 32, 64];
+  const strides = overviewStrides(native);
   const values = (frame: number, x: number, y: number, height: number) => ({
     u: 4 + frame * 0.2 + x * 0.002 + height * 0.001,
     v: 2 + frame * 0.1 + y * 0.002 + height * 0.0005

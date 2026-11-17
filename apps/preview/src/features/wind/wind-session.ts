@@ -81,28 +81,58 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const parked = new Map<string, WindJob>();
   const inflight = new Set<WindJob>();
   let build: PinnedBuild | null = null, installed: WindJob | null = null, installedHeight: WindHeight = 'surface';
-  let timer: ReturnType<typeof setTimeout> | null = null, timerAt = 0, preparationTimer: ReturnType<typeof setTimeout> | null = null, expiryTimer: ReturnType<typeof setTimeout> | null = null;
-  let destroyed = false, limited = false, blockedBytes = 0, blockedNumeric = false, direction = 1, lastFrame: string | null = null, viewKey = '';
-  let pending: boolean | undefined;
+  let timer: ReturnType<typeof setTimeout> | null = null, timerAt = 0, preparationTimer: ReturnType<typeof setTimeout> | null = null, expiryTimer: ReturnType<typeof setTimeout> | null = null, upgradeTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false, numericBlocked = false, acquisitionBlocked = false, preparationBlocked = false, direction = 1, lastFrame: string | null = null, viewKey = '';
+  let blockedNumericBytes = 0, blockedSharedBytes = 0, pending: boolean | undefined, upgradeKey = '';
+  let upgradeSource: WindDataSource | null = null;
+  const narrowPlans = new Set<string>();
   const isCapacity = (error: unknown) => error instanceof WindCapacityError || (error instanceof Error && ('code' in error && error.code === 'capacity' || error instanceof RangeError && /byte budget/.test(error.message)));
-  const bytes = () => blockedNumeric ? options.cache.allocatedBytes : options.budget?.used ?? options.cache.allocatedBytes;
-  const releaseLimit = () => { limited = false; blockedBytes = 0; blockedNumeric = false; };
-  const capacity = (frame: string, error: unknown) => {
-    blockedNumeric = error instanceof WindCapacityError && error.resource === 'numeric';
-    let reclaimed = false;
+  const sharedBytes = () => options.budget?.used ?? options.cache.allocatedBytes;
+  const admissionBlocked = () => numericBlocked || acquisitionBlocked;
+  const blocked = () => admissionBlocked() || preparationBlocked;
+  const releaseAdmission = () => { numericBlocked = false; acquisitionBlocked = false; blockedNumericBytes = 0; upgradeKey = ''; };
+  const releasePreparation = () => { preparationBlocked = false; blockedSharedBytes = 0; };
+  const releaseLimit = () => { releaseAdmission(); releasePreparation(); };
+  const planToken = (frame: string) => {
+    const camera = cameraBounds(map), padded = windBounds(map, options.lowMemory);
+    return `${frame}:${camera.join(',')}:${padded.join(',')}`;
+  };
+  const coversJob = (job: WindJob, camera = cameraBounds(map)) => job.build === state().build && coversBounds(job.bounds, camera);
+  const capacity = (frame: string, error: unknown, phase: 'acquisition' | 'preparation') => {
+    const numeric = phase === 'acquisition' && error instanceof WindCapacityError && error.resource === 'numeric';
+    options.cache.evictUnreferenced?.();
+    const beforeNumeric = options.cache.allocatedBytes, beforeShared = sharedBytes();
     const prior = parked.entries().next().value;
-    if (prior || frame === state().selectedFrame) {
+    const selectedReady = usableAt(selected());
+    if (prior || frame === state().selectedFrame || !selectedReady) {
       const distant = [...ordered()].reverse().map(key => jobs.get(key)).find(job => job && job.frame !== frame && job !== installed && job.status === 'ready');
       const victim = prior?.[1] ?? distant;
       if (victim) {
         if (prior) parked.delete(prior[0]); else jobs.delete(victim.frame);
-        dispose(victim); reclaimed = true;
+        dispose(victim);
       }
     }
     options.cache.evictUnreferenced?.();
-    const displayCanHelp = frame === state().selectedFrame && !blockedNumeric;
-    limited = !(reclaimed || displayCanHelp && options.relieveDisplay?.()); blockedBytes = bytes();
-    if (!limited) schedule();
+    const numericFreed = options.cache.allocatedBytes < beforeNumeric;
+    const sharedFreed = sharedBytes() < beforeShared;
+    if (phase === 'preparation') {
+      preparationBlocked = !sharedFreed;
+      blockedSharedBytes = sharedBytes();
+      if (!preparationBlocked) schedulePreparation();
+      return;
+    }
+    const displayCanHelp = frame === state().selectedFrame && !numeric && !!options.relieveDisplay?.();
+    if (numeric) {
+      numericBlocked = !numericFreed;
+      blockedNumericBytes = options.cache.allocatedBytes;
+      if (!numericBlocked) { upgradeKey = ''; narrowPlans.clear(); }
+    } else {
+      acquisitionBlocked = !(sharedFreed || numericFreed || displayCanHelp);
+      blockedSharedBytes = sharedBytes();
+      if (!acquisitionBlocked) { upgradeKey = ''; narrowPlans.clear(); }
+    }
+    if (!admissionBlocked()) schedule();
+    if (!preparationBlocked) schedulePreparation();
   };
   const active = () => {
     const s = state();
@@ -130,7 +160,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     if (timer !== null) clearTimeout(timer);
     if (preparationTimer !== null) clearTimeout(preparationTimer);
     if (expiryTimer !== null) clearTimeout(expiryTimer);
-    timer = preparationTimer = expiryTimer = null;
+    if (upgradeTimer !== null) clearTimeout(upgradeTimer);
+    timer = preparationTimer = expiryTimer = upgradeTimer = null;
   }
   function clearField(): void {
     field.clear(); installed = null; publish.displayed(false); publish.quality(false); publish.pointWind();
@@ -146,6 +177,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     for (const job of jobs.values()) dispose(job);
     for (const job of parked.values()) dispose(job);
     parked.clear();
+    upgradeSource?.dispose(); upgradeSource = null; upgradeKey = ''; narrowPlans.clear();
     jobs.clear(); failures.clear(); releaseLimit(); build = null; lastFrame = null; viewKey = '';
     setPending(false); options.overlay.setWindActive(false, false); publish.status('unavailable'); publish.reservation();
   }
@@ -164,15 +196,17 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     try {
       const prepared = job.source.prepare?.(height);
       if (!prepared) {
-        jobs.delete(job.frame); dispose(job); recordFailure(job.frame); return false;
+        if (jobs.get(job.frame) === job) { jobs.delete(job.frame); dispose(job); recordFailure(job.frame); }
+        return false;
       }
       job.source.field?.(height);
       job.heights.add(height);
       failures.delete(job.frame);
       return true;
     } catch (error) {
-      if (isCapacity(error)) { capacity(job.frame, error); return false; }
-      jobs.delete(job.frame); dispose(job); recordFailure(job.frame); return false;
+      if (isCapacity(error)) { capacity(job.frame, error, 'preparation'); return false; }
+      if (jobs.get(job.frame) === job) { jobs.delete(job.frame); dispose(job); recordFailure(job.frame); }
+      return false;
     }
   }
   function install(job: WindJob, height: WindHeight): boolean {
@@ -194,7 +228,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       return true;
     } catch (error) {
       if (!isCapacity(error)) throw error;
-      capacity(job.frame, error); return false;
+      capacity(job.frame, error, 'preparation'); return false;
     }
   }
   function reconcile(): void {
@@ -208,13 +242,13 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     }
     const available = usableAt(job, s.height);
     const failure = s.selectedFrame ? failures.get(s.selectedFrame) : undefined;
-    setPending(active() && !available && !limited && (!failure || job?.status === 'loading'));
+    setPending(active() && !available && !blocked() && (!failure || job?.status === 'loading'));
     publish.status(options.replacementFailed() || failure ? 'unavailable' : available ? 'ready' : active() ? 'loading' : 'unavailable');
     options.overlay.setWindActive(active(), jobs.size > 0);
     publish.reservation();
   }
   function schedulePreparation(): void {
-    if (destroyed || preparationTimer !== null || limited) return;
+    if (destroyed || preparationTimer !== null || preparationBlocked) return;
     preparationTimer = setTimeout(() => {
       preparationTimer = null;
       if (!active()) return;
@@ -233,6 +267,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   function start(frame: string, foreground: boolean): void {
     const s = state();
     if (!s.build || inflight.size >= 8) return;
+    const token = planToken(frame);
+    if (narrowPlans.has(token)) return;
     const bounds = windBounds(map, options.lowMemory), core = cameraBounds(map), controller = new AbortController();
     const source = new WindDataSource(options.apiBaseUrl, {
       fetchImpl: foreground ? options.scheduler.fetch : (input, init) => options.scheduler.fetch(input, { ...init, priority: 'low' } as RequestInit),
@@ -245,17 +281,20 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     job.done = source.load({ build: job.build, frame, bounds, core, signal: controller.signal }).then(status => {
       if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
       if (status === 'ready') {
-        job.status = 'ready';
         if (source.admitted) job.bounds = [...source.admitted] as Bounds;
+        if (!coversBounds(job.bounds, cameraBounds(map))) {
+          if (jobs.get(frame) === job) jobs.delete(frame);
+          source.dispose(); narrowPlans.add(token); return;
+        }
+        narrowPlans.delete(token); job.status = 'ready';
       } else {
         jobs.delete(frame); source.dispose(); recordFailure(frame);
       }
     }, error => {
       if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
       jobs.delete(frame); source.dispose();
-      if (isCapacity(error)) {
-        capacity(frame, error);
-      } else recordFailure(frame);
+      if (isCapacity(error)) capacity(frame, error, 'acquisition');
+      else recordFailure(frame);
     }).finally(() => {
       inflight.delete(job);
       if (destroyed || build !== job.build || !active()) return;
@@ -265,18 +304,70 @@ export function createWindSession(options: WindSessionOptions): WindSession {
       reconcile(); schedule(); schedulePreparation();
     });
   }
+  function scheduleUpgrade(): void {
+    if (upgradeTimer !== null || upgradeSource || destroyed || admissionBlocked()) return;
+    const job = selected(), stride = job?.status === 'ready' ? job.source.overviewStride : null;
+    if (!job || typeof stride !== 'number') return;
+    const key = `${job.build.manifest.buildId}:${job.frame}:${stride}:${cameraBounds(map).join(',')}`;
+    if (key === upgradeKey) return;
+    upgradeTimer = setTimeout(() => {
+      upgradeTimer = null;
+      if (destroyed || !active() || admissionBlocked() || selected() !== job) return;
+      const current = selected();
+      if (!current || current.source !== job.source) return;
+      upgradeKey = key;
+      const bounds = windBounds(map, options.lowMemory), core = cameraBounds(map);
+      const source = new WindDataSource(options.apiBaseUrl, {
+        fetchImpl: options.scheduler.fetch,
+        ...(options.scheduler.request ? { request: (spec: ForecastRequestSpec) => options.scheduler.request!(spec) } : {}),
+        cache: options.cache as WindDataCache, budget: options.budget, priority: 'background',
+        horizon: renderedFrames(job.build.manifest).length, overviewForHorizon: true, coalesceSpans: true
+      });
+      upgradeSource = source;
+      void source.load({ build: job.build, frame: job.frame, bounds, core, finerThan: stride }).then(status => {
+        if (upgradeSource !== source || destroyed || selected()?.source !== job.source) {
+          source.dispose(); if (upgradeSource === source) upgradeSource = null; return;
+        }
+        const admitted = source.admitted, camera = cameraBounds(map);
+        const finer = status === 'ready' && !!admitted && coversBounds(admitted, camera) && !(source.isOverview && (source.overviewStride == null || source.overviewStride >= stride));
+        if (!finer) { source.dispose(); upgradeSource = null; return; }
+        const height = state().height;
+        try {
+          if (!source.prepare(height) || !source.field(height)) { source.dispose(); upgradeSource = null; return; }
+        } catch (error) {
+          if (isCapacity(error)) { preparationBlocked = true; blockedSharedBytes = sharedBytes(); }
+          source.dispose(); upgradeSource = null; return;
+        }
+        const replacement: WindJob = { zoom: map.getZoom(), build: job.build, frame: job.frame, bounds: [...admitted] as Bounds, controller: new AbortController(), source, status: 'ready', heights: new Set([height]), done: Promise.resolve() };
+        const previous = jobs.get(job.frame);
+        jobs.set(job.frame, replacement); upgradeSource = null;
+        if (previous && previous !== replacement) {
+          if (installed === previous) clearField();
+          dispose(previous);
+        }
+        if (!installed) install(replacement, height);
+        reconcile();
+      }, error => {
+        if (upgradeSource === source) upgradeSource = null;
+        source.dispose();
+        if (!isCapacity(error) || destroyed) return;
+        if (error instanceof WindCapacityError && error.resource === 'numeric') { numericBlocked = true; blockedNumericBytes = options.cache.allocatedBytes; }
+        else { acquisitionBlocked = true; blockedSharedBytes = sharedBytes(); }
+      });
+    }, 150);
+  }
   function pump(): void {
     if (!active()) { setPending(false); return; }
     const s = state(), frames = ordered(), current = selected();
     if (!current && s.selectedFrame) {
       const failure = failures.get(s.selectedFrame);
-      if (!limited && (!failure || failure.retryAt !== null && failure.retryAt <= Date.now())) start(s.selectedFrame, true);
+      if (!admissionBlocked() && (!failure || failure.retryAt !== null && failure.retryAt <= Date.now())) start(s.selectedFrame, true);
     }
     const selectedJob = selected();
-    if (selectedJob?.status === 'ready' && !readyAt(selectedJob, s.height)) prepare(selectedJob, s.height);
+    if (!preparationBlocked && selectedJob?.status === 'ready' && !readyAt(selectedJob, s.height)) prepare(selectedJob, s.height);
     reconcile();
     const selectedFailure = s.selectedFrame ? failures.get(s.selectedFrame) : undefined;
-    if (!limited && (readyAt(selected(), s.height) || !selected() && selectedFailure && (selectedFailure.retryAt === null || selectedFailure.retryAt > Date.now()))) {
+    if (!admissionBlocked() && (readyAt(selected(), s.height) || !selected() && selectedFailure && (selectedFailure.retryAt === null || selectedFailure.retryAt > Date.now()))) {
       let background = [...jobs.values()].filter(job => job.status === 'loading' && job.frame !== s.selectedFrame).length;
       for (const frame of frames) {
         if (background >= 6) break;
@@ -287,7 +378,8 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     }
     schedulePreparation();
     const deadlines = [...failures.values()].flatMap(failure => failure.retryAt !== null && failure.retryAt > Date.now() ? [failure.retryAt] : []);
-    if (deadlines.length && !limited) schedule(Math.min(...deadlines) - Date.now());
+    if (deadlines.length && !admissionBlocked()) schedule(Math.min(...deadlines) - Date.now());
+    scheduleUpgrade();
   }
   function update(): void {
     if (destroyed) return;
@@ -307,19 +399,31 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     }
     build = s.build;
     const nextView = `${map.getZoom()}:${camera.join(',')}`;
-    if (viewKey && viewKey !== nextView) { failures.clear(); releaseLimit(); }
+    if (viewKey && viewKey !== nextView) {
+      failures.clear();
+      if (narrowPlans.size > 32) narrowPlans.clear();
+      if (![...jobs.values(), ...parked.values()].some(job => coversJob(job, camera))) releaseAdmission();
+    }
     viewKey = nextView;
-    const fits = (job: WindJob) => job.build === s.build && coversBounds(job.bounds, camera) && (!job.source.isOverview || map.getZoom() <= job.zoom);
-    if ([...jobs.values()].some(job => !fits(job)) || !jobs.size && [...parked.values()].some(fits)) {
-      const restored = [...parked].filter(([, job]) => fits(job));
-      for (const [frame, job] of parked) if (!restored.some(([key]) => key === frame)) dispose(job);
-      parked.clear();
-      for (const [frame, job] of jobs) {
-        if (installed === job && !fits(job)) clearField();
-        if (job.status === 'ready') parked.set(frame, job); else dispose(job);
-      }
-      jobs.clear();
-      for (const [frame, job] of restored) jobs.set(frame, job);
+    const covers = (job: WindJob) => coversJob(job, camera);
+    const restored = new Map<string, WindJob>();
+    for (const [frame, job] of parked) if (covers(job)) restored.set(frame, job);
+    for (const [frame, job] of [...parked]) if (!restored.has(frame) && !covers(job) && [...jobs.values()].some(item => !covers(item))) { parked.delete(frame); dispose(job); }
+    for (const [frame, job] of [...jobs]) {
+      if (covers(job)) continue;
+      jobs.delete(frame);
+      if (installed === job) clearField();
+      if (job.status === 'ready' && job.build === s.build && !restored.has(frame)) {
+        const previous = parked.get(frame);
+        if (previous && previous !== job) dispose(previous);
+        parked.set(frame, job);
+      } else dispose(job);
+    }
+    for (const [frame, job] of restored) {
+      const current = jobs.get(frame);
+      if (current && covers(current)) { if (current !== job) parked.set(frame, job); continue; }
+      if (current && current !== job) dispose(current);
+      parked.delete(frame); jobs.set(frame, job);
     }
     if (lastFrame !== s.selectedFrame) {
       const previousSource = lastFrame ? jobs.get(lastFrame)?.source as (WindDataSource & { setPriority?: (priority: 'foreground' | 'background') => void }) | undefined : undefined;
@@ -334,17 +438,25 @@ export function createWindSession(options: WindSessionOptions): WindSession {
           if (victim) { jobs.delete(victim.frame); dispose(victim); }
         }
       }
-      if (!selected()) releaseLimit();
+      if (!selected()) releaseAdmission();
       selected()?.source.promote?.();
     }
     if (timer !== null) { clearTimeout(timer); timer = null; }
     pump();
   }
   const released = () => {
-    if (!limited || destroyed) return;
-    const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
-    if (bytes() >= blockedBytes && reclaimed === 0) return;
-    releaseLimit(); schedule();
+    if (destroyed || !blocked()) return;
+    const evicted = options.cache.evictUnreferenced?.() ?? 0;
+    let wakeAdmission = false, wakePreparation = false;
+    if (numericBlocked && options.cache.allocatedBytes < blockedNumericBytes && (evicted > 0 || options.cache.allocatedBytes < blockedNumericBytes)) {
+      numericBlocked = false; wakeAdmission = true;
+    }
+    if ((acquisitionBlocked || preparationBlocked) && sharedBytes() < blockedSharedBytes) {
+      if (acquisitionBlocked) { acquisitionBlocked = false; wakeAdmission = true; }
+      if (preparationBlocked) { preparationBlocked = false; wakePreparation = true; }
+    }
+    if (wakeAdmission) { upgradeKey = ''; narrowPlans.clear(); schedule(); }
+    if (wakePreparation) schedulePreparation();
   };
   if ('onRelease' in options.cache) options.cache.onRelease = released;
   const unsubscribe = options.budget?.onRelease(released);
@@ -396,7 +508,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
     get resident() { return jobs.size + parked.size > 0; },
     get preparation() {
       const promised = state().build ? renderedFrames(state().build!.manifest).length : 0, height = state().height;
-      return { promised, admitted: jobs.size, ready: [...jobs.values()].filter(job => usableAt(job, height)).length, limited };
+      return { promised, admitted: jobs.size, ready: [...jobs.values()].filter(job => usableAt(job, height)).length, limited: blocked() };
     },
     get current() { const job = selected(); return job?.status === 'ready' && usableAt(job) ? job : null; },
     get installed() { return installed ? { build: installed.build, frame: installed.frame, source: installed.source, height: installedHeight, isOverview: installed.source.isOverview === true } : null; },

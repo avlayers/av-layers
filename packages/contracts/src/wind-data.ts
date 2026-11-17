@@ -129,6 +129,17 @@ export function windOverviewLayout(grid: Pick<Grid, 'width' | 'height'>, stride:
   return { width, height, count, chunkBytes: WIND_OVERVIEW_TILE_SIZE ** 2 * WIND_OVERVIEW_CELL_BYTES, pages: Math.ceil(count / WIND_INDEX_ENTRIES), pageCount: (page: number) => Math.min(WIND_INDEX_ENTRIES, count - page * WIND_INDEX_ENTRIES) };
 }
 
+/** Doubling overview strides. The last level fits in one chunk. */
+export function overviewStrides(grid: Pick<Grid, 'width' | 'height'>): number[] {
+  const strides: number[] = [];
+  for (let stride = 2; strides.length < 16; stride *= 2) {
+    strides.push(stride);
+    const { width, height } = windOverviewLayout(grid, stride);
+    if (Math.max(width, height) <= WIND_OVERVIEW_TILE_SIZE) return strides;
+  }
+  return strides;
+}
+
 export function windFrameParts(frame: WindFrame): Array<{ kind: string; shards: WindFrame['wind'] }> {
   return [{ kind: 'wind', shards: frame.wind }, { kind: 'fine', shards: frame.fine }, ...(frame.overview ?? []).map(level => ({ kind: `overview-${level.stride}`, shards: level.shards }))];
 }

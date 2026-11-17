@@ -881,6 +881,24 @@ it('keeps a contained pan inside the retained crop without closing prepared imag
   } finally { f.overview.destroy(); }
 });
 
+it('keeps preview identities across a one-level zoom inside the same preview', async () => {
+  const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
+  const armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };
+  try {
+    f.view(armenia, 8); f.overview.select(b, 'usable-lift-agl', frame);
+    await vi.waitFor(() => expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true));
+    const previewUrls = () => f.requests.map(request => request.url).filter(url => {
+      const zoom = Number(/\/(\d+)\/\d+\/\d+\.webp$/.exec(url)?.[1]);
+      return Number.isFinite(zoom) && zoom < 8;
+    });
+    const before = previewUrls(), closes = bitmaps.reduce((count, bitmap) => count + bitmap.close.mock.calls.length, 0);
+    f.view(armenia, 9); f.overview.select(b, 'usable-lift-agl', frame);
+    expect(f.overview.ready(b, 'usable-lift-agl', frame)).toBe(true);
+    expect(previewUrls()).toEqual(before);
+    expect(bitmaps.reduce((count, bitmap) => count + bitmap.close.mock.calls.length, 0)).toBe(closes);
+  } finally { f.overview.destroy(); }
+});
+
 it('retains the displayed preview while preparing a new viewport', async () => {
   const f = fixture(), b = build(), frame = b.manifest.frames[0].id;
   const wide = { west: -80, east: 80, south: -50, north: 50 }, armenia = { west: 44.27798057856188, east: 44.72201942143812, south: 40.104612670852696, north: 40.29538732914732 };

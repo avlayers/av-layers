@@ -3,7 +3,7 @@ import { mkdir, open, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK } from '@av/contracts/layers';
-import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, windOverviewLayout, windFrameParts, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, encodeTileMask, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
+import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_HEIGHTS, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, overviewStrides, windOverviewLayout, windFrameParts, WIND_FRAME_LIMIT, WIND_FRAME_MAX_PAGES, WIND_INDEX_ENTRIES, WIND_ROOT_LIMIT, assertWindFrameLayout, encodeTileMask, windFrameSchema, parseWindFrame, windDataSchema, windLayout, type WindFrame } from '@av/contracts/wind-data';
 import { SAMPLE_BLOCK_SIZE, encodeBoundedJson, parseBoundedJson, sameGrid, type ManifestV5, type WholeDomainGrid } from '@av/contracts';
 import { encodeWindColumns, normalizedWindColumn } from '@av/forecast/wind';
 import type { NormalizedFrame } from '@av/forecast/inputs';
@@ -96,14 +96,6 @@ function encodeFineTargets(prepared: WholeDomainPrepared, terrain: WindTerrain, 
     view.setUint8(pos + 9, liftFlags & SUPPORT_MASK);
   }
   return data;
-}
-
-function overviewStrides(grid: WindGrids['native']): number[] {
-  const strides: number[] = [];
-  for (let stride = 2; ; stride *= 2) {
-    strides.push(stride);
-    if (Math.max(Math.ceil(grid.width / stride), Math.ceil(grid.height / stride)) <= 128) return strides;
-  }
 }
 
 function columnWind(column: ReturnType<typeof normalizedWindColumn>, height: number | 'surface') {
