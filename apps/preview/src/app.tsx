@@ -188,14 +188,14 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
               value={selectedIndex} aria-label="Forecast time" tabindex={-1}
             />
             <p id="timestamp" class="sr-only">{timestamp}</p>
-            <div class="timebar-status">
-              <p id="frame-status" role="status" aria-live="polite" data-quality={overlay.quality ?? 'none'}>{notices.frameStatus}</p>
-              <p id="timeline-status" hidden={!notices.overviewTotal} data-ready={notices.overviewReady} data-total={notices.overviewTotal} data-detail-ready={notices.detailReady}>
-                Preview{intent.windVisible && wind.supported ? ' + wind' : ''} ready {notices.overviewReady} / {notices.overviewTotal}
-                {' · '}Detail ready {notices.detailReady} / {notices.overviewTotal}{notices.preparationLimited ? ' · Capacity limited' : ''}
-              </p>
-            </div>
           </footer>
+          <div class="timebar-status">
+            <p id="frame-status" role="status" aria-live="polite" data-quality={overlay.quality ?? 'none'}>{notices.frameStatus}</p>
+            <p id="timeline-status" hidden={!notices.overviewTotal} data-ready={notices.overviewReady} data-total={notices.overviewTotal} data-detail-ready={notices.detailReady}>
+              Preview{intent.windVisible && wind.supported ? ' + wind' : ''} ready {notices.overviewReady} / {notices.overviewTotal}
+              {' · '}Detail ready {notices.detailReady} / {notices.overviewTotal}{notices.preparationLimited ? ' · Capacity limited' : ''}
+            </p>
+          </div>
         </div>
       </div>
       {offline ? <p class="toast fixture-warning">SYNTHETIC FIXTURE — development data</p> : null}

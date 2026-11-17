@@ -143,6 +143,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 #timestamp { margin: 6px 0 0; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; color: #243140; }
 
 .timebar-status { position: absolute; bottom: calc(100% + 4px); right: 0; max-width: 100%; padding: 4px 7px; border-radius: 4px; background: #fffffff2; color: #243140; font-size: 11px; line-height: 1.3; text-align: right; }
+#map-dock > .timebar-status { pointer-events: none; }
+#legend:not([hidden]) ~ .timebar-status { max-width: calc(100% - 256px); }
 .timebar-status p { margin: 0; }
 #frame-status[data-quality="overview"] { color: #16324f; }
 #timeline-status { color: #4c5b68; }
@@ -205,5 +207,13 @@ a { color: #1c6b8a; }
   .ribbon { flex: 1 1 248px; width: auto; max-width: 100%; }
   #map-controls > #map-dock { flex-wrap: wrap; width: 100%; }
   #timebar { flex: 1 0 100%; max-width: none; height: 50px; }
-  #legend:not([hidden]) ~ #timebar #frame-status { bottom: calc(100% + 66px); }
+  #map-dock > .timebar-status,
+  #legend:not([hidden]) ~ .timebar-status {
+    position: static;
+    flex: 1 0 100%;
+    order: -1;
+    width: 100%;
+    max-width: none;
+    text-align: left;
+  }
 }

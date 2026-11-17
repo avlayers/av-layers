@@ -161,11 +161,6 @@
   accent-color: var(--wind-controls-ink);
   cursor: pointer;
 }
-.wind-controls-scale[data-height="surface"] .wind-controls-range::-webkit-slider-thumb,
-.wind-controls-scale[data-height="lift"] .wind-controls-range::-webkit-slider-thumb { opacity: 0.36; }
-.wind-controls-scale[data-height="surface"] .wind-controls-range::-moz-range-thumb,
-.wind-controls-scale[data-height="lift"] .wind-controls-range::-moz-range-thumb { opacity: 0.36; }
-
 .wind-controls-value {
   position: absolute;
   left: -4px;
