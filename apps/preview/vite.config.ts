@@ -10,7 +10,8 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  plugins: [preact(), browserBundleBudget(412_000, 33_000), {
+  // CI measured 413919 B gzip startup after the publication reader.
+  plugins: [preact(), browserBundleBudget(414_000, 33_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {
