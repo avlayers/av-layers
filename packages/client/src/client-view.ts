@@ -290,6 +290,7 @@ export function planViewportPrefetch(options: {
   direction?: 1 | -1;
   prepared?: readonly { layer: LayerId; frame: string }[];
   timelineFrames?: readonly string[];
+  framesOnly?: boolean;
 }): string[] {
   const { build, activeLayer, activeFrame } = options, manifest = build.manifest;
   const frames = renderedFrames(manifest);
@@ -325,6 +326,10 @@ export function planViewportPrefetch(options: {
   function warm(layer: LayerId, id: string | undefined): void {
     if ((layer === activeLayer && id === activeFrame) || options.prepared?.some(item => item.layer === layer && item.frame === id)) return;
     for (const tile of viewport) add(layer, id, tile);
+  }
+  if (options.framesOnly) {
+    for (const id of options.timelineFrames ?? []) { if (urls.size >= 64) break; warm(activeLayer, id); }
+    return [...urls];
   }
   const sibling = activeLayer === 'usable-lift-agl' ? 'usable-lift-msl' : activeLayer === 'usable-lift-msl' ? 'usable-lift-agl' : undefined;
   const preferred = options.preferred ?? (sibling ? { layer: sibling, frame: activeFrame } : undefined);

@@ -237,6 +237,8 @@ export class RasterOverlay {
     this.ensureProtocol(); this.cancelRefinement();
     this.moving ||= this.map.isMoving?.() ?? false;
     const prev = this.requested;
+    this.detailState = 'idle';
+    if (!prev || prev.build !== build || prev.layer !== layer) this.byteReadyFrames.clear();
     if (prev?.build === build && prev.layer === layer && prev.frame !== frame) {
       const frames = renderedFrames(build.manifest);
       this.direction = frames.findIndex(i => i.id === frame) > frames.findIndex(i => i.id === prev.frame) ? 1 : -1;
@@ -784,15 +786,17 @@ export class RasterOverlay {
 
   private prefetchBytes(): void {
     const slot = this.active;
-    if (this.disposed || this.moving || !slot || !matches(slot, this.requested) || !this.protocol || this.prefetched) return;
+    if (this.disposed || this.playing || this.moving || !slot || !matches(slot, this.requested) || !this.protocol || this.prefetched) return;
     this.prefetched = true;
     const bounds = this.map.getBounds(), z = Math.min(layerMaxZoom(slot.build.manifest, slot.layer), Math.max(0, Math.round(this.map.getZoom()) + 1));
     const tiles = viewportTiles({ west: bounds.getWest(), east: bounds.getEast(), south: bounds.getSouth(), north: bounds.getNorth() }, z);
     const prepared = this.slots.filter(v => v.successful && !this.problem(v) && this.tilesSettled(v));
     const warming = this.warmth.update(boundsAreaKm2(cameraBounds(this.map))), timeline = this.timelineFrames(slot);
-    const urls = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
-      preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: warming ? [] : timeline.slice(0, 4) });
-    for (const url of new Set(urls)) void this.prefetchOne(url);
+    if (!warming) {
+      const urls = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
+        preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: timeline.slice(0, 4) });
+      for (const url of new Set(urls)) void this.prefetchOne(url);
+    }
     const preparedFrames = new Set(prepared.map(item => item.frame));
     for (const frame of warming ? timeline : timeline.slice(0, 4)) if (preparedFrames.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
     const template = slot.build.templates[slot.layer];
@@ -802,10 +806,10 @@ export class RasterOverlay {
     this.prefetching = true; this.prefetchCursor += batch.length;
     const jobs = batch.map(frame => {
       const planned = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
-        preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: [frame] });
+        direction: this.direction, prepared, timelineFrames: [frame], framesOnly: true });
       const frameTemplate = frameTileUrl(template, frame), cut = frameTemplate.indexOf('{z}');
       const prefix = cut > 0 ? frameTemplate.slice(0, cut) : '', frameUrls = prefix ? planned.filter(url => url.startsWith(prefix)) : [];
-      if (!frameUrls.length) return Promise.resolve(false);
+      if (frameUrls.length < tiles.length) return Promise.resolve(false);
       return Promise.all(frameUrls.map(url => this.prefetchOne(url))).then(results => {
         const ok = results.every(Boolean);
         if (ok && !this.disposed) { this.byteReadyFrames.add(frame); this.emit(); }
@@ -814,7 +818,7 @@ export class RasterOverlay {
     });
     void Promise.all(jobs).finally(() => {
       this.prefetching = false;
-      if (!this.disposed && this.active === slot && matches(slot, this.requested) && this.prefetchCursor < timeline.length && this.warmth.warming) {
+      if (!this.disposed && !this.playing && this.active === slot && matches(slot, this.requested) && this.prefetchCursor < timeline.length && this.warmth.warming) {
         this.prefetched = false; queueMicrotask(() => this.prefetchBytes());
       }
     });
