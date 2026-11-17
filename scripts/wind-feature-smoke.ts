@@ -272,8 +272,9 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert((await range.getAttribute('aria-valuetext'))?.includes('AGL') === true, 'AGL value text is missing');
       await page.getByRole('button', { name: /^Top of lift/ }).click();
       assert(await scale.getAttribute('data-height') === 'lift', 'Top of lift height did not select');
-      assert(await range.inputValue() === '8', 'Top of lift did not retain the fixed height');
+      assert(await range.inputValue() === '9', 'Top of lift did not park the thumb at the top');
       await page.getByRole('button', { name: 'Surface', exact: true }).click();
+      assert(await range.inputValue() === '0', 'Surface did not park the thumb at the bottom');
       assert(await root.getAttribute('data-visible') === 'true', 'Wind visibility changed with height selection');
       await page.waitForTimeout(400);
       assert(numericRequests.length === before, `Height changes made ${numericRequests.length - before} numeric requests`);
@@ -428,6 +429,14 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
           const attributionStyle = attributionElement ? getComputedStyle(attributionElement) : null;
           const attributionRect = attributionElement && attributionStyle && attributionStyle.display !== 'none' && attributionStyle.visibility !== 'hidden' ? attributionElement.getBoundingClientRect() : null;
           const attribution = attributionRect && attributionRect.width > 0 ? { left: attributionRect.left, right: attributionRect.right, top: attributionRect.top, bottom: attributionRect.bottom, width: attributionRect.width, height: attributionRect.height } : null;
+          const opacityElement = document.querySelector('#opacity');
+          const opacityStyle = opacityElement ? getComputedStyle(opacityElement) : null;
+          const opacityRect = opacityElement && opacityStyle && opacityStyle.display !== 'none' && opacityStyle.visibility !== 'hidden' ? opacityElement.getBoundingClientRect() : null;
+          const opacity = opacityRect && opacityRect.width > 0 ? { left: opacityRect.left, right: opacityRect.right, top: opacityRect.top, bottom: opacityRect.bottom, width: opacityRect.width, height: opacityRect.height } : null;
+          const statusElement = document.querySelector('.timebar-status');
+          const statusStyle = statusElement ? getComputedStyle(statusElement) : null;
+          const statusRect = statusElement && statusStyle && statusStyle.display !== 'none' && statusStyle.visibility !== 'hidden' ? statusElement.getBoundingClientRect() : null;
+          const status = statusRect && statusRect.width > 0 ? { left: statusRect.left, right: statusRect.right, top: statusRect.top, bottom: statusRect.bottom, width: statusRect.width, height: statusRect.height } : null;
           const unit = document.querySelector('.wind-controls-unit');
           const windBackings: Array<{ width: number; height: number }> = [];
           let mapBacking: { width: number; height: number } | null = null;
@@ -448,6 +457,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
             trigger,
             timeline,
             key,
+            opacity,
+            status,
             attribution,
             unit: unit ? { scrollWidth: unit.scrollWidth, clientWidth: unit.clientWidth } : null,
             windBackings,
@@ -475,6 +486,10 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(!intersects(layout.rail, layout.timeline), `${width}px rail overlaps the timeline`);
         if (layout.key) assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
         if (layout.key && layout.attribution) assert(!intersects(layout.key, layout.attribution), `${width}px key overlaps attribution`);
+        assert(layout.opacity !== null && layout.opacity.width >= 24, `${width}px opacity slider is missing`);
+        assert(layout.status !== null, `${width}px forecast status is missing`);
+        assert(!intersects(layout.status, layout.opacity), `${width}px status covers the opacity slider`);
+        if (layout.key) assert(!intersects(layout.status, layout.key), `${width}px status covers the legend`);
         assert(layout.unit !== null && layout.unit.scrollWidth <= layout.unit.clientWidth + 1, `${width}px rail unit label is clipped`);
         const timelineFloor = width >= 721 ? width - 320 : width - 40;
         assert(layout.timeline.width >= timelineFloor, `${width}px timeline width is ${layout.timeline.width}`);

@@ -122,8 +122,9 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   function renderHeight(): void {
     const numeric = typeof state.height === 'number', index = STOPS.indexOf(fixedHeight), unit = units === 'imperial' ? 'ft AGL' : 'm AGL';
-    range.value = String(index);
-    range.setAttribute('aria-valuetext', `${stopLabel(fixedHeight, units)} ${unit}`);
+    const shown = state.height === 'lift' ? STOPS.length - 1 : state.height === 'surface' ? 0 : index;
+    range.value = String(shown);
+    range.setAttribute('aria-valuetext', numeric ? `${stopLabel(fixedHeight, units)} ${unit}` : state.height === 'lift' ? 'Top of lift' : 'Surface');
     unitLine.textContent = unit;
     for (const { tick, height, labelled } of ticks) {
       const v = stopValue(height, units);
@@ -181,13 +182,18 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   pause.addEventListener('click', () => { if (!destroyed && !pause.disabled) { state = { ...state, paused: !state.paused }; render(); notify(true); } });
   lift.addEventListener('click', () => selectHeight('lift'));
   surface.addEventListener('click', () => selectHeight('surface'));
+  let parked: 'surface' | 'lift' | null = null;
+  const parkedIndex = () => parked === 'lift' ? STOPS.length - 1 : parked === 'surface' ? 0 : -1;
+  range.addEventListener('pointerdown', () => { parked = state.height === 'lift' || state.height === 'surface' ? state.height : null; });
+  range.addEventListener('pointercancel', () => { parked = null; });
   range.addEventListener('input', () => {
     const index = Number(range.value);
-    if (!Number.isInteger(index) || index < 0 || index >= STOPS.length) return;
+    if (!Number.isInteger(index) || index < 0 || index >= STOPS.length || index === parkedIndex()) return;
+    parked = null;
     fixedHeight = STOPS[index]; state = { ...state, height: fixedHeight }; renderHeight(); notify(false);
   });
   range.addEventListener('change', () => persist(state, fixedHeight));
-  range.addEventListener('pointerup', () => selectHeight(fixedHeight));
+  range.addEventListener('pointerup', () => { parked = null; selectHeight(fixedHeight); });
 
   let focusPending = false, focusAtDismiss: Element | null = null;
   const onPointerUp = (): void => {

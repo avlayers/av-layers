@@ -152,7 +152,7 @@ describe('wind controls', () => {
     expect(range.type).toBe('range');
     expect([range.min, range.max, range.step, range.value]).toEqual(['0', '9', '1', '0']);
     expect(range.getAttribute('aria-label')).toBe('Wind height');
-    expect(range.getAttribute('aria-valuetext')).toBe('20 m AGL');
+    expect(range.getAttribute('aria-valuetext')).toBe('Surface');
     controls.destroy();
   });
 
@@ -256,7 +256,7 @@ describe('wind controls', () => {
     controls.destroy();
   });
 
-  it('retains the fixed height for Top of lift and returns on rail movement', () => {
+  it('parks the thumb at the selected end and returns to the fixed height', () => {
     const { controls, root } = create();
     const range = one(root, 'wind-controls-range');
     range.value = '8';
@@ -267,8 +267,20 @@ describe('wind controls', () => {
     fire(one(root, 'wind-controls-lift'), 'click');
     expect(controls.state.height).toBe('lift');
     expect(one(root, 'wind-controls-scale').getAttribute('data-height')).toBe('lift');
-    expect(range.value).toBe('8');
+    expect(range.value).toBe('9');
+    expect(range.getAttribute('aria-valuetext')).toBe('Top of lift');
 
+    fire(range, 'pointerdown');
+    fire(range, 'input');
+    expect(controls.state.height).toBe('lift');
+
+    fire(range, 'pointerup');
+    expect(controls.state.height).toBe(3000);
+    expect(range.value).toBe('8');
+    expect(range.getAttribute('aria-valuetext')).toBe('3,000 m AGL');
+
+    fire(one(root, 'wind-controls-lift'), 'click');
+    fire(range, 'pointerdown');
     range.value = '2';
     fire(range, 'input');
     expect(controls.state.height).toBe(250);
@@ -277,6 +289,15 @@ describe('wind controls', () => {
     fire(one(root, 'wind-controls-surface'), 'click');
     expect(controls.state.height).toBe('surface');
     expect(one(root, 'wind-controls-scale').getAttribute('data-height')).toBe('surface');
+    expect(range.value).toBe('0');
+    expect(range.getAttribute('aria-valuetext')).toBe('Surface');
+
+    fire(one(root, 'wind-controls-lift'), 'click');
+    fire(range, 'pointerdown');
+    fire(range, 'pointercancel');
+    range.value = '9';
+    fire(range, 'input');
+    expect(controls.state.height).toBe(4000);
     controls.destroy();
   });
 
@@ -294,7 +315,7 @@ describe('wind controls', () => {
     expect(one(root, 'wind-controls-unit').textContent).toBe('ft AGL');
     expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['66', '820', '3.3k', '13.1k']);
     expect(one(root, 'wind-controls-value').textContent).toBe('66');
-    expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('66 ft AGL');
+    expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('Surface');
     expect(controls.state.height).toBe('surface');
     controls.destroy();
   });
