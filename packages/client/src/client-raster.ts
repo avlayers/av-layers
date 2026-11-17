@@ -25,7 +25,7 @@ export interface RasterTileProtocol {
   setBuildExpiry(buildId: string, expiresAtMs: number): void;
   prefetch(tileUrl: string, signal?: AbortSignal): Promise<void>;
   evictBuild(buildId?: string): void;
-  stats(): { cacheHits: number; cacheMisses: number; cachedBytes: number; cachedTiles: number; coalesced: number };
+  stats(): { cacheHits: number; cacheMisses: number; cachedBytes: number; cachedTiles: number; coalesced: number; cacheEvictionGeneration: number };
   dispose(): void;
 }
 export interface RasterTileSourceProtocol extends RasterTileProtocol {
@@ -131,7 +131,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   const queued: TileTask[] = [], active = new Set<TileTask>(), tasks = new Map<string, TileTask>();
   const cache = new Map<string, TileEntry>(), buildExpiry = new Map<string, number>();
   const foreground: SourceGroup = { interactive: true }, background: SourceGroup = { interactive: false };
-  let disposed = false, cachedBytes = 0, retainedBytes = 0, cacheHits = 0, cacheMisses = 0, coalesced = 0, order = 0, consumers = 0, dispatchSuspended = false;
+  let disposed = false, cachedBytes = 0, retainedBytes = 0, cacheHits = 0, cacheMisses = 0, coalesced = 0, order = 0, consumers = 0, dispatchSuspended = false, cacheEvictionGeneration = 0;
 
   function validate(url: string, template: boolean): string {
     if (url.length > 4096) throw new Error('Raster URL exceeds budget');
@@ -146,7 +146,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   }
   function dropCache(url: string): void {
     const entry = cache.get(url);
-    if (entry) { cachedBytes -= entry.response.data.byteLength; retainedBytes -= entry.weight; entry.response.release(); }
+    if (entry) { cachedBytes -= entry.response.data.byteLength; retainedBytes -= entry.weight; entry.response.release(); cacheEvictionGeneration++; }
     cache.delete(url);
   }
   function pruneCache(): void {
@@ -458,7 +458,7 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       if (until <= Date.now()) evictBuild(build);
     },
     evictBuild,
-    stats() { pruneCache(); return { cacheHits, cacheMisses, cachedBytes, cachedTiles: cache.size, coalesced }; },
+    stats() { pruneCache(); return { cacheHits, cacheMisses, cachedBytes, cachedTiles: cache.size, coalesced, cacheEvictionGeneration }; },
     dispose() { disposed = true; evictBuild(); }
   };
 }

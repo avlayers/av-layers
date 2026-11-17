@@ -59,6 +59,7 @@ export class RasterOverlay {
   private prefetchCursor = 0;
   private prefetching = false;
   private readonly prefetchPromises = new globalThis.Map<string, Promise<boolean>>();
+  private lastCacheEvictions = 0;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private selectedPending = false;
   private pendingSelection: Selection | null = null;
@@ -571,6 +572,8 @@ export class RasterOverlay {
     ]);
   }
   private emit(): void {
+    const evictions = this.protocol?.stats().cacheEvictionGeneration ?? 0;
+    if (evictions !== this.lastCacheEvictions) { this.lastCacheEvictions = evictions; if (this.byteReadyFrames.size) this.byteReadyFrames.clear(); }
     const displayed = this.coarse ?? this.active, st = this.overview?.state, readiness = this.overview?.readiness?.();
     if (this.detailState !== 'timed-out') this.refreshDetailState();
     const next: OverlayState = { displayed, requested: this.requested, quality: this.coarse ? this.overview?.quality?.(this.coarse.build, this.coarse.layer, this.coarse.frame) ?? 'overview' : this.active ? 'detail' : null,
@@ -801,20 +804,26 @@ export class RasterOverlay {
     for (const frame of warming ? timeline : timeline.slice(0, 4)) if (preparedFrames.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
     const template = slot.build.templates[slot.layer];
     if (!warming || this.prefetching || !template) return;
-    const perFrame = Math.max(1, tiles.length), batch = timeline.slice(this.prefetchCursor, this.prefetchCursor + Math.max(1, Math.floor(64 / perFrame)));
+    if (!this.requiredKeys.size) this.refreshRequired();
+    const perFrame = this.requiredKeys.size;
+    if (!perFrame) return;
+    const batch = timeline.slice(this.prefetchCursor, this.prefetchCursor + Math.max(1, Math.floor(64 / Math.min(perFrame, 64))));
     if (!batch.length) return;
     this.prefetching = true; this.prefetchCursor += batch.length;
-    const jobs = batch.map(frame => {
-      const planned = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
-        direction: this.direction, prepared, timelineFrames: [frame], framesOnly: true });
-      const frameTemplate = frameTileUrl(template, frame), cut = frameTemplate.indexOf('{z}');
-      const prefix = cut > 0 ? frameTemplate.slice(0, cut) : '', frameUrls = prefix ? planned.filter(url => url.startsWith(prefix)) : [];
-      if (frameUrls.length < tiles.length) return Promise.resolve(false);
-      return Promise.all(frameUrls.map(url => this.prefetchOne(url))).then(results => {
-        const ok = results.every(Boolean);
-        if (ok && !this.disposed) { this.byteReadyFrames.add(frame); this.emit(); }
-        return ok;
+    const jobs = batch.map(async frame => {
+      const frameTemplate = frameTileUrl(template, frame);
+      const frameUrls = [...this.requiredKeys].map(key => {
+        const [z, x, y] = key.split('/');
+        return frameTemplate.replaceAll('{z}', z!).replaceAll('{x}', x!).replaceAll('{y}', y!);
       });
+      if (!frameUrls.length) return false;
+      let ok = true;
+      for (let index = 0; index < frameUrls.length; index += 64) {
+        const results = await Promise.all(frameUrls.slice(index, index + 64).map(url => this.prefetchOne(url)));
+        if (!results.every(Boolean)) { ok = false; break; }
+      }
+      if (ok && !this.disposed) { this.byteReadyFrames.add(frame); this.emit(); }
+      return ok;
     });
     void Promise.all(jobs).finally(() => {
       this.prefetching = false;
