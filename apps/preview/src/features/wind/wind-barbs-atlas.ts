@@ -40,6 +40,7 @@ export class WindBarbAtlas {
   private readonly dynamicCtx: CanvasRenderingContext2D;
   private next = 0;
   private dynamicNext = 0;
+  private readonly dynamicKeys: Array<string | undefined> = [];
   dynamicUrl = '';
 
   constructor() {
@@ -47,7 +48,7 @@ export class WindBarbAtlas {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is unavailable');
     this.ctx = ctx;
-    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 4 * ICON; this.dynamicCanvas.height = 4 * ICON;
+    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 16 * ICON; this.dynamicCanvas.height = 16 * ICON;
     const dynamicCtx = this.dynamicCanvas.getContext('2d');
     if (!dynamicCtx) throw new Error('Canvas 2D is unavailable');
     this.dynamicCtx = dynamicCtx;
@@ -63,16 +64,21 @@ export class WindBarbAtlas {
   }
 
   private add(key: string, speedKt: number, southern: boolean, dynamic: boolean): void {
-    const columns = dynamic ? 4 : COLUMNS, slot = dynamic ? this.dynamicNext++ : this.next++;
-    if (slot >= columns * columns) return;
+    const columns = dynamic ? 16 : COLUMNS, slot = dynamic ? this.dynamicNext % (columns * columns) : this.next++;
+    if (!dynamic && slot >= columns * columns) return;
     const x = (slot % columns) * ICON, y = Math.floor(slot / columns) * ICON;
+    if (dynamic) {
+      const previous = this.dynamicKeys[slot];
+      if (previous && previous !== key) delete this.dynamicMapping[previous];
+      this.dynamicKeys[slot] = key; this.dynamicNext++;
+    }
     drawIcon(dynamic ? this.dynamicCtx : this.ctx, speedKt, southern, x, y);
     (dynamic ? this.dynamicMapping : this.mapping)[key] = { x, y, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
     if (dynamic) this.dynamicUrl = this.dynamicCanvas.toDataURL('image/png');
   }
 
   private dynamic(speedKt: number, southern: boolean): string {
-    const rounded = Math.ceil(speedKt / 5) * 5, key = `d${southern ? 's' : 'n'}${rounded}`;
+    const rounded = Math.max(285, Math.round(speedKt / 5) * 5), key = `d${southern ? 's' : 'n'}${rounded}`;
     if (!this.dynamicMapping[key]) this.add(key, rounded, southern, true);
     return key;
   }

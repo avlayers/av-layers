@@ -184,7 +184,7 @@ export function createPreviewApp(): PreviewApp {
     const layer = activeLayer(current, intent().reference, intent().customLayer);
     const compatible = raster.requested?.build === current && raster.requested?.layer === layer;
     const previews = new Set(compatible ? raster.previewReadyFrames ?? [] : []);
-    const details = new Set(compatible ? raster.detailReadyFrames ?? [] : []);
+    const details = new Set(compatible ? raster.detailDrawableFrames ?? raster.detailReadyFrames ?? [] : []);
     const needsWind = Boolean(current?.manifest.mapData) && intent().windVisible;
     const windReady = needsWind ? new Set([...(windSession?.ready ?? [])].filter(([, heights]) => heights.has(intent().windHeight)).map(([frame]) => frame)) : null;
     writer.notices({ ...preparedAxisReadiness(frames, previews, details, windReady),

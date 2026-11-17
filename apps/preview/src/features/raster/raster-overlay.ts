@@ -393,7 +393,10 @@ export class RasterOverlay {
     const next = this.slots.find(s => matches(s, this.requested));
     if (next === this.active && !this.coarse && !(this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame))) { this.prepareNext(); return; }
     if (next && (next.successful || next.failed.size) && this.tilesSettled(next)) {
-      if (this.stagingSelection && matches(next, this.stagingSelection) && this.cameraRevision !== this.stagingRevision) { this.abandon(next); this.refreshRequired(); return; }
+      if (this.stagingSelection && matches(next, this.stagingSelection)) {
+        if (this.cameraRevision !== this.stagingRevision) { this.abandon(next); this.refreshRequired(); return; }
+        this.clearStagingWatchdog();
+      }
       if (!next.successful) { this.abandon(next); return; }
       if (this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame)) { this.abandon(next); this.stageOverview(); return; }
       if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
@@ -605,7 +608,13 @@ export class RasterOverlay {
     this.stagingTimer = setTimeout(() => {
       this.stagingTimer = null;
       const slot = this.slots.find(candidate => candidate !== this.active && matches(candidate, sel));
-      if (slot) { this.detailState = 'timed-out'; this.drop(slot); this.emit(); }
+      if (!slot) return;
+      if (slot.successful && this.map.isSourceLoaded(slot.id)) { this.clearStagingWatchdog(); return; }
+      const requested = matches(slot, this.requested);
+      this.detailState = 'timed-out';
+      this.drop(slot);
+      if (requested) { this.replacementFailed = true; this.incomplete = this.problem(this.active); }
+      this.emit();
     }, STAGING_TIMEOUT_MS);
   }
 
@@ -750,7 +759,7 @@ export class RasterOverlay {
       catch { const failed = this.slots.find(s => matches(s, next)); if (failed) this.abandon(failed); else this.warmFailed.push(next); }
       return;
     }
-    if (!this.overview?.supported) this.prefetchBytes();
+    this.prefetchBytes();
   }
   private timelineFrames(slot: Slot): string[] {
     const frames = renderedFrames(slot.build.manifest), index = frames.findIndex(f => f.id === slot.frame);
@@ -768,7 +777,10 @@ export class RasterOverlay {
       preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: warming ? timeline : timeline.slice(0, 4) });
     this.prefetched = true;
     const template = slot.build.templates[slot.layer], prefixFrames = new globalThis.Map<string, string>();
-    if (template) for (const frame of renderedFrames(slot.build.manifest)) prefixFrames.set(frameTileUrl(template, frame.id), frame.id);
+    if (template) for (const frame of renderedFrames(slot.build.manifest)) {
+      const frameTemplate = frameTileUrl(template, frame.id), index = frameTemplate.indexOf('{z}');
+      if (index > 0) prefixFrames.set(frameTemplate.slice(0, index), frame.id);
+    }
     const groups = new globalThis.Map<string, string[]>();
     for (const url of urls) {
       let frame: string | undefined;
@@ -776,13 +788,15 @@ export class RasterOverlay {
       if (!frame) continue;
       const group = groups.get(frame) ?? []; group.push(url); groups.set(frame, group);
     }
-    for (const frame of (warming ? timeline : timeline.slice(0, 4))) if (!groups.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
+    const preparedFrames = new Set(prepared.map(item => item.frame));
+    for (const frame of (warming ? timeline : timeline.slice(0, 4))) if (!groups.has(frame) && preparedFrames.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
     for (const [frame, group] of groups) {
+      let ok = true;
       const jobs = group.map(url => {
         const ctrl = new AbortController(); this.prefetchJobs.set(url, ctrl);
-        return this.protocol!.prefetch(url, ctrl.signal).catch(() => {}).finally(() => { if (this.prefetchJobs.get(url) === ctrl) this.prefetchJobs.delete(url); });
+        return this.protocol!.prefetch(url, ctrl.signal).catch(() => { ok = false; }).finally(() => { if (this.prefetchJobs.get(url) === ctrl) this.prefetchJobs.delete(url); });
       });
-      void Promise.allSettled(jobs).then(() => { if (!this.disposed && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); } });
+      void Promise.all(jobs).then(() => { if (ok && !this.disposed && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); } });
     }
   }
 }
