@@ -58,7 +58,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 ### av-wrf (av-wrf-soaring)
 
 - Public model ID: `av-wrf`; model family: `wrf`; source configuration: `av-wrf-pilot-v1`; domain: `pilot`.
-- Attribution: av-wrf · WRF-ARW / NOAA GFS · Aviation Forecast Layers.
+- Attribution: av-wrf · WRF-ARW / ICON-EU · Aviation Forecast Layers.
 - Resolution tier: `high`.
 - Grid: `lambert-conformal`; 204 columns × 174 rows; spherical Earth radius 6370000 m; periodic longitude: false.
 - Terrain subdivision factor: `1`; fine grid: 204 columns × 174 rows.
@@ -73,7 +73,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
-- Publication timing: cycle age at most 6 hours; remaining horizon at least 36 hours.
+- Publication timing: cycle age at most 36 hours; remaining horizon at least 36 hours.
 
 ### GFS (gfs-soaring)
 

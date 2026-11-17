@@ -429,7 +429,7 @@
       "source": {"modelFamily": "wrf", "configurationId": "av-wrf-pilot-v1", "domainId": "pilot"},
       "tier": "high",
       "label": "av-wrf",
-      "attribution": "av-wrf · WRF-ARW / NOAA GFS · Aviation Forecast Layers",
+      "attribution": "av-wrf · WRF-ARW / ICON-EU · Aviation Forecast Layers",
       "layers": [
         "usable-lift-msl",
         "usable-lift-agl",
@@ -476,7 +476,7 @@
         "expectedRunsPerDay": 1,
         "window": {"hourlyThrough": 36, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 36, "framesPerShard": 2}
       },
-      "freshness": {"maxCycleAgeHours": 6},
+      "freshness": {"maxCycleAgeHours": 36},
       "coverage": {
         "id": "av-wrf-pilot-land-v1",
         "description": "Land and 50 km coastal buffer within the configured av-wrf Lambert domain; Russia excluded.",
