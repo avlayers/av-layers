@@ -203,6 +203,17 @@ it('sizes and renders against the map canvas when its append container has zero 
   f.overlay.destroy();
 });
 
+it('clears the presented GPU frame when the style switches to barbs', () => {
+  const f = fixture(256, 256, 256, undefined, true);
+  f.overlay.setOptions({ style: 'hybrid' });
+  f.overlay.setField({ sample: () => ({ status: 0, u: 10, v: 0 }) }, 'replace', 'f001');
+  f.drawGl();
+  expect(f.overlay.renderState?.frame).toBe('f001');
+  f.overlay.setOptions({ style: 'barbs' });
+  expect(f.overlay.renderState?.frame).toBeNull();
+  f.overlay.destroy();
+});
+
 it('uses valid paired samples for barb labels and never renders missing wind as calm', () => {
   const f = fixture();
   const field: WindField = { sample: () => ({ status: 2, u: 0, v: 0 }) };

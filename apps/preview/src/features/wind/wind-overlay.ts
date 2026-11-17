@@ -53,6 +53,7 @@ export class WindOverlay {
   private barbSamples = new globalThis.Map<string, ReturnType<WindField['sample']>>();
   private barbZoom = NaN;
   private view: { x: number; y: number; zoom: number; bearing: number; pitch: number } | null = null;
+  private windFrame: string | null = null;
 
   private readonly currentView = () => {
     const p = this.map.project([0, 0]);
@@ -153,6 +154,8 @@ export class WindOverlay {
     });
   }
 
+  get renderState(): { generation: number; frame: string | null; installedGeneration: number } | null { return this.gl?.renderState ?? null; }
+
   get displayMemory(): { canvasBytes: number; glBytes: number; limited: boolean } {
     return { canvasBytes: this.canvasBytes, glBytes: this.gl?.bytes ?? 0, limited: this.canvasLimited || this.glLimited || this.gl?.limited === true };
   }
@@ -167,9 +170,10 @@ export class WindOverlay {
     return this.budget.used < before;
   }
 
-  install(field: WindField | null, prepared: WindPreparedGrid | null, _mode: 'replace' | 'swap' = 'replace'): void {
+  install(field: WindField | null, prepared: WindPreparedGrid | null, _mode: 'replace' | 'swap' = 'replace', frame: string | null = null): void {
     if (this.destroyed) return;
-    if (this.field === field && this.prepared === prepared && field) return;
+    if (this.field === field && this.prepared === prepared && this.windFrame === frame && field) return;
+    this.windFrame = frame;
     const changed = this.prepared !== prepared, previousRelease = this.releasePrepared;
     const nextRelease = changed ? prepared?.retain?.() ?? null : previousRelease;
     this.field = field; this.prepared = prepared; this.barbSamples.clear();
@@ -186,24 +190,24 @@ export class WindOverlay {
     this.resetTrails(); this.drawBarbs(); this.schedule();
   }
 
-  setPrepared(prepared: WindPreparedGrid | null): void {
-    if (this.prepared !== prepared) this.install(this.field, prepared);
+  setPrepared(prepared: WindPreparedGrid | null, frame: string | null = this.windFrame): void {
+    if (this.prepared !== prepared || this.windFrame !== frame) this.install(this.field, prepared, 'replace', frame);
   }
 
-  setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace'): void {
-    this.install(field, null, mode);
+  setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace', frame: string | null = this.windFrame): void {
+    this.install(field, null, mode, frame);
   }
 
   setOptions(options: Partial<WindOverlayOptions>): void {
     if (this.destroyed) return;
     const prev = this.options; this.options = { ...prev, ...options };
-    if (prev.style !== this.options.style || prev.visible !== this.options.visible) { this.resize(); return; }
+    if (prev.style !== this.options.style || prev.visible !== this.options.visible) { this.resize(); this.syncGl(); return; }
     if (prev.paused !== this.options.paused) this.lastTime = 0;
     if (prev.units !== this.options.units) this.drawBarbs();
     this.syncGl(); this.schedule();
   }
 
-  clear(): void { this.install(null, null); }
+  clear(): void { this.install(null, null, 'replace', null); }
 
   destroy(): void {
     if (this.destroyed) return;
@@ -214,7 +218,7 @@ export class WindOverlay {
     document.removeEventListener('visibilitychange', this.visibility);
     const gl = this.gl, releasePrepared = this.releasePrepared;
     this.gl = null; this.releasePrepared = null;
-    this.field = null; this.prepared = null; this.particles = []; this.barbSamples.clear(); this.lostCanvases.clear();
+    this.field = null; this.prepared = null; this.windFrame = null; this.particles = []; this.barbSamples.clear(); this.lostCanvases.clear();
     try { gl?.destroy(); }
     finally {
       for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.width = 0; c.height = 0; c.remove(); }
@@ -287,6 +291,7 @@ export class WindOverlay {
   }
 
   private syncGl(): void {
+    this.gl?.setFrame(this.windFrame);
     if (this.prepared) this.gl?.setPrepared(this.prepared);
     else this.gl?.setFields(null, this.field);
     this.gl?.setMotion(this.options.paused || this.options.style === 'barbs', !this.options.visible || this.options.style === 'barbs' || !this.field || this.mapLost);

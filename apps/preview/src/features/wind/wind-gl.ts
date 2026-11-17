@@ -7,7 +7,7 @@ import { WIND_TRAIL_WIDTH } from '../raster/raster-budget';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
-export interface WindGl { readonly bytes: number; readonly limited: boolean; relievePressure(): boolean; holdPressure(hold: boolean): void; setFields(from: WindSampleField | null, to: WindSampleField | null): void; setPrepared(prepared: WindPreparedGrid | null): void; setMotion(paused: boolean, hidden: boolean): void; reset(): void; destroy(): void }
+export interface WindGl { readonly bytes: number; readonly limited: boolean; readonly renderState: { generation: number; frame: string | null; installedGeneration: number }; relievePressure(): boolean; holdPressure(hold: boolean): void; setFields(from: WindSampleField | null, to: WindSampleField | null): void; setPrepared(prepared: WindPreparedGrid | null): void; setFrame(frame: string | null): void; setMotion(paused: boolean, hidden: boolean): void; reset(): void; destroy(): void }
 
 const STATE = 64, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
 const FULL = `#version 300 es
@@ -133,6 +133,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
   let updateProg: WebGLProgram | null = null, lineProg: WebGLProgram | null = null, blitProg: WebGLProgram | null = null;
   let vao: WebGLVertexArrayObject | null = null, states: WebGLTexture[] = [], stateFbo: WebGLFramebuffer[] = [], winds: WebGLTexture[] = [], trails: WebGLTexture[] = [], trailFbo: WebGLFramebuffer[] = [];
   let index = 0, trail = 0, reset = 1, zoom = NaN, blendAt = 0, last = 0, shiftX = 0, shiftY = 0, sized = false, uploadedPrepared: WindPreparedGrid | null = null, preparedShift = 0;
+  let frameLabel: string | null = null, passFrame: string | null = null, renderedFrame: string | null = null, renderedGeneration = 0, passGeneration = 0, installedGeneration = 0;
   function preparedArea(prepared: WindPreparedGrid, shift: number) {
     return { west: prepared.bounds[0] + shift, south: prepared.bounds[1], east: prepared.bounds[2] + shift, north: prepared.bounds[3] };
   }
@@ -240,7 +241,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     const vertexArray = vao, programs = [updateProg, lineProg, blitProg];
     states = []; winds = []; trails = []; stateFbo = []; trailFbo = []; vao = null;
     updateProg = lineProg = blitProg = null;
-    gl = null; state.ready = false; uploadedPrepared = null; sized = limited = false;
+    gl = null; state.ready = false; renderedGeneration = 0; renderedFrame = null; uploadedPrepared = null; sized = limited = false;
     if (context) {
       for (const texture of textures) discard(() => context.deleteTexture(texture));
       for (const fbo of framebuffers) discard(() => context.deleteFramebuffer(fbo));
@@ -252,7 +253,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     trailBytes = 0;
   }
   function fail(): void {
-    state.failed = true;
+    state.failed = true; renderedGeneration = 0; renderedFrame = null;
     releaseGl();
     freeFixed(); report(false);
   }
@@ -314,21 +315,24 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     gl.uniform1i(gl.getUniformLocation(blit, 'u_tex'), 0);
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), reset || jump ? 0 : sx, reset || jump ? 0 : sy);
     // Same coefficient as the canvas trail fade.
+    const wasReset = reset === 1;
     gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), reset || jump ? 0 : Math.exp(-dt * 0.9));
     draw(blit, gl.TRIANGLES, 3);
     gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.CULL_FACE);
-    gl.useProgram(lines);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
-    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, states[1 - index]);
-    gl.uniform1i(gl.getUniformLocation(lines, 'u_prev'), 0);
-    gl.uniform1i(gl.getUniformLocation(lines, 'u_curr'), 1);
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_world'), 512 * 2 ** nextZoom);
-    gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
-    gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
-    gl.uniform1f(gl.getUniformLocation(lines, 'u_radius'), WIND_TRAIL_WIDTH * 0.5 * trailW / Math.max(1, map.getCanvas().clientWidth));
-    draw(lines, gl.TRIANGLES, STATE * STATE * 6);
+    if (!wasReset) {
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(lines);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, states[index]);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, states[1 - index]);
+      gl.uniform1i(gl.getUniformLocation(lines, 'u_prev'), 0);
+      gl.uniform1i(gl.getUniformLocation(lines, 'u_curr'), 1);
+      gl.uniform1f(gl.getUniformLocation(lines, 'u_world'), 512 * 2 ** nextZoom);
+      gl.uniform2f(gl.getUniformLocation(lines, 'u_view'), trailW, trailH);
+      gl.uniform1f(gl.getUniformLocation(lines, 'u_max'), 30 * trailW / Math.max(1, map.getCanvas().clientWidth));
+      gl.uniformMatrix4fv(gl.getUniformLocation(lines, 'u_matrix'), false, matrix instanceof Float32Array ? matrix : Float32Array.from(matrix));
+      gl.uniform1f(gl.getUniformLocation(lines, 'u_radius'), WIND_TRAIL_WIDTH * 0.5 * trailW / Math.max(1, map.getCanvas().clientWidth));
+      draw(lines, gl.TRIANGLES, STATE * STATE * 6);
+    }
     index = 1 - index; trail = nextTrail; reset = 0;
     gl.colorMask(savedMask[0], savedMask[1], savedMask[2], savedMask[3]);
     if (savedCull) gl.enable(gl.CULL_FACE); else gl.disable(gl.CULL_FACE);
@@ -347,6 +351,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     gl.uniform2f(gl.getUniformLocation(blit, 'u_shift'), 0, 0);
     gl.uniform1f(gl.getUniformLocation(blit, 'u_keep'), 1);
     draw(blit, gl.TRIANGLES, 3);
+    renderedGeneration = passGeneration; renderedFrame = passFrame;
     gl.useProgram(savedProgram); gl.bindVertexArray(savedVao); gl.bindTexture(gl.TEXTURE_2D, null);
     if (!state.paused && document.visibilityState !== 'hidden') map.triggerRepaint();
   }
@@ -409,6 +414,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     },
     onRemove() { releaseGl(); freeFixed(); state.added = false; },
     prerender(_context, options) {
+      passGeneration = installedGeneration; passFrame = frameLabel;
       try { frame(options.modelViewProjectionMatrix as unknown as ArrayLike<number>); }
       catch { fail(); }
     },
@@ -437,6 +443,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
   });
   return {
     get bytes() { return state.destroyed ? 0 : (fixedAllocated ? fixedBytes : 0) + trailBytes + stagedTrailLeases.reduce((sum, lease) => sum + lease.bytes, 0); },
+    get renderState() { return { generation: renderedGeneration, frame: renderedFrame, installedGeneration }; },
     get limited() { return !state.destroyed && limited; },
     holdPressure(hold) {
       pressureHeld = hold;
@@ -452,7 +459,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
       return trailBytes < previous;
     },
     reset() {
-      reset = 1;
+      reset = 1; installedGeneration++;
       if (!gl || !state.ready || gl.isContextLost()) return;
       const framebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
       const color = gl.getParameter(gl.COLOR_CLEAR_VALUE) as Float32Array | null;
@@ -469,7 +476,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     setFields(from, to) {
       if (state.prepared) { state.prepared = null; uploadedPrepared = null; }
       if (state.from === from && state.to === to) { if (state.ready && !state.hidden) map.triggerRepaint(); return; }
-      state.from = from; state.to = to; blendAt = performance.now();
+      state.from = from; state.to = to; blendAt = performance.now(); installedGeneration++;
       if (Number.isNaN(zoom)) { const area = viewBounds(); if (area) bounds = area; }
       if (fixedAllocated) { grid(from ?? to, pending.a); grid(to, pending.b); }
       pending.dirty = true;
@@ -478,7 +485,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
     setPrepared(prepared) {
       if (prepared && (!Number.isSafeInteger(prepared.size) || prepared.size < 1 || prepared.size > GRID)) throw new RangeError('Wind display grid exceeds texture budget');
       if (state.prepared === prepared) { if (prepared && state.ready && !state.hidden) map.triggerRepaint(); return; }
-      state.prepared = prepared; state.from = null; state.to = null; uploadedPrepared = null;
+      state.prepared = prepared; state.from = null; state.to = null; uploadedPrepared = null; installedGeneration++;
       if (prepared) {
         preparedShift = preparedWorldShift(prepared.bounds, map.getCenter?.().lng ?? (prepared.bounds[0] + prepared.bounds[2]) / 2);
         bounds = preparedArea(prepared, preparedShift);
@@ -486,7 +493,8 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: 
       }
       if (state.ready) map.triggerRepaint();
     },
-    setMotion(paused, hidden) { state.paused = paused; state.hidden = hidden; if (!hidden && state.ready) map.triggerRepaint(); },
+    setFrame(next) { if (frameLabel === next) return; frameLabel = next; installedGeneration++; },
+    setMotion(paused, hidden) { state.paused = paused; state.hidden = hidden; if (hidden) { renderedGeneration = 0; renderedFrame = null; } else if (state.ready) map.triggerRepaint(); },
     destroy() {
       if (state.destroyed) return;
       state.destroyed = true; state.from = null; state.to = null; state.prepared = null; uploadedPrepared = null;

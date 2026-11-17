@@ -324,11 +324,11 @@ it('keeps speculative count and byte headroom while a full background queue admi
   });
   let index = 0;
   const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => streams[index++]!.response), maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024, maxQueued: 64 });
-  const background = Array.from({ length: 68 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: 1024 * 1024 }).response.catch(() => null));
+  const background = Array.from({ length: 68 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: 1024 * 1024, initialReserveBytes: 1024 * 1024 }).response.catch(() => null));
   await vi.waitFor(() => expect(scheduler.detail().backgroundActive).toBe(2));
   expect(scheduler.detail().backgroundBytes).toBeLessThanOrEqual(2 * 1024 * 1024);
   expect(scheduler.stats()).toEqual({ active: 2, queued: 64 });
-  const selected = scheduler.request({ url: 'https://example.test/selected', priority: 'foreground', kind: 'raster', maxResponseBytes: 1024 * 1024 });
+  const selected = scheduler.request({ url: 'https://example.test/selected', priority: 'foreground', kind: 'raster', maxResponseBytes: 1024 * 1024, initialReserveBytes: 1024 * 1024 });
   await vi.waitFor(() => expect(scheduler.stats().active).toBe(3));
   expect(scheduler.detail().live).toBeLessThanOrEqual(8);
   expect(scheduler.stats().active).toBe(3);
@@ -361,11 +361,11 @@ it('rejects an oversized task and starts smaller runnable work past a non-fittin
     ? new Promise<Response>(resolve => { resolveFirst = resolve; })
     : Promise.resolve(new Response(new Uint8Array(4))));
   const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 8, maxInFlightBytes: 4 * 1024 * 1024 });
-  expect(() => scheduler.request({ url: 'https://example.test/too-big', priority: 'foreground', kind: 'raster', maxResponseBytes: 5 * 1024 * 1024 })).toThrow('exceeds its class bound');
-  expect(() => scheduler.request({ url: 'https://example.test/big-bg', priority: 'background', kind: 'raster', maxResponseBytes: 3 * 1024 * 1024 })).toThrow('exceeds its class bound');
-  const large = scheduler.request({ url: 'https://example.test/large-1', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 3 * 1024 * 1024 });
-  const blocked = scheduler.request({ url: 'https://example.test/large-2', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 3 * 1024 * 1024 });
-  const small = scheduler.request({ url: 'https://example.test/small', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, expectedResponseBytes: 1024 * 1024 });
+  expect(() => scheduler.request({ url: 'https://example.test/too-big', priority: 'foreground', kind: 'wind', maxResponseBytes: 5 * 1024 * 1024, exactResponseBytes: 5 * 1024 * 1024 })).toThrow('exceeds its class bound');
+  expect(() => scheduler.request({ url: 'https://example.test/big-bg', priority: 'background', kind: 'wind', maxResponseBytes: 3 * 1024 * 1024, exactResponseBytes: 3 * 1024 * 1024 })).toThrow('exceeds its class bound');
+  const large = scheduler.request({ url: 'https://example.test/large-1', priority: 'foreground', kind: 'raster', maxResponseBytes: 4 * 1024 * 1024, exactResponseBytes: 3 * 1024 * 1024 });
+  const blocked = scheduler.request({ url: 'https://example.test/large-2', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, exactResponseBytes: 3 * 1024 * 1024 });
+  const small = scheduler.request({ url: 'https://example.test/small', priority: 'foreground', kind: 'json', maxResponseBytes: 4 * 1024 * 1024, exactResponseBytes: 1024 * 1024 });
   await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
   expect(fetchImpl.mock.calls.map(call => call[0])).toEqual(['https://example.test/large-1', 'https://example.test/small']);
   resolveFirst(new Response(new Uint8Array(4)));
@@ -389,7 +389,7 @@ it('retains admission through a late response body cancellation', async () => {
   complete(new Response(new ReadableStream<Uint8Array>({ cancel })));
   await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
   expect(settled).toBe(false);
-  expect(scheduler.detail().bodyBytes).toBe(4 * 1024 * 1024);
+  expect(scheduler.detail().bodyBytes).toBe(16 * 1024);
   release();
   await handle.settled;
   expect(settled).toBe(true);
@@ -480,10 +480,10 @@ it('dispatches a small explicit request under a tiny byte ceiling', async () => 
   scheduler.dispose();
 });
 
-it('reserves the explicit safe maximum before headers arrive', async () => {
+it('reserves only the initial admission watermark before headers arrive', async () => {
   const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(() => new Promise<Response>(() => {})), maxActive: 4, maxInFlightBytes: 4 * 1024 * 1024 });
   const handle = scheduler.request({ url: 'https://example.test/unknown', priority: 'foreground', kind: 'raster', maxResponseBytes: 3 * 1024 * 1024 });
-  await vi.waitFor(() => expect(scheduler.detail().bodyBytes).toBe(3 * 1024 * 1024));
+  await vi.waitFor(() => expect(scheduler.detail().bodyBytes).toBe(16 * 1024));
   scheduler.dispose();
   await handle.response.catch(() => {});
 });
@@ -492,7 +492,7 @@ it('rejects a body that exceeds its exact admitted size', async () => {
   const chunk = new Uint8Array(600);
   const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(chunk); controller.enqueue(chunk); } });
   const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response(stream)), maxActive: 4, maxInFlightBytes: 4 * 1024 * 1024 });
-  const handle = scheduler.request({ url: 'https://example.test/exact', priority: 'foreground', kind: 'wind', maxResponseBytes: 4096, expectedResponseBytes: 1024 });
+  const handle = scheduler.request({ url: 'https://example.test/exact', priority: 'foreground', kind: 'wind', maxResponseBytes: 4096, exactResponseBytes: 1024 });
   const response = await handle.response;
   await expect(response.arrayBuffer()).rejects.toThrow('exceeds its admitted size');
   await handle.settled;
@@ -535,14 +535,14 @@ it('defaults to twenty background bodies and reserves four starts and four MiB',
   let index = 0;
   const fetchImpl = vi.fn<typeof fetch>(async () => streams[index++].response);
   const scheduler = createForecastRequestScheduler({ fetchImpl });
-  const background = Array.from({ length: 21 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: MiB }));
+  const background = Array.from({ length: 21 }, (_, i) => scheduler.request({ url: `https://example.test/bg/${i}`, priority: 'background', kind: 'raster', maxResponseBytes: MiB, initialReserveBytes: MiB }));
   const foreground: typeof background = [];
   const pending = () => Promise.allSettled([...background, ...foreground].map(handle => handle.response));
   background.forEach(handle => void handle.response.catch(() => {}));
   try {
     expect(fetchImpl).toHaveBeenCalledTimes(20);
     expect(scheduler.detail()).toMatchObject({ active: 20, queued: 1, backgroundActive: 20, backgroundBytes: 20 * MiB, bodyBytes: 20 * MiB });
-    for (let i = 0; i < 4; i++) foreground.push(scheduler.request({ url: `https://example.test/fg/${i}`, priority: 'foreground', kind: 'wind', maxResponseBytes: MiB }));
+    for (let i = 0; i < 4; i++) foreground.push(scheduler.request({ url: `https://example.test/fg/${i}`, priority: 'foreground', kind: 'wind', maxResponseBytes: MiB, exactResponseBytes: MiB }));
     foreground.forEach(handle => void handle.response.catch(() => {}));
     expect(fetchImpl).toHaveBeenCalledTimes(24);
     expect(scheduler.detail()).toMatchObject({ active: 24, queued: 1, bodyBytes: 24 * MiB });
@@ -625,8 +625,8 @@ it('releases queued and active reservations after cancellation', async () => {
   const firstStream = streamResponse();
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(firstStream.response).mockResolvedValueOnce(new Response(null));
   const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 2, maxBackgroundActive: 1, maxInFlightBytes: 4 * MiB, maxBackgroundBytes: MiB });
-  const active = scheduler.request({ url: 'https://example.test/active', priority: 'background', kind: 'wind', maxResponseBytes: MiB });
-  const queued = scheduler.request({ url: 'https://example.test/queued', priority: 'background', kind: 'wind', maxResponseBytes: MiB });
+  const active = scheduler.request({ url: 'https://example.test/active', priority: 'background', kind: 'wind', maxResponseBytes: MiB, exactResponseBytes: MiB });
+  const queued = scheduler.request({ url: 'https://example.test/queued', priority: 'background', kind: 'wind', maxResponseBytes: MiB, exactResponseBytes: MiB });
   const queuedRejection = expect(queued.response).rejects.toMatchObject({ name: 'AbortError' });
   try {
     await active.response;
@@ -732,7 +732,7 @@ it('rejects requests that can never fit the shared preparation budget', async ()
   } finally { scheduler.dispose(); }
 });
 
-it('keeps the explicit maximum reserved when an identity length understates the streamed body', async () => {
+it('grows an identity reservation to the streamed body bytes', async () => {
   const budget = createPreparationBudget(4096), stream = streamResponse();
   stream.response.headers.set('content-length', '10');
   stream.response.headers.set('content-encoding', 'identity');
@@ -740,7 +740,7 @@ it('keeps the explicit maximum reserved when an identity length understates the 
   const handle = scheduler.request({ url: 'https://example.test/body', priority: 'foreground', kind: 'wind', maxResponseBytes: 1024 });
   try {
     const response = await handle.response;
-    expect(budget.used).toBe(1024);
+    expect(budget.used).toBe(10);
     const reading = response.arrayBuffer();
     stream.stream.enqueue(new Uint8Array(512)); stream.stream.close();
     expect((await reading).byteLength).toBe(512);
@@ -888,4 +888,121 @@ it('preserves foreground processing capacity when a precharged background reques
     const next = await background.response, nextBody = next.arrayBuffer(); streams[1].stream.close(); await nextBody; await background.settled;
   } finally { scheduler.dispose(); numeric.release(); await outcomes; }
   expect(budget.used).toBe(0);
+});
+
+it('grows an unknown-length admission as streamed bytes pass the initial reserve', async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({ start(value) { stream = value; } }), { headers: { 'content-type': 'image/webp' } });
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => response), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/tile', priority: 'foreground', kind: 'raster', maxResponseBytes: MiB });
+  try {
+    const body = (await handle.response).body!.getReader();
+    expect(scheduler.detail().bodyBytes).toBe(16 * 1024);
+    stream.enqueue(new Uint8Array(20 * 1024));
+    expect((await body.read()).value!.byteLength).toBe(20 * 1024);
+    expect(scheduler.detail().bodyBytes).toBe(20 * 1024);
+    stream.close();
+    expect((await body.read()).done).toBe(true);
+    await handle.settled;
+    expect(scheduler.detail()).toMatchObject({ active: 0, bodyBytes: 0 });
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('delivers error responses whose length differs from the exact payload size', async () => {
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response('missing', { status: 404, headers: { 'content-length': '7', 'content-type': 'text/plain' } })), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/missing', priority: 'foreground', kind: 'wind', maxResponseBytes: 1024, exactResponseBytes: 1024 });
+  try {
+    const response = await handle.response;
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('missing');
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('rejects an exact response that ends short', async () => {
+  const stream = streamResponse(), scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => stream.response), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/short', priority: 'foreground', kind: 'wind', maxResponseBytes: 1024, exactResponseBytes: 1024 });
+  try {
+    const reading = (await handle.response).arrayBuffer();
+    stream.stream.enqueue(new Uint8Array(512)); stream.stream.close();
+    await expect(reading).rejects.toThrow('does not match its exact size');
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('cancels the physical body when a declared length exceeds remaining capacity', async () => {
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({ start() {}, cancel() { cancelled = true; } });
+  const budget = createPreparationBudget(2048), scheduler = createForecastRequestScheduler({ budget, fetchImpl: vi.fn(async () => new Response(body, { headers: { 'content-length': '4096', 'content-encoding': 'identity', 'content-type': 'image/webp' } })) });
+  const handle = scheduler.request({ url: 'https://example.test/large', priority: 'foreground', kind: 'raster', maxResponseBytes: 4096, initialReserveBytes: 1024 });
+  try {
+    await expect(handle.response).rejects.toThrow('budget');
+    await vi.waitFor(() => expect(cancelled).toBe(true));
+    expect(budget.used).toBe(0);
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('promotes a streaming reservation so selected growth uses foreground capacity', async () => {
+  const stream = streamResponse(), budget = createPreparationBudget(4096, { foregroundReserveBytes: 2048 });
+  const scheduler = createForecastRequestScheduler({ budget, fetchImpl: vi.fn(async () => stream.response) });
+  const handle = scheduler.request({ url: 'https://example.test/promote', priority: 'background', kind: 'raster', maxResponseBytes: 4096, initialReserveBytes: 2048 });
+  try {
+    const reader = (await handle.response).body!.getReader();
+    stream.stream.enqueue(new Uint8Array(2048));
+    expect((await reader.read()).value!.byteLength).toBe(2048);
+    handle.promote();
+    stream.stream.enqueue(new Uint8Array(1024));
+    expect((await reader.read()).value!.byteLength).toBe(1024);
+    expect(budget.used).toBe(3072);
+    stream.stream.close();
+    expect((await reader.read()).done).toBe(true);
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('rejects a bodyless successful response that promised an exact size', async () => {
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response(null, { status: 204 })), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/empty', priority: 'foreground', kind: 'wind', maxResponseBytes: 1024, exactResponseBytes: 1024 });
+  try {
+    await expect(handle.response).rejects.toThrow('does not match its exact size');
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('delivers an oversized error status with an empty body', async () => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ start() {}, cancel });
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response(body, { status: 404, headers: { 'content-length': '4096', 'content-encoding': 'identity' } })), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/error', priority: 'foreground', kind: 'wind', maxResponseBytes: 1024, exactResponseBytes: 1024 });
+  try {
+    const response = await handle.response;
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('');
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('delivers an error status when its identity body exceeds remaining capacity', async () => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ start() {}, cancel });
+  const budget = createPreparationBudget(2048), scheduler = createForecastRequestScheduler({ budget, fetchImpl: vi.fn(async () => new Response(body, { status: 404, headers: { 'content-length': '4096', 'content-encoding': 'identity' } })) });
+  const handle = scheduler.request({ url: 'https://example.test/error', priority: 'foreground', kind: 'wind', maxResponseBytes: 8192, exactResponseBytes: 1024 });
+  try {
+    const response = await handle.response;
+    expect(response.status).toBe(404);
+    await response.body?.cancel();
+    await vi.waitFor(() => expect(cancel).toHaveBeenCalled());
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
+});
+
+it('accepts an exact-size response whose encoded length differs', async () => {
+  const data = new Uint8Array(1024);
+  const scheduler = createForecastRequestScheduler({ fetchImpl: vi.fn(async () => new Response(data, { headers: { 'content-encoding': 'gzip', 'content-length': '300' } })), maxInFlightBytes: 4 * MiB });
+  const handle = scheduler.request({ url: 'https://example.test/compressed', priority: 'foreground', kind: 'wind', maxResponseBytes: 2048, exactResponseBytes: 1024 });
+  try {
+    expect((await (await handle.response).arrayBuffer()).byteLength).toBe(1024);
+    await handle.settled;
+  } finally { scheduler.dispose(); await Promise.allSettled([handle.response, handle.settled]); }
 });

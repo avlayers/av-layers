@@ -40,7 +40,7 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`414,350 B` gzip) and lazy
+[Build checks](vite.config.ts) bound startup (`416,000 B` gzip) and lazy
 (`33,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
@@ -95,7 +95,9 @@ Use `--channel chrome` for installed Chrome and inspect the recorded WebGL rende
 The [benchmark](../../scripts/preview-layer-bench.ts) loads each revision’s actual
 preview UI and serves patterned lossless WebP over HTTP/2 with controlled latency.
 Nine framebuffer probes verify time, layer and position, recording first-correct
-and fully detailed views separately. Cold and warmed 40-frame sweeps dispatch
+and fully detailed views separately. GPU accounting reports texture and buffer
+storage; wind verification reads the frame and generation recorded by the WebGL
+render pass, not the submitted field state. Cold and warmed 40-frame sweeps dispatch
 every 60 or 120 ms; settled steps include the point card.
 
 Use `--scenario cold --delay-ms 250` or `500` to measure slower tile responses.

@@ -1,6 +1,7 @@
 export interface PreparationLease {
   readonly bytes: number;
   resize(bytes: number): boolean;
+  promote?(): void;
   release(): void;
 }
 
@@ -57,6 +58,7 @@ export function createPreparationBudget(limit: number, options: { foregroundRese
         if (delta > 0 && !canReserve(delta, state.priority)) return false;
         state.bytes = next; change(state.category, delta); return true;
       },
+      promote() { if (owners.has(lease)) state.priority = 'foreground'; },
       release() {
         if (!owners.delete(lease)) return;
         const previous = state.bytes; state.bytes = 0; change(state.category, -previous);

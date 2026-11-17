@@ -25,17 +25,18 @@ combined work across all grids selected by a request.
   share one [scheduler](../packages/client/src/client-request-scheduler.ts).
   Eight forecast requests stay active. A request owns its count and byte
   reservation until the body settles or cancellation completes. An explicit
-  request reserves its validated expected size or its safe maximum; the fetch
-  adapter keeps the 1 MiB header reserve. A declared length replaces that
-  reserve only with an exposed `Content-Encoding: identity`. Unknown, malformed
-  and compressed lengths keep the reservation. The queue holds 64 requests.
+  request reserves its exact known size, its declared identity length, or a
+  16 KiB admission watermark, then grows that reservation as streamed bytes
+  arrive up to its hard response ceiling; the fetch adapter keeps the 1 MiB
+  header reserve. Unknown, malformed and compressed lengths keep the watermark
+  until bytes arrive. The queue holds 64 requests.
   Speculative work starts only below six bodies and the background byte cap;
   foreground keeps two transfer slots and up to 2 MiB, clamped to the configured
   total. Selected work takes priority over queued speculation and evicts a
   queued background prefetch when all 64 slots are occupied. Promotion of a
   queued task changes queue rank; promotion of an active raster or wind consumer
   reaches the physical request handle without a second fetch. A validated
-  expected size is exact: delivered bytes beyond it fail the stream. The raster
+  exact size reserves that size and fails delivered bytes beyond it. The raster
   protocol keeps 16 inner requests active. A tile that has returned HTTP 200 is
   stored in the compressed cache when its caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using

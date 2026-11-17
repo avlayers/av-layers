@@ -8,7 +8,7 @@ import { fixtureBuild } from '../../../../../tests/forecast-fixture';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import { WindOverlay } from './wind-overlay';
 
-const gl = vi.hoisted(() => ({ setFields: vi.fn(), setPrepared: vi.fn(), setMotion: vi.fn(), reset: vi.fn(), destroy: vi.fn() }));
+const gl = vi.hoisted(() => ({ setFields: vi.fn(), setPrepared: vi.fn(), setFrame: vi.fn(), setMotion: vi.fn(), reset: vi.fn(), destroy: vi.fn(), renderState: { generation: 0, frame: null, installedGeneration: 0 } }));
 vi.mock('./wind-gl', () => ({ attachWindGl: () => gl }));
 
 class Canvas extends EventTarget {
@@ -46,7 +46,7 @@ function fixture(budget?: PreparationBudget) {
 
 const overlay = () => fixture().view;
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); gl.setFields.mockReset(); gl.setPrepared.mockReset(); gl.destroy.mockReset(); gl.reset.mockReset(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); gl.setFields.mockReset(); gl.setPrepared.mockReset(); gl.setFrame.mockReset(); gl.destroy.mockReset(); gl.reset.mockReset(); });
 
 it('replaces the GPU field without a playback blend', () => {
   const now = vi.spyOn(performance, 'now').mockReturnValue(1_000);

@@ -65,6 +65,19 @@ it('loads once per view and samples surface, AGL, and lift without requests', as
   source.dispose();
 });
 
+it('accepts a compressed numeric chunk whose encoded length differs', async () => {
+  const pinned = build(), frame = pinned.manifest.frames[0].id;
+  const fetcher = vi.fn<typeof fetch>(async url => {
+    if (String(url).endsWith(`/data/${frame}`)) return new Response(descriptor(frame), { headers: { 'content-type': 'application/json' } });
+    const bytes = String(url).includes('/wind/') ? wind : fine;
+    return new Response(Uint8Array.from(bytes), { headers: { 'content-type': 'application/octet-stream', 'content-length': String(bytes.length + 1000), 'content-encoding': 'gzip' } });
+  });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
+  expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
+  expect(source.sample(0.5, 0.5, 'surface')).toEqual({ status: 'valid', u: 1, v: 2 });
+  source.dispose();
+});
+
 it('reuses validated immutable chunks across panning, replacement views and timeline returns', async () => {
   const pinned = build(), frame = pinned.manifest.frames[0].id, cache = new WindDataCache();
   const fetcher = vi.fn<typeof fetch>(async url => String(url).includes('/wind/') || String(url).includes('/fine/')
@@ -1042,12 +1055,12 @@ it('uses bounded scheduler handles for descriptor and exact chunk lengths', asyn
     expect(requests).toHaveLength(3);
     const desc = requests.find(spec => spec.url.endsWith(`/data/${frame}`))!;
     expect(desc).toMatchObject({ kind: 'json', priority: 'background', maxResponseBytes: WIND_FRAME_LIMIT });
-    expect(desc.expectedResponseBytes).toBeUndefined();
+    expect(desc.exactResponseBytes).toBeUndefined();
     for (const spec of requests) {
       expect(spec.init?.redirect).toBe('error');
       if (spec.kind === 'json') continue;
       const bytes = spec.url.includes('/wind/') ? wind.length : fine.length;
-      expect(spec).toMatchObject({ kind: 'wind', priority: 'background', maxResponseBytes: bytes, expectedResponseBytes: bytes });
+      expect(spec).toMatchObject({ kind: 'wind', priority: 'background', maxResponseBytes: bytes, exactResponseBytes: bytes });
     }
   } finally { source.dispose(); }
 });
@@ -1083,7 +1096,7 @@ it('binds scheduler span limits to the sum of validated tile lengths', async () 
       const [first, last = first] = spec.url.split('/').at(-1)!.split('-').map(Number);
       const bytes = (last! - first! + 1) * (spec.url.includes('/wind/') ? globalWind.length : globalFine.length);
       expect(spec.maxResponseBytes).toBe(bytes);
-      expect(spec.expectedResponseBytes).toBe(bytes);
+      expect(spec.exactResponseBytes).toBe(bytes);
     }
   } finally { source.dispose(); }
 });
