@@ -1,6 +1,6 @@
 import {
   ApiClient, AUTO_MODEL_ID, createForecastRequestScheduler, createPreparationBudget, formatBuildFreshness, formatPlaceTime,
-  mapForecastHorizonNotice, watchBuildExpiry,
+  isGlobeView, mapForecastHorizonNotice, watchBuildExpiry,
   normalizePoint, PointSeriesController, type PinnedBuild, type PointHorizon, type UnitSystem
 } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
@@ -103,6 +103,11 @@ export function createPreviewApp(): PreviewApp {
   const forecastSession = createForecastSession({
     api, writer, intent,
     center: () => { const center = map!.getCenter(); return normalizePoint(center.lat, center.lng); },
+    globe: () => {
+      if (!map) return false;
+      const bounds = map.getBounds();
+      return isGlobeView({ zoom: map.getZoom(), west: bounds.getWest(), east: bounds.getEast() });
+    },
     mapFailed, aborted, now: () => Date.now(),
     hooks: {
       onLoading(model) {

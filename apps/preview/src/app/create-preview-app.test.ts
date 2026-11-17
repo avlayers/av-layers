@@ -70,7 +70,9 @@ let map: {
   once(type: string, handler: (...args: never[]) => void): void;
   getCenter(): { lat: number; lng: number };
   getZoom(): number;
+  getBounds(): { getWest(): number; getEast(): number; getSouth(): number; getNorth(): number };
   getContainer(): object;
+  zoom: number;
   remove(): void;
   fire(type: string, event?: unknown): void;
   center: { lat: number; lng: number };
@@ -79,9 +81,11 @@ let map: {
 async function harness(wind = false) {
   const handlers = new Map<string, (...args: never[]) => void>();
   map = {
-    center: { lat: 40, lng: -100 },
+    center: { lat: 40, lng: -100 }, zoom: 6,
     on(type, handler) { handlers.set(type, handler); }, once(type, handler) { handlers.set(type, handler); },
-    getCenter() { return this.center; }, getZoom: () => 6, getContainer: () => ({}), remove: vi.fn(),
+    getCenter() { return this.center; }, getZoom() { return this.zoom; },
+    getBounds: () => ({ getWest: () => -100.2, getEast: () => -99.8, getSouth: () => 39.8, getNorth: () => 40.2 }),
+    getContainer: () => ({}), remove: vi.fn(),
     fire(type, event = {}) { handlers.get(type)?.(event as never); }
   };
   const location = { pathname: '/', search: '?model=auto&wind=0&lat=40&lon=-100&z=6' };
@@ -300,5 +304,15 @@ it('withholds map wind until the displayed raster matches the installed wind fra
   mocks.pointOptions!.publish.changed();
   expect(test.app.store.view.point.value.wind).toBe('');
   expect(sample).toHaveBeenCalledTimes(1);
+  test.app.dispose();
+});
+
+it('marks the default world zoom as a globe and a tight view as local', async () => {
+  const test = await harness();
+  expect(mocks.resolveAutoBuild.mock.calls[0]?.[1]).toMatchObject({ globe: false, lat: 40, lon: -100 });
+  map.zoom = 2;
+  map.fire('moveend');
+  await vi.waitFor(() => expect(mocks.resolveAutoBuild).toHaveBeenCalledTimes(2));
+  expect(mocks.resolveAutoBuild.mock.calls[1]?.[1]).toMatchObject({ globe: true, lat: 40, lon: -100 });
   test.app.dispose();
 });

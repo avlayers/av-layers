@@ -26,6 +26,7 @@ Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
 Auto selects the finest available forecast covering the map center and time.
+A globe view, or a map without a location, selects GFS when that build is available.
 Builds with numeric wind support trails and WMO/ICAO knot-feathered barbs with
 `km/h` or `mph` speed labels at the selected height.
 The basemap is the XC Skies Natural shaded-relief raster, with the roads and
@@ -39,7 +40,7 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`414,000 B` gzip) and lazy
+[Build checks](vite.config.ts) bound startup (`414,150 B` gzip) and lazy
 (`33,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the

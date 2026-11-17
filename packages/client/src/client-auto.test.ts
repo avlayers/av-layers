@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '@av/contracts/format';
-import { ApiClient, resolveAutoBuild, selectAutoFrame, selectBestCatalogModel } from './index.js';
+import { ApiClient, isGlobeView, resolveAutoBuild, selectAutoFrame, selectBestCatalogModel } from './index.js';
 import { REGION_A_BOUNDS, REGION_B_POINT, REGION_B_BOUNDS, REGION_A_POINT, autoBuild, autoCatalogRow, autoTime } from '../../../tests/auto-forecast-fixtures.js';
 import { fixtureLatest } from '../../../tests/forecast-fixture.js';
 import { fixturePointSample } from '../../../tests/client-point-fixture.js';
@@ -23,6 +23,25 @@ it('ranks live coverage by spacing within both advertised time bounds', () => {
   expect(select(REGION_A_POINT, 0)).toBeNull();
   expect(select(REGION_B_POINT, 18)).toBe(nz.manifest.model);
   expect(select(REGION_B_POINT, 18, [...models.slice(0, -1), { ...models.at(-1)!, expiresAt: autoTime(-1) }])).toBe('gfs');
+});
+
+it('treats zoom 2 and a half-world span as a globe', () => {
+  expect(isGlobeView({ zoom: 2 })).toBe(true);
+  expect(isGlobeView({ zoom: 2.01, west: 44, east: 45 })).toBe(false);
+  expect(isGlobeView({ zoom: 6, west: -180, east: 0 })).toBe(true);
+  expect(isGlobeView({ zoom: 6, west: -180, east: -0.1 })).toBe(false);
+  expect(isGlobeView({ west: -200, east: 200 })).toBe(true);
+  expect(isGlobeView({ west: 170, east: -170 })).toBe(false);
+  expect(isGlobeView(null)).toBe(false);
+});
+
+it('sorts GFS first on a globe and keeps the finest model when zoomed in', () => {
+  const nowMs = Date.parse(autoTime(0)), validTimeMs = Date.parse(autoTime(18));
+  const select = (globe: boolean, rows = models) => selectBestCatalogModel({ ...REGION_A_POINT, models: rows, globe, nowMs, validTimeMs });
+  expect(isGlobeView({ zoom: 6, west: 44, east: 45 })).toBe(false);
+  expect(select(true)).toBe(global.manifest.model);
+  expect(select(isGlobeView({ zoom: 6, west: 44, east: 45 }))).toBe(fine.manifest.model);
+  expect(select(true, models.map(row => row.model === global.manifest.model ? { ...row, expiresAt: autoTime(-1) } : row))).toBe(fine.manifest.model);
 });
 
 it.each(['outside-domain', 'unavailable'] as const)('skips a rendered time hole and a point with %s status', async status => {
@@ -114,4 +133,54 @@ it.each(['latest', 'sample'] as const)('falls back to the coarser model after a 
   const fallback = expect(selection).resolves.toMatchObject({ build: { manifest: { model: 'icon-eu' } }, frame: { id: 'f018' } });
   await vi.advanceTimersByTimeAsync(DEFAULT_REQUEST_TIMEOUT_MS);
   await fallback;
+});
+
+it('falls through a globe view when the pinned GFS build misses the center', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(autoTime(0)));
+  const uncovered = autoBuild(global.manifest.model, [0, 0, 1, 1], [1, 18, 36, 60, 72]);
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input)), model = url.pathname.split('/')[3];
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models: [autoCatalogRow(global.manifest, 27_800), autoCatalogRow(fine.manifest, 1000)] });
+    const build = model === uncovered.manifest.model ? uncovered : fine;
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    return Response.json(fixturePointSample(build, String(input)));
+  });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
+  const selection = await resolveAutoBuild(api, { ...REGION_A_POINT, globe: true, layers: ['usable-lift-agl'],
+    validTimeMs: Date.parse(autoTime(18)), signal: new AbortController().signal });
+  expect(selection?.build.manifest.model).toBe(fine.manifest.model);
+  expect(selection?.frame.id).toBe('f018');
+});
+
+it('pins live GFS without a sample when the location is missing', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(autoTime(0)));
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/catalog')) return Response.json({ models });
+    if (path.endsWith('/latest')) return Response.json(fixtureLatest(global.manifest));
+    return Response.json(fixturePointSample(global, String(input)));
+  });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
+  const signal = new AbortController().signal;
+  const layers = ['usable-lift-msl'] as const;
+  const selection = await resolveAutoBuild(api, { layers, validTimeMs: Date.parse(autoTime(18)), signal });
+  expect(selection?.build.manifest.model).toBe(global.manifest.model);
+  expect(selection?.frame.id).toBe('f018');
+  const paths = () => fetchImpl.mock.calls.map(([input]) => new URL(String(input)).pathname);
+  expect(paths()).toEqual(['/v1/catalog', `/v1/models/${global.manifest.model}/latest`]);
+  const missing = await resolveAutoBuild(api, { lat: Number.NaN, lon: REGION_A_POINT.lon, globe: true, layers, validTimeMs: Date.parse(autoTime(18)), signal });
+  expect(missing?.build.manifest.model).toBe(global.manifest.model);
+  expect(paths().some(path => path.endsWith('/sample'))).toBe(false);
+  const outside = await resolveAutoBuild(api, { layers, validTimeMs: Date.parse(autoTime(0)), signal });
+  expect(outside).toBeNull();
+  expect(paths().filter(path => path.endsWith('/latest'))).toHaveLength(2);
+
+  const unavailable = vi.fn<typeof fetch>(async input => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith('/catalog')) return Response.json({ models: models.map(row => row.model === global.manifest.model ? { ...row, available: false } : row) });
+    return Response.json(fixtureLatest(global.manifest));
+  });
+  const empty = await resolveAutoBuild(new ApiClient({ baseUrl: 'https://api.test', fetchImpl: unavailable }), { layers, signal });
+  expect(empty).toBeNull();
+  expect(unavailable.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual(['/v1/catalog']);
 });

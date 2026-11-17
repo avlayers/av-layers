@@ -18,7 +18,8 @@ The pane shows the displayed frame's UTC time. The overlay hides when Windy's
 selected time falls outside the map forecast. Closing the pane ends point
 requests while the overlay continues following Windy's timeline until build expiry.
 Choose **Auto** to use the finest available forecast that covers the map center
-and Windy's selected time.
+and Windy's selected time. A globe view, or a map without a location, selects
+GFS when that build is available.
 For a standalone map, use [`@av/preview`](../preview/README.md).
 
 The [build check](vite.config.ts) bounds compressed plugin JavaScript and

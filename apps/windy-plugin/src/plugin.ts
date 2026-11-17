@@ -1,6 +1,6 @@
 import { DEFAULT_MODEL } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
-import { ApiClient, AUTO_MODEL_ID, createRasterTileProtocol, formatBuildFreshness, hostTimestampMs, normalizePoint,
+import { ApiClient, AUTO_MODEL_ID, createRasterTileProtocol, formatBuildFreshness, hostTimestampMs, isGlobeView, normalizePoint,
   resolveAutoBuild, type AutoForecastSelection, type GeoPoint, type RasterTileProtocol } from '@av/client';
 import { syncPluginSeam, watchPluginSeam } from './coverage-seam';
 import { forecastCommitted, PluginController, type WindyHost } from './controller';
@@ -102,15 +102,20 @@ function clearAutoForecast(message: string): void {
 async function loadAuto(): Promise<void> {
   if (selectedModel !== AUTO_MODEL_ID) return;
   cancelAuto();
-  const center = map.maplibreMap.getCenter?.();
-  if (!center) { clearAutoForecast('Map location is unavailable.'); return; }
   const request = new AbortController();
   autoAbort = request;
   const time = hostTimestampMs(store.get('timestamp'));
   try {
-    const selection = await resolveAutoBuild(api, { ...normalizePoint(center.lat, center.lng),
+    const view = map.maplibreMap;
+    const center = view.getCenter?.();
+    const bounds = view.getBounds();
+    const point = center && Number.isFinite(center.lat) && Number.isFinite(center.lng) ? normalizePoint(center.lat, center.lng) : null;
+    const selection = await resolveAutoBuild(api, {
+      ...(point ?? {}),
+      globe: isGlobeView({ zoom: view.getZoom(), west: bounds.getWest(), east: bounds.getEast() }),
       layers: ['usable-lift-msl', 'usable-lift-agl'], signal: request.signal,
-      ...(time === null ? {} : { validTimeMs: time }) });
+      ...(time === null ? {} : { validTimeMs: time })
+    });
     if (request.signal.aborted || autoAbort !== request || selectedModel !== AUTO_MODEL_ID) return;
     if (!selection) { clearAutoForecast('No forecast covers this location and time.'); return; }
     const current = controller?.currentBuild?.manifest;
