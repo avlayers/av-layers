@@ -4,7 +4,7 @@ import { barbGeometry } from '@av/windgram/wind-barb';
 export interface BarbIcon { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number; mask: boolean }
 export type BarbMapping = Record<string, BarbIcon>;
 
-const ICON = 46, COLUMNS = 11, SIZE = 512, STAFF = 30, CALM = 'calm';
+const ICON = 46, COLUMNS = 11, SIZE = 512, STAFF = 20, CALM = 'calm';
 const staticKey = (speedKt: number, southern: boolean) => `${southern ? 's' : 'n'}${speedKt}`;
 
 function drawIcon(ctx: CanvasRenderingContext2D, speedKt: number, southern: boolean, x: number, y: number): void {
@@ -48,7 +48,7 @@ export class WindBarbAtlas {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is unavailable');
     this.ctx = ctx;
-    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 16 * ICON; this.dynamicCanvas.height = 16 * ICON;
+    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 24 * ICON; this.dynamicCanvas.height = 24 * ICON;
     const dynamicCtx = this.dynamicCanvas.getContext('2d');
     if (!dynamicCtx) throw new Error('Canvas 2D is unavailable');
     this.dynamicCtx = dynamicCtx;
@@ -64,7 +64,7 @@ export class WindBarbAtlas {
   }
 
   private add(key: string, speedKt: number, southern: boolean, dynamic: boolean): void {
-    const columns = dynamic ? 16 : COLUMNS, slot = dynamic ? this.dynamicNext % (columns * columns) : this.next++;
+    const columns = dynamic ? 24 : COLUMNS, slot = dynamic ? this.dynamicNext % (columns * columns) : this.next++;
     if (!dynamic && slot >= columns * columns) return;
     const x = (slot % columns) * ICON, y = Math.floor(slot / columns) * ICON;
     if (dynamic) {
@@ -74,7 +74,7 @@ export class WindBarbAtlas {
     }
     if (dynamic) (dynamic ? this.dynamicCtx : this.ctx).clearRect(x, y, ICON, ICON);
     drawIcon(dynamic ? this.dynamicCtx : this.ctx, speedKt, southern, x, y);
-    (dynamic ? this.dynamicMapping : this.mapping)[key] = { x, y, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
+    (dynamic ? this.dynamicMapping : this.mapping)[key] = { x, y, width: ICON, height: ICON, anchorX: 0.5, anchorY: 0.5, mask: false };
     if (dynamic) this.dynamicUrl = this.dynamicCanvas.toDataURL('image/png');
   }
 

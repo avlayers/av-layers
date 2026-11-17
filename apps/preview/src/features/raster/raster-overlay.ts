@@ -58,6 +58,7 @@ export class RasterOverlay {
   private prefetched = false;
   private prefetchCursor = 0;
   private prefetching = false;
+  private readonly prefetchPromises = new globalThis.Map<string, Promise<boolean>>();
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private selectedPending = false;
   private pendingSelection: Selection | null = null;
@@ -160,15 +161,15 @@ export class RasterOverlay {
     this.armExpiry(); this.emit();
   };
   private readonly move = (): void => {
-    this.cameraRevision++; this.requiredKeys.clear(); this.detailState = 'idle';
+    this.cameraRevision++; this.requiredKeys.clear(); this.detailState = 'idle'; this.byteReadyFrames.clear();
     this.cancelPaint(); this.cancelRefinement(); this.cancelFocus();
     this.moving = true; this.preferred = null; this.warmFailed = []; this.sourceLimits.clear(); this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.armExpiry(); this.emit();
   };
-  private readonly viewChanged = (): void => { this.cameraRevision++; this.requiredKeys.clear(); this.detailState = 'idle'; this.sourceLimits.clear(); this.enforceBudget(); };
+  private readonly viewChanged = (): void => { this.cameraRevision++; this.requiredKeys.clear(); this.detailState = 'idle'; this.byteReadyFrames.clear(); this.sourceLimits.clear(); this.enforceBudget(); };
   private readonly resized = (): void => {
-    this.cameraRevision++; this.refreshRequired();
+    this.cameraRevision++; this.refreshRequired(); this.byteReadyFrames.clear();
     this.cancelPaint(); this.cancelRefinement(); this.cancelFocus();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
@@ -550,7 +551,7 @@ export class RasterOverlay {
     const template = keep && frameTileUrl(keep.build.templates[keep.layer], keep.frame);
     const prefix = template?.slice(0, template.indexOf('{z}'));
     for (const [url, ctrl] of this.prefetchJobs) if (!prefix || !url.startsWith(prefix)) { ctrl.abort(); this.prefetchJobs.delete(url); }
-    this.prefetched = false; this.prefetchCursor = 0;
+    this.prefetched = false; this.prefetchCursor = 0; this.prefetchPromises.clear();
   }
   private drop(slot: Slot): void {
     if (this.stagingSelection && matches(slot, this.stagingSelection) && slot !== this.active) this.clearStagingWatchdog();
@@ -578,7 +579,7 @@ export class RasterOverlay {
       detailState: this.detailState, cameraRevision: this.cameraRevision, requiredTiles: this.requiredKeys.size,
       loadedTiles: this.loadedKeys.size, pendingTiles: this.pendingKeys.size, erroredTiles: this.erroredKeys.size,
       coarseReadyFrames: readiness?.previewReadyFrames ?? [], detailBytesReadyFrames: [...this.byteReadyFrames],
-      detailDrawableFrames: this.active && this.active.successful && !this.problem(this.active) ? [this.active.frame] : [] };
+      detailDrawableFrames: this.active && matches(this.active, this.requested) && this.active.successful && !this.problem(this.active) && this.tilesSettled(this.active) ? [this.active.frame] : [] };
     const pending = !!this.requested && !matches(displayed, this.requested) && !this.replacementFailed;
     if (pending !== this.selectedPending || (pending && !matches(this.pendingSelection, this.requested))) {
       this.selectedPending = pending; this.pendingSelection = pending ? this.requested : null;
@@ -613,9 +614,8 @@ export class RasterOverlay {
       if (!slot) return;
       if (slot.successful && this.map.isSourceLoaded(slot.id)) { this.clearStagingWatchdog(); return; }
       const requested = matches(slot, this.requested);
-      this.detailState = 'timed-out';
       this.drop(slot);
-      if (requested) { this.replacementFailed = true; this.incomplete = this.problem(this.active); }
+      if (requested) { this.detailState = 'timed-out'; this.replacementFailed = true; this.incomplete = this.problem(this.active); }
       this.emit();
     }, STAGING_TIMEOUT_MS);
   }
@@ -769,6 +769,19 @@ export class RasterOverlay {
     const before = frames.slice(0, index).reverse(), after = frames.slice(index + 1);
     return (this.direction === -1 ? [...before, ...after] : [...after, ...before]).map(f => f.id);
   }
+  private prefetchOne(url: string): Promise<boolean> {
+    const existing = this.prefetchPromises.get(url);
+    if (existing) return existing;
+    if (!this.protocol) return Promise.resolve(false);
+    const ctrl = new AbortController(); this.prefetchJobs.set(url, ctrl);
+    const promise = this.protocol.prefetch(url, ctrl.signal).then(() => true).catch(() => false).finally(() => {
+      if (this.prefetchJobs.get(url) === ctrl) this.prefetchJobs.delete(url);
+      if (this.prefetchPromises.get(url) === promise) this.prefetchPromises.delete(url);
+    });
+    this.prefetchPromises.set(url, promise);
+    return promise;
+  }
+
   private prefetchBytes(): void {
     const slot = this.active;
     if (this.disposed || this.moving || !slot || !matches(slot, this.requested) || !this.protocol || this.prefetched) return;
@@ -778,11 +791,8 @@ export class RasterOverlay {
     const prepared = this.slots.filter(v => v.successful && !this.problem(v) && this.tilesSettled(v));
     const warming = this.warmth.update(boundsAreaKm2(cameraBounds(this.map))), timeline = this.timelineFrames(slot);
     const urls = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
-      preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: warming ? timeline.slice(0, 12) : timeline.slice(0, 4) });
-    for (const url of new Set(urls)) {
-      const ctrl = new AbortController(); this.prefetchJobs.set(url, ctrl);
-      void this.protocol.prefetch(url, ctrl.signal).catch(() => {}).finally(() => { if (this.prefetchJobs.get(url) === ctrl) this.prefetchJobs.delete(url); });
-    }
+      preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: warming ? [] : timeline.slice(0, 4) });
+    for (const url of new Set(urls)) void this.prefetchOne(url);
     const preparedFrames = new Set(prepared.map(item => item.frame));
     for (const frame of warming ? timeline : timeline.slice(0, 4)) if (preparedFrames.has(frame) && !this.byteReadyFrames.has(frame)) { this.byteReadyFrames.add(frame); this.emit(); }
     const template = slot.build.templates[slot.layer];
@@ -791,14 +801,16 @@ export class RasterOverlay {
     if (!batch.length) return;
     this.prefetching = true; this.prefetchCursor += batch.length;
     const jobs = batch.map(frame => {
-      let ok = true;
-      const frameTemplate = frameTileUrl(template, frame);
-      const frameJobs = tiles.map(tile => {
-        const url = frameTemplate.replaceAll('{z}', String(tile.z)).replaceAll('{x}', String(tile.x)).replaceAll('{y}', String(tile.y));
-        const ctrl = new AbortController(); this.prefetchJobs.set(url, ctrl);
-        return this.protocol!.prefetch(url, ctrl.signal).catch(() => { ok = false; }).finally(() => { if (this.prefetchJobs.get(url) === ctrl) this.prefetchJobs.delete(url); });
+      const planned = planViewportPrefetch({ build: slot.build, activeLayer: slot.layer, activeFrame: slot.frame, viewportTiles: tiles,
+        preferred: this.predicted()[0], direction: this.direction, prepared, timelineFrames: [frame] });
+      const frameTemplate = frameTileUrl(template, frame), cut = frameTemplate.indexOf('{z}');
+      const prefix = cut > 0 ? frameTemplate.slice(0, cut) : '', frameUrls = prefix ? planned.filter(url => url.startsWith(prefix)) : [];
+      if (!frameUrls.length) return Promise.resolve(false);
+      return Promise.all(frameUrls.map(url => this.prefetchOne(url))).then(results => {
+        const ok = results.every(Boolean);
+        if (ok && !this.disposed) { this.byteReadyFrames.add(frame); this.emit(); }
+        return ok;
       });
-      return Promise.all(frameJobs).then(() => { if (ok && !this.disposed) { this.byteReadyFrames.add(frame); this.emit(); } });
     });
     void Promise.all(jobs).finally(() => {
       this.prefetching = false;
