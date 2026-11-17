@@ -31,6 +31,8 @@ export class WindDeck {
   private renderedGeneration = 0;
   private features: BarbFeature[] = [];
   private particles = 2048;
+  private imageKey = '';
+  private imageData: Uint8Array | null = null;
   private atlasUrl = '';
   private lease: PreparationLease | null = null;
   private destroyed = false;
@@ -95,6 +97,14 @@ export class WindDeck {
     try { if (!this.map.hasControl(this.overlay)) this.map.addControl(this.overlay); this.render(); } catch { /* style replacement in progress */ }
   };
 
+  private preparedImage(prepared: WindPreparedGrid): Uint8Array {
+    if (this.imageKey === prepared.key && this.imageData) return this.imageData;
+    const row = prepared.size * 4, data = new Uint8Array(prepared.data.length);
+    for (let y = 0; y < prepared.size; y++) data.set(prepared.data.subarray((prepared.size - 1 - y) * row, (prepared.size - y) * row), y * row);
+    this.imageKey = prepared.key; this.imageData = data;
+    return data;
+  }
+
   private mount(interleaved: boolean): MapLibreOverlay | null {
     try {
       const overlay = new MapLibreOverlay({ interleaved, layers: [], onAfterRender: () => { this.renderedGeneration = this.installedGeneration; }, onError: () => {} });
@@ -106,14 +116,13 @@ export class WindDeck {
     if (!this.overlay) return;
     const visible = this.options.visible, barbs = visible && this.options.style !== 'trails', trails = visible && this.options.style !== 'barbs';
     const staticFeatures = this.features.filter(feature => !feature.dynamic), dynamicFeatures = this.features.filter(feature => feature.dynamic);
-    const width = this.map.getCanvas().clientWidth, height = this.map.getCanvas().clientHeight;
     const layers = [
       ...(trails && this.prepared ? [new ParticleLayer({
         id: `av-wind-particles-${this.generation}`,
-        image: { data: this.prepared.data, width: this.prepared.size, height: this.prepared.size },
-        imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'NEAREST',
-        bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 32, speedFactor: 0.6,
-        width, height, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
+        image: { data: this.preparedImage(this.prepared), width: this.prepared.size, height: this.prepared.size },
+        imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'LINEAR',
+        bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 32, speedFactor: 0.5, fps: 30,
+        width: 1.5, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
       })] : []),
       ...(barbs ? [
         new IconLayer<BarbFeature>({
