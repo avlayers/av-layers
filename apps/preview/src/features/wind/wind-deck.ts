@@ -1,12 +1,12 @@
 import { MapLibreOverlay } from '@deck.gl/maplibre';
-import { IconLayer, TextLayer } from '@deck.gl/layers';
+import { IconLayer } from '@deck.gl/layers';
 import { seamInsertBefore, type PreparationBudget, type PreparationLease } from '@av/client';
 import type { WindPreparedGrid } from '@av/client/wind';
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import { encodeWindByte } from '@av/contracts/wind-data';
 import type { Map } from 'maplibre-gl';
-import { BARB_ICON_SIZE, CALM_BARB_KEY, WindBarbAtlas } from './wind-barbs-atlas';
+import { BARB_ICON_SIZE, CALM_BARB_KEY, LABEL_ICON_SIZE, WindBarbAtlas } from './wind-barbs-atlas';
 import { WindParticleLayer } from './wind-particle-layer';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
@@ -14,7 +14,15 @@ export interface WindDeckOptions { style: 'trails' | 'barbs' | 'hybrid'; visible
 interface BarbFeature { position: [number, number]; icon: string; angle: number; text: string; dynamic: boolean }
 
 const MAX_LAT = 85.05112878, DEG = Math.PI / 180, DISPLAY_BYTES = 8 * 1024 * 1024, FALLBACK_GRID_SIZE = 128;
-const FLAT_PARAMS = { depthWriteEnabled: false, depthCompare: 'always' as const };
+const PREMULT_PARAMS = {
+  depthWriteEnabled: false,
+  depthCompare: 'always' as const,
+  blend: true,
+  blendColorSrcFactor: 'one' as const,
+  blendColorDstFactor: 'one-minus-src-alpha' as const,
+  blendAlphaSrcFactor: 'one' as const,
+  blendAlphaDstFactor: 'one-minus-src-alpha' as const
+};
 const ATLAS_SAMPLER = { magFilter: 'linear' as const, minFilter: 'linear' as const };
 
 const valid = (sample: ReturnType<WindField['sample']>): sample is { u: number; v: number; status: number } =>
@@ -24,7 +32,7 @@ const latitude = (y: number, size: number) => Math.atan(Math.sinh(Math.PI * (1 -
 const worldShift = (bounds: readonly [number, number, number, number], centerLon: number) =>
   bounds[2] - bounds[0] >= 359 ? 0 : 360 * Math.round((centerLon - (bounds[0] + bounds[2]) * 0.5) / 360);
 
-/** deck.gl wind renderer: GPU Transform-Feedback streamlines plus map-plane barbs and SDF haloed labels. */
+/** deck.gl wind renderer: GPU Transform-Feedback streamlines plus 4x supersampled premultiplied barbs and labels. */
 export class WindDeck {
   private overlay: MapLibreOverlay | null = null;
   private interleaved = false;
@@ -246,9 +254,10 @@ export class WindDeck {
         new IconLayer<BarbFeature>({
           id: 'av-wind-barbs',
           data: staticFeatures,
-          iconAtlas: this.atlas.canvas as unknown as string,
+          iconAtlas: this.atlas.staticImage as unknown as string,
           iconMapping: this.atlas.mapping,
           textureParameters: ATLAS_SAMPLER,
+          alphaCutoff: 0.002,
           getIcon: feature => feature.icon,
           getPosition: feature => feature.position,
           getAngle: feature => -feature.angle,
@@ -256,7 +265,7 @@ export class WindDeck {
           sizeUnits: 'pixels',
           billboard: false,
           pickable: false,
-          parameters: FLAT_PARAMS
+          parameters: PREMULT_PARAMS
         }),
         ...(dynamicFeatures.length ? [new IconLayer<BarbFeature>({
           id: 'av-wind-barbs-dynamic',
@@ -264,6 +273,7 @@ export class WindDeck {
           iconAtlas: this.atlas.dynamicImage as unknown as string,
           iconMapping: this.atlas.dynamicMapping,
           textureParameters: ATLAS_SAMPLER,
+          alphaCutoff: 0.002,
           getIcon: feature => feature.icon,
           getPosition: feature => feature.position,
           getAngle: feature => -feature.angle,
@@ -271,28 +281,22 @@ export class WindDeck {
           sizeUnits: 'pixels',
           billboard: false,
           pickable: false,
-          parameters: FLAT_PARAMS
+          parameters: PREMULT_PARAMS
         })] : []),
-        new TextLayer<BarbFeature>({
+        new IconLayer<BarbFeature>({
           id: 'av-wind-labels',
           data: this.labeledFeatures,
-          getText: feature => feature.text,
+          iconAtlas: this.atlas.labelImage as unknown as string,
+          iconMapping: this.atlas.labelMapping,
+          textureParameters: ATLAS_SAMPLER,
+          alphaCutoff: 0.002,
+          getIcon: feature => feature.text,
           getPosition: feature => feature.position,
-          getSize: 10,
+          getSize: LABEL_ICON_SIZE,
           sizeUnits: 'pixels',
           billboard: true,
-          getColor: [15, 23, 42, 255],
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          fontWeight: 600,
-          fontSettings: { sdf: true, fontSize: 64, buffer: 12, radius: 16, smoothing: 0.12 },
-          outlineWidth: 7,
-          outlineColor: [255, 255, 255, 245],
-          getPixelOffset: [0, 3],
-          getTextAnchor: 'middle',
-          getAlignmentBaseline: 'top',
-          background: false,
           pickable: false,
-          parameters: FLAT_PARAMS
+          parameters: PREMULT_PARAMS
         })
       ] : [])
     ];
@@ -319,9 +323,10 @@ export class WindDeck {
       const icon = this.atlas.key(speed * DISPLAY_KNOTS_PER_MPS, lat < 0);
       if (!icon) continue;
       const direction = (Math.atan2(-sample.u, -sample.v) * 180 / Math.PI + 360) % 360;
-      const text = icon === CALM_BARB_KEY ? '' : String(speedText);
+      const text = icon === CALM_BARB_KEY ? '' : this.atlas.labelKey(String(speedText));
       features.push({ position: [lon, lat], icon, angle: direction, text, dynamic: icon.startsWith('d') });
     }
+    this.atlas.flushLabels();
     return features;
   }
 }
