@@ -138,7 +138,8 @@ export class WindDeck {
         new TextLayer<BarbFeature>({
           id: 'av-wind-labels', data: this.features, getText: feature => feature.text,
           getPosition: feature => feature.position, getSize: 10, sizeUnits: 'pixels', billboard: true,
-          getColor: [15, 23, 42], fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          getColor: [17, 17, 17], fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', fontWeight: 600,
+          outlineWidth: 2, outlineColor: [255, 255, 255], getPixelOffset: [0, 3],
           getTextAnchor: 'middle', getAlignmentBaseline: 'top', background: false, pickable: false
         })
       ] : [])

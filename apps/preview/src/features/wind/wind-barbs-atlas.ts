@@ -1,33 +1,45 @@
 import { quantizedBarbSpeed } from '@av/contracts/units';
-import { barbGeometry } from '@av/windgram/wind-barb';
 
 export interface BarbIcon { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number; mask: boolean }
 export type BarbMapping = Record<string, BarbIcon>;
 
-const ICON = 46, COLUMNS = 11, SIZE = 512, STAFF = 20, CALM = 'calm';
+const SCALE = 2, ICON = 46 * SCALE, COLUMNS = 11, SIZE = 1024, STAFF = 21 * SCALE, CALM = 'calm';
+const BARB_ICON_SIZE = 46;
 const staticKey = (speedKt: number, southern: boolean) => `${southern ? 's' : 'n'}${speedKt}`;
+
+function haloStroke(ctx: CanvasRenderingContext2D): void {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.82)'; ctx.lineWidth = 2.2 * SCALE; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.restore();
+  ctx.stroke();
+}
 
 function drawIcon(ctx: CanvasRenderingContext2D, speedKt: number, southern: boolean, x: number, y: number): void {
   ctx.save();
   ctx.translate(x + ICON / 2, y + ICON / 2);
-  ctx.lineCap = 'butt';
-  ctx.lineJoin = 'miter';
+  ctx.strokeStyle = '#111'; ctx.fillStyle = '#0f172a'; ctx.lineWidth = 0.9 * SCALE; ctx.lineCap = 'butt'; ctx.lineJoin = 'miter';
   if (speedKt === 0) {
-    ctx.beginPath(); ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
-    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 3; ctx.stroke();
-    ctx.strokeStyle = '#111'; ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.beginPath(); ctx.arc(0, 0, 2.5 * SCALE, 0, Math.PI * 2);
+    haloStroke(ctx);
     ctx.restore();
     return;
   }
-  const geometry = barbGeometry(speedKt, 0, STAFF, southern);
-  const paths = [new Path2D(geometry.staff), ...geometry.flags.map(flag => new Path2D(flag))];
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 3.2;
-  for (const path of paths) ctx.stroke(path);
-  ctx.strokeStyle = '#111'; ctx.fillStyle = '#111'; ctx.lineWidth = 1.4;
-  for (const [index, path] of paths.entries()) {
-    if (index > 0 && geometry.flags[index - 1]!.endsWith('Z')) ctx.fill(path);
-    ctx.stroke(path);
+  const side = (southern ? -1 : 1) * 6 * SCALE;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -STAFF);
+  haloStroke(ctx);
+  const flags = Math.min(16, Math.floor(speedKt / 50)), feathers = Math.floor((speedKt % 50) / 10), half = speedKt % 10 >= 5;
+  const spacing = Math.min(4 * SCALE, 20 * SCALE / Math.max(1, flags * 2 + feathers + Number(half)));
+  let d = -STAFF;
+  for (let index = 0; index < flags; index++) {
+    ctx.beginPath(); ctx.moveTo(0, d); ctx.lineTo(side, d); ctx.lineTo(0, d + spacing * 2); ctx.closePath();
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.82)'; ctx.lineWidth = 2 * SCALE; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+    ctx.fill();
+    d += spacing * 2;
   }
+  ctx.beginPath();
+  for (let index = 0; index < feathers; index++) { ctx.moveTo(0, d); ctx.lineTo(side, d - 3 * SCALE); d += spacing; }
+  if (half) { ctx.moveTo(0, d); ctx.lineTo(side / 2, d - 1.5 * SCALE); }
+  haloStroke(ctx);
   ctx.restore();
 }
 
@@ -48,7 +60,7 @@ export class WindBarbAtlas {
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is unavailable');
     this.ctx = ctx;
-    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 24 * ICON; this.dynamicCanvas.height = 24 * ICON;
+    this.dynamicCanvas = document.createElement('canvas'); this.dynamicCanvas.width = 8 * ICON; this.dynamicCanvas.height = 8 * ICON;
     const dynamicCtx = this.dynamicCanvas.getContext('2d');
     if (!dynamicCtx) throw new Error('Canvas 2D is unavailable');
     this.dynamicCtx = dynamicCtx;
@@ -64,7 +76,7 @@ export class WindBarbAtlas {
   }
 
   private add(key: string, speedKt: number, southern: boolean, dynamic: boolean): void {
-    const columns = dynamic ? 24 : COLUMNS, slot = dynamic ? this.dynamicNext % (columns * columns) : this.next++;
+    const columns = dynamic ? 8 : COLUMNS, slot = dynamic ? this.dynamicNext % (columns * columns) : this.next++;
     if (!dynamic && slot >= columns * columns) return;
     const x = (slot % columns) * ICON, y = Math.floor(slot / columns) * ICON;
     if (dynamic) {
@@ -85,4 +97,4 @@ export class WindBarbAtlas {
   }
 }
 
-export { ICON as BARB_ICON_SIZE };
+export { BARB_ICON_SIZE };
