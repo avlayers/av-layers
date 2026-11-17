@@ -1,5 +1,5 @@
 import { getProduct } from '@av/contracts/models';
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type StoredModelPointer as ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, matchesHistoricalDescriptors, storedModelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type StoredModelPointer as ModelPointer, type ProductDefinition } from '@av/contracts';
 import { sha256 } from './coverage';
 import { matchStorageBytes, storeStorageBytes } from './storage-cache';
 import { Problem, fail, validateId, ensureLive } from './http';
@@ -213,8 +213,9 @@ async function checkProduct(m: ManifestV5, product: ProductDefinition): Promise<
     expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
     expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
   }
-  if (product.terrainSubdivisionFactor === undefined
-      || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+  // Retained manifests match the frozen descriptors from before field definitions.
+  const matchesCurrent = sameJsonValue(m.descriptors, expected);
+  if (product.terrainSubdivisionFactor === undefined || (!matchesCurrent && !matchesHistoricalDescriptors(product, m))) fail(503, 'publication-invalid', 'Publication does not match admitted product');
   let plan: ReturnType<typeof planWholeDomainGrid>;
   try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
   catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }

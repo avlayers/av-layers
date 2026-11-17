@@ -1,6 +1,7 @@
 import z from 'zod';
 import { gridSchema, normalizeLon, prepareGridGeometry, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
+import { assertIndexedWeatherBindings, requiredAuxiliaryFields, selectConfiguredFields, type AuxiliaryRequirements } from '@av/forecast/direct-scalars';
 import { isPrivateUpstreamKey, privateUpstreamPrefix, sourceUrl } from '../source.js';
 
 const levels = z.array(z.number().int().positive()).min(1).max(256);
@@ -26,7 +27,7 @@ const upstreamSchema = z.object({
     height: z.tuple([z.string().min(1)]), temperature: z.tuple([z.string().min(1)]) }).strict()
 }).strict();
 
-export function indexedSource(model: ModelDefinition) {
+export function indexedSource(model: ModelDefinition, requirements?: AuxiliaryRequirements) {
   if (model.capabilities.verticalCoordinate !== 'isobaric' || model.forecast.statisticsResetHours === null) throw new Error('Indexed GRIB input requires isobaric levels and a statistical reset interval');
   const upstream = upstreamSchema.parse(model.upstream), grid = gridSchema.parse(model.grid);
   const privateR2 = upstream.urlTemplate.startsWith('r2:');
@@ -70,6 +71,10 @@ export function indexedSource(model: ModelDefinition) {
   for (const [fields, u, v] of [[upstream.auxSurface, 'u10mMps', 'v10mMps'], [upstream.auxLevels, 'uWindMps', 'vWindMps']] as const) {
     if (Object.hasOwn(fields ?? {}, u) !== Object.hasOwn(fields ?? {}, v)) throw new Error('Auxiliary GRIB wind components must be configured together');
   }
+  assertIndexedWeatherBindings(model.modelId, upstream);
+  const required = requiredAuxiliaryFields(model.layers, requirements);
+  upstream.auxSurface = selectConfiguredFields(upstream.auxSurface, required.surface);
+  upstream.auxLevels = selectConfiguredFields(upstream.auxLevels, required.levels);
   const fields = { ...upstream.fields, sensibleHeatFlux: upstream.fields.sensibleHeatFlux.slice(0, 2) as [string, string], latentHeatFlux: upstream.fields.latentHeatFlux.slice(0, 2) as [string, string] };
   const fluxScales = { sensibleHeatFlux: upstream.fields.sensibleHeatFlux[2], latentHeatFlux: upstream.fields.latentHeatFlux[2] };
   return { model, upstream, privateR2, grid, geometry: prepareGridGeometry(grid), columnOffset, pressureLevels, levelProducts, fields, fluxScales };

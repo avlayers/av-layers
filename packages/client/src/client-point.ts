@@ -9,6 +9,17 @@ const liftLayers = ['usable-lift-msl', 'usable-lift-agl'] as const;
 const diagnostics = ['precip-rate', 'thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl',
   'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v'] as const;
 const scalarFields: readonly LayerId[] = [...liftLayers, ...diagnostics, 'cloud-cover-total'];
+
+/** Page a frame axis so each request stays inside the point value budget. */
+export function fieldSeriesPages(frameIds: readonly string[], fieldCount: number, maxSampleValues: number): string[][] {
+  if (!Number.isSafeInteger(fieldCount) || fieldCount < 1) throw new RangeError('Field series requires a field');
+  if (!Number.isSafeInteger(maxSampleValues) || maxSampleValues < 1) throw new RangeError('Field series exceeds the sample budget');
+  const pageSize = Math.floor(maxSampleValues / fieldCount);
+  if (pageSize < 1) throw new RangeError('Field series exceeds the sample budget');
+  const pages: string[][] = [];
+  for (let offset = 0; offset < frameIds.length; offset += pageSize) pages.push(frameIds.slice(offset, offset + pageSize));
+  return pages;
+}
 // Chart scalars and the inputs to /profile cloud and wind diagnostics.
 const profileFields: readonly LayerId[] = [...diagnostics, 'pbl-height-agl', 'wind-gust-10m',
   'sfc-temp-c', 'sfc-dewpoint-c', 'cape-jkg'];
@@ -109,8 +120,9 @@ export function createPointSeriesLoader(
             if (pageSize < 1) throw new RangeError('Point response exceeds the byte budget');
             if (missing.includes(first)) requests.push([first]);
             const rest = missing.filter(id => id !== first);
-            if (requests.length + Math.ceil(rest.length / pageSize) > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
-            for (let offset = 0; offset < rest.length; offset += pageSize) requests.push(rest.slice(offset, offset + pageSize));
+            const restPages = fieldSeriesPages(rest, 1, pageSize);
+            if (requests.length + restPages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
+            requests.push(...restPages);
           }
           return { source, requests };
         });

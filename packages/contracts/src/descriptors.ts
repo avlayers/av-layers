@@ -1,5 +1,6 @@
 import z from 'zod';
 import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, terrainColumnMethodForProduct, nativeMethodForLayer } from './methods.js';
+import { weatherFieldDefinition } from './field-definitions.js';
 import { LAYERS, PALETTES, renderedLayers, layerPalette, type LayerId } from './layers.js';
 import type { ProductDefinition } from './product.js';
 import type { GeographicBounds } from './geometry.js';
@@ -21,7 +22,10 @@ export function createProductMethodId(product: Pick<ProductDefinition, 'layers' 
   return [...new Set(product.layers.map(id => methodForLayer(product, id).id))].join('+');
 }
 export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
-  const layers = product.layers.map(id => ({ ...LAYERS[id], methodId: methodForLayer(product, id).id }));
+  const layers = product.layers.map(id => {
+    const definition = weatherFieldDefinition(product.modelId, id);
+    return { ...LAYERS[id], methodId: methodForLayer(product, id).id, ...(definition ? { definition } : {}) };
+  });
   const methods: Record<string, unknown> = Object.fromEntries(layers.map(layer => [layer.methodId, METHODS[layer.methodId as keyof typeof METHODS]]));
   const maximumGust = z.object({ upstream: z.object({ auxSurface: z.object({ gust10mMps: z.object({ statistic: z.literal(2) }) }) }) }).safeParse(product).success;
   const gust = layers.find(layer => layer.id === 'wind-gust-10m');

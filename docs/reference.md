@@ -73,6 +73,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `av-wrf-precip-mm-hr-window-rate-v1`.
+- `cape-jkg` definition: `av-wrf-afwa-mucape-max-theta-e-pressure-gt-500hpa-v1`.
+- `cloud-cover-total` definition: `av-wrf-cloud-total-pct-v1`.
+- `cloud-cover-low` definition: `av-wrf-ecmwf-sigma-ge-0p8-max-random-overlap-v1`.
 - Publication timing: cycle age at most 36 hours; remaining horizon at least 36 hours.
 
 ### GFS (gfs-soaring)
@@ -93,6 +97,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `noaa-gfs-apcp-interval-mean-v1`.
+- `cape-jkg` definition: `noaa-gfs-surface-cape-v1`.
+- `cloud-cover-total` definition: `noaa-gfs-tcdc-total-v1`.
+- `cloud-cover-low` definition: `noaa-gfs-lcdc-low-v1`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### ICON-EU (icon-eu-soaring)
@@ -112,6 +120,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `dwd-icon-eu-tot-prec-interval-mean-v1`.
+- `cape-jkg` definition: `dwd-icon-eu-cape-ml-v1`.
+- `cloud-cover-total` definition: `dwd-icon-eu-clct-v1`.
+- `cloud-cover-low` definition: `dwd-icon-eu-clcl-v1`.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 
 ### RRFS (CONUS) (rrfs-conus-soaring)
@@ -131,6 +143,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `noaa-rrfs-apcp-preceding-hour-v1`.
+- `cape-jkg` definition: `noaa-rrfs-surface-cape-v1`.
+- `cloud-cover-total` definition: `noaa-rrfs-tcdc-total-v1`.
+- `cloud-cover-low` definition: `noaa-rrfs-lcdc-low-v1`.
 - Publication timing: cycle age at most 12 hours; remaining horizon at least 48 hours.
 
 ### WRF North Armenia 1km ICON comparison (wrf-armenia-pilot-dwd-1km-soaring)
@@ -150,6 +166,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `av-wrf-precip-mm-hr-window-rate-v1`.
+- `cape-jkg` definition: `av-wrf-afwa-mucape-max-theta-e-pressure-gt-500hpa-v1`.
+- `cloud-cover-total` definition: `av-wrf-cloud-total-pct-v1`.
+- `cloud-cover-low` definition: `av-wrf-ecmwf-sigma-ge-0p8-max-random-overlap-v1`.
 - Publication timing: cycle age at most 6 hours; remaining horizon at least 18 hours.
 
 ### WRF North Armenia 3km ICON comparison (wrf-armenia-pilot-dwd-3km-soaring)
@@ -169,6 +189,10 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Calculation methods: `supported-terrain-column-1p2-model-levels-v2`, `trailing-precipitation-rate-v2`, `native-soaring-model-levels-v1`, `native-cloud-model-levels-v1`, `native-surface-model-levels-v1`, `native-wind-model-levels-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
 - Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `cloud-cover-low`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `av-wrf-precip-mm-hr-window-rate-v1`.
+- `cape-jkg` definition: `av-wrf-afwa-mucape-max-theta-e-pressure-gt-500hpa-v1`.
+- `cloud-cover-total` definition: `av-wrf-cloud-total-pct-v1`.
+- `cloud-cover-low` definition: `av-wrf-ecmwf-sigma-ge-0p8-max-random-overlap-v1`.
 - Publication timing: cycle age at most 6 hours; remaining horizon at least 18 hours.
 
 ## Scalar quantities and units

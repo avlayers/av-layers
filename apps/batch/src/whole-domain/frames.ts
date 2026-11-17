@@ -170,7 +170,8 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       const tDerive = Date.now(); phase = 'derive';
       const inMap = ordinal < mapFrames;
       const frameLayers = inMap ? product.layers : prepared.nativeSurfaceLayers;
-      const nativeFields = deriveFrame(frame, workingMask, { ...deriveOptions, layers: frameLayers, diagnostics: inMap ? diagnostics : undefined, nativeCoverage: prepared.native.mask.coverage });
+      const scalarRejections: Partial<Record<LayerId, number>> = {};
+      const nativeFields = deriveFrame(frame, workingMask, { ...deriveOptions, layers: frameLayers, diagnostics: inMap ? diagnostics : undefined, nativeCoverage: prepared.native.mask.coverage, scalarRejections });
       if (inMap && !nativeFields['usable-lift-msl']) throw new Error('Whole-domain terrain derivation requires native MSL flags');
       const deriveNativeWallMs = Date.now() - tDerive, tFine = Date.now();
       const nativeClearance = inMap ? { validTime: descriptor.validTime, grid: mask.grid, diagnostics: diagnostics!, flags: nativeFields['usable-lift-msl']!.flags } : undefined;
@@ -180,7 +181,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
           nativeClearance, signal, output: fineOutput, deadlineAt, yieldControl: () => new Promise<void>(resolve => setImmediate(resolve)) })).fields : undefined;
       if (options.onNumericFrame && fineFields) await options.onNumericFrame(frame, id, fineFields['usable-lift-msl'], prepared, terrainData!, signal);
       const deriveFineWallMs = Date.now() - tFine;
-      summaries[id] = summarizeFields(nativeFields, mask, outputIndices, frameLayers);
+      summaries[id] = summarizeFields(nativeFields, mask, outputIndices, frameLayers, scalarRejections);
       deriveMs += Date.now() - tDerive;
       const tPack = Date.now(); phase = 'pack';
       let packWriteWallMs = 0;

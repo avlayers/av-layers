@@ -92,3 +92,8 @@ export function recoverTrailingWindow(input: CompactTrailingWindowInput): Compac
   }
   return { values, missing, missingCount, derivedHours, quantizationTolerance };
 }
+
+export function intervalMeanAmountMm(rateMmPerHour: number, durationHours: number): number | null {
+  if (!Number.isFinite(rateMmPerHour) || rateMmPerHour < 0 || !Number.isFinite(durationHours) || durationHours <= 0) return null;
+  return rateMmPerHour * durationHours;
+}

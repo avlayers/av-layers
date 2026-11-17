@@ -518,30 +518,30 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
     ...(objects ? { remote: { store: options.store!, objects, signal: options.signal } } : {}) });
 }
 
-async function inputsFor(modelId: string): Promise<ForecastInputs> {
+async function inputsFor(modelId: string, numericWind = false): Promise<ForecastInputs> {
   const product = getProduct(modelId);
   if (!product) throw new Error(`No forecast product for ${modelId}`);
-  return { product, provider: getForecastProvider(modelId), mask: await loadCoverage(product) };
+  return { product, provider: getForecastProvider(modelId, { numericWind }), mask: await loadCoverage(product) };
 }
 export async function readBuildPlan(path: string): Promise<BuildPlan> {
   return planSchema.parse(parseBoundedJson(await readLocalFile(path, MAX_MANIFEST_BYTES)));
 }
 export async function createForecastPlan(modelId: string, options: PlanOptions): Promise<BuildPlan> {
-  const inputs = await inputsFor(modelId);
+  const inputs = await inputsFor(modelId, options.numericWind === true);
   return createBuildPlan({ ...options, ...inputs });
 }
 export async function buildForecastShard(planPath: string, shard: number, options: Pick<BuildOptions, 'out' | 'cacheDir' | 'signal'> & { store?: ObjectStorage }): Promise<string> {
   const plan = await readBuildPlan(planPath);
-  return buildShard({ ...options, ...await inputsFor(plan.model), plan, shard });
+  return buildShard({ ...options, ...await inputsFor(plan.model, plan.numericWind === true), plan, shard });
 }
 export async function finalizeForecastBuild(planPath: string, options: Pick<BuildOptions, 'out' | 'signal' | 'onValidated'> & { store?: ObjectStorage }): Promise<string> {
   const plan = await readBuildPlan(planPath);
-  return finalizeBuild({ ...options, ...await inputsFor(plan.model), plan });
+  return finalizeBuild({ ...options, ...await inputsFor(plan.model, plan.numericWind === true), plan });
 }
 
 export async function verifyBuildReceipts(root: string, manifest: ManifestV5, store: ObjectStorage, signal?: AbortSignal, trustedInputs?: ForecastInputs, onNumericReceipts?: (receipts: ObjectReceipt[]) => void): Promise<ObjectReceipt[]> {
   const plan = await readBuildPlan(localPath(root, 'plan.json'));
-  const inputs = trustedInputs ?? await inputsFor(plan.model), admitted = await admitPlan(plan, { ...inputs, out: root, signal }, true);
+  const inputs = trustedInputs ?? await inputsFor(plan.model, plan.numericWind === true), admitted = await admitPlan(plan, { ...inputs, out: root, signal }, true);
   if (manifest.model !== plan.model || manifest.buildId !== plan.buildId || manifest.cycle !== plan.cycle
       || manifest.createdAt !== plan.createdAt || !same(manifest.recipe, plan.recipe)) throw new Error('Manifest forecast plan identity mismatch');
   const whole = admitted.prepared;

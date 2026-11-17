@@ -40,7 +40,8 @@ afterEach(async () => {
 it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves east/north 10m and model winds with scan %i and grid-relative flag %s', async (scanningMode, uvRelativeToGrid) => {
   const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-aux-'));
   tempDirs.push(cacheDir);
-  const configured = splitSource({ ...SPLIT_PRODUCT, capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
+  const configured = splitSource({ ...SPLIT_PRODUCT, layers: [...SPLIT_PRODUCT.layers, 'cloud-cover-total', 'pbl-height-agl', 'wind-gust-10m', 'wind-10m-u', 'wind-10m-v'],
+    capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
     upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74],
       auxSurface: { cloudTotalPct: { field: 'CLCT', kind: 'single-level', parameter: [6, 1], surface: [1, 0], unit: '%' },
         pblHeightM: { field: 'MH', kind: 'single-level', parameter: [19, 3], surface: [1, 0], unit: 'm' },

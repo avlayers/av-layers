@@ -1,5 +1,5 @@
 import { DEFAULT_PROBE_TIMEOUT_MS, MAX_PROVENANCE_BYTES, maxProfileFrames, parseFrameProvenance, parseProvenance,
-  renderedFrames, renderedLayers, type LayerId, type ManifestV5 } from '@av/contracts';
+  renderedFrames, renderedLayers, WEATHER_LAYER_IDS, type LayerId, type ManifestV5 } from '@av/contracts';
 import { WIND_FRAME_LIMIT, parseWindFrame } from '@av/contracts/wind-data';
 import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
 import { PRODUCTS } from '@av/contracts/models';
@@ -120,6 +120,25 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
   }
 }
 
+export async function probeWeatherScalars(client: ApiClient, build: PinnedBuild, signal?: AbortSignal): Promise<void> {
+  if (!WEATHER_LAYER_IDS.every(layer => build.manifest.layers.includes(layer))) return;
+  for (const layer of WEATHER_LAYER_IDS) {
+    const definition = build.manifest.descriptors.layers[layer].definition;
+    if (!definition) continue;
+    invariant(definition.version === 1 && definition.id.length > 0, `Weather definition for ${layer} is incomplete`);
+  }
+  const point = await coveredPoint(client, build, WEATHER_LAYER_IDS, signal);
+  const payload = await client.fieldSeries(build, { ...point, layers: [...WEATHER_LAYER_IDS], signal });
+  for (const frame of payload.frames) {
+    for (const layer of WEATHER_LAYER_IDS) {
+      const sample = frame.layers[layer];
+      invariant(sample, `Weather sample omitted ${layer}`);
+      if (sample.status === 'valid') invariant(typeof sample.value === 'number', `${layer} valid sample has no number`);
+      else invariant(sample.value === null, `${layer} ${sample.status} sample has a number`);
+    }
+  }
+}
+
 const measuredRoutes = ['latest', 'sample', 'samples', 'profile', 'tile', 'provenance'] as const;
 type MeasuredRoute = typeof measuredRoutes[number];
 export interface ProbeReading {
@@ -196,6 +215,7 @@ export async function probeApi(options: {
   const runs = await json(`/v1/models/${options.model}/runs`) as { retained?: Array<{ buildId?: string }> };
   invariant(Array.isArray(runs.retained) && runs.retained.some(item => item.buildId === manifest.buildId), '/runs omitted the latest build');
   await probeSamples(client, build, options.signal);
+  await probeWeatherScalars(client, build, options.signal);
   const provenancePath = `/v1/models/${options.model}/runs/${manifest.buildId}/provenance`;
   const provenance = parseProvenance(await json(provenancePath, MAX_PROVENANCE_BYTES), manifest);
   if (provenance.version === 2) {

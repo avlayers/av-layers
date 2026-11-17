@@ -12,6 +12,7 @@
     "./sparse-coverage": "./src/sparse-coverage.ts",
     "./layers": "./src/layers.ts",
     "./publication": "./src/publication.ts",
+    "./manifest-client": "./src/manifest-client.ts",
     "./wind-data": "./src/wind-data.ts",
     "./point-products": "./src/point-products.ts",
     "./json": "./src/json.ts",

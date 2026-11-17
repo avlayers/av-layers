@@ -1,9 +1,10 @@
 import type { ModelDefinition } from '@av/contracts';
+import type { AuxiliaryRequirements } from '@av/forecast/direct-scalars';
 import type { ResolvableForecastProvider } from '../provider.js';
 import { splitSource } from './source.js';
 
-export function createSplitGribProvider(model: ModelDefinition): ResolvableForecastProvider {
-  const source = splitSource(model);
+export function createSplitGribProvider(model: ModelDefinition, requirements?: AuxiliaryRequirements): ResolvableForecastProvider {
+  const source = splitSource(model, requirements);
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true, retainedGeometryFields: source.modelLevels.length + 1,
     sourceMappingBytesPerCell: source.upstream.nativeGrid ? Uint32Array.BYTES_PER_ELEMENT : 0,

@@ -1,3 +1,4 @@
+import type { ExtraScalarField, PublishedIdentity } from '@av/contracts/manifest-client';
 import type { LayerId } from '@av/contracts/layers';
 import type { ProfileResponse } from '@av/contracts/point-products';
 import type { latestV5Schema, ManifestV5, sampleResponseV5Schema } from '@av/contracts/publication';
@@ -12,6 +13,8 @@ export interface PinnedBuild {
   manifest: ManifestV5;
   templates: Partial<Record<LayerId, string>>;
   expiresAtMs: number;
+  extraScalars?: readonly ExtraScalarField[];
+  publication?: PublishedIdentity;
 }
 
 export interface GeoPoint {

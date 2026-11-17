@@ -1,11 +1,12 @@
 /** Map native arrays to sparse point channels and fixed-width profile records. */
 import {
-  MAX_GRID_CELLS, sparseCoverageLookup, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, isNativeThermalLayer,
+  getBit, MAX_GRID_CELLS, sparseCoverageLookup, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, acceptDirectScalar, isNativeThermalLayer,
   SUPPORT_CUMULUS, SUPPORT_OVERDEVELOPED, SUPPORT_CLOUD_CAPPED,
   type CoverageMask, type LayerId, type SparseCoverage
 } from '@av/contracts';
 import { deriveNativeColumnDiagnostics, type NativeDiagnosticInput, type NativeDiagnosticLevel } from '@av/soaring';
 import { dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
+import { directSurfaceBinding } from './direct-scalars.js';
 import type { AuxField, AuxSurfaceId, NormalizedFrame } from './inputs.js';
 import type { GridField } from './sampler.js';
 import { profileRecordBytes, writeProfileRecord, type ProfileLevelInput } from './profile-pack.js';
@@ -52,19 +53,14 @@ function columnReader(frame: NormalizedFrame, includeLevels = true) {
   return { input, read: readColumn };
 }
 
-const surfaceChannels = {
-  'pbl-height-agl': 'pblHeightM', 'cape-jkg': 'capeJkg',
-  'cloud-cover-total': 'cloudTotalPct', 'cloud-cover-low': 'cloudLowPct',
-  'mslp-hpa': 'mslpPa', 'wind-10m-u': 'u10mMps', 'wind-10m-v': 'v10mMps', 'wind-gust-10m': 'gust10mMps'
-} as const satisfies Partial<Record<LayerId, AuxSurfaceId>>;
-
 export function prepareNativeFields(frame: NormalizedFrame, mask: CoverageMask, layers: readonly LayerId[], coverage?: SparseCoverage) {
   const size = coverage ? coverage.offsets[coverage.offsets.length - 1]! : mask.grid.width * mask.grid.height;
   const fields: Partial<Record<LayerId, GridField>> = {};
+  const rejections: Partial<Record<LayerId, number>> = {};
   const channels = layers.map(layer => {
     const field = { values: new Float32Array(size).fill(NaN), flags: new Uint8Array(size).fill(STATUS_OUTSIDE), ...(coverage ? { coverage } : {}) };
     fields[layer] = field;
-    return { layer, field, source: surfaceChannels[layer as keyof typeof surfaceChannels], supportsLiftFlags: isNativeThermalLayer(layer) };
+    return { layer, field, binding: directSurfaceBinding(layer), supportsLiftFlags: isNativeThermalLayer(layer) };
   });
   const wantsColumn = layers.some(layer => ['thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl', 'bl-mean-wind-u', 'bl-mean-wind-v'].includes(layer));
   const readColumn = columnReader(frame, wantsColumn);
@@ -81,15 +77,18 @@ export function prepareNativeFields(frame: NormalizedFrame, mask: CoverageMask, 
     values['thermal-velocity'] = diagnostic?.thermalVelocityMps ?? null; values['thermal-top-msl'] = diagnostic?.thermalTopM ?? null;
     values['surface-lcl-msl'] = diagnostic?.surfaceLclM ?? null;
     values['bl-mean-wind-u'] = diagnostic?.blMeanWindU ?? null; values['bl-mean-wind-v'] = diagnostic?.blMeanWindV ?? null;
-    for (const { layer, field, source, supportsLiftFlags } of channels) {
-      let value = source ? at(frame.auxSurface?.[source], i) : values[layer] ?? null;
-      if (layer === 'mslp-hpa' && value !== null) value /= 100;
-      field.values[slot] = value ?? NaN;
-      field.flags[slot] = value === null || !Number.isFinite(value) ? STATUS_UNAVAILABLE : STATUS_VALID | (supportsLiftFlags ? support : 0);
+    for (const { layer, field, binding, supportsLiftFlags } of channels) {
+      let value = binding ? at(frame.auxSurface?.[binding.source], i) : values[layer] ?? null;
+      if (value !== null && binding) value *= binding.scale;
+      const accepted = binding ? acceptDirectScalar(layer, value) : { value, invalid: false };
+      if (accepted.invalid && getBit(mask.output, index)) rejections[layer] = (rejections[layer] ?? 0) + 1;
+      const stored = accepted.value;
+      field.values[slot] = stored ?? NaN;
+      field.flags[slot] = stored === null || !Number.isFinite(stored) ? STATUS_UNAVAILABLE : STATUS_VALID | (supportsLiftFlags ? support : 0);
     }
     return support;
   }
-  return { fields, write };
+  return { fields, write, rejections };
 }
 
 interface NativeProfileReader {

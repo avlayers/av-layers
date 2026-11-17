@@ -10,9 +10,10 @@ describe('per-frame scientific summaries', () => {
     const rain: GridField = { values: new Float32Array([0, 2, NaN, NaN, 99]), flags: new Uint8Array([STATUS_VALID, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_UNAVAILABLE, STATUS_OUTSIDE]) };
     const fields: Partial<Record<LayerId, GridField>> = { 'usable-lift-msl': lift, 'usable-lift-agl': lift, 'precip-rate': rain };
     const result = summarizeFields(fields, mask);
-    expect(result['usable-lift-msl']).toEqual({ valid: 2, noLift: 1, unavailable: 1, outside: 0, parcelCrossing: 1, profileTop: 1, pblClosure: 0, min: 100, max: 300, mean: 200 });
-    expect(result['precip-rate']).toEqual({ valid: 2, noLift: 0, unavailable: 2, outside: 0, parcelCrossing: 0, profileTop: 0, pblClosure: 0, min: 0, max: 2, mean: 1 });
+    expect(result['usable-lift-msl']).toEqual({ valid: 2, noLift: 1, unavailable: 1, outside: 0, parcelCrossing: 1, profileTop: 1, pblClosure: 0, invalidValues: 0, noValidOutput: false, min: 100, max: 300, mean: 200 });
+    expect(result['precip-rate']).toEqual({ valid: 2, noLift: 0, unavailable: 2, outside: 0, parcelCrossing: 0, profileTop: 0, pblClosure: 0, invalidValues: 0, noValidOutput: false, min: 0, max: 2, mean: 1 });
     rain.flags.fill(STATUS_UNAVAILABLE);
-    expect(summarizeFields(fields, mask)['precip-rate']).toMatchObject({ valid: 0, unavailable: 4, min: null, max: null, mean: null });
+    expect(summarizeFields(fields, mask)['precip-rate']).toMatchObject({ valid: 0, unavailable: 4, min: null, max: null, mean: null, noValidOutput: true });
+    expect(summarizeFields(fields, mask, undefined, ['precip-rate'], { 'precip-rate': 3 })['precip-rate']).toMatchObject({ invalidValues: 3, valid: 0 });
   });
 });

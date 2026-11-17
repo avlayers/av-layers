@@ -45,11 +45,12 @@ additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
 bundle (MapLibre GL, XC Skies natural basemap, raster previews, and numeric wind
-overlay) at **412,000 B gzip** and each lazy chunk (the on-demand `@av/windgram`
+overlay) at **414,000 B gzip** and each lazy chunk (the on-demand `@av/windgram`
 renderer) at **33,000 B gzip**. The 16 November 2026 baseline measured
 391,946 B startup and 27,336 B lazy; full-horizon preparation measured
 402,953 B startup and 30,006 B lazy, so both caps were raised by that measured
-delta. The timeline figures below remain the 13 November capture.
+delta. The publication reader measured 413,919 B startup on CI. The timeline
+figures below remain the 13 November capture.
 
 ```sh
 pnpm bench:preview --baseline 2f34b65 --channel chrome --frames 40 --delay-ms 40 --out output/timeline-40.json

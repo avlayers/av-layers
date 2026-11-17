@@ -121,6 +121,80 @@ function samplePayload() {
 
 const jsonResponse = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 
+interface ExtendedManifest {
+  frames: Array<Record<string, unknown> & { id: string }>;
+  layers: string[];
+  method: { id: string; hash: string };
+  source: ManifestV5['source'];
+  descriptors: {
+    layers: Record<string, { methodId: string } & Record<string, unknown>>;
+    methods: Record<string, { id?: string; outputs: string[] } & Record<string, unknown>>;
+  };
+  surfaces: Array<{
+    id: string; kind: string; layers: string[];
+    coverage: { id: string; hash: string; maskKey: string; maxZoom: number; gridHash?: string };
+    samples: { channelCount: number; storedCells: number; shards: Array<{ bytes: number }> };
+  }>;
+}
+
+function appendScalar(source: { manifest?: unknown }, mode: 'shared' | 'own') {
+  const payload = structuredClone(source) as { manifest: ExtendedManifest };
+  const manifest = payload.manifest, id = 'cloud-cover-mid';
+  const precipMethod = manifest.descriptors.layers['precip-rate']!.methodId;
+  const methodId = mode === 'own' ? 'native-middle-cloud-v1' : precipMethod;
+  if (mode === 'own') manifest.descriptors.methods[methodId] = { ...structuredClone(manifest.descriptors.methods[precipMethod]!), id: methodId, outputs: [id] };
+  else manifest.descriptors.methods[precipMethod]!.outputs.push(id);
+  manifest.descriptors.layers[id] = {
+    ...structuredClone(manifest.descriptors.layers['precip-rate']!), id, label: 'Middle cloud', quantity: 'cloud-cover-middle', units: '%',
+    methodId, delivery: 'samples-only', palette: undefined, definition: { version: 1, id: 'sample-middle-cloud-v1', kind: 'cloud-cover' }
+  };
+  manifest.layers.push(id);
+  const native = manifest.surfaces.find(surface => surface.kind === 'native')!;
+  native.layers.push(id);
+  const channels = manifest.frames.length * native.layers.length;
+  native.samples.channelCount = channels;
+  native.samples.shards[0]!.bytes = native.samples.storedCells * channels * 5;
+  manifest.method.id = [...new Set(manifest.layers.map(layer => manifest.descriptors.layers[layer]!.methodId))].join('+');
+  return payload;
+}
+
+function extendedSample(manifest: ExtendedManifest, layers: readonly string[], point = { lat: 0.5, lon: 0.5 }, frames?: readonly string[]) {
+  const selected = frames ? manifest.frames.filter(frame => frames.includes(frame.id)) : manifest.frames;
+  return {
+    version: 5 as const, model: 'gfs' as const, buildId, lat: point.lat, lon: point.lon, expiresAt,
+    method: { ...manifest.method }, source: manifest.source,
+    surfaces: manifest.surfaces.map(({ id, kind, layers: surfaceLayers, coverage }) => ({ id, kind, layers: [...surfaceLayers], coverage: { ...coverage } })),
+    frames: selected.map(frame => ({ ...frame, layers: Object.fromEntries(layers.map(layer => [layer, {
+      value: layer === 'precip-rate' ? 7 : 1, status: 'valid' as const, support: 0, interpolated: false,
+      surfaceId: manifest.surfaces.find(surface => surface.layers.includes(layer))?.id ?? 'native'
+    }])) }))
+  };
+}
+
+function extendedProfile(manifest: ExtendedManifest) {
+  const body = profilePayload();
+  body.method = { ...manifest.method };
+  for (const frame of body.frames) delete frame.layers['thermal-velocity'];
+  return body;
+}
+
+function extendedFetch(payload: { manifest: ExtendedManifest }, profile?: ReturnType<typeof profilePayload>) {
+  return vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/catalog')) return jsonResponse({ models: [{ model: 'gfs', available: true, surfaces: payload.manifest.surfaces.map(({ id, kind, layers, coverage }) => ({ id, kind, layers, coverage })) }] });
+    if (url.pathname.endsWith('/latest')) return jsonResponse(payload);
+    const layers = url.searchParams.get('layers')?.split(',') ?? [];
+    const frame = url.searchParams.get('frame')?.split(',') ?? [];
+    if (url.pathname.endsWith('/profile')) return jsonResponse(profile);
+    const points = url.searchParams.get('points')?.split(';').map(pair => {
+      const [lat, lon] = pair.split(',').map(Number);
+      return { lat: lat!, lon: lon! };
+    });
+    if (points) return jsonResponse({ version: 1, model: 'gfs', buildId, expiresAt, points: points.map((point, index) => ({ index, sample: extendedSample(payload.manifest, layers, point, frame) })) });
+    return jsonResponse(extendedSample(payload.manifest, layers, { lat: Number(url.searchParams.get('lat')), lon: Number(url.searchParams.get('lon')) }, frame));
+  });
+}
+
 function client(payload: () => unknown = latestPayload) {
   const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(jsonResponse(payload()));
   return { fetchImpl, client: new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) }) };
@@ -133,6 +207,133 @@ describe('ApiClient v5 pinning', () => {
     expect(build.manifest.layers).toContain('thermal-velocity');
     expect(build.templates).not.toHaveProperty('thermal-velocity');
     expect(Object.keys(build.templates)).toEqual(manifest.layers);
+  });
+
+  it.each(['shared', 'own'] as const)('samples a known field from a publication that appends a sample-only scalar (%s)', async mode => {
+    const payload = appendScalar(mode === 'own' ? profileLatestPayload() : latestPayload(), mode);
+    const profile = mode === 'own' ? extendedProfile(payload.manifest) : undefined;
+    const fetchImpl = extendedFetch(payload, profile);
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const catalog = await api.catalog();
+    expect(JSON.stringify(catalog)).not.toContain('cloud-cover-mid');
+    const build = await api.latest('gfs');
+    expect(build.manifest.layers).toContain('precip-rate');
+    expect(build.manifest.layers).not.toContain('cloud-cover-mid');
+    expect(build.extraScalars?.[0]).toMatchObject({ id: 'cloud-cover-mid', surfaceId: 'native' });
+    if (mode === 'own') {
+      expect(build.publication?.method.id).toContain('native-middle-cloud-v1');
+      expect(build.manifest.method.id).not.toContain('native-middle-cloud-v1');
+    } else expect(build.publication?.method.id).toBe(build.manifest.method.id);
+    const request = { lat: 0.5, lon: 0.5, frames: ['h001'] as const, layers: ['precip-rate'] as const };
+    expect((await api.sample(build, request)).frames[0]?.layers['precip-rate']).toMatchObject({ value: 7, surfaceId: 'native' });
+    expect((await api.samples(build, { points: [{ lat: 0.5, lon: 0.5 }], frames: ['h001'], layers: ['precip-rate'] })).points[0]?.sample.frames[0]?.layers['precip-rate']?.value).toBe(7);
+    expect((await api.fieldSeries(build, request)).frames.map(frame => frame.id)).toEqual(['h001']);
+    if (mode === 'own') expect((await api.profile(build, request)).method.id).toBe(build.publication?.method.id);
+    else expect((await api.pointSeries(build, { lat: 0.5, lon: 0.5 }).load('day')).frames[0]?.layers['precip-rate']?.status).toBe('valid');
+    expect(fetchImpl.mock.calls.some(([input]) => String(input).includes('/sample'))).toBe(true);
+  });
+
+  it('rejects an extended sample whose published method, surfaces, or build differ', async () => {
+    const payload = appendScalar(latestPayload(), 'own');
+    let body = extendedSample(payload.manifest, ['precip-rate']);
+    const fetchImpl = vi.fn<typeof fetch>(async input => jsonResponse(String(input).includes('/latest') ? payload : body));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const build = await api.latest('gfs');
+    const request = { lat: 0.5, lon: 0.5, frames: ['h001'] as const, layers: ['precip-rate'] as const };
+    body = { ...extendedSample(payload.manifest, ['precip-rate']), method: build.manifest.method };
+    await expect(api.sample(build, request)).rejects.toThrow(/method/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    body.method = { ...body.method, hash: hash('9') };
+    await expect(api.sample(build, request)).rejects.toThrow(/method/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    body.surfaces[0]!.coverage.maxZoom = 1;
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    body.buildId = 'other-build';
+    await expect(api.sample(build, request)).rejects.toThrow(/pinned build/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    expect((await api.sample(build, request)).frames[0]?.layers['precip-rate']?.value).toBe(7);
+  });
+
+  it.each(['cell-major-block-shards-v1', 'frame-group-block-shards-v1'] as const)('rejects an extended publication whose original dimensions or method identity are wrong (%s)', async format => {
+    const payload = appendScalar(latestPayload(), 'own');
+    if (format === 'frame-group-block-shards-v1') for (const surface of payload.manifest.surfaces) {
+      const samples = surface.samples as { format?: string; shards: Array<Record<string, unknown>> };
+      samples.format = format;
+      samples.shards = samples.shards.map((shard, blockShard) => ({ ...shard, group: 0, firstFrame: 0, frameCount: payload.manifest.frames.length, blockShard, key: `${prefix}/surfaces/${surface.id}/samples/g0-b${blockShard}.bin` }));
+    }
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(payload));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    expect((await api.latest('gfs')).publication?.surfaces.find(surface => surface.kind === 'native')?.layers).toContain('cloud-cover-mid');
+    const fine = payload.manifest.surfaces.find(surface => surface.kind === 'fine')!;
+    fine.samples.channelCount = 999999;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    fine.samples.channelCount = payload.manifest.frames.length * fine.layers.length;
+    fine.samples.shards[0]!.bytes = -1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    fine.samples.shards[0]!.bytes = fine.samples.storedCells * fine.samples.channelCount * 5;
+    const native = payload.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    native.samples.channelCount = 1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    native.samples.channelCount = payload.manifest.frames.length * native.layers.length;
+    native.samples.shards[0]!.bytes = -1;
+    await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+  });
+
+  it('rejects an extra descriptor or method that does not match its key', async () => {
+    const cases = [
+      (manifest: ExtendedManifest) => { manifest.descriptors.layers['cloud-cover-mid']!.id = 'cloud-cover-high'; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.outputs = []; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.id = 'other-method'; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1'] = { outputs: ['cloud-cover-mid'] }; },
+      (manifest: ExtendedManifest) => { manifest.descriptors.methods['native-middle-cloud-v1']!.outputs = ['precip-rate']; },
+      (manifest: ExtendedManifest) => { manifest.method.id = `${manifest.method.id}+not-published`; }
+    ];
+    const shared = appendScalar(latestPayload(), 'shared');
+    shared.manifest.method.id = `${shared.manifest.method.id}+bogus`;
+    await expect(new ApiClient({ baseUrl: 'https://api.test', fetchImpl: vi.fn<typeof fetch>(async () => jsonResponse(shared)), now: () => Date.parse(created) }).latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    for (const mutate of cases) {
+      const payload = appendScalar(latestPayload(), 'own');
+      mutate(payload.manifest);
+      const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: vi.fn<typeof fetch>(async () => jsonResponse(payload)), now: () => Date.parse(created) });
+      await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
+    }
+  });
+
+  it('rejects a sample whose extra-field layout differs from the pinned publication', async () => {
+    const payload = appendScalar(latestPayload(), 'shared');
+    let body = extendedSample(payload.manifest, ['precip-rate']);
+    const fetchImpl = vi.fn<typeof fetch>(async input => jsonResponse(String(input).includes('/latest') ? payload : body));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
+    const build = await api.latest('gfs');
+    const request = { lat: 0.5, lon: 0.5, frames: ['h001'] as const, layers: ['precip-rate'] as const };
+    const native = () => body.surfaces.find(surface => surface.kind === 'native')!;
+    const fine = () => body.surfaces.find(surface => surface.kind === 'fine')!;
+    native().layers.push('totally-unpublished-field');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers = native().layers.filter(id => id !== 'cloud-cover-mid');
+    fine().layers.push('cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers = native().layers.filter(id => id !== 'cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+    body = extendedSample(payload.manifest, ['precip-rate']);
+    native().layers.push('cloud-cover-mid');
+    await expect(api.sample(build, request)).rejects.toThrow(/surfaces/);
+  });
+
+  it('reports a malformed catalog or batch container without retrying', async () => {
+    const catalogFetch = vi.fn<typeof fetch>(async () => jsonResponse({ models: [{ model: 'gfs', available: true, surfaces: { layers: ['precip-rate'] } }] }));
+    const catalogApi = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: catalogFetch, now: () => Date.parse(created), retryDelayMs: 0 });
+    await expect(catalogApi.catalog()).rejects.toBeInstanceOf(InvalidApiResponseError);
+    expect(catalogFetch).toHaveBeenCalledTimes(1);
+    const payload = appendScalar(latestPayload(), 'shared');
+    const batchFetch = vi.fn<typeof fetch>(async input => jsonResponse(String(input).includes('/latest') ? payload : { points: [null] }));
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: batchFetch, now: () => Date.parse(created), retryDelayMs: 0 });
+    const build = await api.latest('gfs');
+    await expect(api.samples(build, { points: [{ lat: 0.5, lon: 0.5 }], frames: ['h001'], layers: ['precip-rate'] })).rejects.toBeInstanceOf(InvalidApiResponseError);
+    expect(batchFetch).toHaveBeenCalledTimes(2);
   });
 
   it('requires every rendered layer template', async () => {

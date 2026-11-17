@@ -1,9 +1,10 @@
 import type { ModelDefinition } from '@av/contracts';
+import type { AuxiliaryRequirements } from '@av/forecast/direct-scalars';
 import type { ResolvableForecastProvider } from '../provider.js';
 import { indexedSource } from './source.js';
 
-export function createIndexedGribProvider(model: ModelDefinition): ResolvableForecastProvider {
-  const source = indexedSource(model);
+export function createIndexedGribProvider(model: ModelDefinition, requirements?: AuxiliaryRequirements): ResolvableForecastProvider {
+  const source = indexedSource(model, requirements);
   const resolveRun: NonNullable<ResolvableForecastProvider['resolveRun']> = async options => {
     const { discoverPrivateIndexedGribRun } = await import('./discover.js');
     const { run, sourcePin } = await discoverPrivateIndexedGribRun(source, options);

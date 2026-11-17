@@ -32,7 +32,7 @@ it.each(snapshots)('serves retained $model v5 metadata after the point-product r
   expect(get).toHaveBeenCalledTimes(1);
 });
 
-it('preserves the published display label and enforces measurement units', async () => {
+it('preserves the published display label and measurement units', async () => {
   const { retained, read } = retainedFixture(snapshots.find(snapshot => snapshot.model === 'gfs')!);
   const precipitation = LAYERS['precip-rate'];
   const { label, units } = precipitation;
@@ -42,9 +42,21 @@ it('preserves the published display label and enforces measurement units', async
     expect(served.descriptors.layers['precip-rate'].label).toBe(retained.descriptors.layers['precip-rate'].label);
     expect(served.descriptors.layers['precip-rate'].label).not.toBe(precipitation.label);
     precipitation.units = 'cm/h';
-    await expect(read()).rejects.toMatchObject({ status: 503, code: 'publication-invalid' });
+    const retainedUnits = await read();
+    expect(retainedUnits.descriptors.layers['precip-rate'].units).toBe(units);
   } finally {
     precipitation.label = label;
     precipitation.units = units;
   }
+});
+
+it('rejects a retained manifest whose published precipitation units differ', async () => {
+  const source = snapshots.find(item => item.model === 'gfs');
+  if (!source) throw new Error('missing retained GFS snapshot');
+  const snapshot = structuredClone(source);
+  const precipitation = snapshot.descriptors.layers['precip-rate'];
+  if (!precipitation) throw new Error('missing retained precipitation descriptor');
+  precipitation.units = 'cm/h';
+  const { read } = retainedFixture(snapshot);
+  await expect(read()).rejects.toMatchObject({ status: 503, code: 'publication-invalid' });
 });
