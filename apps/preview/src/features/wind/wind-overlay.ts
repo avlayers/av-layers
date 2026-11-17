@@ -2,12 +2,13 @@ import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, quantizedBarbSpeed, type WindSpeedSystem } from '@av/contracts/units';
 import type { Map } from 'maplibre-gl';
 import { WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS, WIND_TRAIL_WIDTH } from '../raster/raster-budget';
-import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 import type { WindPreparedGrid } from '@av/client/wind';
+import type { PreparationBudget, PreparationLease } from '@av/client';
 import { attachWindGl, type WindGl } from './wind-gl';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
 export interface WindOverlayOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
+export interface WindOverlayAllocationOptions { budget?: PreparationBudget }
 interface Particle { lat: number; lon: number; age: number; wind?: ReturnType<WindField['sample']> }
 
 const MAX_PARTICLES = 600, EARTH_RADIUS = 6_371_000, MAX_LAT = 85.05112878, DEG = Math.PI / 180;
@@ -23,10 +24,17 @@ export class WindOverlay {
   private readonly barbCtx: CanvasRenderingContext2D;
   private field: WindField | null = null;
   private prepared: WindPreparedGrid | null = null;
-  private blendFrom: WindField | null = null;
-  private blendStart = 0;
+  private releasePrepared: (() => void) | null = null;
   private gpu = false;
-  private readonly gl: WindGl | null;
+  private gl: WindGl | null;
+  private readonly budget?: PreparationBudget;
+  private canvasLease: PreparationLease | null = null;
+  private canvasBytes = 0;
+  private canvasLimited = false;
+  private glLimited = false;
+  private blockedUsed = 0;
+  private canvasCap = Infinity;
+  private unsubscribeBudget?: () => void;
   private options: WindOverlayOptions = { style: 'trails', visible: true, paused: false, units: 'metric' };
   private particles: Particle[] = [];
   private frame: number | null = null;
@@ -78,12 +86,26 @@ export class WindOverlay {
     this.lastDpr = dpr;
     const showBarbs = this.options.visible && this.options.style !== 'trails', showTrails = this.options.visible && this.options.style !== 'barbs' && !this.gpu;
     this.scale = showTrails ? Math.min(dpr, 1, Math.sqrt((WIND_TRAIL_PIXELS - 1) / (w * h)), 4096 / w, 4096 / h) : 1;
-    const trailW = showTrails ? Math.max(1, Math.floor(w * this.scale)) : 1, trailH = showTrails ? Math.max(1, Math.floor(h * this.scale)) : 1;
+    let trailW = showTrails ? Math.max(1, Math.floor(w * this.scale)) : 1, trailH = showTrails ? Math.max(1, Math.floor(h * this.scale)) : 1;
     const barbBudget = Math.max(1, WIND_CANVAS_PIXELS - trailW * trailH);
     const bScale = showBarbs ? Math.min(dpr, 2, Math.sqrt(barbBudget / (w * h)), 4096 / w, 4096 / h) : 1;
     this.barbScale = bScale >= 1 ? Math.floor(bScale) : bScale;
-    const barbW = showBarbs ? Math.max(1, Math.floor(w * this.barbScale)) : 1, barbH = showBarbs ? Math.max(1, Math.floor(h * this.barbScale)) : 1;
+    let barbW = showBarbs ? Math.max(1, Math.floor(w * this.barbScale)) : 1, barbH = showBarbs ? Math.max(1, Math.floor(h * this.barbScale)) : 1;
     for (const c of [this.trails, this.barbs]) { c.width = 0; c.height = 0; }
+    this.canvasLease?.release(); this.canvasLease = null; this.canvasBytes = 0;
+    let bytes = (trailW * trailH + barbW * barbH) * 4;
+    let lease = bytes <= this.canvasCap ? this.budget?.reserve('wind-display-canvas', bytes) : undefined;
+    this.canvasLimited = Number.isFinite(this.canvasCap);
+    while (this.budget && !lease && (trailW > 1 || trailH > 1 || barbW > 1 || barbH > 1)) {
+      this.canvasLimited = true;
+      trailW = Math.max(1, Math.floor(trailW * 0.75)); trailH = Math.max(1, Math.floor(trailH * 0.75));
+      barbW = Math.max(1, Math.floor(barbW * 0.75)); barbH = Math.max(1, Math.floor(barbH * 0.75));
+      bytes = (trailW * trailH + barbW * barbH) * 4;
+      lease = bytes <= this.canvasCap ? this.budget.reserve('wind-display-canvas', bytes) : undefined;
+    }
+    if (this.budget && !lease) { this.canvasLimited = true; trailW = trailH = barbW = barbH = bytes = 0; }
+    this.canvasLease = lease ?? null; this.canvasBytes = bytes; this.blockedUsed = this.budget?.used ?? 0;
+    this.scale = trailW / w; this.barbScale = barbW / w;
     for (const [c, vis, cw, ch] of [[this.trails, showTrails, trailW, trailH], [this.barbs, showBarbs, barbW, barbH]] as const) {
       c.width = cw; c.height = ch;
       c.style.width = `${this.width}px`; c.style.height = `${this.height}px`; c.style.display = vis ? '' : 'none';
@@ -98,7 +120,9 @@ export class WindOverlay {
   private readonly contextLost = (e: Event): void => { this.lostCanvases.add(e.currentTarget as HTMLCanvasElement); this.syncContext(); };
   private readonly contextRestored = (e: Event): void => { this.lostCanvases.delete(e.currentTarget as HTMLCanvasElement); this.syncContext(); };
 
-  constructor(private readonly map: Map) {
+  constructor(private readonly map: Map, options: WindOverlayAllocationOptions = {}) {
+    this.budget = options.budget;
+    for (const canvas of [this.trails, this.barbs]) { canvas.width = 0; canvas.height = 0; }
     const trailCtx = this.trails.getContext('2d'), barbCtx = this.barbs.getContext('2d');
     if (!trailCtx || !barbCtx) throw new Error('Canvas 2D is unavailable');
     this.trailCtx = trailCtx; this.barbCtx = barbCtx;
@@ -111,40 +135,57 @@ export class WindOverlay {
     map.on('move', this.move); map.on('resize', this.resize);
     map.on('webglcontextlost', this.mapContextLost); map.on('webglcontextrestored', this.mapContextRestored);
     document.addEventListener('visibilitychange', this.visibility);
-    this.gl = attachWindGl(map, ok => { if (this.destroyed) return; this.gpu = ok; this.resize(); this.syncGl(); });
+    const onGlReady = (ok: boolean) => { if (this.destroyed) return; this.gpu = ok; this.resize(); this.syncGl(); };
+    this.gl = attachWindGl(map, onGlReady, this.budget);
+    this.glLimited = !!this.budget && !this.gl && typeof map.addLayer === 'function' && typeof map.once === 'function';
     this.resize();
+    this.unsubscribeBudget = this.budget?.onRelease(() => {
+      if (this.destroyed || !this.budget || !(this.canvasLimited || this.glLimited || this.gl?.limited)) return;
+      if (this.budget.used >= this.blockedUsed) { this.blockedUsed = this.budget.used; return; }
+      if (this.blockedUsed - this.budget.used < 65_536) return;
+      this.canvasCap = Infinity;
+      if (this.glLimited) {
+        this.gl = attachWindGl(map, onGlReady, this.budget);
+        this.glLimited = !this.gl;
+      }
+      this.gl?.holdPressure?.(false);
+      this.resize();
+    });
   }
 
-  install(field: WindField | null, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap' = 'replace'): void {
+  get displayMemory(): { canvasBytes: number; glBytes: number; limited: boolean } {
+    return { canvasBytes: this.canvasBytes, glBytes: this.gl?.bytes ?? 0, limited: this.canvasLimited || this.glLimited || this.gl?.limited === true };
+  }
+
+  relievePressure(): boolean {
+    if (!this.budget || this.destroyed) return false;
+    const before = this.budget.used;
+    this.gl?.holdPressure?.(true);
+    this.gl?.relievePressure?.();
+    if (this.canvasBytes > 8) { this.canvasCap = Math.max(8, Math.floor(this.canvasBytes * 0.56)); this.resize(); }
+    this.blockedUsed = this.budget.used;
+    return this.budget.used < before;
+  }
+
+  install(field: WindField | null, prepared: WindPreparedGrid | null, _mode: 'replace' | 'swap' = 'replace'): void {
     if (this.destroyed) return;
-    if (mode === 'swap' && !prepared && this.field && field && this.field !== field) {
-      this.prepared = null;
-      this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
-      for (const particle of this.particles) particle.wind = undefined;
-      this.barbSamples.clear(); this.syncGl(); this.drawBarbs(); this.schedule(); return;
-    }
-    if (this.field === field && this.prepared === prepared && !this.blendFrom) return;
-    this.blendFrom = null; this.field = field; this.prepared = prepared; this.barbSamples.clear();
-    this.syncGl(); this.resetTrails(); this.drawBarbs(); this.schedule();
+    if (this.field === field && this.prepared === prepared && field) return;
+    const changed = this.prepared !== prepared, previousRelease = this.releasePrepared;
+    const nextRelease = changed ? prepared?.retain?.() ?? null : previousRelease;
+    this.field = field; this.prepared = prepared; this.barbSamples.clear();
+    this.releasePrepared = nextRelease;
+    this.gl?.reset();
+    this.syncGl();
+    if (changed) previousRelease?.();
+    this.resetTrails(); this.drawBarbs(); this.schedule();
   }
 
   setPrepared(prepared: WindPreparedGrid | null): void {
-    if (this.destroyed || this.prepared === prepared) return;
-    this.prepared = prepared;
-    if (prepared && this.options.style !== 'barbs') this.resetTrails();
-    this.syncGl(); this.schedule();
+    if (this.prepared !== prepared) this.install(this.field, prepared);
   }
 
   setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace'): void {
-    if (this.destroyed) return;
-    this.prepared = null;
-    if (mode === 'swap' && this.field && field && this.field !== field) {
-      this.blendFrom = this.field; this.blendStart = performance.now(); this.field = field;
-      for (const particle of this.particles) particle.wind = undefined;
-      this.barbSamples.clear(); this.syncGl(); this.drawBarbs(); this.schedule(); return;
-    }
-    if (this.field === field && !this.blendFrom) return;
-    this.blendFrom = null; this.field = field; this.barbSamples.clear(); this.syncGl(); this.resetTrails(); this.drawBarbs(); this.schedule();
+    this.install(field, null, mode);
   }
 
   setOptions(options: Partial<WindOverlayOptions>): void {
@@ -156,17 +197,21 @@ export class WindOverlay {
     this.syncGl(); this.schedule();
   }
 
-  clear(): void { this.prepared = null; this.setField(null); }
+  clear(): void { this.install(null, null); }
 
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true; this.schedule();
+    this.unsubscribeBudget?.();
     this.map.off('move', this.move); this.map.off('resize', this.resize);
     this.map.off('webglcontextlost', this.mapContextLost); this.map.off('webglcontextrestored', this.mapContextRestored);
-    this.gl?.destroy();
+    this.gl?.reset(); this.gl?.destroy();
     document.removeEventListener('visibilitychange', this.visibility);
-    for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.remove(); }
+    for (const c of [this.trails, this.barbs]) { c.removeEventListener('contextlost', this.contextLost); c.removeEventListener('contextrestored', this.contextRestored); c.width = 0; c.height = 0; c.remove(); }
+    this.canvasLease?.release(); this.canvasLease = null; this.canvasBytes = 0;
+    this.canvasLimited = this.glLimited = false;
     this.field = null; this.prepared = null; this.particles = []; this.barbSamples.clear();
+    this.releasePrepared?.(); this.releasePrepared = null;
   }
 
   private resetTrails(): void {
@@ -228,22 +273,12 @@ export class WindOverlay {
   }
 
   private sampleAt(lat: number, lon: number): ReturnType<WindField['sample']> {
-    const next = this.field!.sample(lat, lon), from = this.blendingFrom();
-    if (!from) return next;
-    const previous = from.sample(lat, lon), t = (performance.now() - this.blendStart) / PLAYBACK_STEP_MS;
-    if (!valid(previous) || !valid(next)) return valid(next) ? next : previous;
-    return { status: next.status, u: previous.u + (next.u - previous.u) * t, v: previous.v + (next.v - previous.v) * t };
-  }
-
-  /** Previous frame while a playback step is still open. The GPU path never calls `sampleAt`, so this is what keeps a finished blend from being uploaded again. */
-  private blendingFrom(): WindField | null {
-    if (this.blendFrom && performance.now() - this.blendStart >= PLAYBACK_STEP_MS) this.blendFrom = null;
-    return this.blendFrom;
+    return this.field!.sample(lat, lon);
   }
 
   private syncGl(): void {
     if (this.prepared) this.gl?.setPrepared(this.prepared);
-    else this.gl?.setFields(this.blendingFrom(), this.field);
+    else this.gl?.setFields(null, this.field);
     this.gl?.setMotion(this.options.paused || this.options.style === 'barbs', !this.options.visible || this.options.style === 'barbs' || !this.field || this.mapLost);
   }
 

@@ -1,15 +1,17 @@
 import { normalizeLon } from '@av/contracts/geometry';
-import type { PinnedBuild } from '@av/client';
+import type { ForecastRequestHandle, ForecastRequestSpec, PinnedBuild, PreparationBudget } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { type WindDataCache, type WindPreparedGrid, WindCapacityError, WindDataSource } from '@av/client/wind';
 import { STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import type { MapBoundsPort, Bounds } from '../map/viewport-policy';
-import { boundsAreaKm2, cameraBounds, coversBounds, createViewportWarmth, FOCUS_DWELL_MS, windBounds } from '../map/viewport-policy';
-import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
+import { cameraBounds, coversBounds } from '../map/viewport-policy';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
 
-export interface WindSchedulerPort { fetch: typeof fetch }
+export interface WindSchedulerPort {
+  fetch: typeof fetch;
+  request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
+}
 export interface WindCachePort {
   isBuildUnavailable(buildId: string): boolean;
   readonly allocatedBytes: number;
@@ -24,6 +26,9 @@ export interface WindSessionOptions {
   readonly lowMemory: boolean;
   readonly scheduler: WindSchedulerPort;
   readonly cache: WindCachePort;
+  readonly budget?: PreparationBudget;
+  readonly selectedPending?: (pending: boolean) => void;
+  readonly relieveDisplay?: () => boolean;
   readonly overlay: { setWindActive(active: boolean, resident: boolean): void };
   readonly field: { install?(field: WindField, prepared: WindPreparedGrid | null, mode: 'replace' | 'swap'): void; setField(field: WindField, mode: 'replace' | 'swap'): void; setPrepared(prepared: WindPreparedGrid | null): void; clear(): void };
   readonly publish: {
@@ -42,14 +47,13 @@ export interface WindSessionOptions {
 }
 
 interface WindView { zoom: number; build: PinnedBuild; frame: string; bounds: Bounds; source: WindDataSource }
-interface WindRequest extends WindView {
+interface WindJob extends WindView {
   controller: AbortController;
-  key: string;
-  core?: Bounds;
-  settled?: 'ready' | 'unavailable';
-  failed?: unknown;
-  done?: Promise<'ready' | 'unavailable'>;
+  status: 'loading' | 'ready';
+  heights: Set<WindHeight>;
+  done: Promise<void>;
 }
+interface Failure { attempts: number; retryAt: number | null }
 
 export interface WindSession {
   update(): void;
@@ -57,363 +61,344 @@ export interface WindSession {
   clear(): void;
   setPlaying(playing: boolean): void;
   heightChanged(previous: WindHeight): void;
+  beforeRasterReveal(target: { build: PinnedBuild; frame: string }): void;
+  readonly ready: ReadonlyMap<string, ReadonlySet<WindHeight>>;
+  readonly staged: { build: PinnedBuild; frame: string; height: WindHeight } | null;
+  readonly failed: ReadonlyMap<string, { attempts: number; retryAt: number | null }>;
+  readonly memory: { numericBytes: number; preparedBytes: number; fieldSamplerBytes: number; horizonNumericRemaining: number | null; budgetUsed: number; budgetLimit: number | null };
   readonly displayed: boolean;
   readonly resident: boolean;
   readonly preparation: { promised: number; admitted: number; ready: number; limited: boolean };
   readonly current: { build: PinnedBuild; frame: string; source: WindDataSource } | null;
-  readonly installed: { build: PinnedBuild; frame: string; source: WindDataSource; height: WindHeight } | null;
+  readonly installed: { build: PinnedBuild; frame: string; source: WindDataSource; height: WindHeight; isOverview: boolean } | null;
   destroy(): void;
 }
 
-/** Numeric wind acquisition, blending and retention for the preview map. */
 export function createWindSession(options: WindSessionOptions): WindSession {
   const { map, publish, field, state } = options;
-  let windView: WindView | null = null, windRequest: WindRequest | null = null, windPrefetch: WindRequest | null = null, installedWind: WindView | null = null;
-  let windDisplayed = false, windLoading = false, height: WindHeight = 'surface', installedHeight: WindHeight = 'surface';
-  let fillTimer: ReturnType<typeof setTimeout> | null = null, prepTimer: ReturnType<typeof setTimeout> | null = null, queuedWindLoad: (() => void) | null = null, destroyed = false;
-  let acquireStatus: WindStatus = 'unavailable';
-  const windHeld = new Map<string, WindRequest>();
-  const failures = new Map<string, number>();
-  let admittedWindow: number | null = null, capacityBlocked = false, blockedBytes = 0;
-  const warmth = createViewportWarmth();
-  if ('onRelease' in options.cache) options.cache.onRelease = () => { if (capacityBlocked) scheduleFill(0); };
-  function fullHorizon(): boolean {
-    const bounds = map.getBounds();
-    return warmth.update(boundsAreaKm2([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]));
-  }
-  const isCapacity = (error: unknown): boolean => error instanceof WindCapacityError || (error instanceof RangeError && /byte budget/.test(error.message));
-  const failureKey = (build: PinnedBuild, frame: string): string => `${build.manifest.buildId}:${frame}`;
-  const cooling = (build: PinnedBuild, frame: string): boolean => (failures.get(failureKey(build, frame)) ?? 0) > Date.now();
-  function recordFailure(build: PinnedBuild, frame: string, capacity: boolean): void {
-    if (failures.size >= 256) failures.delete(failures.keys().next().value!);
-    failures.set(failureKey(build, frame), Date.now() + (capacity ? 1_000 : 30_000));
-  }
-  function orderedFrames(build: PinnedBuild, selectedFrame: string): string[] {
-    const frames = renderedFrames(build.manifest).map(frame => frame.id), index = frames.indexOf(selectedFrame);
-    return frames.slice().sort((a, b) => Math.abs(frames.indexOf(a) - index) - Math.abs(frames.indexOf(b) - index));
-  }
-  function retainedCount(): number {
-    const { build, selectedFrame } = state();
-    if (!build || !selectedFrame) return windHeld.size;
-    let count = windHeld.size;
-    if (!windHeld.has(selectedFrame)) count++;
-    return count;
-  }
-  function evictFarthest(limit: number): boolean {
-    const { build, selectedFrame } = state();
-    if (!build || !selectedFrame) return false;
-    const keep = new Set(orderedFrames(build, selectedFrame).slice(0, limit)), evicted: [string, WindRequest][] = [];
-    for (const [frame, held] of windHeld) {
-      if (keep.has(frame) || held === windView || held === installedWind || held === windRequest || held === windPrefetch) continue;
-      windHeld.delete(frame); evicted.push([frame, held]);
+  const jobs = new Map<string, WindJob>(), failures = new Map<string, Failure>();
+  const parked = new Map<string, WindJob>();
+  const inflight = new Set<WindJob>();
+  let build: PinnedBuild | null = null, installed: WindJob | null = null, installedHeight: WindHeight = 'surface';
+  let timer: ReturnType<typeof setTimeout> | null = null, timerAt = 0, preparationTimer: ReturnType<typeof setTimeout> | null = null, expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false, limited = false, blockedBytes = 0, direction = 1, lastFrame: string | null = null, viewKey = '';
+  let pending: boolean | undefined;
+  const isCapacity = (error: unknown) => error instanceof WindCapacityError || (error instanceof Error && ('code' in error && error.code === 'capacity' || error instanceof RangeError && /byte budget/.test(error.message)));
+  const bytes = () => options.budget?.used ?? options.cache.allocatedBytes;
+  const capacity = (frame: string) => {
+    let reclaimed = false;
+    const prior = parked.entries().next().value;
+    if (prior || frame === state().selectedFrame) {
+      const distant = [...ordered()].reverse().map(key => jobs.get(key)).find(job => job && job.frame !== frame && job !== installed && job.status === 'ready');
+      const victim = prior?.[1] ?? distant;
+      if (victim) {
+        if (prior) parked.delete(prior[0]); else jobs.delete(victim.frame);
+        dispose(victim); reclaimed = true;
+      }
     }
-    for (const [, held] of evicted) if (!retained(held)) held.source.dispose();
-    return evicted.length > 0;
+    options.cache.evictUnreferenced?.();
+    limited = !(reclaimed || options.relieveDisplay?.()); blockedBytes = bytes();
+    if (!limited) schedule();
+  };
+  const active = () => {
+    const s = state();
+    return !destroyed && s.visible && s.mapReady && !s.expired && !s.mapFailed && !s.aborted && !!s.build?.manifest.mapData && s.build.expiresAtMs > Date.now() && !!s.selectedFrame;
+  };
+  const selected = () => { const s = state(); return s.selectedFrame ? jobs.get(s.selectedFrame) : undefined; };
+  const readyAt = (job: WindJob | undefined, height: WindHeight) => !!job && job.status === 'ready' && job.heights.has(height) && (typeof job.source.hasPrepared !== 'function' || job.source.hasPrepared(height)) && (typeof job.source.hasField !== 'function' || job.source.hasField(height));
+  const usableAt = (job: WindJob | undefined, height?: WindHeight): boolean => {
+    const s = state();
+    return !!job && !!s.build && !s.expired && job.build === s.build && s.build.expiresAtMs > Date.now()
+      && (height === undefined || readyAt(job, height)) && coversBounds(job.bounds, cameraBounds(map));
+  };
+  function setPending(value: boolean): void {
+    if (pending === value) return;
+    pending = value; options.selectedPending?.(value);
   }
-  function schedulePreparation(delay = 0): void {
-    if (destroyed || prepTimer !== null) return;
-    prepTimer = setTimeout(() => { prepTimer = null; prepareMissing(); }, delay);
+  function schedule(delay = 0): void {
+    const at = Date.now() + Math.max(0, delay);
+    if (destroyed || timer !== null && timerAt <= at) return;
+    if (timer !== null) clearTimeout(timer);
+    timerAt = at;
+    timer = setTimeout(() => { timer = null; pump(); }, Math.max(0, delay));
   }
-  function prepareMissing(): void {
-    if (destroyed) return;
-    const { build, selectedFrame, height } = state();
-    if (!build || !selectedFrame) return;
-    const limit = admittedWindow ?? Number.POSITIVE_INFINITY;
-    const held = orderedFrames(build, selectedFrame).slice(0, limit).map(id => windHeld.get(id))
-      .find(value => value && typeof value.source.hasPrepared === 'function' && !value.source.hasPrepared(height));
-    if (!held) return;
-    held.source.prepare?.(height);
-    schedulePreparation(0);
+  function cancelTimers(): void {
+    if (timer !== null) clearTimeout(timer);
+    if (preparationTimer !== null) clearTimeout(preparationTimer);
+    if (expiryTimer !== null) clearTimeout(expiryTimer);
+    timer = preparationTimer = expiryTimer = null;
   }
-  function unblockIfReleased(): void {
-    const { build } = state();
-    if (!capacityBlocked) return;
-    const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
-    if (options.cache.allocatedBytes >= blockedBytes && reclaimed === 0) return;
-    const promised = build ? renderedFrames(build.manifest).length : 0;
-    capacityBlocked = false;
-    if (admittedWindow !== null) admittedWindow = admittedWindow + 1 >= promised ? null : admittedWindow + 1;
+  function clearField(): void {
+    field.clear(); installed = null; publish.displayed(false); publish.quality(false); publish.pointWind();
   }
-  const retiring = new Map<WindView, ReturnType<typeof setTimeout>>();
-
-  const hasWindData = (): boolean => Boolean(state().build?.manifest.mapData);
-  const retained = (view: WindView): boolean =>
-    windView === view || windRequest === view || windPrefetch === view || retiring.has(view) || [...windHeld.values()].includes(view as WindRequest);
-
-  function dropRetired(): void {
-    for (const [view, timer] of retiring) { clearTimeout(timer); view.source.dispose(); }
-    retiring.clear();
+  function dispose(job: WindJob): void {
+    if (installed === job) clearField();
+    job.controller.abort();
+    job.source.dispose();
   }
-  function retire(view: WindView): void {
-    if (retiring.has(view)) return;
-    retiring.set(view, setTimeout(() => {
-      retiring.delete(view);
-      if (!retained(view)) view.source.dispose();
-    }, PLAYBACK_STEP_MS + 50));
+  function reset(): void {
+    cancelTimers();
+    clearField();
+    for (const job of jobs.values()) dispose(job);
+    for (const job of parked.values()) dispose(job);
+    parked.clear();
+    jobs.clear(); failures.clear(); limited = false; blockedBytes = 0; build = null; lastFrame = null; viewKey = '';
+    setPending(false); options.overlay.setWindActive(false, false); publish.status('unavailable'); publish.reservation();
   }
-  function releasePrefetch(): void {
-    const prefetch = windPrefetch;
-    windPrefetch = null;
-    if (!prefetch) return;
-    prefetch.controller.abort();
-    if (!retained(prefetch)) prefetch.source.dispose();
-  }
-  function cancelFill(): void {
-    if (fillTimer !== null) { clearTimeout(fillTimer); fillTimer = null; }
-  }
-  function setStatus(status: WindStatus): void { publish.status(status); }
-
-  function setField(mode: 'replace' | 'swap'): void {
-    const view = windView;
-    if (!view) return;
-    if (mode === 'swap' && installedWind === view) return;
-    const previous = mode === 'swap' ? installedWind : null;
-    height = state().height;
-    installedHeight = height;
-    const prepared = typeof view.source.prepare === 'function' ? view.source.prepare(height) : null;
-    const installed = typeof view.source.field === 'function' ? view.source.field(height) : {
-      sample: (lat: number, lon: number) => {
-        const sample = view.source.sample(lat, normalizeLon(lon), height);
-        const status = sample.status === 'valid' ? STATUS_VALID : sample.status === 'no-lift' ? STATUS_NO_LIFT : sample.status === 'outside' ? STATUS_OUTSIDE : STATUS_UNAVAILABLE;
-        return { ...sample, status };
-      }
-    };
-    if (field.install) field.install(installed, prepared, mode);
-    else { field.setField(installed, mode); field.setPrepared(prepared); }
-    installedWind = view; schedulePreparation(0);
-    windDisplayed = true;
-    publish.displayed(true);
-    if (previous && previous !== view) retire(previous);
-  }
-
-  function reconcile(): void {
-    if (destroyed) return;
-    const displayed = options.displayedRaster();
-    const build = state().build;
-    const sameBuild = Boolean(windView && windView.build === build);
-    const aligned = Boolean(sameBuild && windView!.frame === state().selectedFrame && (!displayed || displayed.build === windView!.build && displayed.frame === windView!.frame));
-    if (aligned) setField(installedWind && installedWind.build === windView!.build ? 'swap' : 'replace');
-    else if (!sameBuild && windDisplayed) { field.clear(); windDisplayed = false; installedWind = null; publish.displayed(false); }
-    publish.quality(!!(aligned && windView?.source.isOverview));
-    if (aligned) setStatus('ready');
-    else if (acquireStatus === 'unavailable' || options.replacementFailed()) setStatus('unavailable');
-    else if (acquireStatus === 'loading' || windView) setStatus('loading');
-    publish.reservation();
-    publish.pointWind();
-  }
-
-  function dropUnusable(): void {
-    const previous = windView;
-    windView = null; installedWind = null; windDisplayed = false;
-    field.clear(); publish.displayed(false);
-    if (previous && !retained(previous)) previous.source.dispose();
-  }
-
-  function cancelRequest(): void {
-    const request = windRequest;
-    windRequest = null; queuedWindLoad = null;
-    request?.controller.abort();
-    if (request && !retained(request)) request.source.dispose();
-  }
-
-  function clear(): void {
-    if (destroyed) return;
-    cancelFill();
-    for (const view of windHeld.values()) if (view !== windView && view !== windRequest) view.source.dispose();
-    windHeld.clear();
-    failures.clear();
-    admittedWindow = null; capacityBlocked = false; blockedBytes = 0;
-    if (prepTimer !== null) { clearTimeout(prepTimer); prepTimer = null; }
-    releasePrefetch(); dropRetired(); cancelRequest();
-    if (installedWind && installedWind !== windView) installedWind.source.dispose();
-    windView?.source.dispose(); windView = null; installedWind = null; windDisplayed = false;
-    acquireStatus = 'unavailable';
-    field.clear(); publish.quality(false); publish.displayed(false); setStatus('unavailable'); publish.reservation(); publish.pointWind();
-  }
-
-  function scheduleFill(delay = FOCUS_DWELL_MS): void {
-    if (destroyed || fillTimer !== null || windPrefetch || options.lowMemory) return;
-    fillTimer = setTimeout(() => { fillTimer = null; ensurePrefetch(); }, delay);
-  }
-
-  function ensurePrefetch(): void {
-    const { build, selectedFrame, visible, mapReady, expired, mapFailed } = state();
-    if (destroyed || windPrefetch || options.lowMemory || !visible || !hasWindData() || !mapReady || !build || !selectedFrame || expired || mapFailed || !fullHorizon()) return;
-    unblockIfReleased();
-    const frames = renderedFrames(build.manifest);
-    const ordered = orderedFrames(build, selectedFrame);
-    const limit = admittedWindow ?? frames.length;
-    const frame = ordered
-      .filter(id => id !== selectedFrame && id !== windView?.frame && id !== windRequest?.frame && !windHeld.has(id) && !cooling(build, id))
-      .find(id => ordered.findIndex(item => item === id) < limit);
-    if (!frame) return;
-    const bounds = windBounds(map, options.lowMemory);
-    const request: WindRequest = {
-      zoom: map.getZoom(), build, frame, bounds, core: cameraBounds(map), key: `prefetch:${frame}`, controller: new AbortController(),
-      source: new WindDataSource(options.apiBaseUrl, {
-        fetchImpl: (input, init) => options.scheduler.fetch(input, { ...init, priority: 'low' } as RequestInit),
-        cache: options.cache as WindDataCache, coalesceSpans: true
-      })
-    };
-    windPrefetch = request;
-    const done = request.source.load({ ...request, signal: request.controller.signal }).then(status => { request.settled = status; return status; }, error => { request.failed = error; throw error; });
-    request.done = done;
-    void done.then(status => {
-      if (windPrefetch !== request) return;
-      windPrefetch = null;
-      if (status === 'ready') {
-        const admitted = request.source.admitted;
-        if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
-        if (typeof request.source.prepare === 'function') request.source.prepare(state().height);
-        schedulePreparation(0);
-        failures.delete(failureKey(request.build, request.frame));
-        windHeld.set(request.frame, request); scheduleFill(0);
-      } else {
-        recordFailure(request.build, request.frame, false);
-        if (!retained(request)) request.source.dispose();
-        scheduleFill(FOCUS_DWELL_MS);
-      }
-    }, error => {
-      let capacity = false;
-      if (!request.controller.signal.aborted) {
-        capacity = isCapacity(error);
-        if (capacity) {
-          const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
-          if (!reclaimed) {
-            capacityBlocked = true; blockedBytes = options.cache.allocatedBytes;
-            admittedWindow = Math.max(1, retainedCount());
-            evictFarthest(admittedWindow);
-          }
-        } else recordFailure(request.build, request.frame, false);
-      }
-      if (windPrefetch === request) windPrefetch = null;
-      if (!retained(request)) request.source.dispose();
-      if (!capacity || !capacityBlocked) scheduleFill(FOCUS_DWELL_MS);
+  function ordered(): string[] {
+    const s = state();
+    if (!s.build || !s.selectedFrame) return [];
+    const frames = renderedFrames(s.build.manifest).map(frame => frame.id), index = frames.indexOf(s.selectedFrame);
+    if (index < 0) return [];
+    return frames.slice().sort((a, b) => {
+      const da = frames.indexOf(a) - index, db = frames.indexOf(b) - index;
+      return Math.abs(da) - Math.abs(db) || (db * direction - da * direction);
     });
   }
-
-  function watch(request: WindRequest, work?: Promise<'ready' | 'unavailable'>): void {
-    windRequest = request;
-    const run = async (): Promise<void> => {
-      windLoading = true;
-      const retain = () => Boolean(windView && windView.build === request.build && windView.frame === request.frame && coversBounds(windView.bounds, request.bounds));
-      const pending = work ?? (request.done = request.source.load({ ...request, signal: request.controller.signal }));
-      try {
-        let status: 'ready' | 'unavailable';
-        try { status = await pending; }
-        catch (error) {
-          if (!isCapacity(error) || request.controller.signal.aborted) throw error;
-          releasePrefetch();
-          if (!windView || retain()) throw error;
-          for (const held of windHeld.values()) if (held !== windView) held.source.dispose();
-          windHeld.clear();
-          dropRetired(); windView.source.dispose(); windView = null; windDisplayed = false; installedWind = null; field.clear(); publish.displayed(false);
-          status = await request.source.load({ ...request, signal: request.controller.signal });
-        }
-        if (destroyed || windRequest !== request || request.controller.signal.aborted) return;
-        if (status === 'ready') {
-          const previous = windView;
-          const admitted = request.source.admitted;
-          if (admitted) request.bounds = [admitted[0], admitted[1], admitted[2], admitted[3]];
-          windView = request;
-          windHeld.set(request.frame, request);
-          if (previous && previous !== request && previous.frame !== request.frame && previous.build === request.build) windHeld.set(previous.frame, previous as WindRequest);
-          else if (previous && previous !== request && (previous !== installedWind || !(windDisplayed && previous.build === request.build))) {
-            if (previous === installedWind) installedWind = null;
-            if (!retained(previous)) previous.source.dispose();
-          }
-          acquireStatus = 'ready'; setStatus('ready');
-        } else {
-          const keep = retain();
-          acquireStatus = keep ? 'ready' : 'unavailable';
-          setStatus(acquireStatus);
-          if (!keep) { recordFailure(request.build, request.frame, false); dropUnusable(); }
-        }
-        reconcile();
-        if (status === 'ready') scheduleFill();
-      } catch {
-        if (windRequest === request && !request.controller.signal.aborted) {
-          const keep = retain(); acquireStatus = keep ? 'ready' : 'unavailable'; setStatus(acquireStatus); if (!keep) dropUnusable(); reconcile();
-        }
-      } finally {
-        if (windRequest === request) windRequest = null;
-        if (!retained(request)) request.source.dispose();
-        windLoading = false;
-        if (!destroyed && acquireStatus !== 'ready') scheduleFill(FOCUS_DWELL_MS);
-        const next = queuedWindLoad; queuedWindLoad = null; next?.();
+  function prepare(job: WindJob, height: WindHeight): boolean {
+    if (readyAt(job, height)) return true;
+    try {
+      const prepared = job.source.prepare?.(height);
+      if (!prepared) {
+        jobs.delete(job.frame); dispose(job); recordFailure(job.frame); return false;
       }
-    };
-    if (windLoading) queuedWindLoad = () => { void run(); };
-    else void run();
+      job.source.field?.(height);
+      job.heights.add(height);
+      failures.delete(job.frame);
+      return true;
+    } catch (error) {
+      if (isCapacity(error)) { capacity(job.frame); return false; }
+      jobs.delete(job.frame); dispose(job); recordFailure(job.frame); return false;
+    }
   }
-
+  function install(job: WindJob, height: WindHeight): boolean {
+    if (!readyAt(job, height)) return false;
+    try {
+      const prepared = job.source.prepare(height);
+      if (!prepared) return false;
+      const sampler = typeof job.source.field === 'function' ? job.source.field(height) : {
+        sample: (lat: number, lon: number) => {
+          const sample = job.source.sample(lat, normalizeLon(lon), height);
+          const status = sample.status === 'valid' ? STATUS_VALID : sample.status === 'no-lift' ? STATUS_NO_LIFT : sample.status === 'outside' ? STATUS_OUTSIDE : STATUS_UNAVAILABLE;
+          return { ...sample, status };
+        }
+      };
+      if (field.install) field.install(sampler, prepared, 'replace');
+      else { field.setField(sampler, 'replace'); field.setPrepared(prepared); }
+      installed = job; installedHeight = height;
+      publish.displayed(true); publish.quality(job.source.isOverview === true); publish.pointWind();
+      return true;
+    } catch (error) {
+      if (!isCapacity(error)) throw error;
+      capacity(job.frame); return false;
+    }
+  }
+  function reconcile(): void {
+    if (destroyed) return;
+    const s = state(), raster = options.displayedRaster(), job = selected();
+    if (installed && (installedHeight !== s.height || !usableAt(installed))) clearField();
+    const matches = !!raster && raster.build === s.build && raster.frame === s.selectedFrame;
+    if (matches && usableAt(job, s.height) && job && (installed !== job || installedHeight !== s.height)) {
+      if (installed) clearField();
+      install(job, s.height);
+    }
+    const available = usableAt(job, s.height);
+    const failure = s.selectedFrame ? failures.get(s.selectedFrame) : undefined;
+    setPending(active() && !available && !limited && (!failure || job?.status === 'loading'));
+    publish.status(options.replacementFailed() || failure ? 'unavailable' : available ? 'ready' : active() ? 'loading' : 'unavailable');
+    options.overlay.setWindActive(active(), jobs.size > 0);
+    publish.reservation();
+  }
+  function schedulePreparation(): void {
+    if (destroyed || preparationTimer !== null || limited) return;
+    preparationTimer = setTimeout(() => {
+      preparationTimer = null;
+      if (!active()) return;
+      const height = state().height;
+      const job = ordered().map(frame => jobs.get(frame)).find(value => value?.status === 'ready' && !readyAt(value, height));
+      if (!job) return;
+      if (prepare(job, height)) { reconcile(); schedulePreparation(); }
+    }, 0);
+  }
+  function recordFailure(frame: string): void {
+    const attempts = (failures.get(frame)?.attempts ?? 0) + 1;
+    const retryAt = attempts >= 4 ? null : Date.now() + 30_000;
+    failures.set(frame, { attempts, retryAt });
+    if (retryAt !== null) schedule(retryAt - Date.now());
+  }
+  function start(frame: string, foreground: boolean): void {
+    const s = state();
+    if (!s.build || inflight.size >= 8) return;
+    const bounds = cameraBounds(map), controller = new AbortController();
+    const source = new WindDataSource(options.apiBaseUrl, {
+      fetchImpl: foreground ? options.scheduler.fetch : (input, init) => options.scheduler.fetch(input, { ...init, priority: 'low' } as RequestInit),
+      ...(options.scheduler.request ? { request: (spec: ForecastRequestSpec) => options.scheduler.request!(spec) } : {}),
+      cache: options.cache as WindDataCache, budget: options.budget, priority: foreground ? 'foreground' : 'background',
+      horizon: renderedFrames(s.build.manifest).length, overviewForHorizon: true, coalesceSpans: true
+    });
+    const job: WindJob = { zoom: map.getZoom(), build: s.build, frame, bounds, controller, source, status: 'loading', heights: new Set(), done: Promise.resolve() };
+    jobs.set(frame, job); inflight.add(job);
+    job.done = source.load({ build: job.build, frame, bounds, core: bounds, signal: controller.signal }).then(status => {
+      if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
+      if (status === 'ready') {
+        job.status = 'ready';
+        if (source.admitted) job.bounds = [...source.admitted] as Bounds;
+      } else {
+        jobs.delete(frame); source.dispose(); recordFailure(frame);
+      }
+    }, error => {
+      if (jobs.get(frame) !== job || controller.signal.aborted || destroyed) return;
+      jobs.delete(frame); source.dispose();
+      if (isCapacity(error)) {
+        capacity(frame);
+      } else recordFailure(frame);
+    }).finally(() => {
+      inflight.delete(job);
+      if (destroyed || build !== job.build || !active()) return;
+      if (controller.signal.aborted) { schedule(); return; }
+      const current = selected();
+      if (current?.status === 'ready') prepare(current, state().height);
+      reconcile(); schedule(); schedulePreparation();
+    });
+  }
+  function pump(): void {
+    if (!active()) { setPending(false); return; }
+    const s = state(), frames = ordered(), current = selected();
+    if (!current && s.selectedFrame) {
+      const failure = failures.get(s.selectedFrame);
+      if (!limited && (!failure || failure.retryAt !== null && failure.retryAt <= Date.now())) start(s.selectedFrame, true);
+    }
+    const selectedJob = selected();
+    if (selectedJob?.status === 'ready' && !readyAt(selectedJob, s.height)) prepare(selectedJob, s.height);
+    reconcile();
+    const selectedFailure = s.selectedFrame ? failures.get(s.selectedFrame) : undefined;
+    if (!limited && (readyAt(selected(), s.height) || !selected() && selectedFailure && (selectedFailure.retryAt === null || selectedFailure.retryAt > Date.now()))) {
+      let background = [...jobs.values()].filter(job => job.status === 'loading' && job.frame !== s.selectedFrame).length;
+      for (const frame of frames) {
+        if (background >= 6) break;
+        const failure = failures.get(frame);
+        if (jobs.has(frame) || failure && (failure.retryAt === null || failure.retryAt > Date.now())) continue;
+        start(frame, false); background++;
+      }
+    }
+    schedulePreparation();
+    const deadlines = [...failures.values()].flatMap(failure => failure.retryAt !== null && failure.retryAt > Date.now() ? [failure.retryAt] : []);
+    if (deadlines.length && !limited) schedule(Math.min(...deadlines) - Date.now());
+  }
   function update(): void {
     if (destroyed) return;
-    const { build, selectedFrame, visible, mapReady, expired, mapFailed, aborted } = state();
-    if (!visible || !hasWindData()) { cancelRequest(); releasePrefetch(); publish.reservation(); return; }
-    if (!mapReady || !build || !selectedFrame || expired || mapFailed || aborted) return;
-    if (options.cache.isBuildUnavailable(build.manifest.buildId)) { clear(); return; }
-    if (admittedWindow !== null) evictFarthest(admittedWindow);
-    const camera = cameraBounds(map), view = windBounds(map, options.lowMemory), identity = windView;
-    const covered = (candidate: WindView) => (candidate.source.isOverview === false || map.getZoom() <= candidate.zoom) && coversBounds(candidate.bounds, camera);
-    for (const [frame, held] of windHeld) if (held.build !== build || !covered(held)) { windHeld.delete(frame); if (!retained(held)) held.source.dispose(); }
-    if (identity && identity.build === build && identity.frame === selectedFrame && covered(identity)) {
-      cancelRequest(); acquireStatus = 'ready'; setStatus('ready'); reconcile(); scheduleFill(); return;
+    const s = state();
+    if (!active() || !s.build || !s.selectedFrame) { reset(); return; }
+    const camera = cameraBounds(map);
+    if (build && build !== s.build) reset();
+    if (!build) {
+      const selectedBuild = s.build;
+      const expire = () => {
+        if (build !== selectedBuild) return;
+        const remaining = selectedBuild.expiresAtMs - Date.now();
+        if (remaining <= 0) reset();
+        else expiryTimer = setTimeout(expire, Math.min(2_147_483_647, remaining));
+      };
+      expiryTimer = setTimeout(expire, Math.min(2_147_483_647, selectedBuild.expiresAtMs - Date.now()));
     }
-    cancelFill();
-    if (windPrefetch && !covered(windPrefetch)) releasePrefetch();
-    const held = windHeld.get(selectedFrame);
-    if (held && held.build === build && covered(held) && held.done) {
-      windHeld.delete(selectedFrame); cancelRequest();
-      watch(held, held.settled ? Promise.resolve(held.settled) : held.done); return;
+    build = s.build;
+    const nextView = `${map.getZoom()}:${camera.join(',')}`;
+    if (viewKey && viewKey !== nextView) { failures.clear(); limited = false; blockedBytes = 0; }
+    viewKey = nextView;
+    const fits = (job: WindJob) => job.build === s.build && coversBounds(job.bounds, camera) && (!job.source.isOverview || map.getZoom() <= job.zoom);
+    if ([...jobs.values()].some(job => !fits(job)) || !jobs.size && [...parked.values()].some(fits)) {
+      const restored = [...parked].filter(([, job]) => fits(job));
+      for (const [frame, job] of parked) if (!restored.some(([key]) => key === frame)) dispose(job);
+      parked.clear();
+      for (const [frame, job] of jobs) {
+        if (installed === job && !fits(job)) clearField();
+        if (job.status === 'ready') parked.set(frame, job); else dispose(job);
+      }
+      jobs.clear();
+      for (const [frame, job] of restored) jobs.set(frame, job);
     }
-    const prefetch = windPrefetch;
-    if (prefetch && prefetch.build === build && prefetch.frame === selectedFrame && covered(prefetch) && prefetch.done) {
-      windPrefetch = null; cancelRequest();
-      watch(prefetch, prefetch.settled ? Promise.resolve(prefetch.settled) : prefetch.done); return;
+    if (lastFrame !== s.selectedFrame) {
+      const previousSource = lastFrame ? jobs.get(lastFrame)?.source as (WindDataSource & { setPriority?: (priority: 'foreground' | 'background') => void }) | undefined : undefined;
+      previousSource?.setPriority?.('background');
+      const frames = renderedFrames(s.build.manifest).map(frame => frame.id), previous = lastFrame ? frames.indexOf(lastFrame) : -1, next = frames.indexOf(s.selectedFrame);
+      if (previous >= 0 && next >= 0 && previous !== next) direction = next > previous ? 1 : -1;
+      lastFrame = s.selectedFrame;
+      if (!selected()) {
+        const loading = [...jobs.values()].filter(job => job.status === 'loading');
+        if (loading.length > 6) {
+          const victim = [...ordered()].reverse().map(frame => jobs.get(frame)).find(job => job?.status === 'loading' && job !== installed);
+          if (victim) { jobs.delete(victim.frame); dispose(victim); }
+        }
+      }
+      if (!selected()) { limited = false; blockedBytes = 0; }
+      selected()?.source.promote?.();
     }
-    const key = JSON.stringify([build.manifest.model, build.manifest.buildId, selectedFrame, view, map.getZoom()]);
-    if (key === windRequest?.key) return;
-    if (identity && identity.build !== build) clear();
-    else cancelRequest();
-    acquireStatus = 'loading';
-    setStatus('loading');
-    const request: WindRequest = {
-      zoom: map.getZoom(), build, frame: selectedFrame, bounds: view, core: camera, key, controller: new AbortController(),
-      source: new WindDataSource(options.apiBaseUrl, { fetchImpl: options.scheduler.fetch, cache: options.cache as WindDataCache, coalesceSpans: true })
-    };
-    watch(request);
+    if (timer !== null) { clearTimeout(timer); timer = null; }
+    pump();
   }
-
+  const released = () => {
+    if (!limited || destroyed) return;
+    const reclaimed = options.cache.evictUnreferenced?.() ?? 0;
+    if (bytes() >= blockedBytes && reclaimed === 0) return;
+    limited = false; schedule();
+  };
+  if ('onRelease' in options.cache) options.cache.onRelease = released;
+  const unsubscribe = options.budget?.onRelease(released);
   return {
-    update, reconcile, clear,
-    setPlaying(playing: boolean) { scheduleFill(playing ? 0 : FOCUS_DWELL_MS); },
-    heightChanged(previous) { if (previous !== state().height) { schedulePreparation(0); if (windDisplayed) setField('replace'); } },
-    get displayed() { return windDisplayed; },
-    get resident() { return Boolean(windView || windRequest || windPrefetch || windHeld.size || retiring.size); },
-    get preparation() {
-      const build = state().build, promised = build ? renderedFrames(build.manifest).length : 0;
-      const admitted = admittedWindow === null ? promised : Math.min(admittedWindow, promised);
-      const currentHeight = state().height;
-      const ready = [...windHeld.values()].filter(held => typeof held.source.hasPrepared !== 'function' || held.source.hasPrepared(currentHeight)).length;
-      return { promised, admitted, ready, limited: capacityBlocked || admitted < promised };
+    update, reconcile, clear: reset,
+    setPlaying() { schedule(); },
+    heightChanged(previous) {
+      const s = state();
+      if (previous === s.height || destroyed) return;
+      if (preparationTimer !== null) { clearTimeout(preparationTimer); preparationTimer = null; }
+      failures.clear(); limited = false; blockedBytes = 0;
+      if (installed && installedHeight !== s.height) clearField();
+      const job = selected();
+      if (job?.status === 'ready') prepare(job, s.height);
+      reconcile(); schedule(); schedulePreparation();
     },
-    get current() { return windView; },
-    get installed() { return installedWind && windDisplayed ? { build: installedWind.build, frame: installedWind.frame, source: installedWind.source, height: installedHeight } : null; },
+    beforeRasterReveal(target) {
+      if (destroyed) return;
+      const s = state(), camera = cameraBounds(map);
+      if (installed && installed.build === target.build && installed.frame === target.frame && installedHeight === s.height && coversBounds(installed.bounds, camera)) return;
+      clearField();
+      const job = selected();
+      if (active() && target.build === s.build && target.frame === s.selectedFrame && job && coversBounds(job.bounds, camera) && usableAt(job, s.height)) install(job, s.height);
+    },
+    get ready() {
+      return new Map([...jobs].filter(([, job]) => job.status === 'ready' && usableAt(job)).map(([frame, job]) => [frame, new Set([...job.heights].filter(height => usableAt(job, height)))]));
+    },
+    get staged() { const s = state(), job = selected(); return job && usableAt(job, s.height) ? { build: job.build, frame: job.frame, height: s.height } : null; },
+    get failed() { return new Map(failures); },
+    get memory() {
+      let preparedBytes = 0, fieldSamplerBytes = 0;
+      for (const job of jobs.values()) {
+        const memory = job.source.memoryUsage?.();
+        preparedBytes += memory?.preparedBytes ?? 0; fieldSamplerBytes += memory?.fieldSamplerBytes ?? 0;
+      }
+      for (const job of parked.values()) {
+        const memory = job.source.memoryUsage?.();
+        preparedBytes += memory?.preparedBytes ?? 0; fieldSamplerBytes += memory?.fieldSamplerBytes ?? 0;
+      }
+      const snapshot = options.budget?.snapshot();
+      return { numericBytes: options.cache.allocatedBytes,
+        preparedBytes: snapshot?.['wind-prepared'] ?? preparedBytes,
+        fieldSamplerBytes: snapshot?.['wind-sampler'] ?? fieldSamplerBytes,
+        horizonNumericRemaining: selected()?.source.memoryUsage?.().horizonNumericRemaining ?? null,
+        budgetUsed: options.budget?.used ?? options.cache.allocatedBytes, budgetLimit: options.budget?.limit ?? null };
+    },
+    get displayed() { return !!installed; },
+    get resident() { return jobs.size + parked.size > 0; },
+    get preparation() {
+      const promised = state().build ? renderedFrames(state().build!.manifest).length : 0, height = state().height;
+      return { promised, admitted: jobs.size, ready: [...jobs.values()].filter(job => usableAt(job, height)).length, limited };
+    },
+    get current() { const job = selected(); return job?.status === 'ready' && usableAt(job) ? job : null; },
+    get installed() { return installed ? { build: installed.build, frame: installed.frame, source: installed.source, height: installedHeight, isOverview: installed.source.isOverview === true } : null; },
     destroy() {
       if (destroyed) return;
-      destroyed = true;
-      cancelFill();
-      const owned = new Set<WindView>([...retiring.keys(), ...windHeld.values(), windView, installedWind, windRequest, windPrefetch].filter((view): view is WindView => Boolean(view)));
-      for (const timer of retiring.values()) clearTimeout(timer);
-      retiring.clear();
-      for (const view of owned) view.source.dispose();
-      windHeld.clear();
-      failures.clear();
+      reset(); destroyed = true; unsubscribe?.();
       if ('onRelease' in options.cache) options.cache.onRelease = null;
-      if (prepTimer !== null) { clearTimeout(prepTimer); prepTimer = null; }
-      windView = installedWind = windRequest = windPrefetch = null;
     }
   };
-
 }

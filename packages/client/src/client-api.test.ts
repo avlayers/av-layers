@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient, ExpiredBuildError, InvalidApiResponseError, type LatestPayload } from './index';
 import { FIXTURE_BUILD_ID, fixtureManifestV5, fixtureLatest } from '../../../tests/forecast-fixture';
+import { createPreparationBudget } from './client-preparation-budget';
+import { createForecastRequestScheduler } from './client-request-scheduler';
 
 const expiresAt = '2026-10-31T00:00:00.000Z';
 const created = '2026-10-30T00:00:00.000Z';
@@ -262,5 +264,122 @@ describe('bounded request lifecycle', () => {
     ));
     const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
     await expect(client.latest('gfs')).rejects.toThrow('Response exceeds byte budget'); expect(cancel).toHaveBeenCalledTimes(1); expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('shared JSON preparation budget', () => {
+  it('makes selected JSON progress when foreground responses compete for the processing floor', async () => {
+    const MiB = 1024 * 1024, budget = createPreparationBudget(28 * MiB, { foregroundReserveBytes: 24 * MiB });
+    const background = budget.reserve('background', 4 * MiB, 'background')!;
+    const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const headers: Array<(response: Response) => void> = [];
+    const fetchImpl = vi.fn<typeof fetch>((_input, init) => new Promise((resolve, reject) => {
+      headers.push(resolve); init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+    }));
+    const scheduler = createForecastRequestScheduler({ budget, fetchImpl });
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: scheduler.fetch, budget, now: () => Date.parse(created) });
+    const controllers = Array.from({ length: 24 }, () => new AbortController());
+    const requests = controllers.map(controller => client.latest('gfs', { signal: controller.signal }));
+    const outcomes = Promise.allSettled(requests);
+    try {
+      await vi.waitFor(() => expect(scheduler.stats().active + scheduler.stats().queued).toBe(24));
+      await vi.waitFor(() => expect(headers.length).toBeGreaterThan(0));
+      headers[0](new Response(new ReadableStream<Uint8Array>({ start(controller) { streams.push(controller); } })));
+      streams[0].enqueue(new TextEncoder().encode(JSON.stringify(latestPayload()))); streams[0].close();
+      expect((await requests[0]).manifest.buildId).toBe(FIXTURE_BUILD_ID);
+    } finally {
+      controllers.forEach(controller => controller.abort()); scheduler.dispose(); await outcomes; background.release();
+    }
+    expect(budget.used).toBe(0);
+  });
+  it('charges buffer, decoded text and parsed schema work, then releases transient leases', async () => {
+    const encoded = new TextEncoder().encode(JSON.stringify(latestPayload()));
+    const budget = createPreparationBudget(4 * 1024 * 1024);
+    const snapshots: Readonly<Record<string, number>>[] = [];
+    const reserve = budget.reserve.bind(budget);
+    vi.spyOn(budget, 'reserve').mockImplementation((category, bytes) => {
+      const lease = reserve(category, bytes); snapshots.push(budget.snapshot()); return lease;
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(encoded, { headers: { 'content-length': String(encoded.length) } }));
+    const scheduler = createForecastRequestScheduler({ fetchImpl, budget });
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: scheduler.fetch, budget, now: () => Date.parse(created) });
+    try {
+      const build = await client.latest('gfs');
+      expect(build.manifest.buildId).toBe(FIXTURE_BUILD_ID);
+      expect(snapshots.some(snapshot => snapshot['json-buffer'] === encoded.length && snapshot.response === 1024)).toBe(true);
+      expect(snapshots.some(snapshot => snapshot['json-buffer'] === encoded.length && snapshot['json-parsed'] === encoded.length * 16 && snapshot['json-text'] === encoded.length * 2)).toBe(true);
+      expect(budget.used).toBe(0);
+    } finally { scheduler.dispose(); }
+  });
+
+  it('fails under parse pressure without leaks and recovers after budget release', async () => {
+    const encoded = new TextEncoder().encode(JSON.stringify(latestPayload()));
+    const budget = createPreparationBudget(1024 * 1024 + encoded.length * 19), blocker = budget.reserve('other', 1)!;
+    let response!: Response;
+    const fetchImpl = vi.fn<typeof fetch>(async () => { response = new Response(encoded, { headers: { 'content-length': String(encoded.length) } }); return response; });
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, budget, now: () => Date.parse(created) });
+    try {
+      await expect(client.latest('gfs')).rejects.toThrow('JSON preparation budget exhausted');
+      expect(response.body?.locked).toBe(false);
+      expect(budget.snapshot()).toEqual({ other: 1 });
+      blocker.release();
+      expect((await client.latest('gfs')).manifest.buildId).toBe(FIXTURE_BUILD_ID);
+      expect(budget.used).toBe(0);
+    } finally { blocker.release(); }
+  });
+
+  it('releases growth and parse allocations on malformed data and schema rejection', async () => {
+    const budget = createPreparationBudget(2 * 1024 * 1024);
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(`${' '.repeat(2000)}invalid`))
+      .mockResolvedValueOnce(jsonResponse({ missing: true }));
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, budget });
+    await expect(client.latest('gfs')).rejects.toThrow('Response is not valid JSON');
+    expect(budget.used).toBe(0);
+    await expect(client.latest('gfs')).rejects.toThrow('does not match contract schema');
+    expect(budget.used).toBe(0);
+  });
+
+  it('holds the reader allocation until asynchronous cancellation settles', async () => {
+    const budget = createPreparationBudget(2 * 1024 * 1024);
+    let release!: () => void;
+    const cancel = vi.fn(() => new Promise<void>(resolve => { release = resolve; }));
+    const response = new Response(new ReadableStream<Uint8Array>({ cancel }));
+    const controller = new AbortController();
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: async () => response, budget });
+    const pending = client.latest('gfs', { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    try {
+      await vi.waitFor(() => expect(budget.snapshot()).toEqual({ response: 1024 * 1024, 'json-buffer': 1024 }));
+      controller.abort(); await rejected;
+      expect(budget.snapshot()).toEqual({ response: 1024 * 1024, 'json-buffer': 1024 });
+      release();
+      await vi.waitFor(() => expect(budget.used).toBe(0));
+      expect(response.body?.locked).toBe(false);
+    } finally { release?.(); }
+  });
+
+  it('bounds concurrent JSON buffers with shared transport reservations and recovers after cancellation', async () => {
+    const budget = createPreparationBudget(4096);
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ cancel() {} })));
+    const scheduler = createForecastRequestScheduler({ budget, fetchImpl });
+    const client = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: scheduler.fetch, budget });
+    const controllers = Array.from({ length: 3 }, () => new AbortController());
+    const requests = controllers.slice(0, 2).map(controller => client.latest('gfs', { signal: controller.signal }));
+    requests.forEach(request => void request.catch(() => {}));
+    try {
+      await vi.waitFor(() => expect(budget.snapshot()).toEqual({ response: 2048, 'json-buffer': 2048 }));
+      requests.push(client.latest('gfs', { signal: controllers[2].signal }));
+      void requests[2].catch(() => {});
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(scheduler.stats()).toEqual({ active: 2, queued: 1 });
+      controllers[0].abort();
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(3));
+      await vi.waitFor(() => expect(budget.snapshot()).toEqual({ response: 2048, 'json-buffer': 2048 }));
+    } finally {
+      controllers.forEach(controller => controller.abort());
+      await Promise.allSettled(requests); scheduler.dispose();
+      await vi.waitFor(() => expect(budget.used).toBe(0));
+    }
   });
 });

@@ -88,6 +88,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
   const forecast = store.view.forecast.value;
   const overlay = store.view.overlay.value;
   const point = store.view.point.value;
+  const wind = store.view.wind.value;
   const location = store.view.location.value;
   const notices = store.view.notices.value;
   const frames = forecast.build ? renderedFrames(forecast.build.manifest).flatMap(frame => frame.id ? [{ id: frame.id, validTime: frame.validTime }] : []) : [];
@@ -187,10 +188,13 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
               value={selectedIndex} aria-label="Forecast time" tabindex={-1}
             />
             <p id="timestamp" class="sr-only">{timestamp}</p>
-            <p id="frame-status" role="status" aria-live="polite" data-quality={overlay.quality ?? 'none'}>{notices.frameStatus}</p>
-            <p id="timeline-status" class="sr-only" hidden={!notices.overviewTotal} data-ready={notices.overviewReady} data-total={notices.overviewTotal}>
-              {notices.overviewReady === notices.overviewTotal ? 'Timeline ready' : `${notices.overviewReady + notices.overviewFailed === notices.overviewTotal ? 'Timeline partly ready' : 'Preparing timeline'} · ${notices.overviewReady} / ${notices.overviewTotal} times ready`}
-            </p>
+            <div class="timebar-status">
+              <p id="frame-status" role="status" aria-live="polite" data-quality={overlay.quality ?? 'none'}>{notices.frameStatus}</p>
+              <p id="timeline-status" hidden={!notices.overviewTotal} data-ready={notices.overviewReady} data-total={notices.overviewTotal} data-detail-ready={notices.detailReady}>
+                Preview{intent.windVisible && wind.supported ? ' + wind' : ''} ready {notices.overviewReady} / {notices.overviewTotal}
+                {' · '}Detail ready {notices.detailReady} / {notices.overviewTotal}{notices.preparationLimited ? ' · Capacity limited' : ''}
+              </p>
+            </div>
           </footer>
         </div>
       </div>

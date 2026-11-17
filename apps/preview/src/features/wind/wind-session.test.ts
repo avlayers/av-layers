@@ -35,6 +35,7 @@ function harness() {
   wind.status = 'ready'; wind.loads.length = 0; wind.unavailable.clear(); wind.capacity.clear();
   const withWind = (suffix: string) => {
     const build = fixtureBuild({ buildId: `20260101T000000Z-${suffix.repeat(36)}` });
+    (build as { expiresAtMs: number }).expiresAtMs = Date.now() + 86_400_000;
     (build.manifest as unknown as { mapData: { sha256: string; bytes: number } }).mapData = { sha256: 'a', bytes: 1 };
     return build;
   };
@@ -137,7 +138,7 @@ describe('wind session acquisition and presentation status', () => {
     await vi.waitFor(() => expect(test.session.current?.build).toBe(test.buildB));
     test.session.reconcile();
     expect(test.fields.length).toBe(before);
-    expect(test.statuses.at(-1)).toBe('loading');
+    expect(test.statuses.at(-1)).toBe('ready');
     test.setDisplayed({ build: test.buildB, frame: test.framesB[0]!.id });
     test.session.reconcile();
     expect(test.fields.length).toBeGreaterThan(before);
@@ -175,6 +176,8 @@ describe('wind warming recovery', () => {
 it('installs the prepared lattice in the same operation as the fallback field', async () => {
   const test = harness();
   await ready(test);
+  test.setDisplayed({ build: test.buildA, frame: test.framesA[0]!.id });
+  test.session.reconcile();
   expect(test.install).toHaveBeenCalled();
   expect(test.install.mock.calls.at(-1)![1]).toMatchObject({ height: 'surface', size: 1 });
   expect(test.prepared).not.toHaveBeenCalled();

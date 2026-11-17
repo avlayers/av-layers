@@ -6,6 +6,11 @@ import { estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, MAX_SAMPLE_POIN
   profileResponseSchema, type MultiPointSampleResponse, type ProfileResponse } from '@av/contracts/point-products';
 import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
 import { createPointSeriesLoader } from './client-point.ts';
+import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
+import { ForecastCapacityError, schedulerFetchBudget } from './client-request-scheduler.ts';
+
+const JSON_PARSED_ESTIMATE_PER_BYTE = 16;
+const JSON_UTF16_BYTES_PER_BYTE = 2;
 
 export interface RequestOptions {
   signal?: AbortSignal;
@@ -52,6 +57,7 @@ export class InvalidApiResponseError extends Error {
 export interface ApiClientOptions {
   baseUrl: string;
   fetchImpl?: typeof fetch;
+  budget?: PreparationBudget;
   now?: () => number;
   requestTimeoutMs?: number;
   retryDelayMs?: number;
@@ -80,17 +86,21 @@ export function assertNotExpired(expiresAt: string, now = Date.now()): void {
   if (expiryTime(expiresAt) <= now) throw new ExpiredBuildError(expiresAt);
 }
 
-async function readError(response: Response, signal?: AbortSignal): Promise<ApiError> {
+async function readError(response: Response, signal?: AbortSignal, budget?: PreparationBudget): Promise<ApiError> {
   let code = `http-${response.status}`;
   let detail = response.statusText || `HTTP ${response.status}`;
   try {
-    const body = (await readJsonBounded(response, 64 * 1024, signal)) as { code?: unknown; type?: unknown; detail?: unknown; title?: unknown };
-    if (typeof body.code === 'string') code = body.code;
-    else if (typeof body.title === 'string') code = body.title;
-    else if (typeof body.type === 'string') code = body.type.replace(/^urn:windy-av:/, '');
-    if (typeof body.detail === 'string') detail = body.detail;
-    else if (typeof body.title === 'string') detail = body.title;
-  } catch {
+    const result = await readJsonBounded(response, 64 * 1024, signal, budget);
+    try {
+      const body = result.value as { code?: unknown; type?: unknown; detail?: unknown; title?: unknown };
+      if (typeof body.code === 'string') code = body.code;
+      else if (typeof body.title === 'string') code = body.title;
+      else if (typeof body.type === 'string') code = body.type.replace(/^urn:windy-av:/, '');
+      if (typeof body.detail === 'string') detail = body.detail;
+      else if (typeof body.title === 'string') detail = body.title;
+    } finally { result.release(); }
+  } catch (error) {
+    if (error instanceof ForecastCapacityError) throw error;
     return new ApiError(response.status, code, detail);
   }
   return new ApiError(response.status, code, detail);
@@ -106,39 +116,65 @@ function requireString(value: unknown, name: string): string {
   return value;
 }
 
-async function readJsonBounded(response: Response, limit = MAX_POINT_RESPONSE_BYTES, signal?: AbortSignal): Promise<unknown> {
+function reserveJson(budget: PreparationBudget | undefined, category: string, bytes: number): PreparationLease | undefined {
+  if (!budget) return undefined;
+  const lease = budget.reserve(category, bytes);
+  if (!lease) throw new ForecastCapacityError('capacity', 'JSON preparation budget exhausted');
+  return lease;
+}
+
+async function readJsonBounded(response: Response, limit = MAX_POINT_RESPONSE_BYTES, signal?: AbortSignal, budget?: PreparationBudget): Promise<{ value: unknown; release(): void }> {
   const length = response.headers.get('content-length');
   if (length && Number(length) > limit) {
-    void response.body?.cancel().catch(() => {});
+    await response.body?.cancel().catch(() => {});
     throw new InvalidApiResponseError('Response exceeds byte budget');
   }
   if (!response.body) throw new InvalidApiResponseError('Response body is missing');
   const reader = response.body.getReader();
   const declaredBytes = Number(length);
-  let bytes = new Uint8Array(Number.isSafeInteger(declaredBytes) && declaredBytes > 0 ? declaredBytes : Math.min(1024, limit));
-  const abort = () => { void reader.cancel(signal?.reason).catch(() => {}); };
+  let bufferLease: PreparationLease | undefined, cancellation: Promise<void> | undefined;
+  const abort = () => { cancellation ??= reader.cancel(signal?.reason).catch(() => {}); };
   if (signal?.aborted) abort();
   else signal?.addEventListener('abort', abort, { once: true });
   let total = 0, chunks = 0;
   try {
+    const initial = Number.isSafeInteger(declaredBytes) && declaredBytes > 0 ? declaredBytes : Math.min(1024, limit);
+    bufferLease = reserveJson(budget, 'json-buffer', initial);
+    let bytes = new Uint8Array(initial);
     signal?.throwIfAborted();
     for (;;) {
       const { done, value } = await reader.read();
       signal?.throwIfAborted();
       if (done) break;
-      if (++chunks > 65_536) { void reader.cancel().catch(() => {}); throw new InvalidApiResponseError('Response fragmentation exceeds budget'); }
-      if (total + value.length > limit) { void reader.cancel().catch(() => {}); throw new InvalidApiResponseError('Response exceeds byte budget'); }
+      if (++chunks > 65_536) throw new InvalidApiResponseError('Response fragmentation exceeds budget');
+      if (total + value.length > limit) throw new InvalidApiResponseError('Response exceeds byte budget');
       if (total + value.length > bytes.length) {
-        const grown = new Uint8Array(Math.min(limit, Math.max(total + value.length, bytes.length * 2)));
-        grown.set(bytes.subarray(0, total));
-        bytes = grown;
+        const size = Math.min(limit, Math.max(total + value.length, bytes.length * 2));
+        const grownLease = reserveJson(budget, 'json-buffer', size);
+        try {
+          const grown = new Uint8Array(size);
+          grown.set(bytes.subarray(0, total));
+          bytes = grown;
+        } catch (error) { grownLease?.release(); throw error; }
+        bufferLease?.release(); bufferLease = grownLease;
       }
       bytes.set(value, total);
       total += value.length;
     }
-  } finally { signal?.removeEventListener('abort', abort); reader.releaseLock(); }
-  try { return JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))); }
-  catch { throw new InvalidApiResponseError('Response is not valid JSON'); }
+    const parsedLease = reserveJson(budget, 'json-parsed', total * JSON_PARSED_ESTIMATE_PER_BYTE);
+    try {
+      const textLease = reserveJson(budget, 'json-text', total * JSON_UTF16_BYTES_PER_BYTE);
+      try {
+        let value: unknown;
+        try { value = JSON.parse(new TextDecoder().decode(bytes.subarray(0, total))); }
+        catch { throw new InvalidApiResponseError('Response is not valid JSON'); }
+        return { value, release() { parsedLease?.release(); } };
+      } finally { textLease?.release(); }
+    } catch (error) { parsedLease?.release(); throw error; }
+  } finally {
+    signal?.removeEventListener('abort', abort);
+    await (cancellation ?? reader.cancel().catch(() => {})); reader.releaseLock(); bufferLease?.release();
+  }
 }
 
 function validatePoint(point: GeoPoint): void {
@@ -169,6 +205,7 @@ export class ApiClient {
   private readonly requestTimeoutMs: number;
   private readonly retryDelayMs: number;
   private readonly onMetric: ApiClientOptions['onMetric'];
+  private readonly budget: PreparationBudget | undefined;
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = normalizeBaseUrl(requireString(options.baseUrl, 'baseUrl'));
@@ -177,10 +214,11 @@ export class ApiClient {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.retryDelayMs = options.retryDelayMs ?? 200;
     this.onMetric = options.onMetric;
+    this.budget = options.budget;
     if (!(this.requestTimeoutMs > 0) || !Number.isFinite(this.requestTimeoutMs) || this.retryDelayMs < 0 || !Number.isFinite(this.retryDelayMs)) throw new RangeError('Invalid request timing budget');
   }
 
-  private async getJson(route: ApiClientMetric['route'], path: string, signal?: AbortSignal): Promise<unknown> {
+  private async getJson<T>(route: ApiClientMetric['route'], path: string, signal: AbortSignal | undefined, validate: (value: unknown) => T): Promise<T> {
     if (signal?.aborted) throw signal.reason;
     const started = this.onMetric ? performance.now() : 0;
     let attempts = 0, outcome: ApiClientMetric['outcome'] = 'failure';
@@ -193,16 +231,20 @@ export class ApiClient {
       for (;;) {
         controller.signal.throwIfAborted();
         attempts++;
+        let responseLease: PreparationLease | undefined;
         try {
+          if (this.budget && schedulerFetchBudget(this.fetchImpl) !== this.budget) responseLease = reserveJson(this.budget, 'response', MAX_POINT_RESPONSE_BYTES);
           const response = await this.fetchImpl(`${this.baseUrl}${path}`, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal });
-          if (!response.ok) throw await readError(response, controller.signal);
-          return await readJsonBounded(response, MAX_POINT_RESPONSE_BYTES, controller.signal);
+          if (!response.ok) throw await readError(response, controller.signal, this.budget);
+          const result = await readJsonBounded(response, MAX_POINT_RESPONSE_BYTES, controller.signal, this.budget);
+          try { return validate(result.value); } finally { result.release(); }
         } catch (error) {
           controller.signal.throwIfAborted();
           const retryable = error instanceof TypeError || (error instanceof ApiError && [502, 503, 504].includes(error.status));
           if (attempts >= 2 || !retryable) throw error;
+          responseLease?.release(); responseLease = undefined;
           await Promise.race([new Promise(resolve => setTimeout(resolve, this.retryDelayMs * (1 + Math.random() / 2))), canceled]);
-        }
+        } finally { responseLease?.release(); }
       }
     };
     try {
@@ -220,13 +262,13 @@ export class ApiClient {
   }
 
   async catalog(options: RequestOptions = {}): Promise<CatalogModelEntry[]> {
-    const parsed = catalogSchema.safeParse(await this.getJson('catalog', '/v1/catalog', options.signal));
+    const parsed = await this.getJson('catalog', '/v1/catalog', options.signal, value => catalogSchema.safeParse(value));
     if (!parsed.success) throw new InvalidApiResponseError('catalog response does not match contract schema');
     return parsed.data.models;
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {
-    const parsed = latestV5Schema.safeParse(await this.getJson('latest', `/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal));
+    const parsed = await this.getJson('latest', `/v1/models/${encodeURIComponent(model)}/latest?expand=manifest`, options.signal, value => latestV5Schema.safeParse(value));
     if (!parsed.success) throw new InvalidApiResponseError('latest response does not match contract schema');
     const raw = parsed.data;
     const pointer = raw.pointer;
@@ -277,9 +319,8 @@ export class ApiClient {
       layers: layers.join(',')
     });
     const path = `${pointPath(build, 'sample')}?${params}`;
-    const raw = await this.getJson('sample', path, request.signal);
+    const parsed = await this.getJson('sample', path, request.signal, value => sampleResponseV5Schema.safeParse(value));
     if (build.expiresAtMs <= this.now()) throw new ExpiredBuildError(build.manifest.expiresAt);
-    const parsed = sampleResponseV5Schema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('sample response does not match contract schema');
     const payload = parsed.data;
     this.validateSampleSurfaces(this.sampleSurfaces(build), payload);
@@ -293,9 +334,8 @@ export class ApiClient {
     for (const point of request.points) validatePoint(point);
     const { expectedFrames, layers, frameQuery } = sampleSelection(build, request, build.manifest.layers, request.points.length);
     const params = new URLSearchParams({ points: request.points.map(point => `${point.lat},${point.lon}`).join(';'), frame: frameQuery, layers: layers.join(',') });
-    const raw = await this.getJson('samples', `${pointPath(build, 'samples')}?${params}`, request.signal);
+    const parsed = await this.getJson('samples', `${pointPath(build, 'samples')}?${params}`, request.signal, value => multiPointSampleResponseSchema.safeParse(value));
     assertNotExpired(build.manifest.expiresAt, this.now());
-    const parsed = multiPointSampleResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('multi-point sample response does not match contract schema');
     const payload = parsed.data;
     if (payload.model !== build.manifest.model || payload.buildId !== build.manifest.buildId || payload.expiresAt !== build.manifest.expiresAt || payload.points.length !== request.points.length) {
@@ -318,9 +358,8 @@ export class ApiClient {
     if (layers.some(layer => !native.layers.includes(layer))) throw new RangeError('Profile layers must belong to the native surface');
     if (estimateProfileResponseBytes(expectedFrames.length, native.profiles.levelCount, layers.length) > MAX_POINT_RESPONSE_BYTES) throw new RangeError('Selected profile response exceeds byte budget');
     const params = new URLSearchParams({ lat: String(request.lat), lon: String(request.lon), frame: frameQuery, layers: layers.join(',') });
-    const raw = await this.getJson('profile', `${pointPath(build, 'profile')}?${params}`, request.signal);
+    const parsed = await this.getJson('profile', `${pointPath(build, 'profile')}?${params}`, request.signal, value => profileResponseSchema.safeParse(value));
     assertNotExpired(build.manifest.expiresAt, this.now());
-    const parsed = profileResponseSchema.safeParse(raw);
     if (!parsed.success) throw new InvalidApiResponseError('profile response does not match contract schema');
     const payload = parsed.data;
     if (payload.cycle !== build.manifest.cycle || payload.createdAt !== build.manifest.createdAt) throw new InvalidApiResponseError('profile run timestamps differ from pinned build');

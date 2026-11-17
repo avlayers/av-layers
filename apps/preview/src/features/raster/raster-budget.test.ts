@@ -1,10 +1,29 @@
 import { expect, it } from 'vitest';
 import type { Map } from 'maplibre-gl';
-import { RASTER_TILE_SIZE } from '@av/contracts/format';
+import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import { WIND_NUMERIC_BYTES } from '@av/client/wind';
-import { canRetainRasterOverview, rasterSourceLimit, RASTER_PAN_TILES, VIEWPORT_BYTES, WIND_CANVAS_BYTES, WIND_CANVAS_PIXELS, WIND_TRAIL_PIXELS } from './raster-budget';
+import { canRetainRasterOverview, preparationBudgetBytes, rasterRendererPoolBytes, rasterSourceLimit, RASTER_PAN_TILES, VIEWPORT_BYTES, WIND_CACHE_CAPACITY_BYTES, WIND_CANVAS_BYTES, WIND_CANVAS_PIXELS, WIND_FIELD_SAMPLER_BYTES, WIND_FRAME_PREPARED_BYTES, WIND_PREPARED_GRID_BYTES, WIND_TRAIL_PIXELS, windHorizonProtectedBytes } from './raster-budget';
 
 const map = (count: number) => ({ coveringTiles: () => ({ length: count }) }) as unknown as Pick<Map, 'coveringTiles'>;
+
+it('uses conservative device tiers and charges the configured 48-tile offscreen cache per source', () => {
+  const mib = 1024 * 1024;
+  expect(preparationBudgetBytes(2)).toBe(128 * mib);
+  expect(preparationBudgetBytes(4, true)).toBe(128 * mib);
+  expect(preparationBudgetBytes()).toBe(256 * mib);
+  expect(preparationBudgetBytes(NaN, true)).toBe(256 * mib);
+  expect(preparationBudgetBytes(8)).toBe(256 * mib);
+  expect(preparationBudgetBytes(8, true)).toBe(512 * mib);
+  const perTile = MAX_TILE_BYTES + 2 * RASTER_TILE_SIZE ** 2 * 4;
+  expect(rasterRendererPoolBytes(map(1), 9)).toBe((1 + RASTER_PAN_TILES) * perTile);
+  expect(rasterRendererPoolBytes(map(24), 9)).toBe((24 + RASTER_PAN_TILES) * perTile);
+  expect(WIND_PREPARED_GRID_BYTES).toBe(65_536);
+  expect(WIND_FIELD_SAMPLER_BYTES).toBe(139_264);
+  expect(WIND_FRAME_PREPARED_BYTES).toBe(204_800);
+  expect(windHorizonProtectedBytes({ totalFrames: 40, readyFrames: 10, numericAllocatedBytes: 8 * mib, processingHeadroomBytes: 8 * mib }))
+    .toBe((WIND_CACHE_CAPACITY_BYTES - 8 * mib) + 30 * WIND_FRAME_PREPARED_BYTES + 8 * mib);
+  expect(windHorizonProtectedBytes({ totalFrames: 40, readyFrames: 40, numericAllocatedBytes: 12 * mib })).toBe(0);
+});
 
 it('reserves Retina wind canvases and numeric cache within the viewport envelope and charges warm hidden cache honestly', () => {
   expect(WIND_CANVAS_PIXELS).toBe(8_388_608);

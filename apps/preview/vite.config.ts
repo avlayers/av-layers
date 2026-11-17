@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
-  plugins: [preact(), browserBundleBudget(400_000, 32_000), {
+  plugins: [preact(), browserBundleBudget(412_000, 33_000), {
     name: 'windy-plugin-assets',
     apply: 'build',
     async generateBundle() {

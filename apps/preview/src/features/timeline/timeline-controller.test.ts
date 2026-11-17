@@ -126,9 +126,9 @@ function key(element: Element, value: string): Event {
   return event;
 }
 
-function pointer(element: Element, type: string, clientX: number): void {
+function pointer(element: Element, type: string, clientX: number, pointerId = 1): void {
   const event = new Event(type);
-  Object.defineProperties(event, { clientX: { value: clientX }, button: { value: 0 }, pointerId: { value: 1 } });
+  Object.defineProperties(event, { clientX: { value: clientX }, button: { value: 0 }, pointerId: { value: pointerId } });
   element.dispatchEvent(event);
 }
 
@@ -615,6 +615,117 @@ it('records a scrub that starts with no selection', () => {
   timeline.destroy();
 });
 
+function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onIntent?: (index: number) => void) {
+  doc = new Document();
+  const callbacks = new Map<number, FrameRequestCallback>();
+  let nextId = 0;
+  const view = Object.assign(new EventTarget(), {
+    requestAnimationFrame(callback: FrameRequestCallback) { const id = ++nextId; callbacks.set(id, callback); return id; },
+    cancelAnimationFrame(id: number) { callbacks.delete(id); }
+  });
+  Object.defineProperty(doc, 'defaultView', { value: view });
+  const host = doc.createElement('div');
+  const onSelect = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, ...(onPlayback ? { onPlayback } : {}), ...(onIntent ? { onIntent } : {}) });
+  const hours = [0, 6, 12, 18].map(hour => ({ id: `h${hour}`, validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z` }));
+  timeline.update(hours, 'h0');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetWidth = 240;
+  const flush = () => { const pending = [...callbacks.values()]; callbacks.clear(); for (const callback of pending) callback(16); };
+  return { host, track, timeline, onSelect, hours, callbacks, flush };
+}
+
+it('coalesces drag scene work while immediately moving the playhead', () => {
+  const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  pointer(track, 'pointermove', 120);
+  pointer(track, 'pointermove', 180);
+  expect(byClass(host.children[0]!, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(callbacks.size).toBe(1);
+  flush();
+  expect(onSelect.mock.calls).toEqual([[3, 'none']]);
+  pointer(track, 'pointerup', 180);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it('preserves the pending playhead across unchanged scene updates', () => {
+  const { host, track, timeline, onSelect, hours, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  timeline.update(hours, 'h0');
+  expect(byClass(host.children[0]!, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
+  flush();
+  expect(onSelect.mock.calls).toEqual([[3, 'none']]);
+  timeline.update(hours, 'h18');
+  pointer(track, 'pointerup', 180);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it('commits the newest release position and cancels its queued scene update', () => {
+  const { track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  pointer(track, 'pointerup', 120);
+  expect(onSelect.mock.calls).toEqual([[2, 'push']]);
+  expect(callbacks.size).toBe(0);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  timeline.destroy();
+});
+
+it('restores the starting scene without a history entry when a drag returns', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  flush();
+  pointer(track, 'pointermove', 0);
+  pointer(track, 'pointerup', 0);
+  expect(onSelect.mock.calls).toEqual([[3, 'none'], [0, 'replace']]);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(2);
+  timeline.destroy();
+});
+
+it('invalidates a queued drag when the frame axis changes', () => {
+  const { track, timeline, onSelect, hours, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  timeline.update(hours.slice(0, 3), 'h0');
+  expect(callbacks.size).toBe(0);
+  pointer(track, 'pointermove', 120);
+  pointer(track, 'pointerup', 120);
+  flush();
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('lets an immediate keyboard selection supersede a queued drag', () => {
+  const { track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  key(track, 'End');
+  expect(onSelect.mock.calls).toEqual([[3, 'replace']]);
+  expect(callbacks.size).toBe(0);
+  pointer(track, 'pointerup', 60);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  timeline.destroy();
+});
+
+it('cancels queued drag work on destruction', () => {
+  const { track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  timeline.destroy();
+  expect(callbacks.size).toBe(0);
+  flush();
+  expect(onSelect).not.toHaveBeenCalled();
+});
+
 it('does not record a scrub when the timeline is disabled before release', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, 'a');
@@ -625,5 +736,450 @@ it('does not record a scrub when the timeline is disabled before release', () =>
   timeline.update(frames, 'b', true);
   pointer(track, 'pointerup', 90);
   expect(onSelect.mock.calls.some(call => call[1] === 'push')).toBe(false);
+  timeline.destroy();
+});
+
+it('does not re-seek a repeated release coordinate after opening a folded night', () => {
+  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
+  const hourly = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`, validTime: `2026-11-16T${String(hour).padStart(2, '0')}:00:00Z`
+  }));
+  timeline.setMapCenter(37.54, -77.46);
+  timeline.setOffsetMinutes(-300);
+  timeline.update(hourly, 'h21');
+  track.offsetWidth = 480;
+  pointer(track, 'pointerdown', 10);
+  const selected = Number(track.getAttribute('aria-valuenow'));
+  expect(selected).not.toBe(21);
+  expect(named(host.children[0]!, 'ct-moon')).toHaveLength(1);
+  pointer(track, 'pointerup', 10);
+  expect(onSelect.mock.calls).toEqual([[selected, 'push']]);
+  flush();
+  timeline.destroy();
+});
+
+it('ignores a second pointer and commits the first pointer position', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  pointer(track, 'pointerdown', 180, 2);
+  pointer(track, 'pointermove', 180, 2);
+  pointer(track, 'pointerup', 180, 2);
+  expect(track.getAttribute('aria-valuenow')).toBe('1');
+  pointer(track, 'pointerup', 60);
+  expect(onSelect.mock.calls).toEqual([[1, 'push']]);
+  flush();
+  timeline.destroy();
+});
+
+it('lets day and playback controls supersede pending drag work', () => {
+  vi.useFakeTimers();
+  const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  click(named(host.children[0]!, 'ct-day')[0]!);
+  expect(onSelect.mock.calls).toEqual([[3, 'push']]);
+  pointer(track, 'pointerup', 60);
+  expect(callbacks.size).toBe(0);
+  flush();
+  timeline.update([{ id: 'h0', validTime: '2026-11-14T00:00:00Z' }, { id: 'h6', validTime: '2026-11-14T06:00:00Z' }], 'h0');
+  onSelect.mockClear();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  click(byClass(host.children[0]!, 'ct-play'));
+  expect(onSelect.mock.calls).toEqual([[1, 'replace'], [0, 'replace']]);
+  pointer(track, 'pointerup', 60);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(2);
+  timeline.destroy();
+});
+
+it('recognizes synchronous scene echoes and preserves a pending playhead on old scene updates', () => {
+  const { host, track, timeline, onSelect, hours, flush } = setupAnimationTimeline();
+  onSelect.mockImplementation((index: number) => timeline.update(hours, hours[index]!.id));
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  pointer(track, 'pointermove', 180);
+  timeline.update(hours.map(frame => ({ ...frame })), 'h6');
+  expect(byClass(host.children[0]!, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
+  flush();
+  pointer(track, 'pointerup', 180);
+  expect(onSelect.mock.calls).toEqual([[1, 'none'], [3, 'none'], [3, 'push']]);
+  timeline.destroy();
+});
+
+it('preserves the frozen night scale across old scene updates and synchronous echoes', () => {
+  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
+  const hourly = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`, validTime: `2026-11-16T${String(hour).padStart(2, '0')}:00:00Z`
+  }));
+  const bounds = solarMinuteBounds(37.54, -77.46, '2026-11-16', -300);
+  timeline.setMapCenter(37.54, -77.46);
+  timeline.setOffsetMinutes(-300);
+  timeline.update(hourly, 'h21');
+  onSelect.mockImplementation((index: number) => timeline.update(hourly, hourly[index]!.id));
+  track.offsetWidth = 480;
+  const scale = buildDayScale(480, bounds, 16 * 60);
+  const evening = scale.segments.find(segment => segment.kind === 'evening')!;
+  pointer(track, 'pointerdown', minuteToX(scale, 16 * 60));
+  pointer(track, 'pointermove', (evening.x0 + evening.x1) / 2);
+  timeline.update(hourly, 'h21');
+  expect(named(host.children[0]!, 'ct-moon')).toHaveLength(2);
+  flush();
+  expect(named(host.children[0]!, 'ct-moon')).toHaveLength(2);
+  pointer(track, 'pointerup', (evening.x0 + evening.x1) / 2);
+  expect(named(host.children[0]!, 'ct-moon')).toHaveLength(1);
+  timeline.destroy();
+});
+
+it.each(['selection', 'frames', 'disabled'])('invalidates pending drag and release after external %s change', change => {
+  const { track, timeline, onSelect, hours, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  if (change === 'selection') timeline.update(hours, 'h6');
+  else if (change === 'frames') timeline.update(hours.map((frame, index) => index === 1 ? { ...frame, validTime: '2026-11-14T07:00:00Z' } : frame), 'h0');
+  else timeline.update(hours, 'h0', true);
+  expect(callbacks.size).toBe(0);
+  pointer(track, 'pointerup', 120);
+  flush();
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('does not seek a pointercancel coordinate and permits reentrant RAF scheduling', () => {
+  const { track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  onSelect.mockImplementationOnce(() => pointer(track, 'pointermove', 120));
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  expect(callbacks.size).toBe(1);
+  flush();
+  pointer(track, 'pointercancel', 180);
+  expect(onSelect.mock.calls).toEqual([[1, 'none'], [2, 'none'], [2, 'push']]);
+  timeline.destroy();
+});
+
+it.each(['day', 'key'])('commits same-frame %s selection after a drag scene was delivered', control => {
+  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  flush();
+  if (control === 'day') click(named(host.children[0]!, 'ct-day')[0]!);
+  else key(track, 'End');
+  pointer(track, 'pointerup', 60);
+  expect(onSelect.mock.calls).toEqual([[3, 'none'], [3, control === 'day' ? 'push' : 'replace']]);
+  timeline.destroy();
+});
+
+it('cancels a pending gesture before an external selection of the acknowledged scene', () => {
+  const { host, track, timeline, onSelect, hours, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  pointer(track, 'pointermove', 180);
+  timeline.update(hours, 'h6');
+  expect(track.getAttribute('aria-valuenow')).toBe('3');
+  timeline.cancelGesture();
+  expect(track.getAttribute('aria-valuenow')).toBe('1');
+  expect(byClass(host.children[0]!, 'ct-time').textContent).toBe('06:00 (06:00 UTC)');
+  expect(callbacks.size).toBe(0);
+  timeline.update(hours, 'h6');
+  pointer(track, 'pointerup', 180);
+  flush();
+  expect(onSelect.mock.calls).toEqual([[1, 'none']]);
+  timeline.cancelGesture();
+  timeline.destroy();
+  timeline.cancelGesture();
+});
+
+it('ignores subpixel movement on release after opening a folded night', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  const hourly = Array.from({ length: 24 }, (_, hour) => ({
+    id: `h${hour}`, validTime: `2026-11-16T${String(hour).padStart(2, '0')}:00:00Z`
+  }));
+  timeline.setMapCenter(37.54, -77.46);
+  timeline.setOffsetMinutes(-300);
+  timeline.update(hourly, 'h21');
+  track.offsetWidth = 480;
+  pointer(track, 'pointerdown', 10);
+  const selected = Number(track.getAttribute('aria-valuenow'));
+  pointer(track, 'pointermove', 10.5);
+  pointer(track, 'pointerup', 10.5);
+  expect(onSelect.mock.calls).toEqual([[selected, 'push']]);
+  flush();
+  timeline.destroy();
+});
+
+it('does not start playback when an immediate selection destroys the timeline', () => {
+  vi.useFakeTimers();
+  const onPlayback = vi.fn();
+  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline(onPlayback);
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  onSelect.mockImplementationOnce(() => timeline.destroy());
+  const play = byClass(host.children[0]!, 'ct-play');
+  click(play);
+  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(onPlayback).not.toHaveBeenCalled();
+  flush();
+});
+
+it('does not start playback when a selection synchronously disables the timeline', () => {
+  vi.useFakeTimers();
+  const onPlayback = vi.fn();
+  const { host, track, timeline, onSelect, hours, flush } = setupAnimationTimeline(onPlayback);
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  onSelect.mockImplementationOnce(() => timeline.update(hours, 'h6', true));
+  click(byClass(host.children[0]!, 'ct-play'));
+  expect(vi.getTimerCount()).toBe(0);
+  expect(onPlayback).not.toHaveBeenCalled();
+  flush();
+  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
+  timeline.destroy();
+});
+
+it('does not start playback when selecting the first frame destroys the timeline', () => {
+  vi.useFakeTimers();
+  const onPlayback = vi.fn();
+  const { host, timeline, onSelect, hours } = setupAnimationTimeline(onPlayback);
+  timeline.update(hours, 'h18');
+  onSelect.mockImplementationOnce(() => timeline.destroy());
+  click(byClass(host.children[0]!, 'ct-play'));
+  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(onPlayback).not.toHaveBeenCalled();
+});
+
+it('announces each changed drag intent before coalesced scene delivery', () => {
+  const onIntent = vi.fn();
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline(undefined, onIntent);
+  pointer(track, 'pointerdown', 60);
+  pointer(track, 'pointermove', 60);
+  pointer(track, 'pointermove', 120);
+  pointer(track, 'pointermove', 120);
+  expect(onIntent.mock.calls).toEqual([[1], [2]]);
+  expect(onSelect).not.toHaveBeenCalled();
+  flush();
+  expect(onSelect.mock.calls).toEqual([[2, 'none']]);
+  pointer(track, 'pointerup', 180);
+  expect(onIntent.mock.calls).toEqual([[1], [2], [3]]);
+  expect(onSelect.mock.calls).toEqual([[2, 'none'], [3, 'push']]);
+  timeline.destroy();
+});
+
+it('cancels an obsolete Auto-like result before the next drag scene is delivered', async () => {
+  let generation = 0;
+  const onIntent = vi.fn(() => { generation++; });
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline(undefined, onIntent);
+  const requested = generation;
+  let resolve!: () => void;
+  const result = new Promise<void>(done => { resolve = done; }).then(() => {
+    if (requested === generation) timeline.update(hours, 'h6');
+  });
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 180);
+  resolve();
+  await result;
+  expect(track.getAttribute('aria-valuenow')).toBe('3');
+  expect(onSelect).not.toHaveBeenCalled();
+  flush();
+  expect(onSelect.mock.calls).toEqual([[3, 'none']]);
+  pointer(track, 'pointerup', 180);
+  timeline.destroy();
+});
+
+it.each(['destroy', 'disable', 'cancel'])('stops the gesture when onIntent synchronously calls %s', action => {
+  const onIntent = vi.fn(() => {
+    if (action === 'destroy') timeline.destroy();
+    else if (action === 'disable') timeline.update(hours, 'h0', true);
+    else timeline.cancelGesture();
+  });
+  const setup = setupAnimationTimeline(undefined, onIntent);
+  const { timeline, hours } = setup;
+  pointer(setup.track, 'pointerdown', 60);
+  pointer(setup.track, 'pointerup', 120);
+  setup.flush();
+  expect(onIntent.mock.calls).toEqual([[1]]);
+  expect(setup.callbacks.size).toBe(0);
+  expect(setup.onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('does not commit release when onIntent invalidates the gesture', () => {
+  const onIntent = vi.fn(() => timeline.cancelGesture());
+  const setup = setupAnimationTimeline(undefined, onIntent);
+  const { timeline } = setup;
+  pointer(setup.track, 'pointerdown', 0);
+  pointer(setup.track, 'pointerup', 120);
+  setup.flush();
+  expect(onIntent.mock.calls).toEqual([[2]]);
+  expect(setup.onSelect).not.toHaveBeenCalled();
+  expect(setup.track.getAttribute('aria-valuenow')).toBe('0');
+  timeline.destroy();
+});
+
+it('does not let a reentrant release invalidate a newly started gesture', () => {
+  const onIntent = vi.fn().mockImplementationOnce(() => {
+    timeline.cancelGesture();
+    pointer(track, 'pointerdown', 180);
+  });
+  const setup = setupAnimationTimeline(undefined, onIntent);
+  const { timeline, track } = setup;
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointerup', 120);
+  expect(onIntent.mock.calls).toEqual([[2], [3]]);
+  expect(setup.callbacks.size).toBe(1);
+  pointer(track, 'pointerup', 180);
+  setup.flush();
+  expect(setup.onSelect.mock.calls).toEqual([[3, 'push']]);
+  timeline.destroy();
+});
+
+it.each(['destroy', 'disable'])('does not start a gesture when playback stop synchronously calls %s', action => {
+  vi.useFakeTimers();
+  const onPlayback = vi.fn((playing: boolean) => {
+    if (!playing) {
+      if (action === 'destroy') timeline.destroy();
+      else timeline.update(hours, 'h0', true);
+    }
+  });
+  const setup = setupAnimationTimeline(onPlayback);
+  const { timeline, hours } = setup;
+  click(byClass(setup.host.children[0]!, 'ct-play'));
+  pointer(setup.track, 'pointerdown', 60);
+  expect(setup.callbacks.size).toBe(0);
+  pointer(setup.track, 'pointerup', 120);
+  setup.flush();
+  expect(onPlayback.mock.calls).toEqual([[true], [false]]);
+  expect(vi.getTimerCount()).toBe(0);
+  expect(setup.callbacks.size).toBe(0);
+  expect(setup.onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it.each(['pointerup', 'pointercancel'])('replaces a changed gesture returned to start before RAF on %s', type => {
+  const { track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  pointer(track, 'pointermove', 0);
+  pointer(track, type, 0);
+  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
+  expect(callbacks.size).toBe(0);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  timeline.destroy();
+});
+
+it('pushes the final scene after a synchronous RAF echo', () => {
+  const events: string[] = [];
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline();
+  onSelect.mockImplementation((index: number, history: string) => {
+    events.push(`select:${index}:${history}`);
+    timeline.update(hours, hours[index]!.id);
+  });
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  pointer(track, 'pointerup', 60);
+  expect(events).toEqual(['select:1:none', 'select:1:push']);
+  timeline.destroy();
+});
+
+it('replaces restored starting scene after a previously delivered drag frame', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  pointer(track, 'pointermove', 0);
+  pointer(track, 'pointerup', 0);
+  expect(onSelect.mock.calls).toEqual([[1, 'none'], [0, 'replace']]);
+  timeline.destroy();
+});
+
+it('allows final onSelect to start a new gesture without completing it twice', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  onSelect.mockImplementationOnce(() => pointer(track, 'pointerdown', 120));
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointerup', 60);
+  expect(onSelect.mock.calls).toEqual([[1, 'push']]);
+  pointer(track, 'pointerup', 120);
+  flush();
+  expect(onSelect.mock.calls).toEqual([[1, 'push'], [2, 'push']]);
+  timeline.destroy();
+});
+
+it('returns cancellation state based on the acknowledged scene without completing', () => {
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline();
+  expect(timeline.cancelGesture()).toBeNull();
+  pointer(track, 'pointerdown', 0);
+  expect(timeline.cancelGesture()).toEqual({ changed: false, delivered: false });
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  expect(timeline.cancelGesture()).toEqual({ changed: true, delivered: false });
+  flush();
+  expect(onSelect).not.toHaveBeenCalled();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  pointer(track, 'pointermove', 120);
+  expect(timeline.cancelGesture()).toEqual({ changed: true, delivered: true });
+  expect(track.getAttribute('aria-valuenow')).toBe('1');
+  pointer(track, 'pointerup', 120);
+  flush();
+  expect(onSelect.mock.calls).toEqual([[1, 'none']]);
+  timeline.destroy();
+  expect(timeline.cancelGesture()).toBeNull();
+});
+
+it.each(['day', 'key', 'play'])('does not select again on release when %s supersedes drag', control => {
+  vi.useFakeTimers();
+  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  flush();
+  if (control === 'day') click(named(host.children[0]!, 'ct-day')[0]!);
+  else if (control === 'key') key(track, 'End');
+  else click(byClass(host.children[0]!, 'ct-play'));
+  const calls = onSelect.mock.calls.length;
+  pointer(track, 'pointerup', 60);
+  flush();
+  expect(onSelect).toHaveBeenCalledTimes(calls);
+  timeline.destroy();
+});
+
+it.each(['destroy', 'disable', 'external', 'new gesture'])('does not disturb state after final onSelect causes %s', action => {
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline();
+  onSelect.mockImplementationOnce(() => {
+    if (action === 'destroy') timeline.destroy();
+    else if (action === 'disable') timeline.update(hours, 'h6', true);
+    else if (action === 'external') timeline.update(hours, 'h12');
+    else pointer(track, 'pointerdown', 120);
+  });
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointerup', 60);
+  expect(onSelect.mock.calls).toEqual([[1, 'push']]);
+  if (action === 'new gesture') {
+    pointer(track, 'pointerup', 120);
+    expect(onSelect.mock.calls).toEqual([[1, 'push'], [2, 'push']]);
+  } else if (action === 'external') {
+    expect(track.getAttribute('aria-valuenow')).toBe('2');
+  }
+  flush();
+  timeline.destroy();
+});
+
+it('does not select for an unchanged click or invalidated external update', () => {
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline();
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointerup', 0);
+  pointer(track, 'pointerdown', 0);
+  pointer(track, 'pointermove', 60);
+  timeline.update(hours, 'h12');
+  pointer(track, 'pointerup', 60);
+  flush();
+  expect(onSelect).not.toHaveBeenCalled();
   timeline.destroy();
 });

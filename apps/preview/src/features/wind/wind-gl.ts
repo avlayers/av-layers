@@ -1,12 +1,13 @@
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { decodeWindByte, encodeWindByte } from '@av/contracts/wind-data';
 import type { WindPreparedGrid } from '@av/client/wind';
+import type { PreparationBudget, PreparationLease } from '@av/client';
 import type { CustomLayerInterface, Map } from 'maplibre-gl';
 import { WIND_TRAIL_WIDTH } from '../raster/raster-budget';
 import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
 
 export interface WindSampleField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
-export interface WindGl { setFields(from: WindSampleField | null, to: WindSampleField | null): void; setPrepared(prepared: WindPreparedGrid | null): void; setMotion(paused: boolean, hidden: boolean): void; destroy(): void }
+export interface WindGl { readonly bytes: number; readonly limited: boolean; relievePressure(): boolean; holdPressure(hold: boolean): void; setFields(from: WindSampleField | null, to: WindSampleField | null): void; setPrepared(prepared: WindPreparedGrid | null): void; setMotion(paused: boolean, hidden: boolean): void; reset(): void; destroy(): void }
 
 const STATE = 64, GRID = 128, LAYER = 'av-wind-particles', TRAIL_SIDE = 4096;
 const FULL = `#version 300 es
@@ -99,21 +100,29 @@ export function mixWindVectors(from: EncodedWind | null, to: EncodedWind | null,
 function compile(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
   const program = gl.createProgram();
   if (!program) throw new Error('Wind program unavailable');
-  for (const [type, source] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]] as const) {
-    const shader = gl.createShader(type);
-    if (!shader) throw new Error('Wind shader unavailable');
-    gl.shaderSource(shader, source); gl.compileShader(shader);
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader) || 'Wind shader failed');
-    gl.attachShader(program, shader);
-  }
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'Wind program failed');
-  return program;
+  const shaders: WebGLShader[] = [];
+  try {
+    for (const [type, source] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]] as const) {
+      const shader = gl.createShader(type);
+      if (!shader) throw new Error('Wind shader unavailable');
+      shaders.push(shader);
+      gl.shaderSource(shader, source); gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader) || 'Wind shader failed');
+      gl.attachShader(program, shader);
+    }
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) || 'Wind program failed');
+    return program;
+  } catch (error) { gl.deleteProgram(program); throw error; }
+  finally { for (const shader of shaders) gl.deleteShader(shader); }
 }
 
 /** Draws particle trails into the map WebGL context. Returns null when the map cannot host a custom layer. */
-export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl | null {
+export function attachWindGl(map: Map, onReady: (ok: boolean) => void, budget?: PreparationBudget): WindGl | null {
   if (typeof map.addLayer !== 'function' || typeof map.once !== 'function') return null;
+  const fixedBytes = GRID * GRID * 4 * 7 + STATE * STATE * 16 * 2 + 2;
+  let fixedLease = budget?.reserve('wind-display-gl', fixedBytes);
+  if (budget && !fixedLease) return null;
   const state = { from: null as WindSampleField | null, to: null as WindSampleField | null, prepared: null as WindPreparedGrid | null, paused: false, hidden: true, added: false, ready: false, failed: false, destroyed: false };
   const report = (ok: boolean) => queueMicrotask(() => { if (!state.destroyed) onReady(ok); });
   let gl: WebGL2RenderingContext | null = null;
@@ -124,11 +133,34 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     return { west: prepared.bounds[0] + shift, south: prepared.bounds[1], east: prepared.bounds[2] + shift, north: prepared.bounds[3] };
   }
   let bounds = { west: -180, south: -85, east: 180, north: 85 }, trailW = 1, trailH = 1, maxTrailSide = TRAIL_SIDE;
-  const blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), pending = { a: blank, b: blank, dirty: false };
+  let blank: Uint8Array<ArrayBuffer>, pending: { a: Uint8Array<ArrayBuffer>; b: Uint8Array<ArrayBuffer>; dirty: boolean };
+  try {
+    blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4));
+    pending = { a: new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), b: new Uint8Array(new ArrayBuffer(GRID * GRID * 4)), dirty: false };
+  } catch (error) { fixedLease?.release(); throw error; }
+  let fixedAllocated = true;
+  function freeFixed(): void {
+    blank = new Uint8Array(0); pending.a = new Uint8Array(0); pending.b = new Uint8Array(0);
+    fixedLease?.release(); fixedLease = undefined; fixedAllocated = false;
+  }
+  function allocateFixed(): boolean {
+    if (fixedAllocated) return true;
+    const lease = budget?.reserve('wind-display-gl', fixedBytes);
+    if (budget && !lease) return false;
+    try {
+      blank = new Uint8Array(new ArrayBuffer(GRID * GRID * 4));
+      pending.a = new Uint8Array(new ArrayBuffer(GRID * GRID * 4));
+      pending.b = new Uint8Array(new ArrayBuffer(GRID * GRID * 4));
+    } catch (error) { lease?.release(); throw error; }
+    fixedLease = lease; fixedAllocated = true;
+    return true;
+  }
+  let trailLease: PreparationLease | null = null, trailBytes = 0, limited = false, blockedUsed = 0, pressureScale = 1, pressureHeld = false;
+  const stagedTrailLeases: PreparationLease[] = [];
 
-  function grid(field: WindSampleField | null): Uint8Array<ArrayBuffer> {
-    const data = new Uint8Array(new ArrayBuffer(GRID * GRID * 4));
-    if (!field) return data;
+  function grid(field: WindSampleField | null, data: Uint8Array<ArrayBuffer>): void {
+    data.fill(0);
+    if (!field) return;
     for (let y = 0; y < GRID; y++) {
       const lat = bounds.south + (bounds.north - bounds.south) * (y + 0.5) / GRID;
       for (let x = 0; x < GRID; x++) {
@@ -137,7 +169,6 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
         data[i] = encodeWindByte(sample.u!); data[i + 1] = encodeWindByte(sample.v!); data[i + 3] = 255;
       }
     }
-    return data;
   }
   function viewBounds(): typeof bounds | null {
     const box = map.getBounds?.();
@@ -158,14 +189,26 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   function sizeTrail(): void {
     if (!gl) return;
     const canvas = map.getCanvas(), dpr = window.devicePixelRatio || 1;
-    const { width: tw, height: th } = trailTargetSize(canvas.width || Math.round(canvas.clientWidth * dpr), canvas.height || Math.round(canvas.clientHeight * dpr), maxTrailSide);
+    const target = trailTargetSize(canvas.width || Math.round(canvas.clientWidth * dpr), canvas.height || Math.round(canvas.clientHeight * dpr), maxTrailSide);
+    let tw = Math.max(1, Math.floor(target.width * pressureScale)), th = Math.max(1, Math.floor(target.height * pressureScale));
     if (sized && tw === trailW && th === trailH) return;
-    sized = true;
-    trailW = tw; trailH = th;
-    for (const texture of trails) {
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tw, th, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+    if (limited && budget && budget.used >= blockedUsed) return;
+    let nextLease = budget?.reserve('wind-display-gl', tw * th * 2);
+    while (budget && !nextLease && (tw > 1 || th > 1)) {
+      tw = Math.max(1, Math.floor(tw * 0.75)); th = Math.max(1, Math.floor(th * 0.75));
+      nextLease = budget.reserve('wind-display-gl', tw * th * 2);
     }
+    if (budget && !nextLease && sized && !trailLease) { limited = true; blockedUsed = budget.used; return; }
+    if (budget && !nextLease) { tw = th = 1; }
+    try {
+      for (const texture of trails) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tw, th, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+      }
+    } catch (error) { if (nextLease) stagedTrailLeases.push(nextLease); throw error; }
+    trailLease?.release(); trailLease = nextLease ?? null; trailBytes = nextLease || !budget ? tw * th * 2 : 0;
+    sized = true; trailW = tw; trailH = th;
+    limited = tw !== target.width || th !== target.height; blockedUsed = budget?.used ?? 0;
     reset = 1;
   }
   function uploadWind(): void {
@@ -195,7 +238,16 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     for (const fbo of [...stateFbo, ...trailFbo]) context.deleteFramebuffer(fbo);
     if (vao) context.deleteVertexArray(vao);
     for (const program of [updateProg, lineProg, blitProg]) if (program) context.deleteProgram(program);
-    gl = null; state.ready = false; uploadedPrepared = null;
+    states = []; winds = []; trails = []; stateFbo = []; trailFbo = []; vao = null;
+    updateProg = lineProg = blitProg = null;
+    gl = null; state.ready = false; uploadedPrepared = null; trailLease?.release(); trailLease = null;
+    for (const lease of stagedTrailLeases.splice(0)) lease.release();
+    trailBytes = 0; sized = false;
+  }
+  function fail(): void {
+    state.failed = true;
+    try { releaseGl(); } catch { state.ready = false; report(false); return; }
+    freeFixed(); report(false);
   }
   function frame(matrix: ArrayLike<number>): void {
     if (!gl || state.failed || !state.ready || state.hidden || (!state.to && !state.prepared)) return;
@@ -212,7 +264,7 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     } else if (!inside() || nextZoom !== zoom) {
       const area = viewBounds();
       if (area) bounds = area;
-      pending.a = grid(state.from ?? state.to); pending.b = grid(state.to!); pending.dirty = true; reset = 1; zoom = nextZoom;
+      grid(state.from ?? state.to, pending.a); grid(state.to!, pending.b); pending.dirty = true; reset = 1; zoom = nextZoom;
     }
     uploadWind(); sizeTrail();
     const update = updateProg!, blit = blitProg!, lines = lineProg!;
@@ -290,17 +342,21 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
   const layer: CustomLayerInterface = {
     id: LAYER, type: 'custom', renderingMode: '2d',
     onAdd(_map, context) {
-      try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; }
+      try { releaseGl(); } catch { state.ready = false; state.failed = true; report(false); return; }
       gl = context;
-      maxTrailSide = Math.min(TRAIL_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
       sized = false;
       if (state.destroyed) return;
       try {
+        maxTrailSide = Math.min(TRAIL_SIDE, gl.getParameter(gl.MAX_TEXTURE_SIZE) as number);
+        if (!allocateFixed()) throw new Error('Wind display budget unavailable');
         if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('Wind float target unavailable');
         updateProg = compile(gl, FULL, WIND_PARTICLE_UPDATE); lineProg = compile(gl, LINES, WHITE); blitProg = compile(gl, FULL, BLIT);
-        vao = gl.createVertexArray()!;
-        const tex = (filter: number) => {
-          const texture = gl!.createTexture()!;
+        vao = gl.createVertexArray();
+        if (!vao) throw new Error('Wind vertex array unavailable');
+        const tex = (filter: number, owned: WebGLTexture[]) => {
+          const texture = gl!.createTexture();
+          if (!texture) throw new Error('Wind texture unavailable');
+          owned.push(texture);
           gl!.bindTexture(gl!.TEXTURE_2D, texture);
           gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, filter);
           gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, filter);
@@ -308,42 +364,45 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
           gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
           return texture;
         };
-        states = [tex(gl.NEAREST), tex(gl.NEAREST)];
-        stateFbo = states.map(texture => {
+        tex(gl.NEAREST, states); tex(gl.NEAREST, states);
+        for (const texture of states) {
           gl!.bindTexture(gl!.TEXTURE_2D, texture);
-          gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA32F, STATE, STATE, 0, gl!.RGBA, gl!.FLOAT, new Float32Array(STATE * STATE * 4));
-          const fbo = gl!.createFramebuffer()!;
+          gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA32F, STATE, STATE, 0, gl!.RGBA, gl!.FLOAT, null);
+          const fbo = gl!.createFramebuffer();
+          if (!fbo) throw new Error('Wind framebuffer unavailable');
+          stateFbo.push(fbo);
           gl!.bindFramebuffer(gl!.FRAMEBUFFER, fbo);
           gl!.framebufferTexture2D(gl!.FRAMEBUFFER, gl!.COLOR_ATTACHMENT0, gl!.TEXTURE_2D, texture, 0);
           if (gl!.checkFramebufferStatus(gl!.FRAMEBUFFER) !== gl!.FRAMEBUFFER_COMPLETE) throw new Error('Wind state target incomplete');
-          return fbo;
-        });
-        winds = [tex(gl.NEAREST), tex(gl.NEAREST)];
+        }
+        tex(gl.NEAREST, winds); tex(gl.NEAREST, winds);
         for (const texture of winds) { gl.bindTexture(gl.TEXTURE_2D, texture); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, GRID, GRID, 0, gl.RGBA, gl.UNSIGNED_BYTE, blank); }
-        trails = [tex(gl.LINEAR), tex(gl.LINEAR)];
-        trailFbo = trails.map(texture => {
-          const fbo = gl!.createFramebuffer()!;
+        tex(gl.LINEAR, trails); tex(gl.LINEAR, trails);
+        for (const texture of trails) {
+          const fbo = gl!.createFramebuffer();
+          if (!fbo) throw new Error('Wind framebuffer unavailable');
+          trailFbo.push(fbo);
           gl!.bindFramebuffer(gl!.FRAMEBUFFER, fbo);
           gl!.framebufferTexture2D(gl!.FRAMEBUFFER, gl!.COLOR_ATTACHMENT0, gl!.TEXTURE_2D, texture, 0);
-          return fbo;
-        });
+        }
         sizeTrail();
         for (const fbo of trailFbo) {
           gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
           if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('Wind trail target incomplete');
         }
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        state.ready = true; report(true); map.triggerRepaint();
+        if (!state.prepared) { grid(state.from ?? state.to, pending.a); grid(state.to, pending.b); }
+        state.ready = true; state.failed = false; pending.dirty = true; report(true); map.triggerRepaint();
       } catch {
-        state.failed = true; report(false);
+        fail();
       }
     },
-    onRemove() { try { releaseGl(); } catch { gl = null; state.ready = false; uploadedPrepared = null; } state.added = false; },
+    onRemove() { try { releaseGl(); freeFixed(); } catch { state.ready = false; } state.added = false; },
     prerender(_context, options) {
       try { frame(options.modelViewProjectionMatrix as unknown as ArrayLike<number>); }
-      catch { state.failed = true; report(false); }
+      catch { fail(); }
     },
-    render() { try { present(); } catch { state.failed = true; report(false); } }
+    render() { try { present(); } catch { fail(); } }
   };
   const raise = () => {
     if (state.destroyed) return;
@@ -356,21 +415,57 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     if (state.destroyed || map.getLayer(LAYER)) return;
     state.added = true;
     try { map.addLayer(layer); raise(); }
-    catch { state.failed = true; report(false); }
+    catch { fail(); }
   };
   for (const event of ['idle', 'styledata'] as const) map.on(event, raise);
   if (map.isStyleLoaded?.()) mount();
   else map.once('style.load', mount);
+  const unsubscribe = budget?.onRelease(() => {
+    if (state.destroyed || !limited || pressureHeld) return;
+    if (budget.used >= blockedUsed) { blockedUsed = budget.used; return; }
+    pressureScale = 1; limited = false; sizeTrail(); if (state.ready) map.triggerRepaint();
+  });
   return {
+    get bytes() { return state.destroyed ? 0 : (fixedAllocated ? fixedBytes : 0) + trailBytes + stagedTrailLeases.reduce((sum, lease) => sum + lease.bytes, 0); },
+    get limited() { return !state.destroyed && limited; },
+    holdPressure(hold) {
+      pressureHeld = hold;
+      if (!hold && limited) { pressureScale = 1; limited = false; sizeTrail(); if (state.ready) map.triggerRepaint(); }
+    },
+    relievePressure() {
+      if (!budget || !gl || !sized || trailW === 1 && trailH === 1) return false;
+      const previous = trailBytes;
+      const canvas = map.getCanvas(), dpr = window.devicePixelRatio || 1;
+      const target = trailTargetSize(canvas.width || Math.round(canvas.clientWidth * dpr), canvas.height || Math.round(canvas.clientHeight * dpr), maxTrailSide);
+      pressureScale = Math.min(pressureScale * 0.75, trailW / target.width * 0.75, trailH / target.height * 0.75);
+      limited = false; sizeTrail();
+      return trailBytes < previous;
+    },
+    reset() {
+      reset = 1;
+      if (!gl || !state.ready) return;
+      const framebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING) as WebGLFramebuffer | null;
+      const color = gl.getParameter(gl.COLOR_CLEAR_VALUE) as Float32Array;
+      const mask = gl.getParameter(gl.COLOR_WRITEMASK) as boolean[];
+      const scissor = gl.isEnabled(gl.SCISSOR_TEST);
+      gl.disable(gl.SCISSOR_TEST); gl.colorMask(true, true, true, true); gl.clearColor(0, 0, 0, 0);
+      for (const fbo of trailFbo) { gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fbo); gl.clear(gl.COLOR_BUFFER_BIT); }
+      gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebuffer); gl.clearColor(color[0], color[1], color[2], color[3]);
+      gl.colorMask(mask[0], mask[1], mask[2], mask[3]);
+      if (scissor) gl.enable(gl.SCISSOR_TEST);
+      map.triggerRepaint();
+    },
     setFields(from, to) {
       if (state.prepared) { state.prepared = null; uploadedPrepared = null; }
       if (state.from === from && state.to === to) { if (state.ready && !state.hidden) map.triggerRepaint(); return; }
       state.from = from; state.to = to; blendAt = performance.now();
       if (Number.isNaN(zoom)) { const area = viewBounds(); if (area) bounds = area; }
-      pending.a = grid(from ?? to); pending.b = grid(to); pending.dirty = true;
+      if (fixedAllocated) { grid(from ?? to, pending.a); grid(to, pending.b); }
+      pending.dirty = true;
       if (state.ready) map.triggerRepaint();
     },
     setPrepared(prepared) {
+      if (prepared && (!Number.isSafeInteger(prepared.size) || prepared.size < 1 || prepared.size > GRID)) throw new RangeError('Wind display grid exceeds texture budget');
       if (state.prepared === prepared) { if (prepared && state.ready && !state.hidden) map.triggerRepaint(); return; }
       state.prepared = prepared; state.from = null; state.to = null; uploadedPrepared = null;
       if (prepared) {
@@ -382,9 +477,12 @@ export function attachWindGl(map: Map, onReady: (ok: boolean) => void): WindGl |
     },
     setMotion(paused, hidden) { state.paused = paused; state.hidden = hidden; if (!hidden && state.ready) map.triggerRepaint(); },
     destroy() {
-      state.destroyed = true; state.to = null; state.prepared = null; uploadedPrepared = null;
+      state.destroyed = true; state.from = null; state.to = null; state.prepared = null; uploadedPrepared = null;
+      unsubscribe?.();
       for (const event of ['idle', 'styledata'] as const) map.off(event, raise);
       if (state.added && map.getLayer(LAYER)) map.removeLayer(LAYER);
+      releaseGl();
+      freeFixed();
     }
   };
 }

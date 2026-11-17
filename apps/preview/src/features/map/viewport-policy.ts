@@ -2,8 +2,8 @@ export const FOCUS_DWELL_MS = 400;
 
 /** Mean Earth radius for admission area, independent of model grid constants. */
 export const ADMISSION_EARTH_RADIUS_M = 6_371_008.8;
-export const FULL_HORIZON_ENTER_KM2 = 800;
-export const FULL_HORIZON_EXIT_KM2 = 1000;
+export const FULL_HORIZON_ENTER_KM2 = 100_000;
+export const FULL_HORIZON_EXIT_KM2 = 125_000;
 const AREA_EPSILON_KM2 = 0.000001;
 
 export interface MapBoundsPort {
@@ -50,8 +50,7 @@ export function boundsAreaKm2(bounds: readonly [number, number, number, number])
 /** Whether the conservative viewport area promises the full rendered frame axis. */
 export function fullHorizonFor(areaKm2: number | null, warming: boolean): boolean {
   if (areaKm2 === null) return false;
-  const limit = warming ? FULL_HORIZON_EXIT_KM2 : FULL_HORIZON_ENTER_KM2;
-  return areaKm2 <= limit + AREA_EPSILON_KM2;
+  return warming ? areaKm2 <= FULL_HORIZON_EXIT_KM2 + AREA_EPSILON_KM2 : areaKm2 < FULL_HORIZON_ENTER_KM2;
 }
 
 export interface ViewportWarmth {
@@ -59,7 +58,6 @@ export interface ViewportWarmth {
   readonly warming: boolean;
 }
 
-/** Sticky full-timeline intent with the 800/1000 km² hysteresis band. */
 export function createViewportWarmth(): ViewportWarmth {
   let warming = false;
   return {

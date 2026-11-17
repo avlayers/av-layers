@@ -6,6 +6,7 @@ import { PLAYBACK_STEP_MS, type TimelineFrame } from './timeline-model';
 export type { TimelineFrame } from './timeline-model';
 export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
+  onIntent?(index: number): void;
   onPlayback?(playing: boolean): void;
   offsetMinutes?: number;
   latitude?: number;
@@ -13,6 +14,7 @@ export interface CompactTimelineOptions {
 }
 export interface CompactTimeline {
   update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void;
+  cancelGesture(): { changed: boolean; delivered: boolean } | null;
   setOffsetMinutes(offsetMinutes: number): void;
   setMapCenter(latitude: number, longitude: number): void;
   pause(): void;
@@ -317,8 +319,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   host.append(root);
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
-  let daySignature = '', selectedIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
-  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false;
+  let daySignature = '', selectedIndex = -1, sceneIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
+  let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false, lastPointerX = Number.NaN;
+  let sceneRequest: number | null = null, gestureVersion = 0, gestureChanged = false;
   const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
 
   const controlsDisabled = () => disabled || !frames.length;
@@ -514,17 +517,52 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (selectedButton) reveal(selectedButton);
   }
 
-  function select(index: number, history: 'push' | 'replace' | 'none', moveFocus: boolean): void {
-    if (destroyed || controlsDisabled() || index < 0 || index >= frames.length) return;
-    if (index !== selectedIndex) {
-      selectedIndex = index;
-      render();
-      options.onSelect(index, history);
-    }
-    if (moveFocus) track.focus({ preventScroll: true });
+  function cancelSceneRequest(): void {
+    if (sceneRequest !== null) doc.defaultView?.cancelAnimationFrame(sceneRequest);
+    sceneRequest = null;
   }
 
-  function seek(clientX: number): void {
+  function invalidateGesture(): void {
+    gestureVersion++;
+    cancelSceneRequest();
+    activePointer = null;
+    gestureStart = -1;
+    gestureScale = null;
+    gestureMoved = false;
+    gestureChanged = false;
+    gestureOriginX = Number.NaN;
+    lastPointerX = Number.NaN;
+  }
+
+  function deliverScene(index: number, history: 'push' | 'replace' | 'none'): void {
+    sceneIndex = index;
+    options.onSelect(index, history);
+  }
+
+  function queueScene(): void {
+    if (sceneRequest !== null) return;
+    const view = doc.defaultView;
+    if (!view || typeof view.requestAnimationFrame !== 'function' || typeof view.cancelAnimationFrame !== 'function') {
+      if (selectedIndex !== sceneIndex) deliverScene(selectedIndex, 'none');
+      return;
+    }
+    sceneRequest = view.requestAnimationFrame(() => {
+      sceneRequest = null;
+      if (!destroyed && activePointer !== null && selectedIndex !== sceneIndex) deliverScene(selectedIndex, 'none');
+    });
+  }
+
+  function select(index: number, history: 'push' | 'replace' | 'none', moveFocus: boolean): void {
+    if (destroyed || controlsDisabled() || index < 0 || index >= frames.length) return;
+    const changed = activePointer !== null || index !== selectedIndex || index !== sceneIndex;
+    invalidateGesture();
+    selectedIndex = index;
+    render();
+    if (changed) deliverScene(index, history);
+    if (moveFocus && !destroyed) track.focus({ preventScroll: true });
+  }
+
+  function seek(clientX: number, queue = true): void {
     const group = selectedGroup();
     if (!group || controlsDisabled()) return;
     const rect = track.getBoundingClientRect();
@@ -532,7 +570,15 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const minute = xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)));
     const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(minute)));
     const index = nearestFrameIndexForDay(frames, group.indices, offsetMinutes, Math.floor(rounded / 60), rounded % 60);
-    if (index >= 0) select(index, 'none', false);
+    if (index >= 0 && index !== selectedIndex) {
+      const version = gestureVersion;
+      selectedIndex = index;
+      gestureChanged = true;
+      render();
+      options.onIntent?.(index);
+      if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
+      if (queue) queueScene();
+    }
   }
 
   const stopPlayback = () => {
@@ -543,30 +589,39 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   };
 
   play.addEventListener('click', () => {
+    if (activePointer !== null) {
+      if (selectedIndex >= 0) select(selectedIndex, 'replace', false);
+      else invalidateGesture();
+    }
+    if (destroyed || controlsDisabled()) return;
     if (timer !== null) { stopPlayback(); return; }
-    if (controlsDisabled()) return;
-    if (frames.length <= 1) { if (selectedIndex < 0) select(0, 'replace', false); render(); return; }
+    if (frames.length <= 1) { if (selectedIndex < 0) select(0, 'replace', false); if (!destroyed) render(); return; }
     if (selectedIndex < 0 || selectedIndex >= frames.length - 1) select(0, 'replace', false);
+    if (destroyed || controlsDisabled()) return;
     timer = setInterval(() => {
       if (destroyed || selectedIndex >= frames.length - 1) { stopPlayback(); return; }
       select(selectedIndex + 1, 'replace', false);
       if (selectedIndex >= frames.length - 1) stopPlayback();
     }, PLAYBACK_INTERVAL_MS);
     options.onPlayback?.(true);
-    render();
+    if (!destroyed) render();
   });
 
   track.addEventListener('pointerdown', event => {
     const pointer = event as PointerEvent;
-    if ((pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
+    if (destroyed || activePointer !== null || (pointer.button !== undefined && pointer.button !== 0) || controlsDisabled()) return;
     if (timer !== null) stopPlayback();
+    if (destroyed || controlsDisabled() || activePointer !== null || timer !== null) return;
     gestureScale = null;
     gestureMoved = false;
     gestureOriginX = pointer.clientX;
+    lastPointerX = pointer.clientX;
     gestureStart = selectedIndex;
     activePointer = pointer.pointerId ?? 1;
+    const version = ++gestureVersion;
     if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
     seek(pointer.clientX);
+    if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
     const width = track.getBoundingClientRect().width;
     if (width > 0) gestureScale = liveScale(width);
     if (!destroyed) render();
@@ -576,19 +631,22 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
     if (!gestureMoved && Math.abs(pointer.clientX - gestureOriginX) < 1) return;
     gestureMoved = true;
+    lastPointerX = pointer.clientX;
     seek(pointer.clientX);
   };
   const releasePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
-    activePointer = null;
-    const held = gestureScale !== null;
-    gestureScale = null;
-    gestureMoved = false;
-    gestureOriginX = Number.NaN;
-    if (!destroyed && !controlsDisabled() && selectedIndex >= 0 && selectedIndex !== gestureStart) options.onSelect(selectedIndex, 'push');
-    gestureStart = -1;
-    if (held && !destroyed) render();
+    const version = gestureVersion;
+    if (event.type === 'pointerup' && pointer.clientX !== lastPointerX && (gestureMoved || Math.abs(pointer.clientX - gestureOriginX) >= 1)) seek(pointer.clientX, false);
+    if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
+    const start = gestureStart;
+    const changed = gestureChanged;
+    invalidateGesture();
+    const completedVersion = gestureVersion;
+    if (changed && selectedIndex >= 0) deliverScene(selectedIndex, selectedIndex !== start ? 'push' : 'replace');
+    if (destroyed || controlsDisabled() || completedVersion !== gestureVersion) return;
+    render();
   };
   track.addEventListener('pointermove', movePointer);
   track.addEventListener('pointerup', releasePointer);
@@ -622,16 +680,24 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   resizeObserver?.observe(track);
 
   return {
+    cancelGesture() {
+      if (destroyed || activePointer === null) return null;
+      const state = { changed: gestureChanged, delivered: sceneIndex !== gestureStart };
+      invalidateGesture();
+      selectedIndex = sceneIndex;
+      render();
+      return state;
+    },
     update(nextFrames, selectedFrame, nextDisabled = false) {
       if (destroyed) return;
       const nextIndex = nextFrames.findIndex(frame => frame.id === selectedFrame);
       const sameFrames = nextFrames.length === frames.length && nextFrames.every((frame, index) => frame.id === frames[index]?.id && frame.validTime === frames[index]?.validTime);
-      const echo = activePointer !== null && sameFrames && nextDisabled === disabled && nextIndex === selectedIndex;
-      if (!echo) gestureScale = null;
+      const echo = activePointer !== null && sameFrames && nextDisabled === disabled && nextIndex === sceneIndex;
+      if (!echo && (activePointer !== null || !sameFrames || nextDisabled !== disabled || nextIndex !== sceneIndex)) invalidateGesture();
       frames = nextFrames.slice();
-      selectedIndex = nextIndex;
+      if (!echo) selectedIndex = nextIndex;
+      sceneIndex = nextIndex;
       disabled = nextDisabled;
-      if (activePointer !== null && !echo) gestureStart = selectedIndex;
       syncDays();
       render();
       if (controlsDisabled()) stopPlayback();
@@ -659,10 +725,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      invalidateGesture();
       stopPlayback();
-      activePointer = null;
-      gestureStart = -1;
-      gestureScale = null;
       resizeObserver?.disconnect();
       doc.removeEventListener('visibilitychange', onVisibility);
       doc.defaultView?.removeEventListener('pagehide', stopPlayback);

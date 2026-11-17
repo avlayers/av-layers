@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createRasterTileProtocol, createSourceRasterTileProtocol } from './client-raster';
 import { createForecastRequestScheduler } from './client-request-scheduler';
+import { createPreparationBudget } from './client-preparation-budget';
 const base = 'https://api.test';
 const tile = (x = 0) => `${base}/tiles/gfs/build/usable-lift-msl/f003/7/${x}/50.webp`;
 const webp = () => new Response(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80]), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } });
@@ -40,7 +41,7 @@ it('honors custom active and queued limits and drains the admitted queue', async
   }
   expect(fetchImpl).toHaveBeenCalledTimes(4);
 });
-it.each([{ maxActive: 0 }, { maxActive: 17 }, { maxActive: 1.5 }, { maxActive: NaN }, { maxQueued: 0 }, { maxQueued: 513 }, { maxQueued: 1.5 }, { maxQueued: Infinity }])('rejects invalid raster admission limits: %j', options => {
+it.each([{ maxActive: 0 }, { maxActive: 33 }, { maxActive: 1.5 }, { maxActive: NaN }, { maxQueued: 0 }, { maxQueued: 513 }, { maxQueued: 1.5 }, { maxQueued: Infinity }])('rejects invalid raster admission limits: %j', options => {
   expect(() => createRasterTileProtocol(base, options)).toThrow('Invalid raster request');
 });
 it('bounds admission and disposes both queued and active requests without starting queued work', async () => {
@@ -258,8 +259,8 @@ it('aborts an initial consumer independently and returns distinct coalesced buff
   expect(fetchImpl).toHaveBeenCalledTimes(1);
 });
 
-it('reserves interactive slots under the default prefetch cap', async () => {
-  const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
+it('reserves interactive slots under a configured prefetch cap', async () => {
+  const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl, maxPrefetchActive: 2 });
   const background = Array.from({ length: 4 }, (_, index) => protocol.prefetch(tile(index)));
   expect(fetchImpl).toHaveBeenCalledTimes(2);
   const foreground = protocol.load({ url: protocol.url(tile(4)) }, new AbortController());
@@ -285,14 +286,17 @@ it('drops expired cache entries before a newer tile can evict a live one', async
   expect(fetchImpl).toHaveBeenCalledTimes(3);
 });
 
-it('defaults to sixteen interactive fetches and queues further tiles', async () => {
+it('defaults to twenty-four interactive fetches and queues further tiles', async () => {
   const { fetchImpl, finish } = heldFetch(), protocol = setup({ fetchImpl });
-  const requests = Array.from({ length: 17 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
-  expect(fetchImpl).toHaveBeenCalledTimes(16);
-  for (const done of finish.slice()) done(webp());
-  await Promise.all(requests.slice(0, 16));
-  expect(fetchImpl).toHaveBeenCalledTimes(17);
-  finish[16](webp()); await requests[16];
+  const requests = Array.from({ length: 25 }, (_, i) => protocol.load({ url: protocol.url(tile(i)) }, new AbortController()));
+  const outcomes = Promise.allSettled(requests);
+  try {
+    expect(fetchImpl).toHaveBeenCalledTimes(24);
+    for (const done of finish.slice()) done(webp());
+    await Promise.all(requests.slice(0, 24));
+    expect(fetchImpl).toHaveBeenCalledTimes(25);
+    finish[24](webp()); await requests[24];
+  } finally { protocol.dispose(); await outcomes; }
 });
 
 it('charges long tile URLs and headers against cache admission for small blank tiles', async () => {
@@ -333,7 +337,7 @@ it('bounds queued prefetches even when the prefetch lane cannot dispatch', async
 
 
 it('keeps prepared map sources in the background lane and promotes them without refetching', async () => {
-  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxActive: 4 });
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxActive: 4, maxPrefetchActive: 2 });
   const source = protocol.createSource(false);
   const prepared = Array.from({ length: 4 }, (_, i) => protocol.load({ url: source.url(tile(i)) }, new AbortController()));
   expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -390,7 +394,7 @@ it('limits retained source handles and releases them for the next selection', as
 });
 
 it('bounds the expanded source window while preserving background admission', async () => {
-  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxSources: 4 });
+  const { fetchImpl, finish } = heldFetch(), protocol = setupSources({ fetchImpl, maxSources: 4, maxPrefetchActive: 2 });
   const sources = Array.from({ length: 4 }, (_, index) => protocol.createSource(index === 0));
   expect(() => protocol.createSource(false)).toThrow('source limit');
   const pending = sources.map((source, index) => protocol.load({ url: source.url(tile(index)) }, new AbortController()));
@@ -451,4 +455,270 @@ it('promotes the physical request when a queued source becomes interactive', asy
   for (const entry of pending) if (!entry.url.includes('/tiles/')) entry.resolve(new Response(null));
   await Promise.allSettled([first.settled, second.settled]);
   scheduler.dispose();
+});
+
+it.each([16, 24, 32])('supports %i raster requests without a hidden per-source cap', async limit => {
+  const { fetchImpl, finish } = heldFetch();
+  const protocol = setupSources({ fetchImpl, maxActive: limit, maxPrefetchActive: limit - 4 });
+  const source = protocol.createSource(false);
+  const pending = Array.from({ length: limit - 4 }, (_, i) => protocol.load({ url: source.url(tile(i)) }, new AbortController()));
+  const outcomes = Promise.allSettled(pending);
+  try {
+    expect(fetchImpl).toHaveBeenCalledTimes(limit - 4);
+    finish.forEach(done => done(webp()));
+    expect((await outcomes).every(result => result.status === 'fulfilled')).toBe(true);
+  } finally { protocol.dispose(); await outcomes; }
+});
+
+it('defaults to twenty background requests from one source', async () => {
+  const { fetchImpl, finish } = heldFetch();
+  const protocol = setupSources({ fetchImpl });
+  const source = protocol.createSource(false);
+  const pending = Array.from({ length: 20 }, (_, i) => protocol.load({ url: source.url(tile(i)) }, new AbortController()));
+  const outcomes = Promise.allSettled(pending);
+  try {
+    expect(fetchImpl).toHaveBeenCalledTimes(20);
+    finish.forEach(done => done(webp()));
+    expect((await outcomes).every(result => result.status === 'fulfilled')).toBe(true);
+  } finally { protocol.dispose(); await outcomes; }
+});
+
+it.each(['queued', 'active', 'body'] as const)('immediately promotes the shared physical raster handle when an interactive consumer joins at %s', async phase => {
+  let resolveTile!: (response: Response) => void;
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const fetchImpl = vi.fn<typeof fetch>((input, init) => String(input).includes('/hold')
+    ? new Promise((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true }))
+    : new Promise((resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+      resolveTile = resolve;
+    }));
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: phase === 'queued' ? 1 : 2, maxInFlightBytes: 4 * 1024 * 1024, maxBackgroundBytes: 2 * 1024 * 1024 });
+  const hold = phase === 'queued' ? scheduler.request({ url: `${base}/hold`, priority: 'foreground', kind: 'wind', maxResponseBytes: 1024 }) : undefined;
+  void hold?.response.catch(() => {});
+  const handles: ReturnType<typeof scheduler.request>[] = [];
+  const promote = vi.fn();
+  const protocol = setupSources({ maxActive: 2, request: spec => {
+    const handle = scheduler.request(spec);
+    handles.push(handle);
+    const original = handle.promote;
+    handle.promote = () => { promote(); original(); };
+    return handle;
+  } });
+  const source = protocol.createSource(false);
+  const prepared = protocol.load({ url: source.url(tile()) }, new AbortController());
+  void prepared.catch(() => {});
+  let selected: Promise<unknown> | undefined;
+  try {
+    expect(handles).toHaveLength(1);
+    const promise = handles[0].response;
+    if (phase === 'body') {
+      resolveTile(new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+      await promise;
+    }
+    selected = protocol.load({ url: protocol.url(tile()) }, new AbortController());
+    void selected.catch(() => {});
+    expect(promote).toHaveBeenCalledOnce();
+    expect(handles).toHaveLength(1);
+    expect(handles[0].response).toBe(promise);
+    if (hold) { hold.cancel(); await hold.settled; }
+    if (phase !== 'body') resolveTile(webp());
+    else { body.enqueue(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80])); body.close(); }
+    const [background, foreground] = await Promise.all([prepared, selected]);
+    expect(background).toMatchObject({ data: expect.any(ArrayBuffer) });
+    expect(foreground).toMatchObject({ data: expect.any(ArrayBuffer) });
+    expect(fetchImpl.mock.calls.filter(([url]) => String(url).includes('/tiles/'))).toHaveLength(1);
+  } finally {
+    protocol.dispose(); scheduler.dispose();
+    await Promise.allSettled([prepared, ...(selected ? [selected] : []), ...(hold ? [hold.response] : [])]);
+    await Promise.all(handles.map(handle => handle.settled));
+  }
+});
+
+it('keeps a complete scheduler-backed tile after its only consumer leaves during the body', async () => {
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const fetchImpl = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }), { headers: { 'content-type': 'image/webp', 'cache-control': 'public, max-age=100' } }));
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec) });
+  const source = protocol.createSource(false), controller = new AbortController();
+  const pending = protocol.load({ url: source.url(tile()) }, controller);
+  const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  try {
+    await vi.waitFor(() => expect(body).toBeDefined());
+    await Promise.resolve();
+    controller.abort(); await rejected;
+    body.enqueue(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80])); body.close();
+    await vi.waitFor(() => expect(protocol.stats().cachedTiles).toBe(1));
+    const result = await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+    expect(new Uint8Array(result.data)[0]).toBe(82);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('preserves raster redirect policy and Accept on the scheduler-backed request', async () => {
+  const fetchImpl = vi.fn<typeof fetch>(async () => webp());
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec) });
+  try {
+    await protocol.load({ url: protocol.url(tile()) }, new AbortController());
+    const init = fetchImpl.mock.calls[0][1]!;
+    expect(init.redirect).toBe('error');
+    expect(new Headers(init.headers).get('accept')).toBe('image/webp');
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('rejects a redirected scheduler-backed raster request', async () => {
+  const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+    if (init?.redirect === 'error') return new Response(null, { status: 302, headers: { location: 'https://other.test/tile.webp' } });
+    return webp();
+  });
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), retryDelayMs: 0 });
+  try {
+    await expect(protocol.load({ url: protocol.url(tile()) }, new AbortController())).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('retries a promoted raster as foreground while the selected gate is active', async () => {
+  let resolveFirst!: (response: Response) => void;
+  const fetchImpl = vi.fn<typeof fetch>().mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; })).mockImplementationOnce(async () => webp());
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), retryDelayMs: 0 });
+  const handle = protocol.requestTile(tile(), { priority: 'background' });
+  const outcome = Promise.allSettled([handle.response]);
+  try {
+    await vi.waitFor(() => expect(resolveFirst).toBeDefined());
+    handle.promote(); scheduler.setForegroundPending(1, true);
+    resolveFirst(new Response(null, { status: 503 }));
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2));
+    const result = await handle.response;
+    expect(result.data.byteLength).toBe(12); result.release();
+  } finally { protocol.dispose(); scheduler.dispose(); await outcome; }
+});
+
+it('charges cached and delivered bytes separately and recovers after release', async () => {
+  const budget = createPreparationBudget(24);
+  const fetchImpl = vi.fn<typeof fetch>(async () => { const response = webp(); response.headers.set('content-length', '12'); return response; });
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    const first = await protocol.requestTile(tile(), { priority: 'background' }).response;
+    expect(budget.snapshot()).toEqual({ 'raster-compressed': 12, 'raster-delivered': 12 });
+    await expect(protocol.requestTile(tile()).response).rejects.toThrow('Raster delivery budget exhausted');
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    first.release(); first.release();
+    expect(budget.used).toBe(0);
+    const second = await protocol.requestTile(tile()).response;
+    expect(new Uint8Array(second.data)).toEqual(new Uint8Array(first.data));
+    expect(budget.used).toBe(24);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    protocol.evictBuild();
+    expect(budget.snapshot()).toEqual({ 'raster-delivered': 12 });
+    second.release();
+    expect(budget.used).toBe(0);
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('evicts unreferenced compressed cache entries when the shared budget fills', async () => {
+  const budget = createPreparationBudget(36);
+  const fetchImpl = vi.fn<typeof fetch>(async () => { const response = webp(); response.headers.set('content-length', '12'); return response; });
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    for (let i = 0; i < 3; i++) {
+      const result = await protocol.requestTile(tile(i)).response;
+      expect(budget.used).toBeLessThanOrEqual(36);
+      result.release();
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(protocol.stats().cachedTiles).toBe(2);
+    protocol.evictBuild();
+    expect(budget.used).toBe(0);
+  } finally { protocol.dispose(); scheduler.dispose(); }
+});
+
+it('releases raster body reservation after invalid data and retries after budget pressure', async () => {
+  const budget = createPreparationBudget(24), blocker = budget.reserve('other', 13)!;
+  const fetchImpl = vi.fn<typeof fetch>(async () => { const response = webp(); response.headers.set('content-length', '12'); return response; });
+  const scheduler = createForecastRequestScheduler({ fetchImpl });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  try {
+    await expect(protocol.requestTile(tile()).response).rejects.toThrow('Raster preparation budget exhausted');
+    expect(budget.snapshot()).toEqual({ other: 13 });
+    blocker.release();
+    fetchImpl.mockImplementationOnce(async () => new Response(new Uint8Array(12), { headers: { 'content-type': 'image/webp', 'content-length': '12' } }));
+    await expect(protocol.requestTile(tile()).response).rejects.toThrow('Invalid WebP');
+    expect(budget.used).toBe(0);
+    const result = await protocol.requestTile(tile()).response;
+    result.release(); protocol.evictBuild();
+    expect(budget.used).toBe(0);
+  } finally { blocker.release(); protocol.dispose(); scheduler.dispose(); }
+});
+
+it('promotes one per-tile handle and cancels one consumer without cancelling the shared transfer', async () => {
+  const { fetchImpl, finish } = heldFetch();
+  const scheduler = createForecastRequestScheduler({ fetchImpl, maxActive: 4 });
+  const physical: ReturnType<typeof scheduler.request>[] = [];
+  const protocol = setupSources({ request: spec => { const handle = scheduler.request(spec); physical.push(handle); return handle; } });
+  const first = protocol.requestTile(tile(), { priority: 'background' });
+  const second = protocol.requestTile(tile(), { priority: 'background' });
+  const cancelled = expect(first.response).rejects.toMatchObject({ name: 'AbortError' });
+  try {
+    const original = physical[0].response;
+    second.promote(); second.promote();
+    expect(scheduler.detail().backgroundActive).toBe(0);
+    expect(physical).toHaveLength(1);
+    expect(physical[0].response).toBe(original);
+    first.cancel(); await cancelled;
+    expect(fetchImpl.mock.calls[0][1]!.signal!.aborted).toBe(false);
+    finish[0](webp());
+    const result = await second.response;
+    expect(result.data.byteLength).toBe(12);
+    result.release();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  } finally { protocol.dispose(); scheduler.dispose(); await Promise.allSettled([first.response, second.response]); }
+});
+
+it('charges fallback response and compressed buffers until the response body settles', async () => {
+  const budget = createPreparationBudget(2 * 1024 * 1024), { fetchImpl, finish } = heldFetch();
+  const protocol = setupSources({ fetchImpl, budget });
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const handle = protocol.requestTile(tile());
+  try {
+    expect(budget.snapshot()).toEqual({ response: 1024 * 1024 });
+    finish[0](new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { 'content-type': 'image/webp', 'content-length': '12', 'cache-control': 'public, max-age=100' } }));
+    await vi.waitFor(() => expect(budget.snapshot()).toEqual({ response: 1024 * 1024, 'raster-compressed': 12 }));
+    stream.enqueue(Uint8Array.from([82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80])); stream.close();
+    const result = await handle.response;
+    expect(budget.snapshot()).toEqual({ 'raster-compressed': 12, 'raster-delivered': 12 });
+    result.release(); protocol.evictBuild();
+    expect(budget.used).toBe(0);
+  } finally { protocol.dispose(); await Promise.allSettled([handle.response]); }
+});
+
+it('settles the scheduler and releases the reader and budget when raster allocation fails', async () => {
+  const budget = createPreparationBudget(4 * 1024 * 1024);
+  const failedResponse = webp(); failedResponse.headers.set('content-length', '12');
+  const successfulResponse = webp(); successfulResponse.headers.set('content-length', '12');
+  const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(failedResponse).mockResolvedValueOnce(successfulResponse);
+  const scheduler = createForecastRequestScheduler({ fetchImpl, budget, maxActive: 1 });
+  const protocol = setupSources({ request: spec => scheduler.request(spec), budget });
+  const NativeUint8Array = globalThis.Uint8Array;
+  let failed = false;
+  const replacement = new Proxy(NativeUint8Array, { construct(target, args, newTarget) {
+    if (!failed && args[0] === 12) { failed = true; throw new RangeError('allocation failed'); }
+    return Reflect.construct(target, args, newTarget);
+  } });
+  vi.stubGlobal('Uint8Array', replacement);
+  try {
+    await expect(protocol.requestTile(tile()).response).rejects.toThrow('allocation failed');
+    expect(failed).toBe(true);
+    await vi.waitFor(() => expect(scheduler.stats()).toEqual({ active: 0, queued: 0 }));
+    expect(failedResponse.body?.locked).toBe(false);
+    expect(budget.used).toBe(0);
+    const selected = await protocol.requestTile(tile(1)).response;
+    selected.release(); protocol.evictBuild();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(budget.used).toBe(0);
+  } finally { vi.unstubAllGlobals(); protocol.dispose(); scheduler.dispose(); }
 });

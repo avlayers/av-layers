@@ -1,14 +1,17 @@
 import type { Map, MapSourceDataEvent, ErrorEvent } from 'maplibre-gl';
-import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, longitudeOffsetHours, placeDateKey, planViewportPrefetch, previewRasterLayer, previewRasterSource, seamInsertBefore, type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
+import { createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom, planViewportPrefetch, previewRasterLayer, previewRasterSource, seamInsertBefore, type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileSourceProtocol, type RasterTileSourceTransport, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { addProtocol, removeProtocol } from 'maplibre-gl';
-import { canRetainRasterOverview, MAX_RASTER_SOURCES, rasterSourceLimit } from './raster-budget';
+import { canRetainRasterOverview, MAX_RASTER_SOURCES, rasterRendererPoolBytes, rasterSourceLimit } from './raster-budget';
 import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
 
-interface Selection { build: PinnedBuild; layer: LayerId; frame: string }
-interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean }
-export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean }
+export interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
+type Selection = RasterSelection;
+class RasterBudgetError extends Error {}
+interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; lease: PreparationLease | null; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean }
+export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number } }
+export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean; previewReadyFrames?: readonly string[]; detailReadyFrames?: readonly string[]; limited?: boolean }
 const matches = (a: Selection | null, b: Selection | null): boolean => !!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame;
 
 /** Owns the displayed raster and a bounded prepared window; dispose with the map. */
@@ -41,8 +44,14 @@ export class RasterOverlay {
   private prefetchJobs = new globalThis.Map<string, AbortController>();
   private prefetched = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
+  private selectedPending = false;
+  private pendingSelection: Selection | null = null;
+  private limited = false;
 
   private readonly data = (e: MapSourceDataEvent): void => {
+    if (this.overview && (this.overview.ownsSource?.(e.sourceId) ?? e.sourceId === this.overview.id)) {
+      this.update(); this.emit(); return;
+    }
     const slot = this.slots.find(s => s.id === e.sourceId);
     if (!slot) return;
     if (e.tile) {
@@ -76,11 +85,18 @@ export class RasterOverlay {
     if (this.tilesSettled(slot) && (!slot.successful || !matches(slot, this.requested))) this.abandon(slot);
   };
   private readonly render = (): void => {
+    const overviewPainted = this.overview?.painted ? this.overview.painted() : true;
     if (this.pendingOverview) {
       const next = this.pendingOverview;
       if (!matches(next, this.requested) || !this.overview?.ready(next.build, next.layer, next.frame)) {
         this.cancelPaint(); this.refresh(); this.emit(); return;
       }
+      if (!matches(this.overviewRevealed, next)) {
+        if (this.overview?.canPaint?.() !== false) this.revealOverview(next);
+        return;
+      }
+      if (!overviewPainted) return;
+      if (this.active && !matches(this.active, next)) this.map.setPaintProperty(this.active.id, 'raster-opacity', 0);
       this.coarse = next; this.pendingOverview = null; this.emit(); this.update(); return;
     }
     const next = this.pendingPaint;
@@ -93,6 +109,7 @@ export class RasterOverlay {
     if (previous !== next) previous?.transport.setInteractive(false);
     this.replacementFailed = false; this.incomplete = this.problem(next);
     for (const slot of [...this.slots]) if (slot !== next && (slot.build !== next.build || this.problem(slot))) this.drop(slot);
+    this.limitSlots(next);
     if (previous && previous.build.manifest.buildId !== next.build.manifest.buildId) this.protocol?.evictBuild(previous.build.manifest.buildId);
     queueMicrotask(() => this.prepareNext());
     this.armExpiry(); this.emit();
@@ -106,13 +123,12 @@ export class RasterOverlay {
   private readonly viewChanged = (): void => { this.sourceLimits.clear(); this.enforceBudget(); };
   private readonly resized = (): void => {
     this.cancelPaint(); this.cancelRefinement(); this.cancelFocus();
-    if (!(this.overview?.hasExtent() && this.overview.coversView())) this.clearOverview();
     this.sourceLimits.clear(); this.preferred = null; this.warmFailed = []; this.cancelPrefetch();
     for (const slot of [...this.slots]) if (slot !== this.active && !matches(slot, this.requested)) this.drop(slot);
     this.enforceBudget();
     if (this.requested && !this.moving) {
       this.prepareOverview(this.requested);
-      try { this.loadDetail(this.requested); } catch { /* reported */ }
+      try { this.loadDetail(this.requested); } catch {}
     }
     this.prepareNext(); this.armExpiry(); this.emit();
   };
@@ -128,7 +144,7 @@ export class RasterOverlay {
       this.prepareNext(); this.emit(); return false;
     }
     if (pending) this.drop(pending);
-    try { this.select(sel.build, sel.layer, sel.frame); } catch { /* reported */ }
+    try { this.select(sel.build, sel.layer, sel.frame); } catch {}
     return true;
   };
   private readonly idle = (): void => {
@@ -142,15 +158,30 @@ export class RasterOverlay {
     ['render', this.render], ['movestart', this.move], ['move', this.viewChanged], ['moveend', this.settled], ['idle', this.idle], ['resize', this.resized]
   ];
 
-  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch, private readonly request?: (spec: ForecastRequestSpec) => ForecastRequestHandle) {
+  private overviewRevealed: Selection | null = null;
+  private unsubscribeBudget: (() => void) | null = null;
+
+  constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch, private readonly request?: (spec: ForecastRequestSpec) => ForecastRequestHandle, private readonly options: RasterOverlayOptions = {}) {
     this.opacity = opacity;
     for (const [ev, fn] of this.events) map.on(ev as never, fn as never);
+    this.unsubscribeBudget = options.budget?.onRelease(() => {
+      if (this.disposed || !this.limited || !this.requested || this.moving || this.map.isMoving?.()) return;
+      this.limited = false;
+      this.enforceBudget();
+      if (this.requested && !this.slots.some(s => matches(s, this.requested)) && !matches(this.coarse, this.requested)) {
+        try { this.loadDetail(this.requested); } catch {}
+      }
+      this.prepareNext();
+      this.emit();
+    }) ?? null;
   }
 
   isPrepared(build: PinnedBuild, layer: LayerId, frame: string): boolean {
     const slot = this.slots.find(s => matches(s, { build, layer, frame }));
     return !this.disposed && !!slot && slot.successful && !this.problem(slot) && this.tilesSettled(slot);
   }
+
+  get isSelectedPending(): boolean { return this.selectedPending; }
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (this.disposed) return;
@@ -165,7 +196,6 @@ export class RasterOverlay {
     this.retryEmpty = false; this.preferred = null; this.warmFailed = [];
     this.requested = { build, layer, frame };
     if ((this.pendingPaint && !matches(this.pendingPaint, this.requested)) || (this.pendingOverview && !matches(this.pendingOverview, this.requested))) this.cancelPaint();
-    if (this.coarse && (this.coarse.build !== build || this.coarse.layer !== layer)) this.clearOverview();
     this.enforceBudget();
     if (!this.moving) this.prepareOverview(this.requested);
     this.replacementFailed = false; this.incomplete = this.problem(this.active);
@@ -192,13 +222,34 @@ export class RasterOverlay {
     if (!matches(sel, this.requested) || this.slots.some(s => matches(s, sel))) return;
     const limit = this.slotLimit(sel);
     if (!limit) { this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.armExpiry(); this.emit(); return; }
-    while (this.slots.length >= limit) this.drop(this.slots.findLast(s => s !== this.active) ?? this.active!);
+    for (const s of [...this.slots]) if (s !== this.active) this.drop(s);
+    if (this.slots.length >= limit && matches(this.coarse, sel) && this.active) this.drop(this.active);
     try {
-      this.addSlot(sel, true); this.replacementFailed = false; this.cancelPrefetch(sel); this.armExpiry(); this.emit();
+      try {
+        this.addSlot(sel, true);
+      } catch (error) {
+        if (error instanceof RasterBudgetError) {
+          this.overview?.relievePressure?.();
+          try {
+            this.addSlot(sel, true);
+          } catch (retryError) {
+            if (retryError instanceof RasterBudgetError && this.active) {
+              if (this.overview?.ready(this.active.build, this.active.layer, this.active.frame) && this.overview.show(this.active.build, this.active.layer, this.active.frame, this.opacity)) {
+                this.coarse = { build: this.active.build, layer: this.active.layer, frame: this.active.frame };
+              }
+              this.drop(this.active);
+              this.addSlot(sel, true);
+            } else throw retryError;
+          }
+        } else throw error;
+      }
+      this.limited = false; this.replacementFailed = false; this.cancelPrefetch(sel); this.armExpiry(); this.emit();
     } catch (error) {
       const failed = this.slots.find(s => matches(s, this.requested));
       if (failed) this.drop(failed);
-      this.replacementFailed = true; this.cancelPrefetch(); this.emit(); throw error;
+      this.replacementFailed = true; this.cancelPrefetch();
+      if (error instanceof RasterBudgetError) { this.limited = true; this.emit(); return; }
+      this.emit(); throw error;
     }
   }
 
@@ -210,8 +261,7 @@ export class RasterOverlay {
 
   refresh(): void {
     this.overview?.refresh();
-    const stale = this.coarse && (this.coarse.build !== this.requested?.build || this.coarse.layer !== this.requested?.layer
-      || this.coarse.build.expiresAtMs <= Date.now() || !this.overview?.hasExtent());
+    const stale = this.coarse && this.coarse.build.expiresAtMs <= Date.now();
     if (stale) this.clearOverview();
     if (this.pendingOverview && !this.overview?.ready(this.pendingOverview.build, this.pendingOverview.layer, this.pendingOverview.frame)) this.cancelPaint();
     let changed = false;
@@ -243,7 +293,7 @@ export class RasterOverlay {
     this.sourceLimits.clear(); this.enforceBudget();
     const sel = this.requested;
     if (sel && !this.moving && !this.map.isMoving?.() && sel.build.expiresAtMs > Date.now()) {
-      try { this.select(sel.build, sel.layer, sel.frame); } catch { /* reported */ }
+      try { this.select(sel.build, sel.layer, sel.frame); } catch {}
     }
     this.prepareNext();
   }
@@ -257,22 +307,40 @@ export class RasterOverlay {
     this.requested = this.preferred = null; this.warmFailed = []; this.direction = undefined; this.sourceLimits.clear();
     for (const id of ids) this.protocol?.evictBuild(id);
     if (dispose && this.protocol) { this.overview?.destroy(); this.overview = null; this.protocol.dispose(); removeProtocol(this.protocol.scheme); this.protocol = null; }
-    this.incomplete = this.replacementFailed = this.retryEmpty = false; this.emit();
+    this.incomplete = this.replacementFailed = this.retryEmpty = this.limited = false; this.emit();
+  }
+
+  relievePressure(requiredBytes = 1): boolean {
+    const budget = this.options.budget;
+    if (!budget) return false;
+    const before = budget.used;
+    this.overview?.relievePressure(requiredBytes);
+    for (const slot of [...this.slots]) {
+      if (budget.canReserve(requiredBytes, 'background')) break;
+      if (slot !== this.active && slot !== this.pendingPaint && !matches(slot, this.requested)) this.drop(slot);
+    }
+    return budget.used < before;
   }
 
   destroy(): void {
-    this.disposed = true; this.cancelFocus(); this.clear(true);
+    this.disposed = true; this.unsubscribeBudget?.(); this.unsubscribeBudget = null;
+    this.cancelFocus(); this.clear(true);
     for (const [ev, fn] of this.events) this.map.off(ev as never, fn as never);
   }
 
   private update(): void {
     this.refresh();
-    if (this.pendingPaint || this.pendingOverview) return;
+    if (this.pendingOverview) {
+      if (this.overview?.canPaint?.() !== false) this.revealOverview(this.pendingOverview);
+      return;
+    }
+    if (this.pendingPaint) return;
     const next = this.slots.find(s => matches(s, this.requested));
     if (next === this.active && !this.coarse && !(this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame))) { this.prepareNext(); return; }
     if (next && (next.successful || next.failed.size) && this.tilesSettled(next)) {
       if (!next.successful) { this.abandon(next); return; }
       if (this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame)) { this.abandon(next); this.stageOverview(); return; }
+      if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
       this.map.setPaintProperty(next.id, 'raster-opacity', this.opacity);
       if (this.active && this.active !== next) this.map.setPaintProperty(this.active.id, 'raster-opacity', 0);
       this.overview?.hide(); this.pendingPaint = next; this.cancelPrefetch(); return;
@@ -283,31 +351,51 @@ export class RasterOverlay {
   private cancelPaint(): void {
     if (!this.pendingPaint && !this.pendingOverview) return;
     if (this.pendingPaint) this.map.setPaintProperty(this.pendingPaint.id, 'raster-opacity', 0);
-    this.pendingPaint = this.pendingOverview = null;
+    if (this.coarse && this.overviewRevealed) this.options.beforeReveal?.(this.coarse);
+    if (this.pendingOverview && this.coarse && this.overview?.cancelStage?.(this.opacity)) {
+      this.pendingPaint = this.pendingOverview = this.overviewRevealed = null;
+      return;
+    }
+    this.pendingPaint = this.pendingOverview = this.overviewRevealed = null;
+    if (this.coarse) this.options.beforeReveal?.(this.coarse);
     if (this.coarse && this.overview?.show(this.coarse.build, this.coarse.layer, this.coarse.frame, this.opacity)) return;
     this.coarse = null; this.overview?.hide();
-    if (this.active) this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity);
+    if (this.active) { this.options.beforeReveal?.(this.active); this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity); }
+  }
+
+  private revealOverview(next: Selection): void {
+    if (!matches(this.overviewRevealed, next)) {
+      if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
+      this.overviewRevealed = next;
+    }
+    this.overview?.show(next.build, next.layer, next.frame, this.opacity);
+    for (const s of this.slots) this.map.setPaintProperty(s.id, 'raster-opacity', 0);
   }
 
   private stageOverview(): boolean {
     const next = this.requested;
     if (!next || this.moving || this.map.isMoving?.() || !this.overview?.ready(next.build, next.layer, next.frame)) return false;
-    if (matches(this.coarse, next) || matches(this.pendingOverview, next)) return true;
-    if (!this.overview.show(next.build, next.layer, next.frame, this.opacity)) return false;
-    for (const s of this.slots) this.map.setPaintProperty(s.id, 'raster-opacity', 0);
+    if (matches(this.coarse, next) && !this.overview.needsUpgrade?.(next.build, next.layer, next.frame)) { this.overview.show(next.build, next.layer, next.frame, this.opacity); return true; }
+    if (matches(this.pendingOverview, next)) {
+      if (this.overview.canPaint?.() !== false) this.revealOverview(next);
+      return true;
+    }
+    if (!this.overview.show(next.build, next.layer, next.frame, 0)) return false;
     this.pendingOverview = next;
+    this.overviewRevealed = null;
+    if (this.overview.canPaint?.() !== false) this.revealOverview(next);
     return true;
   }
 
   private clearOverview(): void {
     if (this.coarse && this.active && !matches(this.coarse, this.active)) this.drop(this.active);
-    this.pendingOverview = this.coarse = null; this.overview?.clear();
+    this.pendingOverview = this.coarse = this.overviewRevealed = null; this.overview?.clear();
     if (this.active && !this.pendingPaint) this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity);
   }
 
   private prepareOverview(sel: Selection): void {
     if (!this.overview?.supported) return;
-    if (canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) {
+    if (this.options.budget || canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) {
       this.limitSlots(sel, true); this.overview.select(sel.build, sel.layer, sel.frame);
     } else this.clearOverview();
   }
@@ -328,28 +416,34 @@ export class RasterOverlay {
 
   private armDetail(sel: Selection): void {
     this.cancelRefinement();
+    if (this.overview?.quality?.(sel.build, sel.layer, sel.frame) === 'detail') return;
     if (this.playing && this.overview?.supported) return;
     this.refineTimer = setTimeout(() => {
       this.refineTimer = null;
-      if (matches(sel, this.requested) && !this.moving && !this.playing && sel.build.expiresAtMs > Date.now()) {
-        try { this.loadDetail(sel); } catch { /* reported */ }
+      if (matches(sel, this.requested) && !this.moving && !this.playing && sel.build.expiresAtMs > Date.now() && this.overview?.quality?.(sel.build, sel.layer, sel.frame) !== 'detail') {
+        try { this.loadDetail(sel); } catch {}
       }
     }, 100);
   }
 
   private ensureProtocol(): void {
     if (this.protocol) return;
-    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request });
+    this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request, budget: this.options.budget, ...(this.options.requestLimits ?? { maxActive: 24, maxPrefetchActive: 20 }) });
     addProtocol(this.protocol.scheme, this.protocol.load);
-    this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); });
+    this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); }, this.options);
     if (this.playing) (this.overview as { setPlayback?(playing: boolean): void }).setPlayback?.(true);
   }
 
   private addSlot(sel: Selection, interactive: boolean): void {
     this.ensureProtocol();
     this.protocol!.setBuildExpiry(sel.build.manifest.buildId, sel.build.expiresAtMs);
-    const id = `av-overlay-${++this.generation}`, transport = this.protocol!.createSource(interactive);
-    this.slots.push({ ...sel, id, transport, successful: false, pending: new Set(), failed: new Set(), sourceFailed: false });
+    const bytes = rasterRendererPoolBytes(this.map, layerMaxZoom(sel.build.manifest, sel.layer));
+    const lease = this.options.budget?.reserve('raster-renderer', bytes, interactive ? 'foreground' : 'background') ?? null;
+    if (this.options.budget && !lease) throw new RasterBudgetError('Raster renderer budget exhausted');
+    let transport: RasterTileSourceTransport;
+    try { transport = this.protocol!.createSource(interactive); } catch (error) { lease?.release(); throw error; }
+    const id = `av-overlay-${++this.generation}`;
+    this.slots.push({ ...sel, id, transport, lease, successful: false, pending: new Set(), failed: new Set(), sourceFailed: false });
     const source = previewRasterSource(sel.build.templates[sel.layer], sel.frame, layerMaxZoom(sel.build.manifest, sel.layer), sel.build.manifest.descriptors.attribution);
     source.tiles = source.tiles.map(url => transport.url(url));
     this.map.addSource(id, source);
@@ -386,19 +480,27 @@ export class RasterOverlay {
     if (this.map.getLayer(slot.id)) this.map.removeLayer(slot.id);
     if (this.map.getSource(slot.id)) this.map.removeSource(slot.id);
     slot.transport.dispose();
+    slot.lease?.release();
   }
   private emit(): void {
-    const displayed = this.coarse ?? this.active, st = this.overview?.state;
-    const next: OverlayState = { displayed, requested: this.requested, quality: this.coarse ? 'overview' : this.active ? 'detail' : null,
+    const displayed = this.coarse ?? this.active, st = this.overview?.state, readiness = this.overview?.readiness?.();
+    const next: OverlayState = { displayed, requested: this.requested, quality: this.coarse ? this.overview?.quality?.(this.coarse.build, this.coarse.layer, this.coarse.frame) ?? 'overview' : this.active ? 'detail' : null,
       viewLoading: this.moving || !!(this.active && !this.coarse && !this.map.isSourceLoaded(this.active.id)),
       overviewReady: st?.ready ?? 0, overviewTotal: st?.total ?? 0, overviewFailed: st?.failed ?? 0,
-      incomplete: !this.coarse && this.incomplete, replacementFailed: this.replacementFailed };
+      incomplete: !this.coarse && this.incomplete, replacementFailed: this.replacementFailed,
+      previewReadyFrames: readiness?.previewReadyFrames ?? [], detailReadyFrames: readiness?.detailReadyFrames ?? [], limited: this.limited || !!readiness?.limited };
+    const pending = !!this.requested && !matches(displayed, this.requested) && !this.replacementFailed;
+    if (pending !== this.selectedPending || (pending && !matches(this.pendingSelection, this.requested))) {
+      this.selectedPending = pending; this.pendingSelection = pending ? this.requested : null;
+      this.options.onSelectedPending?.(pending, this.requested);
+    }
     const last = this.lastState;
     if (last && (last.displayed === next.displayed || matches(last.displayed, next.displayed))
       && (last.requested === next.requested || matches(last.requested, next.requested))
       && last.quality === next.quality && last.viewLoading === next.viewLoading
       && last.overviewReady === next.overviewReady && last.overviewTotal === next.overviewTotal
-      && last.overviewFailed === next.overviewFailed && last.incomplete === next.incomplete
+      && last.overviewFailed === next.overviewFailed && last.incomplete === next.incomplete && last.limited === next.limited
+      && last.previewReadyFrames?.join('\0') === next.previewReadyFrames?.join('\0') && last.detailReadyFrames?.join('\0') === next.detailReadyFrames?.join('\0')
       && last.replacementFailed === next.replacementFailed) return;
     this.lastState = next; this.onState(next);
   }
@@ -415,14 +517,60 @@ export class RasterOverlay {
   }
   private limitSlots(sel: Selection, overview = !!this.overview?.state.total): number {
     const limit = Math.min(this.slotLimit(sel, overview), ...this.slots.map(s => this.slotLimit(s, overview)));
-    while (this.slots.length > limit) this.drop(this.slots.findLast(s => s !== this.active) ?? this.active!);
+    if (limit <= 0) {
+      while (this.slots.length > 0) this.drop(this.slots.findLast(s => s !== this.active) ?? this.active!);
+      return 0;
+    }
+    const staging = this.active && !matches(this.active, this.requested) && !matches(this.coarse, this.requested)
+      && this.slots.some(s => s !== this.active && matches(s, this.requested)) ? 1 : 0;
+    const allowed = Math.max(limit, this.active ? 1 + staging : 0);
+    while (this.slots.length > allowed) {
+      this.drop(this.slots.findLast(s => s !== this.active && !matches(s, this.requested)) ?? this.slots.findLast(s => s !== this.active) ?? this.active!);
+    }
     return limit;
   }
   private enforceBudget(): void {
     const sel = this.requested ?? this.active;
     if (!sel) return;
-    if (this.overview?.state.total && !canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) this.clearOverview();
+    if (this.options.budget) {
+      for (const slot of [...this.slots].filter(s => s !== this.active)) {
+        const bytes = rasterRendererPoolBytes(this.map, layerMaxZoom(slot.build.manifest, slot.layer));
+        if (slot.lease && !slot.lease.resize(bytes)) {
+          this.limited = true;
+          this.drop(slot);
+        }
+      }
+      if (this.active?.lease) {
+        const active = this.active, activeLease = active.lease!;
+        const bytes = rasterRendererPoolBytes(this.map, layerMaxZoom(active.build.manifest, active.layer));
+        let resized = activeLease.resize(bytes);
+        if (!resized) {
+          for (const slot of [...this.slots]) if (slot !== active) this.drop(slot);
+          this.overview?.relievePressure?.(Math.max(0, bytes - activeLease.bytes));
+          resized = activeLease.resize(bytes);
+          if (!resized && bytes <= activeLease.bytes + (this.options.budget.limit - this.options.budget.used)) {
+            const oldBytes = activeLease.bytes;
+            activeLease.release();
+            active.lease = this.options.budget.reserve('raster-renderer', bytes, 'foreground') ?? this.options.budget.reserve('raster-renderer', oldBytes, 'foreground');
+            resized = active.lease?.bytes === bytes;
+          }
+        }
+        if (!resized) {
+          this.limited = true;
+          if (this.overview?.ready(active.build, active.layer, active.frame) && this.overview.show(active.build, active.layer, active.frame, this.opacity)) {
+            this.coarse = { build: active.build, layer: active.layer, frame: active.frame };
+            this.drop(active);
+          } else {
+            this.drop(active);
+            this.replacementFailed = true;
+            this.incomplete = false;
+          }
+        }
+      }
+    }
+    if (!this.options.budget && this.overview?.state.total && !canRetainRasterOverview(this.map, layerMaxZoom(sel.build.manifest, sel.layer), this.windActive, this.windResident)) this.clearOverview();
     if (!this.limitSlots(sel)) { this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.incomplete = false; }
+    else if (this.active && matches(this.active, this.requested) && !this.problem(this.active)) this.replacementFailed = false;
     this.armExpiry(); this.emit();
   }
   private predicted(slot: Selection | null = this.active): Selection[] {
@@ -468,9 +616,8 @@ export class RasterOverlay {
   }
   private timelineFrames(slot: Slot): string[] {
     const frames = renderedFrames(slot.build.manifest), index = frames.findIndex(f => f.id === slot.frame);
-    const offset = longitudeOffsetHours(this.map.getCenter().lng) * 60, selectedDay = placeDateKey(Date.parse(frames[index].validTime), offset);
     const before = frames.slice(0, index).reverse(), after = frames.slice(index + 1);
-    return (this.direction === -1 ? [...before, ...after] : [...after, ...before]).filter(f => placeDateKey(Date.parse(f.validTime), offset) === selectedDay).map(f => f.id);
+    return (this.direction === -1 ? [...before, ...after] : [...after, ...before]).map(f => f.id);
   }
   private prefetchBytes(): void {
     const slot = this.active;

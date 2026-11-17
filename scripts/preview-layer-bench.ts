@@ -11,20 +11,30 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { createServer as createVite } from 'vite';
 import { chromium, type Page } from 'playwright';
-import { fixtureLatest } from '../tests/forecast-fixture.ts';
+import { fixtureBuild, fixtureLatest } from '../tests/forecast-fixture.ts';
 import { fixturePointFetch, fixtureProfileBuild } from '../tests/client-point-fixture.ts';
 import { encodeWebp } from '../apps/batch/src/webp.ts';
 import type { PreviewBench } from '../apps/preview/bench.ts';
 import { DETAIL_ZOOM, TILE_SIZE, fixturePixel } from './preview-pixels';
+import { configureGfsWindGrid, configureRrfsWindGrid, previewWindFixture } from './preview-wind';
+import { previewSourceHash } from './preview-hash';
+import { correlatePointerActions } from './preview-observe';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url))), args = process.argv.slice(2);
 const option = (name: string, fallback: string) => { const index = args.indexOf(name); return index < 0 ? fallback : args[index + 1]; };
 const baseline = option('--baseline', 'main'), repeats = Number(option('--repeats', '30')), tileDelayMs = Number(option('--delay-ms', '40'));
 const output = resolve(option('--out', 'output/preview-layer-bench.json')), channel = option('--channel', ''), scenario = option('--scenario', 'all');
 const variant = option('--variant', 'both'), frameCount = Number(option('--frames', '40'));
-const opacity = Number(option('--opacity', '1')), transparent = args.includes('--transparent');
+const focused = scenario === 'viewport-warm' || scenario === 'contention' || scenario === 'pointer-smoke' || scenario === 'device-sim';
+const opacity = Number(option('--opacity', '1')), transparent = args.includes('--transparent'), wind = args.includes('--wind') || focused;
+const model = option('--model', 'gfs'), dpr = Number(option('--dpr', '1')), deviceMemory = Number(option('--device-memory', '4'));
+const viewport = focused ? { width: 1394, height: 1032, dpr, lat: model === 'rrfs' ? 40 : 40.4895, lon: model === 'rrfs' ? -100 : 45.1123, zoom: 8.17 } : { width: 1920, height: 1080, dpr, lat: 40, lon: -100, zoom: 7.15 };
+const detailZoom = focused ? 9 : DETAIL_ZOOM;
+const warmMs = Number(option('--warm-ms', '30000'));
+const observerMode = option('--observer', 'instrumented');
+const forecastRequests = Number(option('--forecast-requests', process.env.VITE_FORECAST_REQUESTS ?? '24'));
 if (!Number.isInteger(repeats) || repeats < 1 || repeats > 200 || !Number.isInteger(tileDelayMs) || tileDelayMs < 0 || tileDelayMs > 1000 ||
-  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke'].includes(scenario) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
+  !Number.isInteger(frameCount) || frameCount < 2 || frameCount > 48 || !['all', 'cold', 'smoke', 'viewport-warm', 'contention', 'pointer-smoke', 'device-sim'].includes(scenario) || (focused && frameCount !== 40) || !['gfs', 'rrfs'].includes(model) || (model === 'rrfs' && !focused) || ![1, 2].includes(dpr) || ![2, 4, 8].includes(deviceMemory) || !Number.isInteger(warmMs) || warmMs < 0 || warmMs > 300000 || ![16, 24, 32].includes(forecastRequests) || !['instrumented', 'control'].includes(observerMode) || !['both', 'baseline', 'changed'].includes(variant) || ![0.7, 1].includes(opacity)) throw new Error('Invalid benchmark options');
 await mkdir(dirname(output), { recursive: true });
 const scratch = await mkdtemp(join(tmpdir(), 'av-preview-bench-')), baselineRoot = join(scratch, 'baseline');
 const workspacePackages = new Map<string, Record<string, string>>();
@@ -43,12 +53,8 @@ for (const entry of await readdir(join(root, 'packages'))) {
   try { await symlink(modules, join(baselineRoot, 'packages', entry, 'node_modules')); } catch { /* package has no local dependencies */ }
 }
 const maplibreDirectory = dirname(createRequire(join(root, 'apps/preview/package.json')).resolve('maplibre-gl/package.json'));
-const build = fixtureProfileBuild({ frameHours: Array.from({ length: frameCount }, (_, index) => index + 1), mapFrameCount: frameCount });
-build.manifest.expiresAt = new Date(Date.now() + 86400000).toISOString();
-build.expiresAtMs = Date.parse(build.manifest.expiresAt);
 const images = new Map<string, Promise<Buffer>>();
 const geometry = new Map<string, Uint8Array>();
-await encodeWebp(new Uint8Array(TILE_SIZE * TILE_SIZE * 4));
 function tileImage(layer: string, frame: string, z: number, x: number, y: number): Promise<Buffer> {
   const key = `${layer}/${frame}/${z}/${x}/${y}`, hit = images.get(key);
   if (hit) return hit;
@@ -58,32 +64,47 @@ function tileImage(layer: string, frame: string, z: number, x: number, y: number
     template = new Uint8Array(TILE_SIZE * TILE_SIZE * 4);
     const size = TILE_SIZE * 2 ** z;
     for (let row = 0; row < TILE_SIZE; row++) for (let column = 0; column < TILE_SIZE; column++) {
-      template.set(fixturePixel('agl', index, z, (x * TILE_SIZE + column + 0.5) / size, (y * TILE_SIZE + row + 0.5) / size, transparent), (row * TILE_SIZE + column) * 4);
+      template.set(fixturePixel('agl', index, z, (x * TILE_SIZE + column + 0.5) / size, (y * TILE_SIZE + row + 0.5) / size, transparent, detailZoom), (row * TILE_SIZE + column) * 4);
     }
     geometry.set(geometryKey, template);
   }
   // Reuse spatial geometry so synthetic trigonometry cannot dominate rapid frame changes.
-  const rgba = template.slice(), [red, green] = fixturePixel(layer.endsWith('-agl') ? 'agl' : 'msl', index, z, 0, 0, false);
+  const rgba = template.slice(), [red, green] = fixturePixel(layer.endsWith('-agl') ? 'agl' : 'msl', index, z, 0, 0, false, detailZoom);
   for (let offset = 0; offset < rgba.length; offset += 4) { rgba[offset] = red; rgba[offset + 1] = green; }
   const image = encodeWebp(rgba); images.set(key, image); return image;
 }
 type Sample = Awaited<ReturnType<PreviewBench['select']>>;
 function summarize(samples: Sample[]) {
-  const times = (field: 'firstCorrectMs' | 'detailedMs') => {
-    const sorted = samples.flatMap(sample => sample[field] === null ? [] : [sample[field]!]).sort((a, b) => a - b);
+  const times = (field: 'sceneMs' | 'firstCorrectMs' | 'detailedMs' | 'combinedMs', inputs = samples) => {
+    const sorted = inputs.flatMap(sample => sample[field] === null ? [] : [sample[field]!]).sort((a, b) => a - b);
     return { count: sorted.length, p50Ms: sorted[Math.floor((sorted.length - 1) * 0.5)] ?? null, p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null, maxMs: sorted.at(-1) ?? null };
   };
-  return { inputs: samples.length, firstCorrectViewport: times('firstCorrectMs'), detailedViewport: times('detailedMs'), maxSources: Math.max(0, ...samples.map(sample => sample.sources)) };
+  const ready = samples.filter(sample => sample.targetReadyAtInput);
+  return { inputs: samples.length, targetReady: ready.length, targetCold: samples.length - ready.length, timeouts: samples.filter(sample => sample.outcome === 'timeout').length, superseded: samples.filter(sample => sample.outcome === 'superseded').length,
+    sceneDelivery: times('sceneMs'), firstCorrectViewport: times('firstCorrectMs'), detailedViewport: times('detailedMs'), combinedInstalled: times('combinedMs'), readyCombinedInstalled: times('combinedMs', ready), maxSources: Math.max(0, ...samples.map(sample => sample.sources)) };
 }
-async function sourceHash(directory: string) {
+const harnessInputs = ['scripts/preview-layer-bench.ts', 'scripts/preview-pixels.ts', 'scripts/preview-wind.ts', 'scripts/preview-hash.ts', 'scripts/preview-observe.ts', 'apps/preview/bench.ts', 'apps/batch/src/webp.ts', 'tests/client-point-fixture.ts', 'tests/forecast-fixture.ts', 'scripts/fixtures/manifest.contract.json', 'scripts/fixtures/gfs-wind-layout.json', 'scripts/fixtures/rrfs-wind-layout.json', 'package.json', 'pnpm-lock.yaml'];
+async function harnessHash() {
   const hash = createHash('sha256');
-  for (const sourceDirectory of sourceDirectories) for (const path of (await readdir(join(directory, sourceDirectory), { recursive: true })).sort()) {
-    if (!/(?:\.(?:ts|tsx|css)|package\.json)$/.test(path) || /\.test\.tsx?$/.test(path)) continue;
-    hash.update(`${sourceDirectory}/${path}`).update(await readFile(join(directory, sourceDirectory, path)));
-  }
-  hash.update(await readFile(join(directory, 'apps/preview/index.html')));
+  for (const file of harnessInputs) hash.update(file).update(await readFile(join(root, file)));
   return hash.digest('hex');
 }
+const harnessBeforeSha256 = await harnessHash();
+async function sourceHash(directory: string, directories = sourceDirectories, index = true) {
+  return previewSourceHash(directory, directories, index);
+}
+const fixtureSourceDirectories = ['packages/contracts', 'packages/forecast', 'packages/soaring'];
+const fixtureSourceBeforeSha256 = await sourceHash(root, fixtureSourceDirectories, false);
+const baselineFixtureSourceSha256 = await sourceHash(baselineRoot, fixtureSourceDirectories, false);
+if (variant !== 'changed' && fixtureSourceBeforeSha256 !== baselineFixtureSourceSha256) throw new Error('Server fixture workspace dependencies differ from baseline; cannot claim isolated baseline');
+const axis = fixtureProfileBuild({ frameHours: Array.from({ length: frameCount }, (_, index) => focused && index >= 24 ? 27 + (index - 24) * 3 : index + 1), mapFrameCount: frameCount });
+const build = model === 'rrfs' ? fixtureBuild({ model: 'rrfs', frames: axis.manifest.frames, mapFrameCount: frameCount }) : axis;
+if (model === 'rrfs') configureRrfsWindGrid(build.manifest); else if (focused) configureGfsWindGrid(build.manifest);
+build.manifest.expiresAt = new Date(Date.now() + 86400000).toISOString();
+build.expiresAtMs = Date.parse(build.manifest.expiresAt);
+if (wind) build.manifest.mapData = { sha256: 'a'.repeat(64), bytes: 1 };
+const windFixture = previewWindFixture(build.manifest, model === 'rrfs' ? 'rrfs' : focused);
+await encodeWebp(new Uint8Array(TILE_SIZE * TILE_SIZE * 4));
 const browser = await chromium.launch({ headless: true, ...(channel ? { channel } : {}) });
 const results = [];
 try {
@@ -91,37 +112,92 @@ try {
     const codeRootReal = await realpath(codeRoot);
     if (variant !== 'both' && variant !== name) continue;
     const sourceSha256 = await sourceHash(codeRoot);
-    let requests = 0, active = 0, peakActive = 0, bytes = 0, lastRequest = 0, base = '', overviewRequests = 0, overviewBytes = 0, maxImageReadyMs = 0;
+    let requests = 0, active = 0, peakActive = 0, bytes = 0, lastRequest = 0, base = '', overviewRequests = 0, overviewBytes = 0, maxImageReadyMs = 0, windRequests = 0, windBytes = 0;
     const urls = new Set<string>(), errors: string[] = [];
     const protocols = new Set<string>(), sessions = new Set<ServerHttp2Session>();
-    const count = () => ({ requests, bytes, overviewRequests, overviewBytes });
-    const since = (start: ReturnType<typeof count>) => ({ requests: requests - start.requests, bytes: bytes - start.bytes, overviewRequests: overviewRequests - start.overviewRequests, overviewBytes: overviewBytes - start.overviewBytes });
     const requestTimings: { frame: string; z: number; startedAt: number; finishedAt?: number }[] = [];
+    const events: { frame: string; kind: string; startedAt: number; finishedAt?: number; queuedAt?: number; queuedBodyBytes?: number; status?: number; aborted?: boolean }[] = [];
+    const count = () => ({ at: Date.now() });
+    const since = (start: ReturnType<typeof count>, end = Date.now()) => {
+      type Counts = { starts: number; serverFinishes: number; aborted: number; queuedBodyBytes: number; finishedBodyBytes: number };
+      const groups: Record<string, Counts> = {}, byFrame: Record<string, Record<string, Counts>> = {};
+      for (const event of events) {
+        if (![event.startedAt, event.queuedAt, event.finishedAt].some(time => time !== undefined && time >= start.at && time <= end)) continue;
+        const frame = byFrame[event.frame || '(unattributed)'] ??= {};
+        for (const group of [groups[event.kind] ??= { starts: 0, serverFinishes: 0, aborted: 0, queuedBodyBytes: 0, finishedBodyBytes: 0 }, frame[event.kind] ??= { starts: 0, serverFinishes: 0, aborted: 0, queuedBodyBytes: 0, finishedBodyBytes: 0 }]) {
+          if (event.startedAt >= start.at && event.startedAt <= end) group.starts++;
+          if (event.queuedAt !== undefined && event.queuedAt >= start.at && event.queuedAt <= end) group.queuedBodyBytes += event.queuedBodyBytes ?? 0;
+          if (event.finishedAt !== undefined && event.finishedAt >= start.at && event.finishedAt <= end) {
+            if (event.aborted) group.aborted++;
+            else { group.serverFinishes++; group.finishedBodyBytes += event.queuedBodyBytes ?? 0; }
+          }
+        }
+      }
+      return { intervalStartEpochMs: start.at, intervalEndEpochMs: end, routes: groups, byFrame, browserReceivedBodyBytes: null };
+    };
+    const attributeInputs = (inputs: Sample[]) => inputs.map(sample => Object.assign(sample, { transport: since({ at: sample.inputEpochMs }, sample.finishedEpochMs ?? Date.now()) }));
+    let faultsEnabled = false, failedWind = false, delayedTile = false;
     const server = createSecureServer({ ...tls, allowHTTP1: true }, async (request, response) => {
       const url = new URL(request.url!, 'http://localhost');
-      const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify(value)); };
+      const kind = url.pathname.startsWith('/tiles/') ? 'raster' : url.pathname.startsWith(`/v1/models/${model}/`) ? url.pathname.endsWith('/latest') ? 'latest' : url.pathname.endsWith('/sample') ? 'sample' : url.pathname.endsWith('/profile') ? 'profile' : 'wind' : null;
+      const event = kind ? { frame: '', kind, startedAt: Date.now() } as typeof events[number] : null;
+      if (event) {
+        if (events.length >= 20000) { errors.push('Benchmark request event limit exceeded'); response.writeHead(503); response.end(); return; }
+        events.push(event);
+        response.once('finish', () => { event.finishedAt = Date.now(); event.status = response.statusCode; event.aborted = false; });
+        response.once('close', () => { if (!response.writableFinished) { event.finishedAt = Date.now(); event.aborted = true; } });
+      }
+      const endBody = (body: string | Uint8Array) => { if (event) { event.queuedAt = Date.now(); event.queuedBodyBytes = typeof body === 'string' ? Buffer.byteLength(body) : body.byteLength; } response.end(body); };
+      const json = (value: unknown) => { response.setHeader('content-type', 'application/json'); endBody(JSON.stringify(value)); };
       try {
         if (url.pathname === '/') {
           response.setHeader('content-type', 'text/html');
           response.end(await vite!.transformIndexHtml(request.url!, await readFile(join(codeRoot, 'apps/preview/index.html'), 'utf8'))); return;
         }
-        if (url.pathname === '/bench/config.json') { json({ frames: build.manifest.frames.map(frame => frame.id), transparent }); return; }
-        if (url.pathname === '/v1/models/gfs/latest') { json(fixtureLatest(build.manifest, base)); return; }
+        if (url.pathname === '/bench/config.json') { json({ frames: build.manifest.frames.map(frame => frame.id), transparent, wind, detailZoom,
+          expectedWind: build.manifest.frames.map(frame => windFixture.expected(frame.id, viewport.lat, viewport.lon, 1500)) }); return; }
+        if (url.pathname === `/v1/models/${model}/latest`) { json(fixtureLatest(build.manifest, base)); return; }
         if (url.pathname.endsWith('/sample') || url.pathname.endsWith('/profile')) { json(fixturePointFetch(build, `${base}${request.url}`)); return; }
+        const numeric = wind && new RegExp(`^/v1/models/${model}/runs/[^/]+/data/([^/]+)(?:/(wind|fine|overview-\\d+)/(\\d+)(?:-(\\d+))?)?$`).exec(url.pathname);
+        if (numeric) {
+          windRequests++; active++; peakActive = Math.max(peakActive, active); lastRequest = Date.now();
+          event!.frame = numeric[1]; event!.kind = `wind-${numeric[2] ?? 'descriptor'}`;
+          const cancellation = new AbortController(); response.once('close', () => cancellation.abort());
+          try {
+            const fail = faultsEnabled && numeric[1] === 'f060' && !numeric[2] && !failedWind;
+            if (fail) failedWind = true;
+            await delay(tileDelayMs + (fail ? 1500 : 0), undefined, { signal: cancellation.signal });
+            if (fail) { response.writeHead(503); endBody(''); return; }
+            const [, frame, kind, first, last] = numeric;
+            const descriptor = windFixture.descriptor(frame);
+            const start = Number(first), end = last === undefined ? start : Number(last);
+            const chunks = kind && Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start && end - start < 512
+              ? Array.from({ length: end - start + 1 }, (_, i) => windFixture.chunk(frame, kind, start + i)) : [];
+            if (!descriptor || (kind && (!chunks.length || chunks.some(chunk => !chunk)))) { response.writeHead(404); response.end(); return; }
+            const body = kind ? Buffer.concat(chunks as Uint8Array[]) : Buffer.from(JSON.stringify(descriptor));
+            response.writeHead(200, { 'content-type': kind ? 'application/octet-stream' : 'application/json', 'content-length': body.length, 'cache-control': 'public, max-age=3600, immutable' });
+            windBytes += body.length; endBody(body);
+          } catch (error) { if (!cancellation.signal.aborted) throw error; }
+          finally { active--; lastRequest = Date.now(); }
+          return;
+        }
         if (url.pathname.startsWith('/tiles/')) {
           protocols.add(request.httpVersion); requests++; active++; peakActive = Math.max(peakActive, active); lastRequest = Date.now(); urls.add(url.pathname);
           const [, , , , layer, frame, zoom, column, filename] = url.pathname.split('/'), z = Number(zoom), x = Number(column), y = Number(filename.replace('.webp', ''));
-          if (z < DETAIL_ZOOM) overviewRequests++;
+          if (z < detailZoom) overviewRequests++;
           const timing = { frame, z, startedAt: Date.now() } as { frame: string; z: number; startedAt: number; finishedAt?: number };
           requestTimings.push(timing);
+          event!.frame = frame; event!.kind = `raster-z${z}`;
           const cancellation = new AbortController();
           response.once('close', () => cancellation.abort());
           try {
-            const ready = Date.now(), latency = delay(tileDelayMs, undefined, { signal: cancellation.signal });
+            const slow = faultsEnabled && frame === 'f060' && z >= detailZoom && !delayedTile;
+            if (slow) delayedTile = true;
+            const ready = Date.now(), latency = delay(tileDelayMs + (slow ? 3000 : 0), undefined, { signal: cancellation.signal });
             const imageReady = Promise.resolve().then(() => tileImage(layer, frame, z, x, y)).then(image => { maxImageReadyMs = Math.max(maxImageReadyMs, Date.now() - ready); return image; });
             const [image] = await Promise.all([imageReady, latency]);
             response.writeHead(200, { 'content-type': 'image/webp', 'content-length': image.length, 'cache-control': 'public, max-age=3600, immutable' });
-            bytes += image.length; if (z < DETAIL_ZOOM) overviewBytes += image.length; timing.finishedAt = Date.now(); response.end(image);
+            bytes += image.length; if (z < detailZoom) overviewBytes += image.length; timing.finishedAt = Date.now(); endBody(image);
           } catch (error) { if (!cancellation.signal.aborted) throw error; }
           finally { active--; lastRequest = Date.now(); }
           return;
@@ -143,10 +219,84 @@ try {
     const benchEntry = join(root, 'apps/preview/bench.ts');
     const vite = await createVite({ configFile: false, root: join(codeRoot, 'apps/preview'), cacheDir: join(scratch, name, 'vite'), logLevel: 'error',
       server: { hmr: { server: hmr, protocol: 'wss', host: '127.0.0.1', clientPort: hmrAddress.port }, middlewareMode: true, fs: { allow: [root, scratch] } }, optimizeDeps: { noDiscovery: true },
-      define: { 'import.meta.env.AV_API_BASE': JSON.stringify(base), 'import.meta.env.VITE_OFFLINE_FIXTURE': '"true"' },
+      define: { 'import.meta.env.AV_API_BASE': JSON.stringify(base), 'import.meta.env.VITE_OFFLINE_FIXTURE': '"true"', ...(name === 'changed' ? { 'import.meta.env.VITE_FORECAST_REQUESTS': JSON.stringify(String(forecastRequests)) } : {}) },
       esbuild: { jsx: 'automatic', jsxImportSource: 'preact' },
       resolve: { alias: [{ find: /^maplibre-gl\//, replacement: `${maplibreDirectory}/` }] },
       plugins: [
+        { name: 'bench-viewport-policy', enforce: 'pre', resolveId(id, importer) { if (id === './src/features/map/viewport-policy' && importer === benchEntry) return join(codeRoot, 'apps/preview/src/features/map/viewport-policy.ts'); } },
+        { name: 'observe-wind-identity', enforce: 'pre', transform(code, id) {
+          if (!wind || name !== 'baseline' || !id.endsWith('/features/wind/wind-session.ts')) return;
+          const anchor = '\n  return {\n    update, reconcile, clear';
+          if (code.split(anchor).length !== 2) throw new Error('Wind session observer anchor is missing or ambiguous');
+          const old = code.includes('const windHeld = new Map<string, WindRequest>();') && code.includes('get installed() { return installedWind && windDisplayed');
+          const current = code.includes('const jobs = new Map<string, WindJob>()') && code.includes('get installed() { return installed ?');
+          if (old === current) throw new Error('Unknown or ambiguous wind session observer version');
+          const view = old ? 'installedWind && windDisplayed ? { view: installedWind, height: installedHeight } : null' : 'installed ? { view: installed, height: installedHeight } : null';
+          const lifecycle = old ? '!destroyed && s.visible && s.mapReady && !s.expired && !s.mapFailed && !s.aborted && !!s.build && s.build.expiresAtMs > Date.now()' : 'active()';
+          const ready = old
+            ? "[...windHeld.values()].filter(held => held === installedWind && windDisplayed && installedHeight === s.height && held.build === s.build && coversBounds(held.bounds, cameraBounds(map)) && (held.source.isOverview !== true || map.getZoom() <= held.zoom) && held.source.hasPrepared(s.height) && held.source.sample(LAT, LON, s.height).status === 'valid').map(held => held.frame)"
+            : "[...jobs.values()].filter(job => job.build === s.build && coversBounds(job.bounds, cameraBounds(map)) && (job.source.isOverview !== true || map.getZoom() <= job.zoom) && readyAt(job, s.height) && job.source.sample(LAT, LON, s.height).status === 'valid').map(job => job.frame)";
+          const expression = ready.replace('LAT', String(viewport.lat)).replace('LON', String(viewport.lon));
+          return code.replace(anchor, `\n  window.__benchWindState = () => { const s = state(), usable = ${lifecycle}, observation = usable ? (${view}) : null; return { height: s.height, ready: usable ? ${expression} : [], installed: observation ? { frame: observation.view.frame, height: observation.height, sample: observation.view.source.sample(${viewport.lat}, ${viewport.lon}, observation.height) } : null }; };${anchor}`);
+        } },
+        { name: 'observe-raster-readiness', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/features/raster/raster-overview.ts')) return;
+          const anchor = 'this.transport = this.supported ? protocol.createSource(false) : null;';
+          if (code.split(anchor).length !== 2 || !code.includes('ready(build: PinnedBuild, layer: LayerId, frame: string)')) throw new Error('Raster readiness observer anchor is missing or ambiguous');
+          const current = code.includes('private readonly natives = new globalThis.Map<string, Image>()');
+          const old = code.includes('private readonly images = new globalThis.Map<string, ImageBitmap>()');
+          if (old === current) throw new Error('Unknown or ambiguous raster readiness observer version');
+          const preview = 'context.frames.filter(frame => this.ready(context.build, context.layer, frame))';
+          const native = old ? 'context.geometry.zoom >= context.requiredZoom ? preview : []' : 'context.frames.filter(frame => this.natives.has(frame) && this.nativeCovers())';
+          return code.replace(anchor, `${anchor} window.__benchRasterReady = () => { const context = this.context; if (!context || this.disposed || context.build.expiresAtMs <= Date.now()) return { preview: [], native: [] }; const preview = ${preview}, native = ${native}; return { preview, native }; };`);
+        } },
+        { name: 'observe-timeline', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/features/timeline/timeline-controller.ts')) return;
+          const render = 'function render(): void {';
+          const anchor = '  const stopPlayback = () => {';
+          if (code.split(render).length !== 2 || code.split(anchor).length !== 2 || !code.includes('function currentScale(width: number)')) throw new Error('Timeline observer anchor is missing or ambiguous');
+          return code.replace(render, `${render} window.__benchTimelineSelected?.(selectedIndex);`).replace(anchor, `  window.__benchTimelinePosition = (index: number) => { const frame = frames[index]; if (!frame) return null; const local = localTimeFromMs(Date.parse(frame.validTime), offsetMinutes); const rect = track.getBoundingClientRect(); if (!local || !rect.width) return null; return { day: local.day, x: rect.left + minuteToX(currentScale(rect.width), local.hour * 60 + local.minute), y: rect.top + rect.height / 2 }; };\n${anchor}`);
+        } },
+        { name: 'observe-scene-commit', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/app/create-preview-app.ts')) return;
+          const anchor = 'forecastSession.commitFrame(frame.id, frame.validTime);';
+          if (code.split(anchor).length !== 2 || !/function selectIndex\(index: number, history: 'none' \| 'push' \| 'replace'(?:, fromTimeline = false)?\): void \{/.test(code)) throw new Error('Scene commit observer anchor is missing or ambiguous');
+          code = code.replace(anchor, `${anchor} window.__benchSceneCommit?.(index, frame.id);`);
+          if (name === 'changed' && wind) {
+            const begin = 'windSession = createWindSession({', end = 'replacementFailed: () => view.overlay.value.replacementFailed\n    });';
+            if (code.split(begin).length !== 2 || code.split(end).length !== 2) throw new Error('Public wind session observer anchor is missing or ambiguous');
+            code = code.replace(end, `${end} window.__benchWindState = () => { const session = windSession, height = intent().windHeight, installed = session?.installed; return { height, ready: session ? [...session.ready].filter(([, heights]) => heights.has(height)).map(([frame]) => frame) : [], preparation: session?.preparation, memory: session?.memory, installed: installed ? { frame: installed.frame, height: installed.height, sample: installed.source.sample(${viewport.lat}, ${viewport.lon}, installed.height), isOverview: installed.isOverview } : null }; };`);
+          }
+          return code;
+        } },
+        { name: 'observe-scheduler', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/client-request-scheduler.ts')) return;
+          const born = 'const signal = init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;';
+          const start = 'function start() {';
+          const finish = 'function finish() {\n      if (finished) return;';
+          const headers = 'const fetched = await fetchImpl(input, { ...init, signal: controller.signal });';
+          if ([born, start, finish, headers].some(anchor => code.split(anchor).length !== 2)) throw new Error('Scheduler observer anchors are missing or ambiguous');
+          return code.replace(born, `const __benchQueued = performance.now(); let __benchStarted = 0, __benchHeaders = 0; ${born}`)
+            .replace(start, `${start} __benchStarted = performance.now(); window.__benchRecord?.(foreground ? 'scheduler-foreground-queue' : 'scheduler-background-queue', __benchStarted - __benchQueued);`)
+            .replace(headers, `${headers} __benchHeaders = performance.now(); window.__benchRecord?.('scheduler-headers-elapsed', __benchHeaders - __benchStarted);`)
+            .replace(finish, `${finish} if (__benchStarted) window.__benchRecord?.('scheduler-start-to-settlement', performance.now() - __benchStarted); if (__benchHeaders) window.__benchRecord?.('scheduler-headers-to-body-settlement', performance.now() - __benchHeaders);`);
+        } },
+        { name: 'observe-wind-cost', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/client-wind.ts')) return;
+          if (!code.includes('export class WindDataSource') || !code.includes('  prepare(height:') || !code.includes('  field(height:')) throw new Error('Wind cost observer anchors are missing');
+          return `${code}\nfor (const name of ['prepare', 'field'] as const) { const original = WindDataSource.prototype[name] as (...args: never[]) => unknown; (WindDataSource.prototype as unknown as Record<string, unknown>)[name] = function (this: WindDataSource, ...args: never[]) { const state = () => name === 'prepare' ? this.hasPrepared(args[0], args[1]) : 'hasField' in this ? this.hasField(args[0]) : null; const cached = state(); return window.__benchWindCall ? window.__benchWindCall(name === 'prepare' ? 'grid' : 'sampler', cached, () => original.apply(this, args), state) : original.apply(this, args); }; }`;
+        } },
+        { name: 'observe-managed-budget', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/client-preparation-budget.ts')) return;
+          const idAnchor = 'let used = 0, pending = false;', changeAnchor = 'if (bytes) categories.set(category, bytes); else categories.delete(category);';
+          if (code.split(idAnchor).length !== 2 || code.split(changeAnchor).length !== 2) throw new Error('Managed budget observer anchors are missing or ambiguous');
+          return code.replace(idAnchor, `${idAnchor} const __benchId = window.__benchBudgetId?.() ?? 0;`).replace(changeAnchor, `${changeAnchor} window.__benchManaged?.(__benchId, limit, used, category, bytes);`);
+        } },
+        { name: 'observe-wind-display', enforce: 'pre', transform(code, id) {
+          if (!id.endsWith('/features/wind/wind-overlay.ts')) return;
+          if (!code.includes('export class WindOverlay') || !code.includes('  install(field:')) throw new Error('Wind display observer anchors are missing');
+          return `${code}\n{ const original = WindOverlay.prototype.install; WindOverlay.prototype.install = function (...args) { const start = performance.now(); try { return original.apply(this, args); } finally { window.__benchRecord?.('wind-display-install-submission', performance.now() - start); } }; }`;
+        } },
         { name: 'code-root-workspace', enforce: 'pre', async resolveId(id) {
           const match = /^@av\/([^/]+)(?:\/(.+))?$/.exec(id);
           if (!match) return;
@@ -178,12 +328,19 @@ try {
     }
     async function openPage() {
       const start = count(), startedAt = Date.now();
-      const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 1 });
+      const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: viewport.dpr });
       const page = await context.newPage();
-      page.on('pageerror', error => errors.push(error.message));
-      await page.goto(`${base}/?model=gfs&ref=agl&opacity=${opacity}&lat=40&lon=-100&z=7.15&t=${encodeURIComponent(build.manifest.frames[0].validTime)}`);
+      await page.addInitScript(mode => { window.__benchObserver = mode; }, observerMode as 'instrumented' | 'control');
+      if (scenario === 'device-sim') await page.addInitScript(memory => { Object.defineProperty(navigator, 'deviceMemory', { value: memory, configurable: true }); }, deviceMemory);
+      page.on('pageerror', error => { if (!errors.includes(error.message)) errors.push(error.message); });
+      const navigation: string[] = [], consoleErrors: string[] = [];
+      page.on('framenavigated', frame => { if (frame === page.mainFrame()) navigation.push(frame.url()); });
+      page.on('console', message => { if (message.type() === 'error' || message.text().includes('[vite]')) consoleErrors.push(message.text()); });
+      if (wind) await page.addInitScript(() => localStorage.setItem('av.wind-controls.v1', JSON.stringify({ style: 'hybrid', visible: true, height: 1500, fixedHeight: 1500 })));
+      await page.goto(`${base}/?model=${model}&ref=agl&opacity=${opacity}&lat=${viewport.lat}&lon=${viewport.lon}&z=${viewport.zoom}&benchObserver=${observerMode}&t=${encodeURIComponent(build.manifest.frames[0].validTime)}`);
       await page.waitForFunction(() => !!window.bench);
-      await page.evaluate(() => Promise.race([window.bench.ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Initial preview did not render')), 30000))]));
+      try { await page.evaluate(() => Promise.race([window.bench.ready, new Promise((_, reject) => setTimeout(() => reject(new Error('Initial preview did not render')), 30000))])); }
+      catch (error) { throw new Error(`Initial preview failed; navigations=${JSON.stringify(navigation)} pageErrors=${JSON.stringify(errors)} console=${JSON.stringify(consoleErrors)}`, { cause: error }); }
       return { context, page, initial: { elapsedMs: Date.now() - startedAt, ...since(start), state: await page.evaluate(() => window.bench.snapshot()) } };
     }
     async function quiet(page: Page, maxWaitMs = 60000, required = true): Promise<boolean> {
@@ -195,10 +352,58 @@ try {
       }
       return true;
     }
+    type Trace = Awaited<ReturnType<PreviewBench['trace']>>;
+    type Action = { kind: 'day-switch' | 'scrub' | 'gesture-end'; requested: number; before: Trace; after: Trace };
+    async function pointerDay(page: Page, index: number) {
+      const position = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
+      if (!position) throw new Error(`Timeline position unavailable for ${index}`);
+      const day = page.locator(`.ct-day[data-day="${position.day}"]`);
+      let action: Action | null = null;
+      if (await day.getAttribute('aria-pressed') !== 'true') {
+        const before = await page.evaluate(() => window.bench.trace()); await day.click();
+        action = { kind: 'day-switch', requested: index, before, after: await page.evaluate(() => window.bench.trace()) };
+      }
+      const updated = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
+      if (!updated) throw new Error(`Timeline position unavailable after day change for ${index}`);
+      return { position: updated, action };
+    }
+    async function pointerJump(page: Page, index: number) {
+      const start = await page.evaluate(() => window.bench.pointerStart()), first = await page.evaluate(() => window.bench.trace()), day = await pointerDay(page, index);
+      const before = await page.evaluate(() => window.bench.trace());
+      await page.mouse.click(day.position.x, day.position.y);
+      const inputs = await page.evaluate(start => window.bench.pointerEnd(start), start);
+      const after = await page.evaluate(() => window.bench.trace()), commits = await page.evaluate(start => window.bench.sceneEvents(start), first.sceneCount);
+      const actions = correlatePointerActions([...(day.action ? [day.action] : []), { kind: 'scrub', requested: index, before, after }], inputs, commits, after.epochMs + 0.001, build.manifest.frames.map(frame => frame.id));
+      return { requested: index, selected: (await page.evaluate(() => window.bench.snapshot())).selectedIndex, inputs, commits, actions };
+    }
+    async function pointerSweep(page: Page, indices: number[]) {
+      const start = await page.evaluate(() => window.bench.pointerStart()), first = await page.evaluate(() => window.bench.trace()), actions: Action[] = [];
+      let day = '';
+      for (const index of indices) {
+        const position = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
+        if (!position) throw new Error(`Timeline position unavailable for ${index}`);
+        if (position.day !== day) {
+          if (day) { const before = await page.evaluate(() => window.bench.trace()); await page.mouse.up(); actions.push({ kind: 'gesture-end', requested: indices[indices.indexOf(index) - 1], before, after: await page.evaluate(() => window.bench.trace()) }); }
+          const next = await pointerDay(page, index); day = next.position.day;
+          if (next.action) actions.push(next.action);
+          await page.mouse.move(next.position.x, next.position.y);
+          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.down(); await delay(120);
+          actions.push({ kind: 'scrub', requested: index, before, after: await page.evaluate(() => window.bench.trace()) });
+        } else {
+          const next = await page.evaluate(index => window.__benchTimelinePosition?.(index), index);
+          if (!next) throw new Error(`Timeline position unavailable for ${index}`);
+          const before = await page.evaluate(() => window.bench.trace()); await page.mouse.move(next.x, next.y); await delay(120);
+          actions.push({ kind: 'scrub', requested: index, before, after: await page.evaluate(() => window.bench.trace()) });
+        }
+      }
+      if (day) { const before = await page.evaluate(() => window.bench.trace()); await page.mouse.up(); actions.push({ kind: 'gesture-end', requested: indices.at(-1)!, before, after: await page.evaluate(() => window.bench.trace()) }); }
+      const inputs = await page.evaluate(start => window.bench.pointerEnd(start), start), end = await page.evaluate(() => window.bench.trace()), commits = await page.evaluate(start => window.bench.sceneEvents(start), first.sceneCount);
+      return { inputs, commits, actions: correlatePointerActions(actions, inputs, commits, end.epochMs + 0.001, build.manifest.frames.map(frame => frame.id)) };
+    }
     const samples: Record<string, Sample[]> = {}, summary: Record<string, unknown> = {}, memoryPlateau = [];
     let environment, finalEnvironment, initialHeap, finalHeap;
     try {
-      for (const prepared of scenario === 'smoke' ? [false] : [false, true]) for (const intervalMs of scenario === 'smoke' ? [120] : [120, 60]) {
+      for (const prepared of focused ? [] : scenario === 'smoke' ? [false] : [false, true]) for (const intervalMs of scenario === 'smoke' ? [120] : [120, 60]) {
         const { context, page, initial } = await openPage();
         try {
           environment ??= await page.evaluate(() => window.bench.snapshot());
@@ -211,8 +416,117 @@ try {
           const finalInput = result.samples.at(-1)!, targetFrame = build.manifest.frames[finalInput.index].id;
           const targetHttp = requestTimings.slice(timingStart).filter(timing => timing.frame === targetFrame).map(timing => ({ z: timing.z, startMs: timing.startedAt - finalInput.inputEpochMs,
             endMs: timing.finishedAt === undefined ? null : timing.finishedAt - finalInput.inputEpochMs }));
-          summary[key] = { ...summarize(result.samples), staleFramePaints: result.staleFramePaints, lastTarget: result.lastTarget, initial, preparation, interaction: since(before), targetHttp };
+          summary[key] = { ...summarize(result.samples), staleFramePaints: result.staleFramePaints, lastTarget: result.lastTarget, initial, preparation, interaction: since(before), targetHttp, telemetry: await page.evaluate(() => window.bench.telemetry()) };
           finalEnvironment = await page.evaluate(() => window.bench.snapshot());
+        } finally { await context.close(); }
+      }
+      if (scenario === 'pointer-smoke') {
+        const { context, page, initial } = await openPage();
+        try {
+          environment = initial.state;
+          const result = await pointerSweep(page, Array.from({ length: frameCount }, (_, index) => index));
+          const attempts = result.actions.filter(action => action.kind === 'scrub');
+          if (attempts.length !== frameCount) throw new Error('Pointer attempt count does not match the frame axis');
+          samples.pointerSmoke = attributeInputs(result.inputs);
+          finalEnvironment = await page.evaluate(() => window.bench.snapshot());
+          summary.pointerSmoke = { initial, attempts: attempts.length, actions: result.actions, commits: result.commits, telemetry: await page.evaluate(() => window.bench.telemetry()) };
+        } finally { await context.close(); }
+      }
+      if (scenario === 'device-sim') {
+        const { context, page, initial } = await openPage();
+        try {
+          environment = initial.state;
+          const steps: unknown[] = [];
+          const record = async (label: string, action: () => Promise<unknown>, pauseMs = 600) => {
+            const before = count(), started = Date.now(), previous = await page.evaluate(() => ({ camera: window.bench.camera(), telemetry: window.bench.telemetry(), state: window.bench.snapshot() }));
+            await action(); const hostActionElapsedMs = Date.now() - started;
+            await delay(pauseMs);
+            const after = await page.evaluate(() => ({ camera: window.bench.camera(), telemetry: window.bench.telemetry(), state: window.bench.snapshot() }));
+            const selected = after.state.frames[after.state.selectedIndex], raster = after.state.rasterReady;
+            steps.push({ label, previous, after, hostActionElapsedMs, moveEndEvents: after.camera.moveEnds - previous.camera.moveEnds,
+              selectedReady: !!selected && (raster.preview.includes(selected) || raster.native.includes(selected)) && after.state.windReady.includes(selected), transport: since(before) });
+          };
+          for (const height of [500, 2000, 1500]) await record(`warming-height-${height}`, async () => page.evaluate(height => {
+            const input = document.querySelector<HTMLInputElement>('.wind-controls-range'); if (!input) throw new Error('Wind height control unavailable');
+            const stops = [100, 250, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000], index = stops.indexOf(height);
+            input.value = String(index); input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+          }, height));
+          const warmStart = Date.now(); let ready = false;
+          while (Date.now() - warmStart < warmMs) {
+            const state = await page.evaluate(() => window.bench.snapshot());
+            ready = state.frames.every(frame => (state.rasterReady.preview.includes(frame) || state.rasterReady.native.includes(frame)) && state.windReady.includes(frame));
+            if (ready) break;
+            await delay(250);
+          }
+          for (const height of [500, 2000, 1500]) await record(`${ready ? 'after-ready' : 'after-bounded-wait'}-height-${height}`, async () => page.evaluate(height => {
+            const input = document.querySelector<HTMLInputElement>('.wind-controls-range'); if (!input) throw new Error('Wind height control unavailable');
+            const stops = [100, 250, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000]; input.value = String(stops.indexOf(height));
+            input.dispatchEvent(new Event('input', { bubbles: true })); input.dispatchEvent(new Event('change', { bubbles: true }));
+          }, height));
+          for (const area of [80000, 110000, 140000, 110000, 80000]) await record(`area-${area}`, async () => page.evaluate(area => window.bench.area(area), area), 900);
+          const original = (await page.evaluate(() => window.bench.camera())).center;
+          await record('pan-away', async () => page.evaluate(([lon, lat]) => window.bench.center(lon + 0.08, lat), original), 900);
+          await record('pan-back', async () => page.evaluate(([lon, lat]) => window.bench.center(lon, lat), original), 900);
+          finalEnvironment = await page.evaluate(() => window.bench.snapshot());
+          summary.deviceSim = { simulated: true, deviceMemoryHint: await page.evaluate(() => (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? null), dpr: await page.evaluate(() => devicePixelRatio), initial, waitMs: Date.now() - warmStart, fullAxisReadyBeforeSecondHeightSequence: ready,
+            boundsAreaOwner: 'viewport-policy.ts boundsAreaKm2(cameraBounds(map))', steps, telemetry: await page.evaluate(() => window.bench.telemetry()), expiryClock: 'not simulated' };
+        } finally { await context.close(); }
+      }
+      if (scenario === 'viewport-warm') {
+        const { context, page, initial } = await openPage();
+        try {
+          environment = initial.state;
+          const preparationStart = count(), started = Date.now();
+          while (Date.now() - started < warmMs) {
+            const state = await page.evaluate(() => window.bench.snapshot());
+            if (state.frames.every(frame => (state.rasterReady.preview.includes(frame) || state.rasterReady.native.includes(frame)) && state.windReady.includes(frame))) break;
+            await delay(250);
+          }
+          const preparation = { elapsedMs: Date.now() - started, ...since(preparationStart), state: await page.evaluate(() => window.bench.snapshot()) };
+          const jumpSamples: Sample[] = [], jumpRequests: ReturnType<typeof since>[] = [];
+          for (const index of [5, 35, 26, 13]) {
+            const before = count();
+            jumpSamples.push(await page.evaluate(index => window.bench.select(index, 'combined'), index));
+            jumpRequests.push(since(before));
+          }
+          samples.jumps = jumpSamples;
+          summary.syntheticRangeJumps = { ...summarize(jumpSamples), requests: jumpRequests };
+          for (const [key, indices] of [['forward', Array.from({ length: frameCount }, (_, i) => i)], ['reverse', Array.from({ length: frameCount }, (_, i) => frameCount - 1 - i)]] as const) {
+            const before = count(), result = await page.evaluate(indices => window.bench.drag(indices, 120), indices);
+            samples[key] = result.samples;
+            summary[`syntheticRange${key}`] = { ...summarize(result.samples), staleFramePaints: result.staleFramePaints, ...since(before) };
+          }
+          const pointerJumps = [];
+          for (const index of [5, 35, 26, 13]) { const before = count(); pointerJumps.push({ ...await pointerJump(page, index), transport: since(before) }); }
+          samples.pointerJumps = attributeInputs(pointerJumps.flatMap(jump => jump.inputs));
+          summary.pointerJumps = { jumps: pointerJumps, ...summarize(samples.pointerJumps) };
+          for (const [key, indices] of [['pointerForward', Array.from({ length: frameCount }, (_, i) => i)], ['pointerReverse', Array.from({ length: frameCount }, (_, i) => frameCount - 1 - i)]] as const) {
+            const before = count(), result = await pointerSweep(page, indices);
+            const attempts = result.actions.filter(action => action.kind === 'scrub');
+            samples[key] = attributeInputs(result.inputs); summary[key] = { attempts: attempts.length, daySwitches: result.actions.filter(action => action.kind === 'day-switch').length, gestureEnds: result.actions.filter(action => action.kind === 'gesture-end').length,
+              statuses: Object.fromEntries(['delivered', 'already-selected', 'diverged', 'superseded', 'timeout', 'not-delivered'].map(status => [status, attempts.filter(action => action.status === status).length])),
+              matchedInputs: summarize(attempts.flatMap(action => action.chosen && (action.status === 'delivered' || action.status === 'already-selected') ? [action.chosen] : [])), actions: result.actions, commits: result.commits, transport: since(before) };
+          }
+          finalEnvironment = await page.evaluate(() => window.bench.snapshot());
+          summary.viewportWarm = { initial, preparation, final: finalEnvironment, telemetry: await page.evaluate(() => window.bench.telemetry()) };
+        } finally { await context.close(); }
+      }
+      if (scenario === 'contention') {
+        const { context, page, initial } = await openPage();
+        try {
+          environment = initial.state;
+          const deadline = Date.now() + 5000;
+          while (active === 0 && Date.now() < deadline) await delay(25);
+          const selectionAttemptAt = Date.now(), activeAtAttempt = active, before = count();
+          faultsEnabled = true;
+          const jump = await pointerJump(page, 35), result = jump.inputs.findLast(sample => sample.index === 35) ?? null;
+          await delay(15000);
+          finalEnvironment = await page.evaluate(() => window.bench.snapshot());
+          samples.contention = attributeInputs(jump.inputs);
+          const inputAt = result?.inputEpochMs ?? null;
+          const activeAtInput = inputAt === null ? [] : events.filter(event => event.startedAt <= inputAt && (event.finishedAt === undefined || event.finishedAt > inputAt));
+          summary.contention = { initial, activeAtAttempt, selectionAttemptAt, inputAt, targetSeen: result !== null, activeAtInput: inputAt === null ? null : activeAtInput.length, nonTargetActiveRequests: inputAt === null ? null : activeAtInput.filter(event => event.frame !== 'f060').length, jump, result, failedWind, delayedTile, ...since(before), final: finalEnvironment, telemetry: await page.evaluate(() => window.bench.telemetry()),
+            events: events.filter(event => event.startedAt >= selectionAttemptAt || (event.finishedAt ?? Infinity) >= (inputAt ?? selectionAttemptAt)).map(event => ({ ...event, startedAt: event.startedAt - (inputAt ?? selectionAttemptAt), finishedAt: event.finishedAt === undefined ? null : event.finishedAt - (inputAt ?? selectionAttemptAt) })) };
         } finally { await context.close(); }
       }
       if (scenario === 'all') {
@@ -267,14 +581,20 @@ try {
       for (const file of [...new Set(loaded)].sort()) { loadedHash.update(relative(codeRootReal, file)); loadedHash.update(await readFile(file)); }
       const sourceIsolation = { codeRoot: codeRootReal, probes, loadedFiles: new Set(loaded).size, loadedSha256: loadedHash.digest('hex') };
       if (errors.length) throw new Error(errors.join('\n'));
-      results.push({ name, revision: name === 'baseline' ? baselineRevision : 'working-tree', sourceSha256, sourceIsolation, environment, finalEnvironment, summary, samples, memoryPlateau,
-        totalRequests: requests, uniqueTileURLs: urls.size, totalTileBytes: bytes, overviewRequests, overviewBytes, maxImageReadyMs, httpVersions: [...protocols], peakHTTPRequests: peakActive, initialHeap, finalHeap });
-      console.log(JSON.stringify({ name, summary, finalEnvironment, peakHTTPRequests: peakActive }));
+      results.push({ name, revision: name === 'baseline' ? baselineRevision : 'working-tree', forecastRequestProfile: name === 'baseline' ? { historical: true, overrideApplied: false } : { historical: false, maxActive: forecastRequests, overrideApplied: true }, sourceSha256, sourceIsolation, environment, finalEnvironment, summary, samples, memoryPlateau,
+        rasterTileStarts: requests, uniqueTileURLs: urls.size, rasterQueuedBodyBytes: bytes, rasterOverviewStarts: overviewRequests, rasterOverviewQueuedBodyBytes: overviewBytes, windRouteStarts: windRequests, windQueuedBodyBytes: windBytes, transport: since({ at: 0 }), maxImageReadyMs, httpVersions: [...protocols], peakTileAndWindHTTPRequests: peakActive, initialHeap, finalHeap });
+      console.log(JSON.stringify({ name, scenario, peakTileAndWindHTTPRequests: peakActive }));
     } finally { await vite.close(); hmr.closeAllConnections(); await new Promise<void>(resolve => hmr.close(() => resolve())); for (const session of sessions) session.destroy(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }
-  const harnessSha256 = createHash('sha256').update(await readFile(fileURLToPath(import.meta.url))).update(await readFile(join(root, 'apps/preview/bench.ts'))).update(await readFile(join(root, 'scripts/preview-pixels.ts'))).digest('hex');
-  await writeFile(output, JSON.stringify({ capturedAt: new Date().toISOString(), scope: 'Nine framebuffer probes at 2%, 50% and 98% of both viewport axes validate selected time, layer and Web Mercator position. First-correct and fully-detailed timings are separate. After-idle preparation is capped at 10s and all preparation requests/bytes are counted.',
-    tileDelayMs, repeats, scenario, frameCount, opacity, transparent, viewport: { width: 1920, height: 1080, dpr: 1 }, sourceDirectories, harnessSha256,
+  const harnessAfterSha256 = await harnessHash();
+  if (harnessAfterSha256 !== harnessBeforeSha256) throw new Error('Benchmark harness or fixture inputs changed during capture');
+  const fixtureSourceAfterSha256 = await sourceHash(root, fixtureSourceDirectories, false);
+  if (fixtureSourceAfterSha256 !== fixtureSourceBeforeSha256) throw new Error('Server fixture workspace dependencies changed during capture');
+  await writeFile(output, JSON.stringify({ capturedAt: new Date().toISOString(), scope: 'Instrumented mode samples nine framebuffer probes for raster identity; wind identity is installed state and a numeric sample, not blended GPU pixels. Control mode disables framebuffer probes and pixel identity, but retains readiness, scene, allocation and sampled RAF observers. Pixel-verified latency is INSTRUMENTED and no overhead is subtracted. Stale paint observations are sampled and cannot prove absence between probes. Synthetic range inputs bypass compact timeline gestures. Scene commits are correlated until the next selection; same-frame generation identity is not observable. Ready means cached viewport-covering raster preview or native plus a prepared grid and valid raw numeric wind sample at the selected height; changed also requires a cached field sampler. Historical baseline lacks reusable per-frame field samplers, so only its currently installed field qualifies. Per-input transport is attributed by frame and wall-clock interval; it does not prove causal request priority. Route starts, server finish events and queued body bytes are attributed independently; browser received bytes are unavailable.',
+    fixtureLimitations: model === 'rrfs' ? 'Numeric values, terrain and frame axis are synthetic; RRFS 26-level grid, masks and shard layout model the published 20261116T012413Z-be57ad09-4ea7-4c22-b515-d2d72a6880bb f001 descriptor for all frames. Other published frame layouts were not verified. No real GRIB, integrity or device performance is implied.' : focused ? 'Numeric wind values and terrain are synthetic; 22-level GFS grids, tile masks, packed chunk sizes and shard counts follow the published 20261116T130646Z-59ac4a14-2907-4ce5-998a-80baf7a60c99 f004 layout. No real GRIB values, real network behavior, native feasibility, GPU execution or device performance are implied.' : 'Synthetic three-level wind validates decoding and identity only; real GFS acquisition costs and native-horizon feasibility remain unverified.',
+    fixtureDigestPolicy: 'All synthetic descriptor shard SHA-256 and indexSha256 fields are stable, frame/kind/shard-specific NON-INTEGRITY placeholders, not content hashes; other synthetic manifest digests are also placeholders. Only URL-keyed client cache behavior is exercised. No content integrity or production digest semantics are tested.',
+    telemetryScope: 'Scheduler queue and body settlement are timed inside scheduler; body settlement includes cancellation and is not server response completion. Decode is createImageBitmap promise elapsed time, not decoder CPU. Canvas draw, successful retained wind builds and display install are synchronous call durations; GL upload is CPU API submission time across map contexts, not GPU execution. Managed peaks are per ledger and limited to the first 16 ledgers; baseline has no ledger. Full-axis times are first observations sampled every 250ms since navigation, not guaranteed completion instants. Observer elapsed time includes synchronous GL readback stalls and readiness/snapshot loops; percentiles use the most recent 4096 samples. Animation is sampled in 500ms windows every 5s; skipped callbacks are estimates at an assumed 60Hz, not hardware dropped-frame counts. Long tasks require browser support. Control mode is not instrumentation-free.',
+    observerMode, model, simulatedDevice: scenario === 'device-sim' ? { dpr, deviceMemoryHint: deviceMemory } : null, tileDelayMs, repeats, scenario, frameCount, frames: build.manifest.frames, opacity, transparent, wind, viewport, detailZoom, warmMs: focused ? warmMs : undefined, sourceDirectories, harnessInputs, harnessBeforeSha256, harnessAfterSha256, fixtureSourceDirectories, fixtureSourceBeforeSha256, fixtureSourceAfterSha256, baselineFixtureSourceSha256, node: process.version,
     memoryScope: 'GPU texture allocations include mip levels/pool. Weak native-pixel tracking counts unclosed/unfinished ImageBitmap decodes and canvas backing dimensions; pending Blob decode size assumes the fixture 256px tile. Driver overhead, workers and default framebuffer remain outside these logical byte counts. CDP heap follows forced GC.',
     channel: channel || 'headless-shell', browser: browser.version(), results }, null, 2) + '\n');
   console.log(`Report: ${output}`);

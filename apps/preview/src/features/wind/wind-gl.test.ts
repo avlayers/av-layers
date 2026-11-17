@@ -1,6 +1,10 @@
-import { expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
+import type { Map } from 'maplibre-gl';
+import { createPreparationBudget } from '@av/client';
 import { WIND_CANVAS_BYTES } from '../raster/raster-budget';
-import { WIND_PARTICLE_UPDATE, encodeWindByte, mixWindVectors, preparedWorldShift, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
+import { WIND_PARTICLE_UPDATE, attachWindGl, encodeWindByte, mixWindVectors, preparedWorldShift, sampleEncodedWindGrid, trailTargetSize } from './wind-gl';
+
+afterEach(() => { vi.unstubAllGlobals(); });
 
 const decode = (byte: number) => byte / 255 * 200 - 100;
 
@@ -72,6 +76,79 @@ it('keeps each trail target at the drawing-buffer size inside the canvas reserve
   expect(full.width * full.height * 2).toBe(WIND_CANVAS_BYTES);
   expect(trailTargetSize(8000, 1000)).toEqual({ width: 4096, height: 512 });
   expect(trailTargetSize(0, -5)).toEqual({ width: 1, height: 1 });
+});
+
+it('reserves GL targets before allocation, degrades and recovers, and releases without GC', async () => {
+  const budget = createPreparationBudget(128 * 1024 * 1024);
+  const other = budget.reserve('other', 127 * 1024 * 1024)!;
+  const enums = new globalThis.Map<string, number>();
+  let maxReserved = 0, clearCount = 0, failedResizeCall = 0;
+  const gl = new Proxy({} as WebGL2RenderingContext, {
+    get(_target, property) {
+      const key = String(property);
+      if (/^[A-Z0-9_]+$/.test(key)) {
+        if (!enums.has(key)) enums.set(key, enums.size + 1);
+        return enums.get(key);
+      }
+      if (key === 'getParameter') return (value: number) => {
+        if (value === gl.MAX_TEXTURE_SIZE) return 4096;
+        if (value === gl.COLOR_CLEAR_VALUE) return [0, 0, 0, 0];
+        if (value === gl.COLOR_WRITEMASK) return [true, true, true, true];
+        return null;
+      };
+      if (key === 'getExtension' || key.startsWith('create')) return () => ({});
+      if (key === 'getShaderParameter' || key === 'getProgramParameter') return () => true;
+      if (key === 'checkFramebufferStatus') return () => gl.FRAMEBUFFER_COMPLETE;
+      if (key === 'isEnabled') return () => false;
+      if (key === 'clear') return () => { clearCount++; };
+      if (key === 'texImage2D') return () => {
+        const reserved = budget.snapshot()['wind-display-gl'] ?? 0;
+        expect(reserved).toBeGreaterThan(0);
+        maxReserved = Math.max(maxReserved, reserved);
+        if (failedResizeCall && ++failedResizeCall === 3) throw new Error('texture allocation failed');
+      };
+      return () => {};
+    }
+  });
+  let layer: { id: string; onAdd(map: unknown, context: WebGL2RenderingContext): void; onRemove(): void } | null = null;
+  const map = {
+    addLayer(value: typeof layer) { layer = value; layer!.onAdd(map, gl); },
+    getLayer: () => layer,
+    removeLayer() { layer?.onRemove(); layer = null; },
+    getStyle: () => ({ layers: [{ id: 'av-wind-particles' }] }),
+    moveLayer: () => {}, on: () => {}, off: () => {}, once: () => {}, isStyleLoaded: () => true,
+    getCanvas: () => ({ width: 2048, height: 2048, clientWidth: 1024, clientHeight: 1024 }),
+    triggerRepaint: () => {}
+  };
+  vi.stubGlobal('window', { devicePixelRatio: 2 });
+  const renderer = attachWindGl(map as unknown as Map, () => {}, budget)!;
+  expect(renderer.limited).toBe(true);
+  expect(budget.snapshot()['wind-display-gl']).toBe(renderer.bytes);
+  const reduced = renderer.bytes;
+  renderer.setMotion(true, true); renderer.reset();
+  expect(clearCount).toBe(2);
+  other.release();
+  await Promise.resolve();
+  expect(renderer.limited).toBe(false);
+  expect(renderer.bytes).toBeGreaterThan(reduced);
+  expect(maxReserved).toBeGreaterThan(renderer.bytes);
+  expect(budget.used).toBe(renderer.bytes);
+  const full = renderer.bytes;
+  expect(renderer.relievePressure()).toBe(true);
+  expect(renderer.bytes).toBeLessThan(full);
+  const numeric = budget.reserve('wind-numeric', 1024)!;
+  await Promise.resolve();
+  expect(renderer.bytes).toBeLessThan(full);
+  numeric.release();
+  await Promise.resolve();
+  expect(renderer.bytes).toBe(full);
+  failedResizeCall = 1;
+  expect(() => renderer.relievePressure()).toThrow('texture allocation failed');
+  expect(budget.used).toBe(renderer.bytes);
+  expect(renderer.bytes).toBeGreaterThan(full);
+  renderer.destroy();
+  expect(budget.used).toBe(0);
+  expect(renderer.bytes).toBe(0);
 });
 
 

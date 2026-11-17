@@ -1,332 +1,794 @@
-import type { ImageSource, Map } from 'maplibre-gl';
-import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInsertBefore, type PinnedBuild, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
+import type { Map } from 'maplibre-gl';
+import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInsertBefore, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileHandle, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
-import { RASTER_TILE_SIZE } from '@av/contracts/format';
-import { PLAYBACK_STEP_MS } from '../timeline/timeline-model';
+import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import { boundsAreaKm2, createViewportWarmth } from '../map/viewport-policy';
-import { planRasterCrop, requiredSourceZoom } from './raster-crop';
-
-const DECODE_CAP = 768 * 1024 * 1024;
-const MAX_TILES = 64;
-const MAX_EDGE = 4096;
-const LATITUDE_LIMIT = 85.0511287798066;
-interface Window { west: number; east: number; top: number; bottom: number }
-interface Tile { x: number; y: number; z: number; canonicalX: number; drawX: number; drawY: number }
-interface Box { left: number; right: number; top: number; bottom: number; z: number }
-interface Geometry extends Window { tiles: Tile[]; width: number; height: number; zoom: number; coordinates: [[number, number], [number, number], [number, number], [number, number]] }
-interface Context { build: PinnedBuild; layer: LayerId; geometry: Geometry; requiredZoom: number; warmed: boolean; frames: string[] }
+import { planRasterCrop, requiredSourceZoom, type RasterCrop } from './raster-crop';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
-interface Job { context: Context; frame: string; controller: AbortController }
+
+type Quality = 'overview' | 'detail';
+type Coordinates = [[number, number], [number, number], [number, number], [number, number]];
+interface Image { bitmap: ImageBitmap; lease: PreparationLease | null }
+interface Retired { image: Image; frame: string | null; coordinates: Coordinates | null; sourceId: string; displayLease: PreparationLease | null; previewLease: PreparationLease | null }
+interface Tile {
+  state: 'waiting' | 'fetching' | 'compressed' | 'decoding' | 'drawn';
+  handle?: RasterTileHandle;
+  data?: ArrayBuffer;
+  release?: () => void;
+}
+interface Job {
+  frame: string;
+  quality: Quality;
+  crop: RasterCrop;
+  width: number;
+  height: number;
+  tiles: Tile[];
+  failed: boolean;
+  lease: PreparationLease | null;
+  partial?: ImageBitmap;
+}
+interface Context {
+  build: PinnedBuild;
+  layer: LayerId;
+  frames: string[];
+  preview: RasterCrop;
+  native: RasterCrop | null;
+  requiredZoom: number | null;
+  previewZoom: number;
+  warmed: boolean;
+  jobs: Job[];
+  previewLease: PreparationLease | null;
+  nativeScheduled: boolean;
+  nativeWindowed: boolean;
+}
+interface ImageSourceLike {
+  image?: ImageBitmap;
+  _imageDirty?: boolean;
+  texture?: unknown;
+  tileID?: { equals?: (other: unknown) => boolean };
+  tiles?: Record<string, { state?: string; tileID?: { canonical?: unknown } }>;
+  updateImage?: (options: { image: ImageBitmap; coordinates: Coordinates }) => void;
+  setCoordinates?: (coordinates: Coordinates) => void;
+}
 export interface RasterOverviewState { ready: number; total: number; failed: number }
+export interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
+export interface RasterOverviewOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; requestLimits?: { maxActive: number; maxPrefetchActive: number } }
 
-function viewport(map: Map): Window | null {
-  const bounds = map.getBounds();
-  let west = bounds.getWest(), east = bounds.getEast();
-  const north = Math.min(LATITUDE_LIMIT, bounds.getNorth()), south = Math.max(-LATITUDE_LIMIT, bounds.getSouth());
-  if (![west, east, north, south].every(Number.isFinite) || north <= south) return null;
+const SELECTED_PREVIEW_SLOTS = 4;
+const DECODE_LEASE_BYTES = 4 * (MAX_TILE_BYTES + RASTER_TILE_SIZE ** 2 * 4);
+const PREVIEW_RETRY_COOLDOWN_MS = 1_000;
+const MAX_PREVIEW_ATTEMPTS = 3;
+
+function bounds(map: Map): [number, number, number, number] {
+  const value = map.getBounds();
+  let west = value.getWest(), east = value.getEast();
   if (east <= west) east += 360;
-  if (east <= west) return null;
-  const middle = (west + east) / 2, span = Math.min(360, east - west);
-  // Shift the entire rectangle together so dateline corners retain their separation.
-  const shift = Math.floor((middle + 180) / 360) * 360;
-  west = (middle - span / 2 - shift + 180) / 360;
-  east = west + span / 360;
-  const y = (latitude: number) => Math.max(0, Math.min(1, (1 - Math.asinh(Math.tan(latitude * Math.PI / 180)) / Math.PI) / 2));
-  return { west, east, top: y(north), bottom: y(south) };
+  if (east - west > 360) { const middle = (west + east) / 2; west = middle - 180; east = middle + 180; }
+  return [west, value.getSouth(), east, value.getNorth()];
 }
 
-function deviceHoldsTimeline(): boolean {
-  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  return memory === undefined || memory > 4;
+function canonicalZoom(map: Map, maxzoom: number): number | null {
+  if (typeof map.coveringTiles !== 'function') return Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
+  const covering = map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true })
+    .map(tile => ({ z: tile?.canonical?.z ?? tile?.overscaledZ })).filter(tile => Number.isFinite(tile.z));
+  return requiredSourceZoom(covering);
 }
 
-function tileBox(window: Window, z: number): Box | null {
-  const count = 2 ** z;
-  const left = Math.floor(window.west * count), right = Math.ceil(window.east * count) - 1;
-  const top = Math.floor(window.top * count), bottom = Math.min(count - 1, Math.ceil(window.bottom * count) - 1);
-  if (right < left || bottom < top || left < -count || right >= count * 2) return null;
-  return { left, right, top, bottom, z };
-}
-
-function expand(box: Box, margin: number): Box {
-  const count = 2 ** box.z;
-  return {
-    z: box.z,
-    left: Math.max(-count, box.left - margin),
-    right: Math.min(count * 2 - 1, box.right + margin),
-    top: Math.max(0, box.top - margin),
-    bottom: Math.min(count - 1, box.bottom + margin)
-  };
-}
-
-function fits(box: Box, frames: number): boolean {
-  const cols = box.right - box.left + 1, rows = box.bottom - box.top + 1;
-  if (cols < 1 || rows < 1 || cols * rows > MAX_TILES) return false;
-  if (cols * RASTER_TILE_SIZE > MAX_EDGE || rows * RASTER_TILE_SIZE > MAX_EDGE) return false;
-  return frames * cols * rows * RASTER_TILE_SIZE * RASTER_TILE_SIZE * 4 <= DECODE_CAP;
-}
-
-function toGeometry(box: Box): Geometry {
-  const count = 2 ** box.z, tiles: Tile[] = [];
-  const originX = box.left * RASTER_TILE_SIZE, originY = box.top * RASTER_TILE_SIZE;
-  for (let y = box.top; y <= box.bottom; y++) for (let x = box.left; x <= box.right; x++) tiles.push({
-    x, y, z: box.z, canonicalX: ((x % count) + count) % count, drawX: x * RASTER_TILE_SIZE - originX, drawY: y * RASTER_TILE_SIZE - originY
-  });
-  const latitude = (y: number) => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / count))) * 180 / Math.PI;
-  let west = box.left / count * 360 - 180, east = (box.right + 1) / count * 360 - 180;
-  const shift = Math.floor(((west + east) / 2 + 180) / 360) * 360;
-  west -= shift; east -= shift;
-  return {
-    west: box.left / count, east: (box.right + 1) / count, top: box.top / count, bottom: (box.bottom + 1) / count,
-    tiles, zoom: box.z,
-    width: (box.right - box.left + 1) * RASTER_TILE_SIZE,
-    height: (box.bottom - box.top + 1) * RASTER_TILE_SIZE,
-    coordinates: [[west, latitude(box.top)], [east, latitude(box.top)], [east, latitude(box.bottom + 1)], [west, latitude(box.bottom + 1)]]
-  };
-}
-
-function requiredZoom(map: Map, maxzoom: number): number {
-  const covering = typeof map.coveringTiles === 'function'
-    ? map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true })
-      .map(tile => ({ z: tile?.canonical?.z ?? tile?.overscaledZ })).filter(tile => Number.isFinite(tile.z))
-    : null;
-  const zoom = covering ? requiredSourceZoom(covering) : null;
-  return zoom ?? Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
-}
-
-/** Native-pixel crop for small views; the mosaic remains the wide-view fallback. */
-function cropGeometry(map: Map, maxzoom: number, frames: number, warmed: boolean): Geometry | null {
-  const window = viewport(map), bounds = map.getBounds();
-  if (!warmed || !window || window.bottom <= window.top) return null;
-  const west = bounds.getWest(), east = bounds.getEast(), south = bounds.getSouth(), north = bounds.getNorth();
-  const zoom = requiredZoom(map, maxzoom);
-  const crop = planRasterCrop([west, south, east, north], zoom);
-  if (!crop || frames * crop.bytes > DECODE_CAP) return null;
-  return {
-    west: crop.left / crop.worldSize, east: crop.right / crop.worldSize,
-    top: crop.top / crop.worldSize, bottom: crop.bottom / crop.worldSize,
-    tiles: crop.tiles, width: crop.width, height: crop.height, zoom, coordinates: crop.coordinates
-  };
-}
-
-/** Padded tile mosaic for a rested camera. Shrink the margin before dropping zoom. */
-function geometry(map: Map, maxzoom: number, frames: number, warmed: boolean): Geometry | null {
-  const crop = cropGeometry(map, maxzoom, frames, warmed);
-  if (crop) return crop;
-  const window = viewport(map);
-  if (!window || window.bottom <= window.top || !Number.isFinite(map.getZoom())) return null;
-  const target = Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
-  const retained = deviceHoldsTimeline() ? frames : Math.min(frames, 5);
-  for (let z = target; z >= 0; z--) {
-    const base = tileBox(window, z);
-    if (!base) continue;
-    const span = Math.min(base.right - base.left + 1, base.bottom - base.top + 1);
-    const padded = expand(base, Math.max(1, Math.ceil(span / 2)));
-    if (fits(padded, retained)) return toGeometry(padded);
-    const ring = expand(base, 1);
-    if (fits(ring, retained)) return toGeometry(ring);
-    if (fits(base, retained)) return toGeometry(base);
+function previewCrop(view: [number, number, number, number], zoom: number): RasterCrop | null {
+  for (let z = Math.max(0, zoom - 1); z >= 0; z--) {
+    const crop = planRasterCrop(view, z);
+    if (crop && crop.tiles.length <= 4) return crop;
   }
   return null;
 }
 
-/** Decoded images for every map frame of one rested build and layer. */
+function contains(crop: RasterCrop, view: [number, number, number, number]): boolean {
+  const current = planRasterCrop(view, crop.zoom, { marginFractionPerEdge: 0, gutterPixelsPerEdge: 0 });
+  if (!current) return false;
+  const shift = Math.round((crop.left + crop.right - current.left - current.right) / (2 * crop.worldSize)) * crop.worldSize;
+  return current.top >= crop.top && current.bottom <= crop.bottom
+    && (crop.right - crop.left >= crop.worldSize || (current.left + shift >= crop.left && current.right + shift <= crop.right));
+}
+
 export class RasterOverview {
   readonly id = `av-overview-${crypto.randomUUID()}`;
-  private readonly blendId: string;
   readonly supported: boolean;
-  private playing = false;
   private readonly canvas: OffscreenCanvas | null;
   private readonly transport: RasterTileSourceTransport | null;
+  private readonly warmth = createViewportWarmth();
+  private readonly previews = new globalThis.Map<string, Image>();
+  private readonly natives = new globalThis.Map<string, Image>();
+  private readonly unavailable = new Set<string>();
+  private readonly retries = new Set<string>();
+  private readonly failureCounts = new globalThis.Map<string, number>();
+  private readonly retryAfter = new globalThis.Map<string, number>();
   private context: Context | null = null;
   private selected: string | null = null;
-  private shown: string | null = null;
-  private readonly warmth = createViewportWarmth();
-  private readonly images = new globalThis.Map<string, ImageBitmap>();
-  private readonly unavailable = new Set<string>();
-  private readonly retried = new Set<string>();
-  private job: Job | null = null;
+  private direction = 1;
+  private shown: Image | null = null;
+  private shownId: string = this.id;
+  private visibleId: string | null = null;
+  private shownFrame: string | null = null;
+  private shownCoordinates: Coordinates | null = null;
+  private heldLease: PreparationLease | null = null;
+  private displayLease: PreparationLease | null = null;
+  private readonly retired: Retired[] = [];
+  private canvasLease: PreparationLease | null = null;
+  private decodeLease: PreparationLease | null = null;
+  private composing: Job | null = null;
+  private fetching = 0;
+  private decoding = 0;
+  private generation = 0;
   private expiry: ReturnType<typeof setTimeout> | null = null;
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private nativeTimer: ReturnType<typeof setTimeout> | null = null;
+  private nativeRested = false;
+  private playing = false;
   private disposed = false;
+  private limited = false;
+  private deferred: { build: PinnedBuild; layer: LayerId; frame: string } | null = null;
+  private readonly unsubscribeBudget: (() => void) | null;
 
-  constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void) {
-    this.blendId = `${this.id}-blend`;
+  constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void, private readonly options: RasterOverviewOptions = {}) {
     this.canvas = typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function' && typeof map.getCanvas === 'function'
       ? new OffscreenCanvas(RASTER_TILE_SIZE, RASTER_TILE_SIZE) : null;
     this.supported = !!this.canvas?.getContext('2d') && typeof this.canvas.transferToImageBitmap === 'function';
     if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
     this.transport = this.supported ? protocol.createSource(false) : null;
+    this.unsubscribeBudget = options.budget?.onRelease(() => {
+      if (this.disposed) return;
+      if (this.deferred) this.select(this.deferred.build, this.deferred.layer, this.deferred.frame);
+      else this.pump();
+    }) ?? null;
   }
 
   get state(): RasterOverviewState {
     const frames = this.context?.frames ?? [];
-    return { ready: frames.filter(frame => this.images.has(frame)).length, total: frames.length, failed: frames.filter(frame => this.unavailable.has(frame)).length };
+    return {
+      ready: frames.filter(frame => this.isFrameUsable(frame)).length,
+      total: frames.length,
+      failed: frames.filter(frame => this.unavailable.has(frame) && !this.isFrameUsable(frame)).length
+    };
+  }
+
+  readiness(): RasterOverviewReadiness {
+    const frames = this.context?.frames ?? [];
+    return { previewReadyFrames: frames.filter(frame => this.previews.has(frame) && this.covers()), detailReadyFrames: frames.filter(frame => this.natives.has(frame) && this.nativeCovers()), limited: this.limited };
   }
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (!this.supported || this.disposed) return;
-    if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !renderedFrames(build.manifest).some(value => value.id === frame)) { this.clear(); return; }
-    const required = requiredZoom(this.map, layerMaxZoom(build.manifest, layer));
-    const bounds = this.map.getBounds();
-    const warmed = this.warmth.update(boundsAreaKm2([bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()]));
-    if (this.context?.build !== build || this.context.layer !== layer || this.context.requiredZoom !== required || this.context.warmed !== warmed || !this.covers()) {
-      this.clear();
-      const frames = renderedFrames(build.manifest);
-      const area = geometry(this.map, layerMaxZoom(build.manifest, layer), frames.length, warmed);
-      if (!area) return;
-      this.canvas!.width = area.width; this.canvas!.height = area.height;
-      this.context = { build, layer, geometry: area, requiredZoom: required, warmed, frames: [] };
+    const frames = renderedFrames(build.manifest).map(value => value.id);
+    if (build.expiresAtMs <= Date.now() || !build.templates[layer] || !frames.includes(frame)) { this.clear(); return; }
+    const view = bounds(this.map), maxzoom = layerMaxZoom(build.manifest, layer);
+    const required = canonicalZoom(this.map, maxzoom);
+    const previewZoom = required ?? Math.max(0, Math.min(maxzoom, Math.round(this.map.getZoom())));
+    const warmed = this.warmth.update(boundsAreaKm2(view));
+    if (this.context?.build !== build || this.context.layer !== layer || this.context.requiredZoom !== required || this.context.previewZoom !== previewZoom || this.context.warmed !== warmed || !this.coversView()) {
+      this.reset(true);
+      const preview = previewCrop(view, previewZoom);
+      if (!preview) { this.limited = true; this.onReady(); return; }
+      const native = warmed && required !== null ? planRasterCrop(view, required) : null;
+      const previewBytes = frames.length * 256 * 256 * 4;
+      const previewLease = this.options.budget
+        ? (this.options.budget.reserve('raster-preview', previewBytes, 'background')
+          ?? this.options.budget.reserve('raster-preview', previewBytes, 'foreground'))
+        : null;
+      if (this.options.budget && !previewLease && !this.options.budget.canReserve(256 * 256 * 4, 'foreground')) {
+        this.deferred = { build, layer, frame }; this.markLimited(); return;
+      }
+      if (this.options.budget && !previewLease) this.markLimited();
+      this.deferred = null;
+      this.context = { build, layer, frames, preview, native, requiredZoom: required, previewZoom, warmed, jobs: [], previewLease, nativeScheduled: false, nativeWindowed: false };
       this.protocol.setBuildExpiry(build.manifest.buildId, build.expiresAtMs);
       this.expiry = setTimeout(() => this.refresh(), Math.min(build.expiresAtMs - Date.now(), 2_147_000_000));
+      for (const id of frames) this.context.jobs.push(this.job(id, 'overview', preview));
+    }
+    if (this.selected !== frame) {
+      if (this.selected) this.direction = frames.indexOf(frame) > frames.indexOf(this.selected) ? 1 : -1;
+      this.nativeRested = false;
+      if (this.nativeTimer !== null) clearTimeout(this.nativeTimer);
+      this.nativeTimer = this.playing ? null : setTimeout(() => { this.nativeTimer = null; this.nativeRested = true; this.pump(); }, 100);
     }
     this.selected = frame;
-    this.window();
-    if (this.unavailable.delete(frame) || this.job?.frame !== frame) this.retried.delete(frame);
-    if (this.job && this.job.frame !== frame && !this.images.has(frame)) this.job.controller.abort();
+    this.ensureSelectedPreview(frame);
+    if (this.context.nativeWindowed) this.updateNativeWindow();
+    if (this.context.nativeScheduled && this.context.native && this.previews.has(frame) && !this.natives.has(frame) && !this.context.jobs.some(job => job.quality === 'detail' && job.frame === frame)) {
+      this.context.jobs.push(this.job(frame, 'detail', this.context.native));
+    }
+    for (const job of this.context.jobs) if (job.frame === frame) for (const tile of job.tiles) tile.handle?.promote();
     this.pump();
   }
 
   setPlayback(playing: boolean): void {
-    this.playing = playing;
-    if (!playing) this.removeBlend();
+    if (this.playing === playing) return;
+    this.playing = playing; this.nativeRested = false;
+    if (this.nativeTimer !== null) clearTimeout(this.nativeTimer);
+    this.nativeTimer = !playing && this.selected ? setTimeout(() => { this.nativeTimer = null; this.nativeRested = true; this.pump(); }, 100) : null;
   }
-
-  coversView(): boolean { return this.covers(); }
-
+  coversView(): boolean { return this.covers() && (!this.context?.native || contains(this.context.native, bounds(this.map))); }
   hasExtent(): boolean { return this.context !== null; }
 
   ready(build: PinnedBuild, layer: LayerId, frame: string): boolean {
-    return !this.disposed && this.context?.build === build && this.context.layer === layer && build.expiresAtMs > Date.now() && this.images.has(frame) && this.covers();
+    return !this.disposed && this.context?.build === build && this.context.layer === layer && build.expiresAtMs > Date.now() && this.isFrameUsable(frame);
+  }
+
+  quality(build: PinnedBuild, layer: LayerId, frame: string): Quality | null {
+    if (!this.ready(build, layer, frame)) return null;
+    if (this.shownFrame === frame && this.shown === this.previews.get(frame) && this.natives.has(frame)) return 'overview';
+    return this.natives.has(frame) && this.nativeCovers() ? 'detail' : 'overview';
+  }
+
+  needsUpgrade(build: PinnedBuild, layer: LayerId, frame: string): boolean {
+    const native = this.natives.get(frame);
+    return this.ready(build, layer, frame) && this.nativeCovers() && !!native && native !== this.shown;
+  }
+
+  ownsSource(id: string | undefined): boolean { return id === this.id || id === `${this.id}-stage`; }
+
+  canPaint(): boolean {
+    const source = this.map.getSource(this.shownId) as ImageSourceLike | undefined;
+    if (!source) return true;
+    if ('image' in source && source.image !== this.shown?.bitmap) return false;
+    if ('_imageDirty' in source && source._imageDirty !== false) return false;
+    if ('texture' in source && !source.texture) return false;
+    if ('tiles' in source && source.tiles) {
+      return Object.values(source.tiles).some(tile => tile?.state === 'loaded'
+        && (!source.tileID?.equals || !tile.tileID?.canonical || source.tileID.equals(tile.tileID.canonical)));
+    }
+    return true;
   }
 
   show(build: PinnedBuild, layer: LayerId, frame: string, opacity: number): boolean {
     if (!this.ready(build, layer, frame)) return false;
-    const coordinates = this.context!.geometry.coordinates;
-    if (!this.map.getSource(this.id)) {
-      this.map.addSource(this.id, { type: 'image', coordinates });
-      this.map.addLayer({ ...previewRasterLayer(0), id: this.id, source: this.id, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
+    const native = this.nativeCovers() ? this.natives.get(frame) : undefined;
+    const preview = this.previews.get(frame);
+    let image = native ?? preview;
+    if (!image) return false;
+    let coordinates = image === native ? this.context!.native!.coordinates : this.context!.preview.coordinates;
+    let displayLease: PreparationLease | null = null;
+    if (this.shown !== image) {
+      const displayPriority = image === native && preview ? 'background' : 'foreground';
+      displayLease = this.options.budget?.reserve('raster-display', image.bitmap.width * image.bitmap.height * 8, displayPriority) ?? null;
+      if (this.options.budget && !displayLease && image === native && preview) {
+        this.markLimited();
+        image = preview;
+        coordinates = this.context!.preview.coordinates;
+        if (this.shown !== image) {
+          displayLease = this.options.budget.reserve('raster-display', image.bitmap.width * image.bitmap.height * 8, 'foreground');
+        }
+      }
+      if (this.shown !== image && this.options.budget && !displayLease) { this.markLimited(); return false; }
     }
-    if (this.shown !== frame) {
-      const previous = this.playing && this.shown ? this.images.get(this.shown) : undefined;
-      (this.map.getSource(this.id) as ImageSource).updateImage({ image: this.images.get(frame)!, coordinates });
-      this.shown = frame;
-      if (previous) this.crossfade(previous, coordinates);
+    const targetId = this.shown !== image && this.visibleId === this.shownId ? (this.shownId === this.id ? `${this.id}-stage` : this.id) : this.shownId;
+    const created = !this.map.getSource(targetId);
+    if (created) {
+      this.map.addSource(targetId, { type: 'image', coordinates });
+      this.map.addLayer({ ...previewRasterLayer(0), id: targetId, source: targetId, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
     }
-    this.map.setPaintProperty(this.id, 'raster-opacity', clampOpacity(opacity));
+    const source = this.map.getSource(targetId) as ImageSourceLike | undefined;
+    if (this.shown !== image) {
+        try {
+          source?.updateImage?.({ image: image.bitmap, coordinates });
+          if (created) source?.setCoordinates?.(coordinates);
+        } catch (error) { displayLease?.release(); throw error; }
+        if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
+        this.heldLease = null; this.displayLease = displayLease;
+        this.shown = image; this.shownId = targetId; this.shownFrame = frame; this.shownCoordinates = coordinates;
+    } else if (this.shownCoordinates !== coordinates) {
+      source?.setCoordinates?.(coordinates);
+      this.shownCoordinates = coordinates;
+    }
+    this.map.setPaintProperty(targetId, 'raster-opacity', clampOpacity(opacity));
+    if (opacity > 0) {
+      if (this.visibleId && this.visibleId !== targetId && this.map.getLayer(this.visibleId)) this.map.setPaintProperty(this.visibleId, 'raster-opacity', 0);
+      this.visibleId = targetId;
+    }
     return true;
   }
 
-  hide(): void {
-    if (this.map.getLayer(this.id)) this.map.setPaintProperty(this.id, 'raster-opacity', 0);
-    if (this.map.getLayer(this.blendId)) this.map.setPaintProperty(this.blendId, 'raster-opacity', 0);
+  hide(): void { for (const id of [this.id, `${this.id}-stage`]) if (this.map.getLayer(id)) this.map.setPaintProperty(id, 'raster-opacity', 0); this.visibleId = null; }
+
+  cancelStage(opacity: number): boolean {
+    const oldId = this.visibleId !== this.shownId ? this.visibleId : this.retired.findLast(entry => entry.sourceId !== this.shownId)?.sourceId;
+    if (!oldId) return false;
+    if (this.map.getLayer(this.shownId)) this.map.removeLayer(this.shownId);
+    if (this.map.getSource(this.shownId)) this.map.removeSource(this.shownId);
+    if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
+    const index = this.retired.findLastIndex(entry => entry.sourceId === oldId);
+    const previous = index < 0 ? null : this.retired.splice(index, 1)[0];
+    this.shown = previous?.image ?? null; this.shownId = oldId; this.visibleId = oldId; this.shownFrame = previous?.frame ?? null;
+    this.shownCoordinates = previous?.coordinates ?? null; this.displayLease = previous?.displayLease ?? null; this.heldLease = previous?.previewLease ?? null;
+    if (this.map.getLayer(oldId)) this.map.setPaintProperty(oldId, 'raster-opacity', clampOpacity(opacity));
+    this.releaseRetired();
+    return !!this.shown;
   }
 
-  refresh(): void { if (this.context && this.context.build.expiresAtMs <= Date.now()) { this.clear(); this.onReady(); } }
-
-  clear(): void {
-    this.job?.controller.abort();
-    this.context = null; this.selected = null; this.shown = null;
-    if (this.expiry !== null) clearTimeout(this.expiry); this.expiry = null;
-    this.removeBlend();
-    if (this.map.getLayer(this.id)) this.map.removeLayer(this.id);
-    if (this.map.getSource(this.id)) this.map.removeSource(this.id);
-    for (const image of this.images.values()) image.close();
-    this.images.clear(); this.unavailable.clear(); this.retried.clear();
-    if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
-  }
-
-  destroy(): void { this.disposed = true; this.clear(); this.transport?.dispose(); }
-
-  private crossfade(image: ImageBitmap, coordinates: Geometry['coordinates']): void {
-    const id = this.blendId;
-    if (!this.map.getSource(id)) {
-      this.map.addSource(id, { type: 'image', coordinates });
-      this.map.addLayer({ ...previewRasterLayer(1), id, source: id, paint: { ...previewRasterLayer(1).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
+  painted(): boolean {
+    if (!this.shown) {
+      this.releaseRetired();
+      return false;
     }
-    (this.map.getSource(id) as ImageSource).updateImage({ image, coordinates });
-    this.map.setPaintProperty(id, 'raster-opacity-transition', { duration: 0, delay: 0 });
-    this.map.setPaintProperty(id, 'raster-opacity', 1);
-    this.map.setPaintProperty(id, 'raster-opacity-transition', { duration: PLAYBACK_STEP_MS, delay: 0 });
-    queueMicrotask(() => { if (this.playing && this.map.getLayer(id)) this.map.setPaintProperty(id, 'raster-opacity', 0); });
+    const source = this.map.getSource(this.shownId) as ImageSourceLike | undefined;
+    if (!source) return false;
+    if ('image' in source && source.image !== this.shown.bitmap) return false;
+    if ('_imageDirty' in source && source._imageDirty !== false) return false;
+    if ('texture' in source && !source.texture) return false;
+    if ('tiles' in source && source.tiles) {
+      const loaded = Object.values(source.tiles).some(tile => tile?.state === 'loaded'
+        && (!source.tileID?.equals || !tile.tileID?.canonical || source.tileID.equals(tile.tileID.canonical)));
+      if (!loaded) return false;
+    }
+    if (this.visibleId === this.shownId) this.releaseRetired();
+    return true;
   }
 
-  private removeBlend(): void {
-    if (this.map.getLayer(this.blendId)) this.map.removeLayer(this.blendId);
-    if (this.map.getSource(this.blendId)) this.map.removeSource(this.blendId);
+  relievePressure(required = 1): boolean {
+    const budget = this.options.budget, context = this.context;
+    if (!budget || !context) return false;
+    const before = budget.used;
+    this.evictNative(required);
+    return budget.used < before;
   }
 
-  private covers(): boolean {
-    const current = viewport(this.map), area = this.context?.geometry;
-    if (!current || !area) return false;
-    const shift = Math.round((area.west + area.east - current.west - current.east) / 2), epsilon = 1e-9;
-    return current.top >= area.top - epsilon && current.bottom <= area.bottom + epsilon
-      && (area.east - area.west >= 1 - epsilon || (current.west + shift >= area.west - epsilon && current.east + shift <= area.east + epsilon));
+  refresh(): void {
+    const context = this.context;
+    if (!context) return;
+    if (context.build.expiresAtMs <= Date.now()) { this.clear(); this.onReady(); return; }
+    if (this.options.budget) {
+      const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
+      if (!this.nativeAdmitted(protectedBytes)) this.evictNative(protectedBytes);
+    }
+    if (context.native && this.options.canExpandNative?.() === false && context.nativeScheduled && !context.nativeWindowed) {
+      context.nativeWindowed = true; this.updateNativeWindow();
+    }
+    if (context.native && this.allAxisUsable(context) && !context.jobs.some(job => job.quality === 'overview')) {
+      if (!context.nativeScheduled) {
+        this.scheduleNative(context);
+      } else if (context.nativeWindowed && this.options.canExpandNative?.() !== false) {
+        const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
+        const nativeBytes = context.native.width * context.native.height * 4;
+        const unreserved = context.frames.filter(frame => !this.natives.has(frame) && !context.jobs.some(job => job.quality === 'detail' && job.frame === frame && job.lease)).length;
+        const staging = Math.max(0, nativeBytes - (this.canvasLease?.bytes ?? 0)) + 8 * MAX_TILE_BYTES * 2;
+        if (this.nativeAdmitted(unreserved * nativeBytes + protectedBytes + staging)) {
+          context.nativeWindowed = false;
+          for (const frame of context.frames) if (!this.natives.has(frame) && !context.jobs.some(job => job.quality === 'detail' && job.frame === frame)) context.jobs.push(this.job(frame, 'detail', context.native));
+        } else {
+          this.updateNativeWindow();
+        }
+      }
+    }
+    this.pump();
+  }
+  clear(): void { this.deferred = null; this.reset(false); }
+  destroy(): void { this.disposed = true; this.unsubscribeBudget?.(); this.clear(); this.transport?.dispose(); }
+
+  private releaseRetired(): void {
+    const closed = new Set<Image>();
+    for (const retired of this.retired.splice(0)) {
+      if (retired.sourceId !== this.visibleId && retired.sourceId !== this.shownId) {
+        if (this.map.getLayer(retired.sourceId)) this.map.removeLayer(retired.sourceId);
+        if (this.map.getSource(retired.sourceId)) this.map.removeSource(retired.sourceId);
+      }
+      if (!closed.has(retired.image) && retired.image !== this.shown && ![...this.previews.values(), ...this.natives.values()].includes(retired.image)) {
+        retired.image.bitmap.close(); retired.image.lease?.release();
+        closed.add(retired.image);
+      }
+      retired.displayLease?.release(); retired.previewLease?.release();
+    }
   }
 
-  private window(): void {
-    if (!this.context || !this.selected) return;
-    const frames = renderedFrames(this.context.build.manifest).map(frame => frame.id), index = frames.indexOf(this.selected);
-    const retained = deviceHoldsTimeline() ? frames.slice() : frames.slice(Math.max(0, index - 2), index + 3);
-    if (this.shown && !retained.includes(this.shown)) retained.push(this.shown);
-    this.context.frames = retained;
-    for (const [frame, image] of this.images) if (!retained.includes(frame)) { image.close(); this.images.delete(frame); }
+  private ensureSelectedPreview(frame: string): void {
+    const context = this.context;
+    if (!context || this.previews.has(frame) || context.jobs.some(job => job.quality === 'overview' && job.frame === frame)) return;
+    const attempts = this.failureCounts.get(frame) ?? 0;
+    if (attempts >= MAX_PREVIEW_ATTEMPTS) return;
+    const due = this.retryAfter.get(frame) ?? 0;
+    if (!this.retries.has(frame) || Date.now() >= due) {
+      if (this.retryTimer !== null) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+      this.retries.add(frame);
+      this.unavailable.delete(frame);
+      context.jobs.push(this.job(frame, 'overview', context.preview));
+      return;
+    }
+    if (this.retryTimer === null) {
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = null;
+        if (this.disposed || !this.context || !this.selected) return;
+        this.ensureSelectedPreview(this.selected);
+        this.pump();
+      }, Math.max(0, due - Date.now()));
+    }
+  }
+
+  private reset(keepShown: boolean): void {
+    this.generation++;
+    for (const job of this.context?.jobs ?? []) {
+      for (const tile of job.tiles) {
+        tile.handle?.cancel();
+        if (tile.state !== 'decoding') { tile.release?.(); tile.release = undefined; tile.data = undefined; }
+      }
+      job.partial?.close(); job.partial = undefined;
+      job.lease?.release();
+    }
+    const previous = this.context;
+    this.context = null; this.selected = null; this.composing = null; this.fetching = 0;
+    if (this.expiry !== null) clearTimeout(this.expiry); this.expiry = null;
+    if (this.retryTimer !== null) clearTimeout(this.retryTimer); this.retryTimer = null;
+    if (this.nativeTimer !== null) clearTimeout(this.nativeTimer); this.nativeTimer = null; this.nativeRested = false;
+    const ownedShown = !!this.shown && [...this.previews.values(), ...this.natives.values()].includes(this.shown);
+    for (const image of [...this.previews.values(), ...this.natives.values()]) {
+      if ((!keepShown || image !== this.shown) && !this.retired.some(entry => entry.image === image)) { image.bitmap.close(); image.lease?.release(); }
+    }
+    this.previews.clear(); this.natives.clear(); this.unavailable.clear(); this.retries.clear();
+    this.failureCounts.clear(); this.retryAfter.clear();
+    if (keepShown && this.shown && ownedShown) { this.heldLease?.release(); this.heldLease = previous?.previewLease ?? null; }
+    else if (keepShown && this.shown) previous?.previewLease?.release();
+    else {
+      previous?.previewLease?.release(); this.heldLease?.release(); this.heldLease = null;
+      if (this.shown && !ownedShown) { this.shown.bitmap.close(); this.shown.lease?.release(); }
+      this.shown = null; this.shownFrame = null; this.shownCoordinates = null; this.shownId = this.id; this.visibleId = null;
+      this.displayLease?.release(); this.displayLease = null;
+      for (const id of [this.id, `${this.id}-stage`]) {
+        if (this.map.getLayer(id)) this.map.removeLayer(id);
+        if (this.map.getSource(id)) this.map.removeSource(id);
+      }
+      this.releaseRetired();
+    }
+    this.canvasLease?.release(); this.canvasLease = null;
+    if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
+    if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
+    this.limited = false;
+  }
+
+  private covers(): boolean { return !!this.context && contains(this.context.preview, bounds(this.map)); }
+  private nativeCovers(): boolean {
+    return !!this.context?.native && this.context.requiredZoom !== null && contains(this.context.native, bounds(this.map))
+      && canonicalZoom(this.map, layerMaxZoom(this.context.build.manifest, this.context.layer)) === this.context.requiredZoom;
+  }
+  private isFrameUsable(frame: string): boolean {
+    return (this.previews.has(frame) && this.covers()) || (this.natives.has(frame) && this.nativeCovers());
+  }
+  private allAxisUsable(context: Context): boolean {
+    return context.frames.every(frame => this.isFrameUsable(frame));
+  }
+
+  private job(frame: string, quality: Quality, crop: RasterCrop): Job {
+    const scale = quality === 'overview' ? Math.min(1, 256 / Math.max(crop.width, crop.height)) : 1;
+    return { frame, quality, crop, width: Math.max(1, Math.round(crop.width * scale)), height: Math.max(1, Math.round(crop.height * scale)),
+      tiles: crop.tiles.map(() => ({ state: 'waiting' })), failed: false, lease: null };
+  }
+
+  private ordered(jobs: Job[]): Job[] {
+    const frames = this.context!.frames, index = frames.indexOf(this.selected ?? '');
+    const rank = (job: Job, delta: number) => job.quality === 'overview' ? delta === 0 ? 0 : Math.abs(delta) <= 2 ? 2 : 4
+      : delta === 0 ? 1 : Math.abs(delta) <= 2 ? 3 : 5;
+    return jobs.sort((a, b) => {
+      const deltaA = frames.indexOf(a.frame) - index, deltaB = frames.indexOf(b.frame) - index;
+      return rank(a, deltaA) - rank(b, deltaB) || Math.abs(deltaA) - Math.abs(deltaB)
+        || Number(Math.sign(deltaB) === this.direction) - Number(Math.sign(deltaA) === this.direction);
+    });
+  }
+
+  private compressedBytes(excludeFrame?: string | null): number {
+    let total = 0;
+    for (const job of this.context?.jobs ?? []) {
+      if (excludeFrame && job.frame === excludeFrame) continue;
+      for (const tile of job.tiles) {
+        if (tile.state === 'compressed' || tile.state === 'decoding') total += tile.data?.byteLength ?? 0;
+      }
+    }
+    return total;
+  }
+
+  private scheduleNative(context: Context): void {
+    if (!context.native || context.nativeScheduled) return;
+    context.nativeScheduled = true;
+    if (this.options.canExpandNative?.() === false) { context.nativeWindowed = true; this.updateNativeWindow(); return; }
+    const nativeBytes = context.native.width * context.native.height * 4;
+    const budget = this.options.budget;
+    const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
+    const staging = Math.max(0, nativeBytes - (this.canvasLease?.bytes ?? 0)) + 8 * MAX_TILE_BYTES * 2;
+    context.nativeWindowed = !!budget && !this.nativeAdmitted(nativeBytes * context.frames.length + protectedBytes + staging);
+    if (context.nativeWindowed) { this.markLimited(); this.updateNativeWindow(); }
+    else for (const frame of context.frames) if (!this.natives.has(frame) && !context.jobs.some(job => job.quality === 'detail' && job.frame === frame)) context.jobs.push(this.job(frame, 'detail', context.native));
+  }
+
+  private suspendComposition(): void {
+    const job = this.composing;
+    if (!job || this.decoding > 0) return;
+    if (job.tiles.some(tile => tile.state === 'drawn')) {
+      job.partial?.close();
+      job.partial = this.canvas!.transferToImageBitmap();
+    }
+    this.composing = null;
   }
 
   private pump(): void {
     const context = this.context;
-    if (this.disposed || this.job || !context || context.build.expiresAtMs <= Date.now()) return;
-    const all = renderedFrames(context.build.manifest), idx = new globalThis.Map(all.map((f, i) => [f.id, i])), selected = idx.get(this.selected ?? '') ?? -1;
-    const frame = context.frames.filter(f => !this.images.has(f) && !this.unavailable.has(f))
-      .sort((a, b) => Math.abs((idx.get(a) ?? 0) - selected) - Math.abs((idx.get(b) ?? 0) - selected))[0];
-    if (!frame || this.context !== context || this.disposed || this.job) return;
-    const job: Job = { context, frame, controller: new AbortController() }; this.job = job;
-    void this.load(job).then(image => {
-      if (!this.current(job) || !context.frames.includes(frame)) { image.close(); return; }
-      const previous = this.images.get(frame);
-      this.images.set(frame, image);
-      if (previous && previous !== image) previous.close();
-      this.retried.delete(frame);
-      this.onReady();
+    if (!context || this.disposed || context.build.expiresAtMs <= Date.now()) return;
+    if (this.options.budget) {
+      const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
+      if (!this.nativeAdmitted(protectedBytes)) this.evictNative(protectedBytes);
+    }
+    if (context.native && this.options.canExpandNative?.() === false && context.nativeScheduled && !context.nativeWindowed) {
+      context.nativeWindowed = true; this.updateNativeWindow();
+    }
+    if (context.native && this.nativeRested && !this.playing) {
+      if (!context.nativeScheduled && this.allAxisUsable(context)) {
+        this.scheduleNative(context);
+      } else if (!context.nativeScheduled && this.selected) {
+        const index = context.frames.indexOf(this.selected);
+        for (const frame of context.frames.slice(Math.max(0, index - 2), index + 3)) {
+          if (this.previews.has(frame) && !this.natives.has(frame) && !context.jobs.some(job => job.quality === 'detail' && job.frame === frame)) context.jobs.push(this.job(frame, 'detail', context.native));
+        }
+      }
+    }
+    const jobs = this.ordered(context.jobs.filter(job => !job.failed));
+    const maxActive = this.options.requestLimits?.maxActive ?? 24;
+    const maxBackground = this.options.requestLimits?.maxPrefetchActive ?? 20;
+    const maxPendingBytes = maxActive * MAX_TILE_BYTES;
+    const maxBackgroundBytes = (maxActive - SELECTED_PREVIEW_SLOTS) * MAX_TILE_BYTES;
+    let selectedFetching = 0;
+    for (const job of jobs) if (job.frame === this.selected) for (const tile of job.tiles) if (tile.state === 'fetching') selectedFetching++;
+    for (const job of jobs) {
+      const isSelected = job.frame === this.selected;
+      if (job.quality === 'detail' && (!this.nativeRested || this.playing)) continue;
+      while (job.tiles.some(tile => tile.state === 'waiting')) {
+        if (this.fetching >= maxActive || this.fetching * MAX_TILE_BYTES + this.compressedBytes() + MAX_TILE_BYTES > maxPendingBytes) break;
+        if (job.quality === 'detail' && jobs.some(other => other.quality === 'overview')
+          && jobs.filter(other => other.quality === 'detail').flatMap(other => other.tiles).filter(tile => tile.state === 'fetching').length >= SELECTED_PREVIEW_SLOTS) break;
+        if (isSelected) {
+          if (this.compressedBytes() >= maxPendingBytes) break;
+        } else {
+          if (this.fetching - selectedFetching >= maxBackground) break;
+          if ((this.fetching - selectedFetching) * MAX_TILE_BYTES + this.compressedBytes(this.selected) + MAX_TILE_BYTES > maxBackgroundBytes) break;
+        }
+        if (job.quality === 'overview' && !context.previewLease && !job.lease && this.options.budget) {
+          const priority = isSelected ? 'foreground' : 'background';
+          job.lease = this.options.budget.reserve('raster-preview', 256 * 256 * 4, priority);
+          if (!job.lease) { this.markLimited(); break; }
+        }
+        if (job.quality === 'detail' && !job.lease && this.options.budget) {
+          const bytes = job.width * job.height * 4;
+          const protectedBytes = Math.max(0, this.options.protectedBytes?.() ?? 0);
+          const decodeBytes = this.decodeLease ? 0 : DECODE_LEASE_BYTES;
+          const staging = Math.max(0, bytes - (this.canvasLease?.bytes ?? 0)) + decodeBytes;
+          const required = bytes + staging + protectedBytes;
+          if (isSelected) this.evictNative(required);
+          if (!this.nativeAdmitted(required)) {
+            this.markLimited();
+            break;
+          }
+          job.lease = this.options.budget.reserve('raster-native', bytes, 'background');
+          if (!job.lease) { this.markLimited(); break; }
+        }
+        const index = job.tiles.findIndex(tile => tile.state === 'waiting');
+        if (isSelected) selectedFetching++;
+        this.fetch(job, index);
+      }
+    }
+    const readyToCompose = (candidate: Job) => candidate.tiles.some(tile => tile.state === 'compressed');
+    const nextReady = jobs.find(readyToCompose) ?? null;
+    if (this.composing && this.decoding === 0) {
+      if (this.composing.tiles.every(tile => tile.state === 'drawn')) {
+        this.finish(this.composing);
+        return;
+      }
+      const stalled = !this.composing.tiles.some(tile => tile.state === 'compressed');
+      const preempted = !!nextReady && nextReady !== this.composing && jobs.indexOf(nextReady) < jobs.indexOf(this.composing);
+      if (stalled || preempted) this.suspendComposition();
+    }
+    if (!this.composing) {
+      const next = jobs.find(readyToCompose);
+      if (next && this.startComposition(next)) this.composing = next;
+    }
+    const job = this.composing;
+    if (!job) {
+      if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
+      return;
+    }
+    while (this.decoding < 4) {
+      const index = job.tiles.findIndex(tile => tile.state === 'compressed');
+      if (index < 0) break;
+      this.decode(job, index);
+    }
+    if (job.tiles.every(tile => tile.state === 'drawn')) this.finish(job);
+    else if (this.decoding === 0 && !job.tiles.some(tile => tile.state === 'compressed')) this.suspendComposition();
+  }
+
+  private startComposition(job: Job): boolean {
+    const budget = this.options.budget, bytes = job.width * job.height * 4;
+    const priority = job.quality === 'overview' && job.frame === this.selected ? 'foreground' : 'background';
+    if (budget) {
+      const needed = Math.max(0, bytes - (this.canvasLease?.bytes ?? 0)) + (this.decodeLease ? 0 : DECODE_LEASE_BYTES);
+      if (!budget.canReserve(needed, priority) || needed > budget.limit - budget.used) {
+        if (priority === 'foreground') this.evictNative(needed + Math.max(0, this.options.protectedBytes?.() ?? 0));
+        if (!budget.canReserve(needed, priority) || needed > budget.limit - budget.used) { this.markLimited(); return false; }
+      }
+      if (!this.canvasLease) {
+        this.canvasLease = budget.reserve('raster-canvas', bytes, priority);
+      } else if (!this.canvasLease.resize(bytes)) {
+        if (priority === 'foreground') {
+          const previousBytes = this.canvasLease.bytes;
+          this.canvasLease.release();
+          this.canvasLease = budget.reserve('raster-canvas', bytes, 'foreground') ?? budget.reserve('raster-canvas', previousBytes, 'background');
+          if (!this.canvasLease || this.canvasLease.bytes !== bytes) { this.markLimited(); return false; }
+        } else {
+          this.markLimited();
+          return false;
+        }
+      }
+      if (!this.decodeLease) this.decodeLease = budget.reserve('raster-decode', DECODE_LEASE_BYTES, priority);
+      if (!this.canvasLease || !this.decodeLease) { this.markLimited(); return false; }
+    }
+    this.canvas!.width = job.width; this.canvas!.height = job.height;
+    const ctx = this.canvas!.getContext('2d')!;
+    ctx.clearRect(0, 0, job.width, job.height);
+    if (job.partial) {
+      try { ctx.drawImage(job.partial, 0, 0, job.width, job.height); }
+      finally { job.partial.close(); job.partial = undefined; }
+    }
+    return true;
+  }
+
+  private fetch(job: Job, index: number): void {
+    const context = this.context!, tile = job.tiles[index], location = job.crop.tiles[index], generation = this.generation;
+    const url = frameTileUrl(context.build.templates[context.layer], job.frame).replaceAll('{z}', String(location.z)).replaceAll('{x}', String(location.canonicalX)).replaceAll('{y}', String(location.y));
+    tile.state = 'fetching'; this.fetching++;
+    let response: Promise<{ data: ArrayBuffer; release?: () => void }>;
+    try {
+      if (typeof this.protocol.requestTile === 'function') {
+        tile.handle = this.protocol.requestTile(url, { priority: job.frame === this.selected ? 'foreground' : 'background' });
+        response = tile.handle.response;
+      } else {
+        const controller = new AbortController();
+        response = this.protocol.load({ url: this.transport!.url(url) }, controller);
+        tile.handle = { response: response as RasterTileHandle['response'], promote() {}, cancel: () => controller.abort() };
+      }
+    } catch {
+      if (tile.state === 'fetching') this.fetching--;
+      this.fail(job);
+      return;
+    }
+    void response.then(value => {
+      if (generation === this.generation && tile.state === 'fetching') this.fetching--;
+      if (generation !== this.generation || job.failed) { value.release?.(); return; }
+      if (value.data.byteLength > MAX_TILE_BYTES) { value.release?.(); this.fail(job); return; }
+      tile.data = value.data; tile.release = value.release; tile.state = 'compressed'; this.pump();
     }).catch(() => {
-      if (!this.current(job)) return;
-      if (frame === this.selected && !this.retried.has(frame)) { this.retried.add(frame); return; }
-      this.unavailable.add(frame); this.onReady();
-    }).finally(() => {
-      if (this.job === job) this.job = null;
-      this.pump();
+      if (generation === this.generation && tile.state === 'fetching') this.fetching--;
+      if (generation === this.generation && !job.failed) this.fail(job);
     });
   }
 
-  private current(job: Job): boolean {
-    return !this.disposed && this.context === job.context && !job.controller.signal.aborted && job.context.build.expiresAtMs > Date.now();
+  private decode(job: Job, index: number): void {
+    const tile = job.tiles[index], generation = this.generation, data = tile.data!;
+    tile.state = 'decoding'; this.decoding++;
+    void Promise.resolve().then(() => createImageBitmap(new Blob([data], { type: 'image/webp' }))).then(image => {
+      if (generation !== this.generation || job.failed || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) {
+        image.close(); if (generation === this.generation && !job.failed) this.fail(job); return;
+      }
+      const location = job.crop.tiles[index], sx = job.width / job.crop.width, sy = job.height / job.crop.height;
+      try { this.canvas!.getContext('2d')!.drawImage(image, location.drawX * sx, location.drawY * sy, RASTER_TILE_SIZE * sx, RASTER_TILE_SIZE * sy); }
+      finally { image.close(); }
+      tile.state = 'drawn';
+    }).catch(() => { if (generation === this.generation && !job.failed) this.fail(job); })
+      .finally(() => {
+        tile.release?.(); tile.release = undefined; tile.data = undefined; this.decoding--;
+        if (!this.context && !this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
+        this.pump();
+      });
   }
 
-  private async load(job: Job): Promise<ImageBitmap> {
-    const context = this.canvas!.getContext('2d')!, area = job.context.geometry;
-    context.clearRect(0, 0, area.width, area.height);
-    const template = frameTileUrl(job.context.build.templates[job.context.layer], job.frame);
-    for (let offset = 0; offset < area.tiles.length; offset += 2) {
-      const results = await Promise.allSettled(area.tiles.slice(offset, offset + 2).map(async tile => {
-        const url = template.replaceAll('{z}', String(tile.z)).replaceAll('{x}', String(tile.canonicalX)).replaceAll('{y}', String(tile.y));
-        const response = await this.protocol.load({ url: this.transport!.url(url) }, job.controller);
-        if (!this.current(job)) throw new Error('Overview cancelled');
-        const image = await createImageBitmap(new Blob([response.data], { type: 'image/webp' }));
-        if (!this.current(job) || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) { image.close(); throw new Error('Invalid overview tile'); }
-        return { tile, image };
-      }));
-      try {
-        if (!this.current(job) || results.some(result => result.status === 'rejected')) throw new Error('Incomplete overview');
-        for (const result of results) if (result.status === 'fulfilled') {
-          const { tile, image } = result.value;
-          context.drawImage(image, tile.drawX, tile.drawY, RASTER_TILE_SIZE, RASTER_TILE_SIZE);
+  private finish(job: Job): void {
+    const context = this.context!;
+    job.partial?.close(); job.partial = undefined;
+    const image = { bitmap: this.canvas!.transferToImageBitmap(), lease: job.lease };
+    job.lease = null;
+    (job.quality === 'overview' ? this.previews : this.natives).set(job.frame, image);
+    if (job.quality === 'overview') {
+      this.unavailable.delete(job.frame);
+      this.failureCounts.delete(job.frame);
+      this.retryAfter.delete(job.frame);
+    }
+    context.jobs = context.jobs.filter(value => value !== job);
+    if (job.quality === 'detail' && !context.nativeWindowed && this.natives.size === context.frames.length) this.limited = false;
+    this.composing = null;
+    if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
+    this.onReady(); this.pump();
+  }
+
+  private cancelJob(job: Job): void {
+    job.failed = true;
+    for (const tile of job.tiles) {
+      if (tile.state === 'fetching') { this.fetching--; tile.state = 'waiting'; }
+      tile.handle?.cancel();
+      if (tile.state !== 'decoding') { tile.release?.(); tile.release = undefined; tile.data = undefined; }
+    }
+    job.partial?.close(); job.partial = undefined;
+    job.lease?.release(); job.lease = null;
+    if (this.composing === job) this.composing = null;
+  }
+
+  private fail(job: Job): void {
+    const context = this.context;
+    if (!context || job.failed) return;
+    this.cancelJob(job);
+    context.jobs = context.jobs.filter(value => value !== job);
+    if (job.quality === 'overview') {
+      const attempts = (this.failureCounts.get(job.frame) ?? 0) + 1;
+      this.failureCounts.set(job.frame, attempts);
+      if (job.frame === this.selected && !this.retries.has(job.frame)) {
+        this.retries.add(job.frame);
+        this.unavailable.delete(job.frame);
+        context.jobs.push(this.job(job.frame, job.quality, job.crop));
+      } else {
+        this.unavailable.add(job.frame);
+        if (attempts < MAX_PREVIEW_ATTEMPTS) {
+          this.retryAfter.set(job.frame, Date.now() + PREVIEW_RETRY_COOLDOWN_MS);
+          if (job.frame === this.selected) this.ensureSelectedPreview(job.frame);
         }
-      } finally {
-        for (const result of results) if (result.status === 'fulfilled') result.value.image.close();
       }
     }
-    if (!this.current(job)) throw new Error('Overview cancelled');
-    return this.canvas!.transferToImageBitmap();
+    this.onReady(); this.pump();
+  }
+
+  private nativeAdmitted(required: number): boolean {
+    return !this.options.budget || (Number.isFinite(required) && this.options.budget.canReserve(required, 'background'));
+  }
+
+  private evictNative(required: number): void {
+    const budget = this.options.budget, context = this.context;
+    if (!budget || !context) return;
+    const index = context.frames.indexOf(this.selected ?? '');
+    const queued = context.jobs
+      .filter(job => job.quality === 'detail' && job.frame !== this.selected && (job.lease || job.tiles.some(tile => tile.state === 'compressed')))
+      .sort((a, b) => Math.abs(context.frames.indexOf(b.frame) - index) - Math.abs(context.frames.indexOf(a.frame) - index));
+    while (!this.nativeAdmitted(required) && queued.length) {
+      const job = queued.shift()!;
+      if (this.composing === job && this.decoding > 0) continue;
+      this.cancelJob(job);
+      context.jobs = context.jobs.filter(value => value !== job);
+      context.nativeWindowed = true;
+      this.markLimited();
+    }
+    const candidates = [...this.natives.entries()].filter(([frame, image]) => frame !== this.selected && image !== this.shown && !this.retired.some(entry => entry.image === image))
+      .sort(([a], [b]) => Math.abs(context.frames.indexOf(b) - index) - Math.abs(context.frames.indexOf(a) - index));
+    while (!this.nativeAdmitted(required) && candidates.length) {
+      const [frame, image] = candidates.shift()!;
+      this.natives.delete(frame); image.bitmap.close(); image.lease?.release();
+      context.nativeWindowed = true;
+      this.markLimited();
+    }
+  }
+
+  private updateNativeWindow(): void {
+    const context = this.context;
+    if (!context?.native || !this.selected) return;
+    const selected = context.frames.indexOf(this.selected);
+    const allowed = new Set(context.frames.slice(Math.max(0, selected - 2), Math.min(context.frames.length, selected + 3)));
+    for (const job of [...context.jobs]) {
+      if (job.quality !== 'detail' || allowed.has(job.frame)) continue;
+      this.cancelJob(job);
+      context.jobs = context.jobs.filter(value => value !== job);
+    }
+    for (const [frame, image] of this.natives) {
+      if (allowed.has(frame) || image === this.shown || this.retired.some(entry => entry.image === image)) continue;
+      this.natives.delete(frame); image.bitmap.close(); image.lease?.release();
+    }
+    for (const frame of allowed) {
+      if (this.previews.has(frame) && !this.natives.has(frame) && !context.jobs.some(job => job.quality === 'detail' && job.frame === frame)) {
+        context.jobs.push(this.job(frame, 'detail', context.native));
+      }
+    }
+  }
+
+  private markLimited(): void {
+    if (this.limited) return;
+    this.limited = true;
+    queueMicrotask(() => { if (!this.disposed && this.limited) this.onReady(); });
   }
 }
