@@ -60,7 +60,7 @@ async function readField(run: WrfRun, field: typeof contract.fields[number], ind
 }
 
 /** Read committed av-wrf cycles into sparse SI model-level frames. Storage owns transport. */
-export function createWrfZarrProvider(model: ModelDefinition): ResolvableForecastProvider {
+export function createWrfZarrProvider(model: ModelDefinition, _requirements?: { numericWind?: boolean }): ResolvableForecastProvider {
   const upstream = z.strictObject({ protocol: z.literal('wrf-zarr-v3'), provider: z.string().min(1), modelId: modelIdSchema.optional() }).parse(model.upstream);
   if (model.capabilities.verticalCoordinate !== 'model-levels' || model.capabilities.maxVerticalLevels > contract.maxVerticalLevels) throw new Error('WRF requires model-level columns');
   const fieldName = (target: string) => contract.fields.find(field => field.target === target)?.name;

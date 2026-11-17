@@ -23,7 +23,7 @@ export function createBuildStamp(): BuildStamp {
   return { createdAt, buildId: `${createdAt.replace(/[-:]/g, '').slice(0, 15)}Z-${randomUUID()}` };
 }
 export async function buildProduct(modelId: string, options: BuildOptions): Promise<string> {
-  const product = getProduct(modelId), provider = getForecastProvider(modelId);
+  const product = getProduct(modelId), provider = getForecastProvider(modelId, { numericWind: options.numericWind === true });
   if (!product) throw new Error(`No forecast product for ${modelId}`);
   return buildForecast({ ...options, product, mask: await loadCoverage(product), provider });
 }

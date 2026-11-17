@@ -17,6 +17,10 @@ export interface ExtraScalarField {
   method: Record<string, unknown>;
 }
 
+export interface PublishedIdentity {
+  method: { id: string; hash: string };
+}
+
 interface MutableMethod { outputs?: unknown; [key: string]: unknown }
 interface MutableShard { storedCells?: unknown; bytes?: number; frameCount?: unknown }
 interface MutableSurface {
@@ -76,8 +80,9 @@ function frameCount(manifest: MutableManifest, kind: unknown): number {
 
 /** Project a manifest onto the strict schema, keeping appended sample-only scalars beside it.
  * Shard byte lengths on the projection follow the known channel count. `extraScalars` keeps the published descriptor and method.
+ * `publication` keeps the published method id. Appended scalars stay on `extraScalars`.
  */
-export function projectClientManifest(value: unknown): { manifest: ManifestV5; extraScalars: ExtraScalarField[] } {
+export function projectClientManifest(value: unknown): { manifest: ManifestV5; extraScalars: ExtraScalarField[]; publication?: PublishedIdentity } {
   if (!value || typeof value !== 'object' || !Array.isArray((value as { layers?: unknown }).layers)) throw new Error(SCHEMA_ERROR);
   const listed = (value as { layers: unknown[] }).layers;
   if (listed.some(id => typeof id !== 'string') || new Set(listed).size !== listed.length) throw new Error(SCHEMA_ERROR);
@@ -104,11 +109,12 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
     if (!method) throw new Error('Unsupported contract');
     return { id, surfaceId: owners[0].id, descriptor: structuredClone(descriptor), method: structuredClone(method) };
   });
+  const publishedMethodId = copy.method.id;
   copy.layers = copy.layers.filter(id => !extra.has(id));
   for (const id of extra) delete descriptors[id];
   for (const surface of surfaces) {
     if (!Array.isArray(surface.layers) || surface.layers.some(id => typeof id !== 'string')) throw new Error('Unsupported contract');
-    const published = surface.layers;
+    const published = surface.layers as string[];
     if (!suffix(published, extra)) throw new Error('Unsupported scalar layout');
     const layers = published.filter(id => !extra.has(id));
     surface.layers = layers;
@@ -138,7 +144,27 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
   for (const id of Object.keys(methods)) if (!referenced.has(id)) delete methods[id];
   for (const method of Object.values(methods)) if (!Array.isArray(method.outputs) || !method.outputs.length) throw new Error('Unsupported scalar layout');
   copy.method.id = methodIds.join('+');
+  if (typeof publishedMethodId !== 'string' || (publishedMethodId !== copy.method.id && !publishedMethodId.startsWith(`${copy.method.id}+`))) throw new Error('Unsupported contract');
   const parsed = manifestV5Schema.safeParse(copy);
   if (!parsed.success) throw new Error('Unsupported contract');
-  return { manifest: parsed.data, extraScalars };
+  return { manifest: parsed.data, extraScalars, publication: { method: { id: publishedMethodId, hash: parsed.data.method.hash } } };
+}
+
+function knownLayerIds(layers: unknown): string[] | undefined {
+  if (!Array.isArray(layers)) return;
+  const known = layers.filter((id): id is string => typeof id === 'string' && isLayerId(id));
+  return known.length && known.length < layers.length ? known : undefined;
+}
+
+/** Drop appended layer ids from a catalog, sample, or batch response. Samples strip only for a build that published extras. */
+export function projectKnownResponse(value: unknown, publication?: PublishedIdentity): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const record = value as { models?: Array<{ surfaces?: Array<{ layers?: unknown }> }>; points?: Array<{ sample?: { surfaces?: Array<{ layers?: unknown }> } }>; surfaces?: Array<{ layers?: unknown }> };
+  if (!publication && !Array.isArray(record.models)) return value;
+  const groups = Array.isArray(record.models) ? record.models : Array.isArray(record.points) ? record.points.map(point => point.sample) : [record];
+  for (const group of groups) for (const surface of group?.surfaces ?? []) {
+    const known = knownLayerIds(surface?.layers);
+    if (known) surface.layers = known;
+  }
+  return value;
 }

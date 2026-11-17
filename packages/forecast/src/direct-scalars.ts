@@ -24,7 +24,11 @@ export function directSurfaceBinding(layer: LayerId): { source: AuxSurfaceId; sc
   return { source, scale: source === 'mslpPa' ? 0.01 : 1 };
 }
 
-export function requiredAuxiliaryFields(layers: readonly LayerId[]): { surface: AuxSurfaceId[]; levels: AuxLevelId[] } {
+export interface AuxiliaryRequirements {
+  numericWind?: boolean;
+}
+
+export function requiredAuxiliaryFields(layers: readonly LayerId[], requirements: AuxiliaryRequirements = {}): { surface: AuxSurfaceId[]; levels: AuxLevelId[] } {
   const surface = new Set<AuxSurfaceId>();
   const levels = new Set<AuxLevelId>();
   for (const layer of layers) {
@@ -32,7 +36,8 @@ export function requiredAuxiliaryFields(layers: readonly LayerId[]): { surface: 
     if (source) surface.add(source);
   }
   if (layers.some(layer => (PBL_CONSUMERS as readonly string[]).includes(layer))) surface.add('pblHeightM');
-  if (layers.includes('bl-mean-wind-u') || layers.includes('bl-mean-wind-v')) {
+  if (layers.includes('bl-mean-wind-u') || layers.includes('bl-mean-wind-v') || requirements.numericWind) {
+    surface.add('u10mMps'); surface.add('v10mMps');
     levels.add('uWindMps'); levels.add('vWindMps');
   }
   if (publishesNativeProfiles(layers)) for (const id of PROFILE_LEVELS) levels.add(id);

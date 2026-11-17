@@ -90,11 +90,12 @@ describe('client manifest projection', () => {
       manifest.layers.unshift(id);
       native.layers.unshift(id);
     }
+    (manifest as unknown as { method: { id: string } }).method.id = [...new Set(manifest.layers.map(layer => String(manifest.descriptors.layers[layer]?.methodId)))].join('+');
     return { manifest, id, methodId, native };
   }
 
   it('keeps an appended sample-only scalar and still parses the known fields', () => {
-    const { manifest, id, methodId } = withExtra('suffix');
+    const { manifest, id, methodId, native } = withExtra('suffix');
     expect(manifestV5Schema.safeParse(manifest).success).toBe(false);
     const projected = projectClientManifest(manifest);
     expect(projected.manifest.layers).toEqual(['usable-lift-msl', 'usable-lift-agl', 'precip-rate']);
@@ -102,6 +103,10 @@ describe('client manifest projection', () => {
     expect(projected.manifest.descriptors.methods[methodId]).toBeUndefined();
     expect(projected.extraScalars).toMatchObject([{ id, descriptor: { definition: { version: 1, id: 'sample-middle-cloud-v1' } }, method: { outputs: [id] } }]);
     expect(projected.manifest.surfaces.find(surface => surface.kind === 'native')!.layers).toEqual(['precip-rate']);
+    expect(projected.publication?.method.id).toContain(methodId);
+    expect(projected.manifest.method.id.includes(methodId)).toBe(false);
+    expect(projected.extraScalars.map(field => field.id)).toEqual([id]);
+    expect(projected.manifest.surfaces.find(surface => surface.id === native.id)?.layers).toEqual(['precip-rate']);
   });
 
   it('rejects an extra scalar inserted ahead of a known layer and an unknown sample codec', () => {

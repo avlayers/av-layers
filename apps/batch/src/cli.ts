@@ -44,13 +44,13 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const plan = wholeDomainPlan(product);
     if (!plan) throw new Error('Model requires a configured whole-domain grid');
     const { violations: retentionViolations, ...retention } = estimateRetention(product.execution.schedule, retentionScenario);
-    const provider = getForecastProvider(product.modelId), fine = await loadBundledFineCoverage(product, plan);
+    const numericWind = process.env.AV_NUMERIC_WIND === 'true';
+    const provider = getForecastProvider(product.modelId, { numericWind }), fine = await loadBundledFineCoverage(product, plan);
     const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
     const { packedTerrainColumnBudget } = await import('@av/forecast/refinement');
     const { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput } = await import('./whole-domain/capacity.js');
     const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels, { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
     const groups = partitionForecastHours(product.frameHours, product.execution.shards);
-    const numericWind = process.env.AV_NUMERIC_WIND === 'true';
     const capacity = admitWholeDomain(wholeDomainCapacityInput(product, provider,
       { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns }, groups, numericWind));
     const wind = numericWind && capacity.mapFrames
@@ -66,7 +66,7 @@ export async function runBatch(args = process.argv.slice(2)): Promise<void> {
     const product = getProduct(modelIdSchema.parse(values.model ?? DEFAULT_MODEL));
     if (!product) throw new Error('No admitted product for this model');
     const { getForecastProvider } = await import('./providers.js');
-    const provider = getForecastProvider(product.modelId);
+    const provider = getForecastProvider(product.modelId, { numericWind: process.env.AV_NUMERIC_WIND === 'true' });
     const localSource = values['source-store-dir'];
     if (localSource !== undefined && (!localSource.trim() || product.upstream.protocol !== 'wrf-zarr-v3')) throw new Error('--source-store-dir requires a nonempty directory and a WRF Zarr model');
     const store = localSource ? (await import('./local-source.js')).localForecastSource(localSource, sourceModelId(product))

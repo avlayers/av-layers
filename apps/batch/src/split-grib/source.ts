@@ -1,7 +1,7 @@
 import z from 'zod';
 import { MAX_GRID_CELLS, regularLatLonGridSchema, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
-import { assertSplitWeatherBindings, requiredAuxiliaryFields, selectConfiguredFields } from '@av/forecast/direct-scalars';
+import { assertSplitWeatherBindings, requiredAuxiliaryFields, selectConfiguredFields, type AuxiliaryRequirements } from '@av/forecast/direct-scalars';
 
 const field = z.object({ field: z.string().min(1), kind: z.enum(['time-invariant', 'single-level', 'model-level']),
   parameter: z.tuple([z.number().int(), z.number().int()]),
@@ -25,7 +25,7 @@ const upstreamSchema = z.object({ protocol: z.literal('split-grib2'), provider: 
     precipitation: field.extend({ kind: z.literal('single-level'), statistic: z.literal(1) }).optional() }).strict()
 }).strict();
 
-export function splitSource(model: ModelDefinition) {
+export function splitSource(model: ModelDefinition, requirements?: AuxiliaryRequirements) {
   if (model.capabilities.verticalCoordinate !== 'model-levels') throw new Error('Split GRIB input requires model-level fields');
   const upstream = upstreamSchema.parse(model.upstream), grid = regularLatLonGridSchema.parse(model.grid);
   if (model.layers.includes('precip-rate') && !upstream.fields.precipitation) throw new Error('Split GRIB precipitation requires its accumulation descriptor');
@@ -42,7 +42,7 @@ export function splitSource(model: ModelDefinition) {
     if (Object.hasOwn(fields ?? {}, u) !== Object.hasOwn(fields ?? {}, v)) throw new Error('Auxiliary Split GRIB wind components must be configured together');
   }
   assertSplitWeatherBindings(model.modelId, upstream);
-  const required = requiredAuxiliaryFields(model.layers);
+  const required = requiredAuxiliaryFields(model.layers, requirements);
   upstream.auxSurface = selectConfiguredFields(upstream.auxSurface, required.surface);
   upstream.auxLevels = selectConfiguredFields(upstream.auxLevels, required.levels);
   const coreFields = Object.values(upstream.fields).filter(value => value !== undefined);
