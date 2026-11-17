@@ -12,7 +12,7 @@ export interface WindField { sample(lat: number, lon: number): { u: number | nul
 export interface WindDeckOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
 interface BarbFeature { position: [number, number]; icon: string; angle: number; text: string; dynamic: boolean }
 
-const MAX_LAT = 85.05112878, DEG = Math.PI / 180, DISPLAY_BYTES = 5 * 1024 * 1024;
+const MAX_LAT = 85.05112878, DEG = Math.PI / 180, DISPLAY_BYTES = 8 * 1024 * 1024;
 const valid = (sample: ReturnType<WindField['sample']>): sample is { u: number; v: number; status: number } =>
   (sample.status & STATUS_MASK) === STATUS_VALID && sample.u !== null && sample.v !== null && Number.isFinite(sample.u) && Number.isFinite(sample.v);
 const worldY = (lat: number, size: number) => (1 - Math.asinh(Math.tan(Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * DEG)) / Math.PI) * size / 2;
@@ -40,7 +40,7 @@ export class WindDeck {
   constructor(private readonly map: Map, private readonly budget?: PreparationBudget) {
     this.atlasUrl = this.atlas.canvas.toDataURL('image/png');
     this.lease = budget?.reserve('wind-display-gl', DISPLAY_BYTES, 'foreground') ?? null;
-    this.overlay = this.mount(true) ?? this.mount(false);
+    this.overlay = this.mount(false) ?? this.mount(true);
     map.on('style.load', this.restore);
   }
 
@@ -90,7 +90,7 @@ export class WindDeck {
   private readonly restore = (): void => {
     if (this.destroyed) return;
     if (!this.overlay) {
-      this.overlay = this.mount(true) ?? this.mount(false);
+      this.overlay = this.mount(false) ?? this.mount(true);
       if (this.overlay) this.render();
       return;
     }
@@ -120,9 +120,9 @@ export class WindDeck {
       ...(trails && this.prepared ? [new ParticleLayer({
         id: `av-wind-particles-${this.generation}`,
         image: { data: this.preparedImage(this.prepared), width: this.prepared.size, height: this.prepared.size },
-        imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'LINEAR',
-        bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 32, speedFactor: 0.5, fps: 30,
-        width: 1.5, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
+        imageUnscale: [-100, 100], imageType: 'VECTOR', imageInterpolation: 'LINEAR', imageSmoothing: 1,
+        bounds: this.prepared.bounds as unknown as [number, number, number, number], numParticles: this.particles, maxAge: 64, speedFactor: 0.8, fps: 30,
+        width: 1.2, animate: !this.options.paused && !document.hidden, opacity: 0.9, color: [255, 255, 255]
       })] : []),
       ...(barbs ? [
         new IconLayer<BarbFeature>({
