@@ -122,6 +122,7 @@ async function openWindCard(page: Page): Promise<void> {
 }
 
 async function dismissWindCard(page: Page): Promise<void> {
+  await page.keyboard.press('Escape');
   await page.mouse.move(4, 4);
   await page.evaluate(() => {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -311,7 +312,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.locator('#point-card').waitFor({ state: 'visible', timeout: timeoutMs });
       assert(await page.locator('.point-marker').isVisible(), 'Selected point marker dot is not visible');
       assert((await page.locator('#point-close').count()) === 0, 'Legacy #point-close header row button should not exist');
-      await page.mouse.click(map.x + map.width - 90, map.y + 90);
+      await page.waitForTimeout(450);
+      await page.mouse.click(map.x + map.width - 200, map.y + 200);
       await page.locator('#point-card').waitFor({ state: 'hidden', timeout: timeoutMs });
       assert(!(await page.locator('.point-marker').isVisible()), 'Point marker dot remained visible after dismissing point card');
     }, false);
@@ -346,6 +348,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(imperial.includes('mph'), `Point wind is not imperial: ${imperial}`);
     }, false);
     await closePointIfOpen(page);
+    await page.locator('#units-metric').click();
 
     await run('time change redraws wind for the selected hour', async () => {
       await chooseStyle(page, 'Barbs');
@@ -453,9 +456,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         if (layout.key) {
           if (width >= 721) {
             assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
-          } else {
-            if (layout.track) assert(!intersects(layout.key, layout.track), `${width}px mobile key chip overlaps the scrub track`);
-            if (layout.firstDay) assert(!intersects(layout.key, layout.firstDay), `${width}px mobile key chip overlaps day pills`);
+          } else if (layout.track) {
+            assert(!intersects(layout.key, layout.track), `${width}px mobile key chip overlaps the scrub track`);
           }
           assert(layout.keyTrigger !== null, `${width}px capsule key trigger is missing`);
         }

@@ -432,18 +432,22 @@ export function WeatherChannelDock(props: {
   };
 
   useEffect(() => {
-    if (!touchInspectKey) return;
+    if (!touchInspectKey && !hoveredKey) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (dockRef.current && target && !dockRef.current.contains(target)) {
         clearTouchTimer();
+        clearHoverLeaveTimer();
         setTouchInspectKey(null);
+        setHoveredKey(null);
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         clearTouchTimer();
+        clearHoverLeaveTimer();
         setTouchInspectKey(null);
+        setHoveredKey(null);
       }
     };
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -452,7 +456,7 @@ export function WeatherChannelDock(props: {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [touchInspectKey]);
+  }, [touchInspectKey, hoveredKey]);
 
   useEffect(() => {
     if (!props.windSupported) {
