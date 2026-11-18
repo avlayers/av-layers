@@ -356,13 +356,13 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const beforePixels = await page.screenshot({ clip });
       const track = page.locator('.ct-track');
       const selected = await track.getAttribute('aria-valuenow');
+      const max = Number(await track.getAttribute('aria-valuemax'));
       const otherDay = page.locator('.ct-day:not(.is-selected):not([disabled])');
       if (await otherDay.count()) await otherDay.first().click();
       else {
-        const box = await track.boundingBox();
-        assert(box !== null && box.width > 0, 'Timeline track has no box');
-        const atEnd = Number(selected) >= Number(await track.getAttribute('aria-valuemax'));
-        await page.mouse.click(box.x + box.width * (atEnd ? 0.08 : 0.92), box.y + box.height / 2);
+        assert(max > 0, 'Timeline has no other frame to select');
+        await track.focus();
+        await page.keyboard.press(Number(selected) >= max ? 'ArrowLeft' : 'ArrowRight');
       }
       await page.waitForFunction(previous => document.querySelector('.ct-track')?.getAttribute('aria-valuenow') !== previous, selected, { timeout: timeoutMs });
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
