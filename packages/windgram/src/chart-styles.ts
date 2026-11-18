@@ -1,4 +1,5 @@
 import { WINDGRAM_STABILITY } from './windgram-stability.ts';
+import { windgramCalloutStyles } from './windgram-callout.ts';
 
 /* White/yellow chart text sits on stability fills from #ffeeee (1.1:1 on its own)
    to #7777dd (3.8:1). A dark halo keeps every label legible without recolouring
@@ -31,16 +32,9 @@ export const chartStyles = `
 .windgram .wg-tol-node { fill: #2563eb; stroke: #ffffff; stroke-width: 1.4; }
 .windgram .wg-inspector { pointer-events: none; }
 .windgram .wg-inspector text { stroke: none; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
-.windgram .wg-inspector line { stroke: #14223f; stroke-width: 1; stroke-dasharray: 3 4; }
+.windgram .wg-inspector line[data-cursor-vertical], .windgram .wg-inspector line[data-cursor-horizontal] { stroke: #14223f; stroke-width: 1; stroke-dasharray: 3 4; }
 .windgram .wg-inspector circle[data-cursor-point] { fill: none; stroke: #17253e; stroke-width: 2; }
 .windgram .wg-inspector circle[data-cursor-tol-ring] { fill: #38bdf826; stroke: #38bdf8; stroke-width: 1.6; stroke-dasharray: 2.5 2; }
-.windgram .wg-inspector-back { fill: #122033; fill-opacity: .95; stroke: #ffffff; stroke-opacity: .55; stroke-width: .75; }
-.windgram .wg-inspector-badge { fill: #fbbf24; font-size: 9px; font-weight: 750; letter-spacing: .04em; }
-.windgram .wg-inspector-badge.is-free { fill: #93c5fd; font-weight: 700; }
-.windgram .wg-inspector-agl { fill: #fff; font-size: 12px; font-weight: 750; }
-.windgram .wg-inspector-msl { fill: #94a3b8; font-size: 10.5px; font-weight: 600; }
-.windgram .wg-inspector-meteo { fill: #e2e8f0; font-size: 10.5px; font-weight: 600; }
-.windgram .wg-inspector-soar { fill: #86efac; font-size: 10.5px; font-weight: 650; }
-.windgram .wg-inspector-soar.is-muted { fill: #cbd5e1; font-weight: 600; }
+${windgramCalloutStyles}
 ${WINDGRAM_STABILITY.map(({ className, color }) => `.windgram .meteo-gram-stab-${className} { fill: ${color}; }`).join('\n')}
 `;

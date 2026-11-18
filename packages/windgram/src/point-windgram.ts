@@ -1,5 +1,5 @@
 import { formatMapLiftCell, formatPointMapTimes, hasNativeProfiles, longitudeOffsetHours, pointLiftExpectation, pointMapLift, samePoint, type GeoPoint, type PinnedBuild, type PointFrame, type PointSeries, type UnitSystem } from '@av/client';
-import { mountWindgram, type WindgramMount } from './dom.ts';
+import { mountWindgram, type WindgramCalloutVariant, type WindgramMount } from './dom.ts';
 import { panelStyles } from './panel-styles.ts';
 import { renderPointSeries } from './scalar-point.ts';
 import { localDateKey } from './internal-meteo.ts';
@@ -25,6 +25,7 @@ export interface PointWindgramOptions {
   readonly totalFrames?: number;
   readonly loading?: boolean;
   readonly mapOffsetMinutes?: number;
+  readonly calloutVariant?: WindgramCalloutVariant;
   onFrame(id: string): void;
 }
 
@@ -282,6 +283,7 @@ function createPointWindgram(
         readout: srReadout,
         selectedValidAt,
         inspectionMode: 'magnetic',
+        calloutVariant: options.calloutVariant,
         onStepHour: step,
         onTelemetry: paintTelemetry,
         onSelectHour: validAt => {

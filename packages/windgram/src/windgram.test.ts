@@ -10,6 +10,7 @@ import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
 
 import { barbGeometry, displayedBarbSpeed, quantizedBarbSpeed } from './wind-barb.ts';
+import { classifyParagliderWind, cloudOktasSegments, getWindgramCalloutRenderer } from './windgram-callout.ts';
 import { windBarbGlyph } from './windgram-glyphs.ts';
 import { resolveWindgramPresentation } from './windgram-presentation.ts';
 import { elevationTickMeters, mpsToKnots, roundedElevationLabel } from './windgram-format.ts';
@@ -605,5 +606,151 @@ describe('Windgram data', () => {
     point('pointerleave');
     expect(cursor.getAttribute('visibility')).toBe('hidden');
     chart.dispose();
+  });
+
+  it('renders Option B 2x2 Instrument Tile by default with PG wind thresholds, vario bar, cloud oktas, conditional rain, and pluggable variant swapping', () => {
+    expect(classifyParagliderWind(null)).toBe('missing');
+    expect(classifyParagliderWind(0.2)).toBe('calm');
+    expect(classifyParagliderWind(4.0)).toBe('ok');      // 14.4 km/h (<20 km/h)
+    expect(classifyParagliderWind(7.0)).toBe('caution'); // 25.2 km/h (20-30 km/h)
+    expect(classifyParagliderWind(9.5)).toBe('danger');  // 34.2 km/h (>30 km/h)
+    expect([0, 4, 15, 35, 75, 95].map(cloudOktasSegments)).toEqual([0, 0, 1, 2, 4, 5]);
+
+    const { sample, profile, forecast } = fixture([20, 21]);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
+    frames[0].layers['cloud-cover-total'] = { ...frames[0].layers['sfc-temp-c']!, value: 35 };
+    const site = forecast(frames);
+    const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, timeZone: site.site.timeZone, hours: site.hours });
+
+    const defaultSvg = renderWindgramSvg(scene);
+    expect(defaultSvg).toContain('data-callout-variant="tile-2x2"');
+    expect(defaultSvg).toContain('data-tile-wind-arrow=""');
+    expect(defaultSvg).toContain('data-tile-climb-fill=""');
+    expect(defaultSvg).toContain('data-tile-okta="4"');
+    expect(defaultSvg).toContain('data-tile-rain-icon=""');
+
+    const classicSvg = renderWindgramSvg(scene, { calloutVariant: 'classic' });
+    expect(classicSvg).toContain('data-callout-variant="classic"');
+    expect(classicSvg).toContain('data-cursor-soar=""');
+    expect(classicSvg).not.toContain('data-tile-wind-arrow=""');
+
+    // Bind Option B 2x2 DOM nodes directly and verify live painting across dry, caution-wind/rain, and in-cloud states.
+    const back = new FakeElement('rect');
+    const badgePill = new FakeElement('rect');
+    const badge = new FakeElement('text');
+    const agl = new FakeElement('text');
+    const msl = new FakeElement('text');
+    const windBg = new FakeElement('rect');
+    const dial = new FakeElement('circle');
+    const windArrow = new FakeElement('path');
+    const windCalm = new FakeElement('circle');
+    const windSpeed = new FakeElement('text');
+    const windDir = new FakeElement('text');
+    const climbFill = new FakeElement('rect');
+    const climbVal = new FakeElement('text');
+    const climbSub = new FakeElement('text');
+    const cloudBg = new FakeElement('rect');
+    const oktas = [0, 1, 2, 3, 4].map(() => new FakeElement('rect'));
+    const cloudText = new FakeElement('text');
+    const rainBg = new FakeElement('rect');
+    const tempEl = new FakeElement('text');
+    const rainIcon = new FakeElement('path');
+    const hazardEl = new FakeElement('text');
+    const tileNodes = new Map<string, FakeElement>([
+      ['[data-cursor-back]', back],
+      ['[data-tile-badge-pill]', badgePill],
+      ['[data-cursor-badge]', badge],
+      ['[data-cursor-agl]', agl],
+      ['[data-cursor-msl]', msl],
+      ['[data-tile-wind-bg]', windBg],
+      ['[data-tile-dial]', dial],
+      ['[data-tile-wind-arrow]', windArrow],
+      ['[data-tile-wind-calm]', windCalm],
+      ['[data-tile-wind-speed]', windSpeed],
+      ['[data-tile-wind-dir]', windDir],
+      ['[data-tile-climb-fill]', climbFill],
+      ['[data-tile-climb-val]', climbVal],
+      ['[data-tile-climb-sub]', climbSub],
+      ['[data-tile-cloud-bg]', cloudBg],
+      ...oktas.map((el, i) => [`[data-tile-okta="${i}"]`, el] as const),
+      ['[data-tile-cloud-text]', cloudText],
+      ['[data-tile-rain-bg]', rainBg],
+      ['[data-tile-temp]', tempEl],
+      ['[data-tile-rain-icon]', rainIcon],
+      ['[data-tile-hazard]', hazardEl],
+    ]);
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => tileNodes.get(sel) ?? null,
+    } as unknown as ParentNode);
+
+    const baseReading = readWindgram(scene, 0, 1800);
+    const dummyTelemetry = {
+      timeChip: '3:00 PM', altChip: '★ TOL 500 m AGL', snappedToTol: true, canSnapToTol: false,
+      calloutBadge: '★ TOP OF LIFT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: true, chips: [],
+    };
+
+    // 1) Flyable wind (270° W blowing East -> downwind arrow rotated 90°), dry sky (rain icon hidden), 35% cloud (2/5 oktas).
+    const size = bound.paint({
+      aglText: '500 m AGL',
+      mslText: '2,000 m MSL',
+      useTol: true,
+      telemetry: dummyTelemetry,
+      reading: { ...baseReading, speedKt: mpsToKnots(4.5), directionDeg: 270, precipitationMmHr: 0, windShear: null },
+      unitSystem: 'metric',
+    });
+    expect(size).toEqual({ width: 194, height: 84 });
+    expect(badge.textContent).toBe('★ TOL');
+    expect(windArrow.getAttribute('transform')).toBe('translate(18 37.5) rotate(90)');
+    expect(windSpeed.textContent).toBe('16 km/h');
+    expect(windSpeed.getAttribute('class')).toContain('is-ok');
+    expect(windDir.textContent).toBe('W');
+    expect(Number(climbFill.getAttribute('height'))).toBeGreaterThan(0);
+    expect(oktas.map(el => el.getAttribute('class')?.includes('is-lit') ?? false)).toEqual([true, true, false, false, false]);
+    expect(cloudText.textContent).toBe('Cloud 35%');
+    expect(rainIcon.getAttribute('visibility')).toBe('hidden');
+    expect(hazardEl.textContent).toBe('Dry');
+
+    // 2) Caution wind (25 km/h WNW), active precipitation (0.8 mm/h), freezing air (-2°C), and in-cloud RH >=94%.
+    bound.paint({
+      aglText: '900 m AGL',
+      mslText: '2,400 m MSL',
+      useTol: false,
+      telemetry: dummyTelemetry,
+      reading: {
+        ...baseReading,
+        speedKt: mpsToKnots(7.0),
+        directionDeg: 292.5,
+        temperatureF: 28.4,
+        cloud: 'humidity',
+        cloudCoverTotalPercent: 85,
+        precipitationMmHr: 0.8,
+      },
+      unitSystem: 'metric',
+    });
+    expect(badge.textContent).toBe('ALT');
+    expect(back.getAttribute('class')).toContain('is-caution');
+    expect(windBg.getAttribute('class')).toContain('is-caution');
+    expect(windDir.textContent).toBe('WNW · Caution');
+    expect(cloudBg.getAttribute('class')).toContain('is-cloud');
+    expect(cloudText.textContent).toBe('IN CLOUD · 85%');
+    expect(tempEl.textContent).toBe('❄ -2°C');
+    expect(tempEl.getAttribute('class')).toContain('is-freeze');
+    expect(rainIcon.getAttribute('visibility')).toBe('visible');
+    expect(hazardEl.textContent).toBe('Rain 0.8 mm/h');
+
+    // 3) Live runtime variant swap via setCalloutVariant.
+    const swapHost = new FakeElement('div');
+    const mounted = mountWindgram(swapHost as unknown as HTMLElement, {
+      view: scene,
+      idPrefix: 'swap-callout',
+      selectedValidAt: scene.hours[0].validAt,
+      inspectionMode: 'magnetic',
+    });
+    expect(swapHost.innerHTML).toContain('data-callout-variant="tile-2x2"');
+    mounted.setCalloutVariant('classic');
+    expect(swapHost.innerHTML).toContain('data-callout-variant="classic"');
+    mounted.setCalloutVariant('tile-2x2');
+    expect(swapHost.innerHTML).toContain('data-callout-variant="tile-2x2"');
+    mounted.dispose();
   });
 });
