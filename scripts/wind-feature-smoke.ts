@@ -387,22 +387,32 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         await page.setViewportSize({ width, height: viewportHeight(width) });
         await page.waitForTimeout(300);
         const layout = await page.evaluate(() => {
-          const boxOf = (el: Element | null) => {
-            if (!el) return null;
+          // A named function in this callback is rewritten to call __name, which the page does not define.
+          const targets = [
+            ['rail', '.wind-controls-rail'],
+            ['trigger', '#toggle-wind'],
+            ['dock', '#map-dock'],
+            ['timeline', '.compact-timeline', '#timebar'],
+            ['track', '.ct-track'],
+            ['firstDay', '.ct-day'],
+            ['key', '#legend'],
+            ['keyTrigger', '#legend-key-toggle'],
+            ['attribution', '.maplibregl-ctrl-attrib']
+          ] as const;
+          const boxes = {
+            rail: null, trigger: null, dock: null, timeline: null, track: null,
+            firstDay: null, key: null, keyTrigger: null, attribution: null
+          } as Record<(typeof targets)[number][0], Rect | null>;
+          for (const [name, selector, fallback] of targets) {
+            const el = document.querySelector(selector) ?? (fallback === undefined ? null : document.querySelector(fallback));
+            if (!el) continue;
             const style = getComputedStyle(el);
-            if (style.display === 'none' || style.visibility === 'hidden') return null;
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
             const r = el.getBoundingClientRect();
-            return r.width > 0 ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } : null;
-          };
-          const rail = boxOf(document.querySelector('.wind-controls-rail'));
-          const trigger = boxOf(document.querySelector('#toggle-wind'));
-          const dock = boxOf(document.querySelector('#map-dock'));
-          const timeline = boxOf(document.querySelector('.compact-timeline') ?? document.querySelector('#timebar'));
-          const track = boxOf(document.querySelector('.ct-track'));
-          const firstDay = boxOf(document.querySelector('.ct-day'));
-          const key = boxOf(document.querySelector('#legend'));
-          const keyTrigger = boxOf(document.querySelector('#legend-key-toggle'));
-          const attribution = boxOf(document.querySelector('.maplibregl-ctrl-attrib'));
+            if (r.width <= 0) continue;
+            boxes[name] = { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+          }
+          const { rail, trigger, dock, timeline, track, firstDay, key, keyTrigger, attribution } = boxes;
           const unit = document.querySelector('.wind-controls-unit');
           const windBackings: Array<{ width: number; height: number }> = [];
           let mapBacking: { width: number; height: number } | null = null;
