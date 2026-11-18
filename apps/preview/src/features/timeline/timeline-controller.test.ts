@@ -1216,3 +1216,182 @@ it('does not select for an unchanged click or invalidated external update', () =
   expect(onSelect).not.toHaveBeenCalled();
   timeline.destroy();
 });
+
+it('tracks pointer arbitrarily across sparse 3-hour intervals while dragging and snaps playhead to selected hour on release', () => {
+  const sparse3h: TimelineFrame[] = [9, 12, 15, 18].map(hour => ({
+    id: `h${hour}`,
+    validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z`
+  }));
+  const { host, onSelect, timeline } = setup();
+  const root = host.children[0]!;
+  const track = byClass(root, 'ct-track');
+  const playhead = byClass(root, 'ct-playhead');
+  const snapGhost = byClass(root, 'ct-snap-ghost');
+  const loupe = byClass(root, 'ct-loupe');
+  track.offsetLeft = 0;
+  track.offsetWidth = 240; // 10 px per hour on linear 24h scale
+  timeline.update(sparse3h, 'h12');
+  expect(playhead.style.left).toBe('50%');
+  expect(snapGhost.getAttribute('hidden')).toBe('');
+  expect(loupe.getAttribute('hidden')).toBe('');
+
+  // Press at 12:00 (x = 120) and drag smoothly into the 3-hour gap at 13:12 (x = 132 -> 55%).
+  pointer(track, 'pointerdown', 120);
+  pointer(track, 'pointermove', 132);
+  expect(root.classList.contains('is-scrubbing')).toBe(true);
+  expect(playhead.style.left).toBe('55%');
+  expect(snapGhost.getAttribute('hidden')).toBeNull();
+  expect(snapGhost.style.left).toBe('50%');
+  expect(loupe.getAttribute('hidden')).toBeNull();
+  expect(loupe.textContent).toBe('Sat 14 · 12:00');
+  expect(onSelect).not.toHaveBeenCalled();
+
+  // Drag past midpoint to 14:00 (x = 140 -> 58.3%): nearest frame flips to h15 (62.5%) while playhead stays under finger!
+  pointer(track, 'pointermove', 140);
+  expect(playhead.style.left).toBe('58.3%');
+  expect(snapGhost.style.left).toBe('62.5%');
+  expect(loupe.textContent).toBe('Sat 14 · 15:00');
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
+
+  // Drag into hatched tail at 22:00 (x = 220 -> 91.7%): still scrolls arbitrarily without freezing!
+  pointer(track, 'pointermove', 220);
+  expect(playhead.style.left).toBe('91.7%');
+  expect(snapGhost.style.left).toBe('75%');
+  expect(loupe.textContent).toBe('Sat 14 · 18:00');
+
+  // Release at 22:00: playhead jumps cleanly to the selected 18:00 frame (75%) and hides loupe/ghost!
+  pointer(track, 'pointerup', 220);
+  expect(root.classList.contains('is-scrubbing')).toBe(false);
+  expect(playhead.style.left).toBe('75%');
+  expect(snapGhost.getAttribute('hidden')).toBe('');
+  expect(loupe.getAttribute('hidden')).toBe('');
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it('steps single frames via right-thumb steppers, pre-warms neighbors, and switches pluggable variants', () => {
+  const onPrepare = vi.fn();
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
+  const root = host.children[0]!;
+  const prev = byClass(root, 'ct-step-prev');
+  const next = byClass(root, 'ct-step-next');
+  const steppers = byClass(root, 'ct-steppers');
+  const progress = byClass(root, 'ct-progress');
+  const progressBar = byClass(root, 'ct-progress-bar');
+
+  timeline.update(frames, 'a');
+  expect(prev.disabled).toBe(true);
+  expect(next.disabled).toBe(false);
+
+  next.dispatchEvent(new Event('pointerenter'));
+  expect(onPrepare).toHaveBeenCalledWith(1);
+  click(next);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+  expect(prev.disabled).toBe(false);
+
+  click(next);
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
+  expect(next.disabled).toBe(true);
+
+  click(prev);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+
+  timeline.setReadiness?.(10, 40, true);
+  expect(progress.getAttribute('hidden')).toBeNull();
+  expect(progressBar.style.transform).toBe('scaleX(0.25)');
+  timeline.setReadiness?.(40, 40, false);
+  expect(progress.getAttribute('hidden')).toBe('');
+
+  expect(steppers.getAttribute('hidden')).toBeNull();
+  expect(root.dataset.variant).toBe('capsule');
+  timeline.setVariant?.('capsule');
+  expect(steppers.getAttribute('hidden')).toBeNull();
+  timeline.destroy();
+});
+
+it('previews elastic edge pull, bounces across gap days at 20px overscroll, and guards outer-edge release', () => {
+  const onPrepare = vi.fn();
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
+  const root = host.children[0]!;
+  const track = byClass(root, 'ct-track');
+  const playhead = byClass(root, 'ct-playhead');
+  const loupe = byClass(root, 'ct-loupe');
+  track.offsetLeft = 0;
+  track.offsetWidth = 240;
+
+  // Fri 13 (12:00, 18:00), Sat 14 unavailable gap, Sun 15 (09:00, 15:00), Mon 16 (06:00).
+  const multiDay: TimelineFrame[] = [
+    { id: 'f12', validTime: '2026-11-13T12:00:00Z' },
+    { id: 'f18', validTime: '2026-11-13T18:00:00Z' },
+    { id: 's09', validTime: '2026-11-15T09:00:00Z' },
+    { id: 's15', validTime: '2026-11-15T15:00:00Z' },
+    { id: 'm06', validTime: '2026-11-16T06:00:00Z' }
+  ];
+  timeline.update(multiDay, 'f18');
+
+  // Scrub inside right edge (x = 240): stays on Fri 13 without pulling or bouncing.
+  pointer(track, 'pointerdown', 180);
+  pointer(track, 'pointermove', 240);
+  expect(root.classList.contains('is-edge-armed')).toBe(false);
+  expect(track.style.transform ?? '').toBe('');
+  expect(loupe.textContent).toBe('Fri 13 · 18:00');
+  expect(onPrepare).not.toHaveBeenCalled();
+
+  // Pull 10px past right edge (x = 250): rubber-bands track, pre-warms Sun 15 first frame, previews arrow in loupe.
+  pointer(track, 'pointermove', 250);
+  expect(root.classList.contains('is-track-pulled')).toBe(true);
+  expect(root.classList.contains('is-edge-armed')).toBe(true);
+  expect(track.style.transform).toMatch(/^translateX\(/);
+  expect(loupe.textContent).toBe('Fri 13 · 18:00 → Sun 15');
+  expect(onPrepare).toHaveBeenCalledExactlyOnceWith(2);
+
+  // Pull 22px past right edge (x = 262): bounces across unavailable Sat 14 to Sun 15 09:00 (index 2).
+  pointer(track, 'pointermove', 262);
+  expect(root.dataset.bounce).toBe('next-a');
+  expect(root.classList.contains('is-track-pulled')).toBe(false);
+  expect(root.classList.contains('is-edge-armed')).toBe(false);
+  expect(track.style.transform).toBe('');
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
+  expect(playhead.style.left).toBe('37.5%');
+  expect(loupe.textContent).toBe('Sun 15 · 09:00');
+
+  // Slight outer wiggle at x = 270 does not runaway-bounce or snap to end of Sun 15.
+  pointer(track, 'pointermove', 270);
+  expect(onSelect).toHaveBeenCalledTimes(1);
+  expect(playhead.style.left).toBe('37.5%');
+
+  // Pulling another 32px outward (x = 296 >= 262 + 32) steps one more day to Mon 16 06:00 (index 4).
+  pointer(track, 'pointermove', 296);
+  expect(root.dataset.bounce).toBe('next-b');
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'none');
+  expect(playhead.style.left).toBe('25%');
+
+  // Releasing while still outside the right edge commits Mon 16 06:00 cleanly without re-seeking x = 298.
+  pointer(track, 'pointerup', 298);
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'push');
+  expect(playhead.style.left).toBe('25%');
+
+  // Left-edge pull & bounce backward from Sun 15 to Fri 13 latest frame (18:00, index 1), then re-enter to scrub Fri 13.
+  timeline.update(multiDay, 's09');
+  pointer(track, 'pointerdown', 60);
+  pointer(track, 'pointermove', -10);
+  expect(loupe.textContent).toBe('Fri 13 ← Sun 15 · 09:00');
+  pointer(track, 'pointermove', -22);
+  expect(root.dataset.bounce).toBe('prev-a');
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'none');
+  expect(playhead.style.left).toBe('75%');
+
+  // Slide back inside track (x = 120 >= 10px inside left edge) to continue scrubbing Fri 13 smoothly in one gesture!
+  pointer(track, 'pointermove', 120);
+  expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
+  expect(playhead.style.left).toBe('50%');
+  pointer(track, 'pointerup', 120);
+  expect(onSelect).toHaveBeenLastCalledWith(0, 'push');
+  timeline.destroy();
+});

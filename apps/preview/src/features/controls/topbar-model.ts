@@ -1,4 +1,5 @@
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
+import type { UnitSystem } from '@av/client';
 import {
   CLOUD_STYLE_OPTIONS,
   RAIN_STYLE_OPTIONS,
@@ -7,8 +8,9 @@ import {
   type RainStyleChoice
 } from '../map/channel-styles';
 import { themeOption, type MapTheme } from '../map/visual-theme';
+import { WIND_STYLE_LABELS, windStopLabel, type WindHeight, type WindStyle } from '../wind/wind-model';
 
-export type WeatherChannelKey = 'lift' | 'clouds' | 'rain' | 'isobars';
+export type WeatherChannelKey = 'lift' | 'wind' | 'clouds' | 'rain' | 'isobars';
 export type DockChannelKey = WeatherChannelKey | 'peek';
 
 const THEME_INFO_STORAGE_KEY = 'av.preview.themeInfoOpen';
@@ -23,6 +25,19 @@ export const THEME_CHIP_LABELS: Readonly<Record<MapTheme, string>> = {
   cockpit: 'Cockpit',
   xcskies: 'XC Skies'
 };
+
+export const WIND_ENCODING_OPTIONS: ReadonlyArray<{ readonly id: WindStyle; readonly label: string; readonly summary: string }> = [
+  { id: 'trails', label: 'Flow', summary: WIND_STYLE_LABELS.trails },
+  { id: 'barbs', label: 'Barbs', summary: WIND_STYLE_LABELS.barbs },
+  { id: 'hybrid', label: 'Mix', summary: WIND_STYLE_LABELS.hybrid }
+];
+
+/** Formats the active wind altitude for compact badges and hover cards. */
+export function formatWindLevelLabel(height: WindHeight, units: UnitSystem = 'metric'): string {
+  if (height === 'surface') return 'SFC';
+  if (height === 'lift') return 'TOL';
+  return `${windStopLabel(height, units)} ${units === 'imperial' ? 'ft' : 'm'} AGL`;
+}
 
 /** Returns the approximate horizontal grid spacing in integer kilometers for a configured model. */
 export function modelApproxKm(modelId: string | null | undefined): number | null {
@@ -62,6 +77,9 @@ export function writeThemeInfoOpen(open: boolean): void {
 export interface ChannelDetailContext {
   readonly cloudStyle?: CloudStyleChoice;
   readonly rainStyle?: RainStyleChoice;
+  readonly windStyle?: WindStyle;
+  readonly windHeight?: WindHeight;
+  readonly units?: UnitSystem;
 }
 
 export interface ChannelDescriptor {
@@ -83,6 +101,19 @@ export const DOCK_CHANNELS: readonly ChannelDescriptor[] = [
     detail: theme => theme === 'xcskies'
       ? 'Usable thermal ceiling in classic 22-step XC Skies duckies'
       : `Usable thermal ceiling (${themeOption(theme).shortLabel} palette)`
+  },
+  {
+    key: 'wind',
+    id: 'toggle-wind',
+    shortLabel: 'Wind',
+    title: 'Wind',
+    hasStyles: true,
+    shortcut: 'W',
+    detail: (_theme, ctx) => {
+      const styleLabel = WIND_STYLE_LABELS[ctx?.windStyle ?? 'trails'];
+      const level = formatWindLevelLabel(ctx?.windHeight ?? 'surface', ctx?.units ?? 'metric');
+      return `${styleLabel} at ${level} · adjust height on the right WIND rail`;
+    }
   },
   {
     key: 'clouds',

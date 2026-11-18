@@ -310,16 +310,13 @@ it('refreshes the same chart on a page append and resize, and disposes the obser
   const onFrame = vi.fn();
   renderPointWindgram(container as unknown as HTMLElement, { frames: payload.frames.slice(0, 1) }, build, { point, frameId: 'f001', unitSystem: 'metric', totalFrames: 5, loading: true, onFrame });
   const section = container.children[0];
-  const inspect = visit(container).find(node => node.tag === 'input')!;
-  inspect.checked = true; inspect.dispatchEvent(new Event('change'));
   const nodes = visit(container);
-  expect(nodes.filter(node => node.tag === 'input')).toHaveLength(1);
-  expect(nodes.find(node => node.className === 'windgram-inspection')?.children).toHaveLength(2);
+  expect(nodes.filter(node => node.tag === 'input')).toHaveLength(0);
+  expect(nodes.find(node => node.className === 'av-windgram-bar')?.children).toHaveLength(2);
   const host = nodes.find(node => node.className === 'av-windgram-host')!;
   const firstSvg = host.innerHTML;
   const update = renderPointWindgram(container as unknown as HTMLElement, payload, build, { point, frameId: 'f001', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame });
   expect(container.children[0]).toBe(section);
-  expect(inspect.checked).toBe(true);
   expect(host.innerHTML).not.toBe(firstSvg);
   const fullSvg = host.innerHTML;
   host.clientWidth = 620;

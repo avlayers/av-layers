@@ -5,6 +5,7 @@ import { renderPointSeries } from './scalar-point.ts';
 import { localDateKey } from './internal-meteo.ts';
 import { buildWindgramView, createPointForecast, type SiteForecast, type WindgramView } from './model.ts';
 import { renderWindgramKey } from './svg.ts';
+import type { WindgramTelemetryStrip } from './windgram-readout.ts';
 
 const STYLE_ID = 'av-windgram-document-style';
 
@@ -125,20 +126,23 @@ function createPointWindgram(
   const incomplete = node('p', 'av-point-incomplete', 'Forecast incomplete. Some hours could not be loaded.');
   incomplete.role = 'status';
   const chartHost = node('div', 'av-windgram-host');
-  const details = node('details', 'av-windgram-details');
-  details.append(node('summary', undefined, 'Chart details'));
-  const inspection = node('div', 'windgram-inspection');
-  const inspectLabel = node('label');
-  const inspectCheckbox = node('input');
-  inspectCheckbox.type = 'checkbox';
-  const inspectText = node('span', undefined, ' Inspect any height');
-  inspectLabel.append(inspectCheckbox, inspectText);
-  const readout = node('p', 'windgram-readout');
-  readout.id = `${idPrefix}-readout`;
-  inspection.append(inspectLabel, readout);
-  const keyHost = node('div', 'av-windgram-key');
-  details.append(inspection, keyHost);
-  section.append(chartHost, liftSummary, time, profileStatus, incomplete, details);
+
+  // Accessible screen-reader live readout + Option A 1-line Telemetry Strip & Key Popover.
+  const srReadout = node('p', 'windgram-readout');
+  srReadout.id = `${idPrefix}-readout`;
+  srReadout.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0';
+
+  const bar = node('div', 'av-windgram-bar');
+  const chipsRow = node('div', 'av-windgram-chips');
+  const keyPop = node('details', 'av-windgram-key-pop');
+  const keySummary = node('summary', 'av-windgram-key-btn');
+  keySummary.ariaLabel = 'Visual chart key';
+  keySummary.append(node('span', undefined, 'Key '), node('span', undefined, 'ⓘ'));
+  const keyCard = node('div', 'av-windgram-key');
+  keyPop.append(keySummary, keyCard);
+  bar.append(chipsRow, keyPop);
+
+  section.append(chartHost, liftSummary, time, profileStatus, incomplete, srReadout, bar);
   container.replaceChildren(section);
 
   let units: UnitSystem = options.unitSystem;
@@ -147,7 +151,6 @@ function createPointWindgram(
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
   let onFrame = options.onFrame;
-  let inspectionMode: 'lift' | 'height' = 'lift';
   let keyUnits: UnitSystem | null = null;
   let activeWidth = 0;
   let activeHeight: number | undefined;
@@ -155,6 +158,43 @@ function createPointWindgram(
   let mountedView: WindgramView | null = null;
   let mounted: WindgramMount | null = null;
   let disposed = false;
+  let lastChipLayoutKey = '';
+  let liveAltEl: HTMLElement | null = null;
+
+  const paintTelemetry = (telemetry: WindgramTelemetryStrip | null) => {
+    if (disposed) return;
+    if (!telemetry) {
+      if (lastChipLayoutKey === 'empty') return;
+      lastChipLayoutKey = 'empty';
+      liveAltEl = null;
+      chipsRow.replaceChildren(node('span', 'wg-chip', 'Tap or drag chart to inspect'));
+      return;
+    }
+    const altMode = !telemetry.altChip ? 'none' : telemetry.canSnapToTol ? 'btn' : telemetry.snappedToTol ? 'tol' : 'plain';
+    const layoutKey = `${telemetry.timeChip}|${altMode}|${telemetry.chips.join('\u0001')}`;
+    if (layoutKey === lastChipLayoutKey && (altMode === 'none' || liveAltEl)) {
+      if (liveAltEl && liveAltEl.textContent !== telemetry.altChip) liveAltEl.textContent = telemetry.altChip;
+      return;
+    }
+    lastChipLayoutKey = layoutKey;
+    const items: HTMLElement[] = [node('span', 'wg-chip is-time', telemetry.timeChip)];
+    if (!telemetry.altChip) {
+      liveAltEl = null;
+    } else if (telemetry.canSnapToTol) {
+      const snapBtn = node('button', 'wg-chip is-alt', telemetry.altChip);
+      snapBtn.type = 'button';
+      snapBtn.title = 'Return cursor to Top of Lift';
+      snapBtn.addEventListener('click', () => mounted?.snapToTol());
+      liveAltEl = snapBtn;
+      items.push(snapBtn);
+    } else {
+      const span = node('span', telemetry.snappedToTol ? 'wg-chip is-tol' : 'wg-chip', telemetry.altChip);
+      liveAltEl = span;
+      items.push(span);
+    }
+    for (const label of telemetry.chips) items.push(node('span', 'wg-chip', label));
+    chipsRow.replaceChildren(...items);
+  };
 
   const chartHeight = () => {
     const cap = browser?.getComputedStyle(chartHost).maxHeight;
@@ -167,7 +207,6 @@ function createPointWindgram(
     const key = `${dayKey}|${units}|${widthPx}|${heightPx}|${hours.length}`;
     if (viewCache?.key !== key || viewCache.frames.some((frame, i) => frame !== frames[i])) {
       const timeZone = data.forecast.site.timeZone;
-      // Compact soaring drawing at every width, so desktop matches the phone.
       const daylight = buildWindgramView(data.forecast, {
         unitSystem: units, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: { timeZone, dateKey: dayKey }
       });
@@ -182,12 +221,6 @@ function createPointWindgram(
     const target = data.frames[Math.max(0, Math.min(data.frames.length - 1, index + delta))];
     if (target.id !== selectedFrameId) onFrame(target.id);
   };
-
-  inspectCheckbox.addEventListener('change', () => {
-    if (disposed) return;
-    inspectionMode = inspectCheckbox.checked ? 'height' : 'lift';
-    mounted?.setMode(inspectionMode);
-  });
 
   const update: Update = (frameId, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = mapOffsetMinutes) => {
     if (disposed) return;
@@ -221,9 +254,14 @@ function createPointWindgram(
     const targetDayKey = selectedDay && data.days.has(selectedDay) ? selectedDay : data.days.keys().next().value;
     const dayHours = targetDayKey === undefined ? undefined : data.days.get(targetDayKey);
     const showChart = dayHours !== undefined && (data.hasSounding || (!loading && data.hasValues));
-    chartHost.hidden = details.hidden = !showChart;
-    liftSummary.hidden = liftLayers.length === 0 || (showChart && lift.mslM !== null);
+    chartHost.hidden = bar.hidden = !showChart;
+    liftSummary.hidden = liftLayers.length === 0 || showChart;
     if (!showChart || targetDayKey === undefined) return;
+
+    if (keyUnits !== units) {
+      keyCard.innerHTML = renderWindgramKey(units, usesDsm);
+      keyUnits = units;
+    }
 
     const widthPx = chartHost.clientWidth > 0 ? chartHost.clientWidth : 420;
     const heightPx = chartHeight();
@@ -239,8 +277,13 @@ function createPointWindgram(
 
     if (!mounted) {
       mounted = mountWindgram(chartHost, {
-        view, idPrefix, readout, selectedValidAt, inspectionMode,
+        view,
+        idPrefix,
+        readout: srReadout,
+        selectedValidAt,
+        inspectionMode: 'magnetic',
         onStepHour: step,
+        onTelemetry: paintTelemetry,
         onSelectHour: validAt => {
           const id = data.frameIdByValidTime.get(validAt);
           if (id) onFrame(id);
@@ -251,8 +294,6 @@ function createPointWindgram(
       mounted.select(selectedValidAt);
     }
     mountedView = view;
-    if (keyUnits !== units) keyHost.innerHTML = renderWindgramKey(units, usesDsm);
-    keyUnits = units;
   };
 
   const refresh = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions) => {
@@ -281,6 +322,7 @@ function createPointWindgram(
     dispose() {
       if (disposed) return;
       disposed = true;
+      keyPop.open = false;
       browser?.removeEventListener('resize', resize);
       observer?.disconnect();
       mounted?.dispose();

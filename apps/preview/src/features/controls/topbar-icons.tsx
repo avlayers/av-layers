@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
+import type { UnitSystem } from '@av/client';
 import {
   CLOUD_STYLE_OPTIONS,
   RAIN_STYLE_OPTIONS,
@@ -7,10 +8,13 @@ import {
   type RainStyleChoice
 } from '../map/channel-styles';
 import { THEME_OPTIONS, themeOption, type MapTheme } from '../map/visual-theme';
+import type { WindHeight, WindStatus, WindStyle } from '../wind/wind-model';
 import {
   DOCK_CHANNELS,
+  formatWindLevelLabel,
   readThemeInfoOpen,
   THEME_CHIP_LABELS,
+  WIND_ENCODING_OPTIONS,
   writeThemeInfoOpen,
   type DockChannelKey,
   type WeatherChannelKey
@@ -123,7 +127,7 @@ export function ThemeGlyph({ theme }: { theme: MapTheme }) {
   }
 }
 
-export function ChannelGlyph({ channel }: { channel: DockChannelKey }) {
+export function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
   const common = {
     width: 17,
     height: 17,
@@ -143,6 +147,28 @@ export function ChannelGlyph({ channel }: { channel: DockChannelKey }) {
           <path d="M5.8 18c1.5-2.1 1.5-4.2 0-6.3M18.2 18c-1.5-2.1-1.5-4.2 0-6.3" stroke-width="1.6" />
         </svg>
       );
+    case 'wind':
+      if (windStyle === 'barbs') {
+        return (
+          <svg {...common}>
+            <circle cx="5.5" cy="17.5" r="1.7" />
+            <path d="M6.8 16.2 17.8 4.8m0 0 3.7 3m-6.8 0 3 2.5" />
+          </svg>
+        );
+      }
+      if (windStyle === 'hybrid') {
+        return (
+          <svg {...common}>
+            <path d="M3 7c3.2-2.4 5.8 2.4 9.2 0s4.8-1.8 7.3.4M3 13c2.8-2 5 1.8 8 0" />
+            <path d="M13.5 18.2 19.5 9.5m0 0 2.5 2.2" />
+          </svg>
+        );
+      }
+      return (
+        <svg {...common}>
+          <path d="M3 7.2h12.2a2.4 2.4 0 1 0-2.1-3.5M3 12h15.2a2.4 2.4 0 1 1-2.1 3.5M3 16.8h8.8" />
+        </svg>
+      );
     case 'clouds':
       return (
         <svg {...common}>
@@ -159,7 +185,6 @@ export function ChannelGlyph({ channel }: { channel: DockChannelKey }) {
     case 'isobars':
       return (
         <svg {...common}>
-          {/* Sweeping concentric synoptic pressure contours + crisp barometric H center */}
           <path d="M2.6 13.8C3.5 7 8.4 3.2 16 3.4c2.3.1 4.1.7 5.4 1.8" />
           <path d="M5.2 19C6.2 11.8 10.4 8.2 17.2 8.4c1.6.1 2.9.5 4 1.3" stroke-width="1.65" />
           <path d="M14.2 13.5v6.4M19.2 13.5v6.4M14.2 16.7h5" stroke-width="2.0" />
@@ -209,7 +234,7 @@ export function ThemeIconPicker(props: {
       class="theme-bar"
       role="group"
       aria-label="Map style and color palette"
-      onMouseLeave={() => setTriggerHover(false)}
+      onPointerLeave={() => setTriggerHover(false)}
     >
       <button
         id="theme-prev"
@@ -250,7 +275,7 @@ export function ThemeIconPicker(props: {
           id="theme-menu"
           role="listbox"
           aria-label="Choose map style and lift palette"
-          onMouseLeave={() => setHoveredTheme(null)}
+          onPointerLeave={() => setHoveredTheme(null)}
         >
           <div class="theme-menu-head">
             <span class="theme-menu-heading">Map Style &amp; Lift Palette</span>
@@ -333,8 +358,15 @@ export function ThemeIconPicker(props: {
 
 export function WeatherChannelDock(props: {
   theme: MapTheme;
+  units: UnitSystem;
   cloudStyle: CloudStyleChoice;
   rainStyle: RainStyleChoice;
+  windSupported: boolean;
+  windVisible: boolean;
+  windStyle: WindStyle;
+  windPaused: boolean;
+  windHeight: WindHeight;
+  windStatus: WindStatus;
   liftVisible: boolean;
   cloudsVisible: boolean;
   rainVisible: boolean;
@@ -345,6 +377,8 @@ export function WeatherChannelDock(props: {
   onPrepareChannel?: (channel: WeatherChannelKey) => void;
   onSetCloudStyle: (style: CloudStyleChoice) => void;
   onSetRainStyle: (style: RainStyleChoice) => void;
+  onSetWindStyle: (style: WindStyle) => void;
+  onSetWindPaused: (paused: boolean) => void;
   onSetPeeking: (peeking: boolean) => void;
 }) {
   const dockRef = useRef<HTMLDivElement | null>(null);
@@ -398,18 +432,22 @@ export function WeatherChannelDock(props: {
   };
 
   useEffect(() => {
-    if (!touchInspectKey) return;
+    if (!touchInspectKey && !hoveredKey) return;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (dockRef.current && target && !dockRef.current.contains(target)) {
         clearTouchTimer();
+        clearHoverLeaveTimer();
         setTouchInspectKey(null);
+        setHoveredKey(null);
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         clearTouchTimer();
+        clearHoverLeaveTimer();
         setTouchInspectKey(null);
+        setHoveredKey(null);
       }
     };
     document.addEventListener('pointerdown', onPointerDown, true);
@@ -418,7 +456,17 @@ export function WeatherChannelDock(props: {
       document.removeEventListener('pointerdown', onPointerDown, true);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [touchInspectKey]);
+  }, [touchInspectKey, hoveredKey]);
+
+  useEffect(() => {
+    if (!props.windSupported) {
+      if (hoveredKey === 'wind') setHoveredKey(null);
+      if (touchInspectKey === 'wind') {
+        clearTouchTimer();
+        setTouchInspectKey(null);
+      }
+    }
+  }, [props.windSupported, hoveredKey, touchInspectKey]);
 
   useEffect(() => () => {
     clearTouchTimer();
@@ -428,6 +476,7 @@ export function WeatherChannelDock(props: {
   const channelUnderlyingOn = (key: WeatherChannelKey): boolean => {
     switch (key) {
       case 'lift': return props.liftVisible;
+      case 'wind': return props.windVisible;
       case 'clouds': return props.cloudsVisible;
       case 'rain': return props.rainVisible;
       case 'isobars': return props.isobarsVisible;
@@ -440,10 +489,23 @@ export function WeatherChannelDock(props: {
     return channelUnderlyingOn(key);
   };
 
+  const visibleLayerChannels = DOCK_CHANNELS.filter(
+    (channel): channel is (typeof DOCK_CHANNELS)[number] & { readonly key: WeatherChannelKey } =>
+      channel.key !== 'peek' && (channel.key !== 'wind' || props.windSupported)
+  );
+
   const activeInfoKey = touchInspectKey ?? hoveredKey;
-  const activeDesc = activeInfoKey ? DOCK_CHANNELS.find(c => c.key === activeInfoKey) ?? null : null;
+  const activeDesc = activeInfoKey && (activeInfoKey !== 'wind' || props.windSupported)
+    ? DOCK_CHANNELS.find(c => c.key === activeInfoKey) ?? null
+    : null;
   const activeIsOn = activeInfoKey ? channelActive(activeInfoKey) : false;
   const resolvedStyles = resolveChannelStyles(props.theme, { cloudStyle: props.cloudStyle, rainStyle: props.rainStyle });
+  const windPausedActive = props.windVisible && props.windPaused && props.windStyle !== 'barbs';
+  const windStateBadge = !activeIsOn ? 'OFF'
+    : props.windStatus === 'loading' ? 'LOADING'
+    : props.windStatus === 'unavailable' ? 'UNAVAILABLE'
+    : windPausedActive ? 'PAUSED'
+    : 'ON';
 
   const triggerAction = (key: DockChannelKey) => {
     if (key === 'peek') props.onSetPeeking(!props.peeking);
@@ -460,8 +522,8 @@ export function WeatherChannelDock(props: {
     >
       <div id="weather-layers" class="control-pill icon-pill" role="group" aria-label="Weather overlay layers">
         <span class="dock-group-tag" aria-hidden="true">Layers</span>
-        {DOCK_CHANNELS.slice(0, 4).map(channel => {
-          const key = channel.key as WeatherChannelKey;
+        {visibleLayerChannels.map(channel => {
+          const key = channel.key;
           const isActive = channelActive(key);
           const mutedByPeek = props.peeking && channelUnderlyingOn(key);
           const isInspected = touchInspectKey === key;
@@ -471,8 +533,9 @@ export function WeatherChannelDock(props: {
               id={channel.id}
               type="button"
               class={`icon-channel-btn${isActive ? ' is-active' : ''}${mutedByPeek ? ' is-peek-muted' : ''}${isInspected ? ' is-inspected' : ''}`}
-              aria-label={`${channel.title} (${isActive ? 'on' : mutedByPeek ? 'temporarily hidden while peeking' : 'off'})`}
+              aria-label={`${channel.title} (${isActive ? (key === 'wind' && windPausedActive ? 'paused' : 'on') : mutedByPeek ? 'temporarily hidden while peeking' : 'off'})`}
               aria-pressed={isActive}
+              aria-busy={key === 'wind' ? (isActive && props.windStatus === 'loading') : undefined}
               disabled={props.disabled}
               onPointerEnter={e => { if (e.pointerType !== 'touch') enterChannelHover(key); }}
               onPointerLeave={e => { if (e.pointerType !== 'touch') scheduleHoverLeave(); }}
@@ -503,7 +566,7 @@ export function WeatherChannelDock(props: {
                 props.onToggleChannel(key);
               }}
             >
-              <ChannelGlyph channel={key} />
+              <ChannelGlyph channel={key} windStyle={props.windStyle} />
               <span class={`channel-bar bar-${key}`} aria-hidden="true" />
               {channel.hasStyles ? <span class="channel-menu-hint" aria-hidden="true" /> : null}
             </button>
@@ -578,13 +641,62 @@ export function WeatherChannelDock(props: {
           <div class="hover-card-head">
             <span class="hover-card-title">{activeDesc.title}</span>
             <span class={activeIsOn ? 'hover-state-pill is-on' : 'hover-state-pill'}>
-              {activeDesc.key === 'peek' ? (activeIsOn ? 'PEEKING' : 'READY') : (activeIsOn ? 'ON' : 'OFF')}
+              {activeDesc.key === 'peek'
+                ? (activeIsOn ? 'PEEKING' : 'READY')
+                : activeDesc.key === 'wind'
+                  ? windStateBadge
+                  : (activeIsOn ? 'ON' : 'OFF')}
             </span>
+            {activeDesc.key === 'wind' ? (
+              <span class="hover-state-pill">{formatWindLevelLabel(props.windHeight, props.units)}</span>
+            ) : null}
             {activeDesc.shortcut ? <kbd class="hover-card-kbd">{activeDesc.shortcut}</kbd> : null}
           </div>
           <p class="hover-card-detail">
-            {activeDesc.detail(props.theme, { cloudStyle: props.cloudStyle, rainStyle: props.rainStyle })}
+            {activeDesc.detail(props.theme, {
+              cloudStyle: props.cloudStyle,
+              rainStyle: props.rainStyle,
+              windStyle: props.windStyle,
+              windHeight: props.windHeight,
+              units: props.units
+            })}
           </p>
+
+          {activeDesc.key === 'wind' ? (
+            <div class="hover-encoding-group" role="group" aria-label="Wind display style">
+              {WIND_ENCODING_OPTIONS.map(opt => {
+                const selected = props.windStyle === opt.id && props.windVisible;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    class={`hover-encoding-pill${selected ? ' is-selected' : ''}`}
+                    aria-pressed={selected}
+                    title={opt.summary}
+                    onClick={() => {
+                      props.onSetWindStyle(opt.id);
+                      if (touchInspectKey) armTouchAutoDismiss();
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                class={`hover-encoding-pill${windPausedActive ? ' is-selected' : ''}`}
+                aria-pressed={windPausedActive}
+                disabled={!props.windVisible || props.windStyle === 'barbs'}
+                title={windPausedActive ? 'Resume particle animation' : 'Pause particle animation'}
+                onClick={() => {
+                  props.onSetWindPaused(!props.windPaused);
+                  if (touchInspectKey) armTouchAutoDismiss();
+                }}
+              >
+                {windPausedActive ? 'Play' : 'Pause'}
+              </button>
+            </div>
+          ) : null}
 
           {activeDesc.key === 'clouds' ? (
             <div class="hover-encoding-group" role="group" aria-label="Cloud cover encoding">

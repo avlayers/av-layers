@@ -52,7 +52,8 @@ describe('cached point forecast pages', () => {
     expect(series.frames[0]?.layers['usable-lift-msl']).toMatchObject({ surfaceId: 'gfs-fine' });
     expect(series.frames.at(-1)?.layers['usable-lift-msl']).toBeUndefined();
     expect(series.layers).toContain('usable-lift-msl');
-    expect(series.layers).not.toContain('cloud-cover-total');
+    expect(series.layers).toContain('cloud-cover-total');
+    expect(series.layers).toContain('cloud-cover-low');
     expect(pointSeriesSelection(build, 'forecast').layers).toEqual(series.layers);
   });
 

@@ -1,6 +1,12 @@
 // Physical readings at an hour and height, with published diagnostic context.
 
-import { windFromComponents } from '@av/soaring';
+import {
+  LENSCHOW_F_MAX,
+  lenschowNormalizedUpdraft,
+  SINK_RATE_MPS,
+  usableLiftDepthM,
+  windFromComponents,
+} from '@av/soaring';
 import {
   celsiusToFahrenheit,
   clamp,
@@ -22,6 +28,50 @@ function windShearAtHeight(sample: WindgramView['sampling'][number] | undefined,
   const vectorChangeMps = Math.hypot(b.value - a.value, bv.value - av.value);
   return { lowerM: a.altitudeM, upperM: b.altitudeM, vectorChangeMps, perKmMps: vectorChangeMps * 1000 / (b.altitudeM - a.altitudeM) };
 }
+
+function estimateThermalClimb(
+  zM: number,
+  groundM: number | null,
+  usableTopM: number | null,
+  thermalTopM: number | null,
+  cloudCapM: number | null,
+  thermalVelocityMps: number | null,
+): { estimatedClimbMps: number | null; peakClimbMps: number | null } {
+  if (
+    groundM === null
+    || usableTopM === null
+    || usableTopM <= groundM
+    || thermalVelocityMps === null
+    || thermalVelocityMps <= 0
+  ) {
+    return { estimatedClimbMps: null, peakClimbMps: null };
+  }
+  const peakClimb = thermalVelocityMps * LENSCHOW_F_MAX - SINK_RATE_MPS;
+  if (peakClimb <= 0) return { estimatedClimbMps: null, peakClimbMps: null };
+  if (zM < groundM || zM > usableTopM + 0.5) {
+    return { estimatedClimbMps: 0, peakClimbMps: peakClimb };
+  }
+  const usableDepthM = usableTopM - groundM;
+  const cloudCapped = cloudCapM !== null && usableTopM >= cloudCapM - 2;
+  let convectiveDepthM: number;
+  if (!cloudCapped) {
+    const unitCrit = usableLiftDepthM(1, thermalVelocityMps);
+    convectiveDepthM = unitCrit !== null && unitCrit > 0 ? usableDepthM / unitCrit : usableDepthM;
+  } else {
+    const nativeDepthM = thermalTopM !== null && thermalTopM > groundM ? thermalTopM - groundM : 0;
+    convectiveDepthM = Math.max(usableDepthM, nativeDepthM);
+  }
+  if (!(convectiveDepthM > 0)) return { estimatedClimbMps: 0, peakClimbMps: peakClimb };
+  const zeta = clamp((zM - groundM) / convectiveDepthM, 0, 1);
+  const netClimb = Math.max(0, thermalVelocityMps * lenschowNormalizedUpdraft(zeta) - SINK_RATE_MPS);
+  return { estimatedClimbMps: netClimb, peakClimbMps: peakClimb };
+}
+
+function clampCloudPercent(value: number | null | undefined): number | null {
+  const raw = finiteScalar(value);
+  return raw === null ? null : clamp(raw, 0, 100);
+}
+
 export function readWindgram(view: WindgramView, hourIndex: number, heightM: number): WindgramReading {
   const index = clamp(Math.round(hourIndex), 0, view.hours.length - 1);
   const sample = view.sampling[index];
@@ -41,6 +91,15 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const modelTerrainM = source?.modelTerrainM ?? null;
   const fineTerrainM = source?.mapLift.terrainM ?? null;
   const groundM = fineTerrainM ?? modelTerrainM;
+  const usableTopM = view.hours[index]?.usableLiftTopM ?? null;
+  const climb = estimateThermalClimb(
+    z,
+    groundM,
+    usableTopM,
+    source?.thermalTopM ?? null,
+    source?.effectiveCloudLimitM ?? null,
+    finiteScalar(source?.thermalVelocityMps),
+  );
   return {
     hourIndex: index,
     validAt: view.hours[index]?.validAt ?? '',
@@ -64,6 +123,10 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     surfaceWindDirectionDeg: finiteScalar(surface?.windDirectionDeg),
     precipitationMmHr: finiteScalar(surface?.precipitationMmHr),
     capeJkg: finiteScalar(surface?.capeJkg),
+    cloudCoverTotalPercent: clampCloudPercent(surface?.cloudCoverTotalPercent),
+    cloudCoverLowPercent: clampCloudPercent(surface?.cloudCoverLowPercent),
+    estimatedClimbMps: climb.estimatedClimbMps,
+    peakClimbMps: climb.peakClimbMps,
     cloudBaseM: source?.surfaceLclM ?? null,
     effectiveCloudLimitM: source?.effectiveCloudLimitM ?? null,
     modelTerrainM,

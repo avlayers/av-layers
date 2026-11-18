@@ -66,7 +66,7 @@ function heightAxisLabels(view: WindgramView, system: UnitSystem) {
   }).join('');
   if (view.compact) return altitudes;
   const pressures = visibleHeightAnchors(view).map(anchor => {
-    const mark = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>`;
+    const mark = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>"/>`;
     return mark + text(view.left - 10, anchor.y - 3, anchor.pressureHpa === null ? '' : formatQuantity(anchor.pressureHpa, 'pressure', undefined, system), 'text-anchor="end" class="wg-axis"');
   }).join('');
   return pressures + altitudes;
@@ -90,12 +90,14 @@ export function renderWindgramSvg(
     displayedBarbs(view, new Set(view.hours.map((_, i) => i))));
   const parts: string[] = [
     styleTag(options.stylesheet),
-    `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8 0" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`,
+    `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`,
     `<rect width="${fmt(view.width)}" height="${fmt(view.height)}" rx="6" fill="${WINDGRAM_STABLE_COLOR}"/>`,
     heightAxisHeader(view, system),
     view.compact ? '' : text(right + 12, view.top - 14, `${unitLabel('elevation', system)} MSL`, 'class="wg-axis-unit"'),
     `<g clip-path="url(#${id}-plot)"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}" fill="${WINDGRAM_STABLE_COLOR}"/>`,
   ];
+  // Fix humidity hatch path cleanly: M0 0L8 8M0 8L8 0
+  parts[1] = `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8 0" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`;
   for (const field of view.fields) {
     parts.push(
       `<path d="${escape(field.path)}" class="${escape(field.className)}" fill-rule="evenodd"${field.className === 'windgram-missing' ? ` fill="url(#${id}-missing)"` : ''}/>`,
@@ -133,7 +135,7 @@ export function renderWindgramSvg(
     if (series.key === 'usableLiftTopM') {
       for (const hour of view.hours) {
         const z = hour.usableLiftTopM;
-        if (z !== null) parts.push(`<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="2" fill="${series.color}" data-map-lift-ceiling=""/>`);
+        if (z !== null) parts.push(`<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="3.4" class="wg-tol-node" fill="${series.color}" stroke="#ffffff" stroke-width="1.3" data-map-lift-ceiling=""/>`);
       }
     }
   }
@@ -214,7 +216,18 @@ export function renderWindgramSvg(
     `Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
     'text-anchor="middle" class="wg-axis-unit wg-footer"'));
   parts.push(
-    '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true"><line data-cursor-vertical=""/><line data-cursor-horizontal=""/><circle data-cursor-point="" r="7"/><g data-cursor-readout=""><rect data-cursor-back="" height="47" rx="6" class="wg-inspector-back"/><text x="10" y="20" data-cursor-agl="" class="wg-inspector-agl"/><text x="10" y="36" data-cursor-msl="" class="wg-inspector-msl"/></g></g>',
+    '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true">' +
+    '<line data-cursor-vertical=""/><line data-cursor-horizontal=""/>' +
+    '<circle data-cursor-tol-ring="" r="6.5" visibility="hidden"/>' +
+    '<circle data-cursor-point="" r="7"/>' +
+    '<g data-cursor-readout="">' +
+    '<rect data-cursor-back="" height="58" rx="7" class="wg-inspector-back"/>' +
+    '<text x="10" y="13.5" data-cursor-badge="" class="wg-inspector-badge"/>' +
+    '<text x="10" y="27.5" data-cursor-agl="" class="wg-inspector-agl"/>' +
+    '<text x="92" y="27.5" data-cursor-msl="" class="wg-inspector-msl"/>' +
+    '<text x="10" y="41" data-cursor-meteo="" class="wg-inspector-meteo"/>' +
+    '<text x="10" y="53" data-cursor-soar="" class="wg-inspector-soar"/>' +
+    '</g></g>',
   );
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
   const coverage = uncovered.length && firstData && lastData ? ` Forecast available ${firstData.label}–${lastData.label}; hatched hours unavailable.` : !view.hours.length ? ' Daylight forecast unavailable in this run.' : '';
@@ -223,17 +236,50 @@ export function renderWindgramSvg(
 }
 
 export function renderWindgramKey(system: UnitSystem, usesDsm = false): string {
-  const icon = (content: string, width = 35) => `<svg xmlns="${SVG_NS}" viewBox="0 0 ${width} 24" width="${width}" height="24" aria-hidden="true">${content}</svg>`;
+  const icon = (content: string, width = 32) => `<svg xmlns="${SVG_NS}" viewBox="0 0 ${width} 22" width="${width}" height="22" aria-hidden="true">${content}</svg>`;
   const humidity = icon(
-    `<rect x="2" y="1" width="31" height="22" rx="2" fill="${WINDGRAM_STABLE_COLOR}"/><path d="M4 3L22 21M13 3L31 21M4 21L22 3M13 21L31 3" stroke="#fff" stroke-width="1"/>`,
+    `<rect x="2" y="2" width="28" height="18" rx="3" fill="${WINDGRAM_STABLE_COLOR}"/><path d="M4 4L20 19M12 4L28 19M4 19L20 4M12 19L28 4" stroke="#fff" stroke-width="1"/>`,
   );
-  const potential = icon(`<path d="${CLOUD_PATH}" transform="translate(17 20) scale(.55)" fill="none" stroke="#7773bc" stroke-width="1.7" stroke-dasharray="4 3"/>`);
-  const wind = icon('<path d="M9 21L9 3M9 3L20 7M9 8L15 10" fill="none" stroke="#355963" stroke-width="1"/>');
+  const potential = icon(`<path d="${CLOUD_PATH}" transform="translate(16 18) scale(.52)" fill="none" stroke="#93c5fd" stroke-width="1.7" stroke-dasharray="3.5 2.5"/>`);
+  const wind = icon(
+    '<path d="M8 19L8 3M8 3L18 6.5M8 7.5L13.5 9.5" fill="none" stroke="#78ff78" stroke-width="1.35" stroke-linecap="round"/>' +
+    '<path d="M21 19L21 3M21 3L30 6.5M21 7.5L30 11" fill="none" stroke="#f8fafc" stroke-width="1.35" stroke-linecap="round"/>',
+  );
   const freezing = icon(
-    `<path d="M1 12H34" stroke="#237d92" stroke-width="1.5" stroke-dasharray="5 3"/><path d="${SNOWFLAKE_PATH}" transform="translate(17 12)" fill="none" stroke="#237d92"/>`,
+    `<path d="M1 11H31" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 3"/><path d="${SNOWFLAKE_PATH}" transform="translate(16 11)" fill="none" stroke="#67e8f9"/>`,
   );
-  const lift = icon('<path d="M1 12H34" stroke="#134ac4" stroke-width="1.5"/><circle cx="17" cy="12" r="2" fill="#134ac4"/>');
+  const lift = icon(
+    '<path d="M1 11H31" stroke="#3b82f6" stroke-width="2"/>' +
+    '<circle cx="9" cy="11" r="3" fill="#2563eb" stroke="#fff" stroke-width="1.2"/>' +
+    '<circle cx="23" cy="11" r="3" fill="#2563eb" stroke="#fff" stroke-width="1.2"/>',
+  );
+  const missing = icon(
+    '<rect x="2" y="2" width="28" height="18" rx="3" fill="#a7a4c0"/>' +
+    '<path d="M4 19L19 4M12 19L27 4M4 11L11 4M20 19L27 12" stroke="#5b5875" stroke-width="1.2"/>',
+  );
   const feathers = 'half 5 / full 10 / flag 50 kt';
   const greenLimit = formatQuantity(knotsToMps(9), 'wind', undefined, system);
-  return `<div class="windgram-legend"><div class="windgram-legend-ramp"><strong>Lapse rate · ${unitLabel('lapseRate', system)}</strong>${WINDGRAM_STABILITY.map(({ color }, i) => `<span class="windgram-legend-chip" style="--chip:${color}">${stabilityRange(i, system)}</span>`).join('')}</div><div class="windgram-legend-symbols"><span>${wind}Wind · ${feathers}</span><span>${humidity}RH ≥${CLOUD_RH_THRESHOLD_PERCENT}%</span><span>${potential}Native surface LCL</span><span>${freezing}${formatQuantity(0, 'temperature', undefined, system)} freezing level</span><span>${lift}Map usable lift</span></div><details class="windgram-legend-note"><summary>Chart key</summary><p>Lapse scale from WxToFly. Red and orange mark rapid cooling. Gray marks inversions. Dark hatching marks unavailable atmosphere. Green wind is below ${greenLimit}. Faint barbs are interpolated. Dashed amber is the native parcel top. Dashed teal is the native effective cloud limit. Dashed gray marks fine surface elevation.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p></details></div>`;
+  const lapseUnit = unitLabel('lapseRate', system);
+  const segments = WINDGRAM_STABILITY.map(
+    ({ color }, i) => `<span class="wg-key-seg" style="background:${color}" title="${escape(`${stabilityRange(i, system)} ${lapseUnit}`)}"></span>`,
+  ).join('');
+  return (
+    `<div class="windgram-legend">` +
+    `<div class="wg-key-head"><strong>Visual Chart Key</strong><span>Lapse rate · ${escape(lapseUnit)}</span></div>` +
+    `<div class="wg-key-spectrum">` +
+    `<div class="wg-key-zones"><span>Strong Thermal</span><span>Unstable</span><span>Marginal</span><span>Stable</span><span>Inversion</span></div>` +
+    `<div class="wg-key-bar">${segments}</div>` +
+    `<div class="wg-key-ticks"><span>${escape(stabilityRange(0, system))}</span><span>${escape(stabilityRange(2, system))}</span><span>${escape(stabilityRange(4, system))}</span><span>${escape(stabilityRange(5, system))}</span><span>${escape(stabilityRange(7, system))}</span></div>` +
+    `</div>` +
+    `<div class="wg-key-grid">` +
+    `<div class="wg-key-item">${lift}<div><strong>Map usable lift</strong><span>Magnetic Top-of-Lift curve</span></div></div>` +
+    `<div class="wg-key-item">${wind}<div><strong>Wind · ${feathers}</strong><span>Green wind is below ${escape(greenLimit)}</span></div></div>` +
+    `<div class="wg-key-item">${potential}<div><strong>Cloud base (LCL)</strong><span>Potential cumulus base</span></div></div>` +
+    `<div class="wg-key-item">${humidity}<div><strong>Cloud layer</strong><span>RH ≥${CLOUD_RH_THRESHOLD_PERCENT}% moisture</span></div></div>` +
+    `<div class="wg-key-item">${freezing}<div><strong>${escape(formatQuantity(0, 'temperature', undefined, system))} freezing</strong><span>Cyan isotherm &amp; freeze mark</span></div></div>` +
+    `<div class="wg-key-item">${missing}<div><strong>No forecast data</strong><span>Unavailable hours in run</span></div></div>` +
+    `</div>` +
+    `<p class="wg-key-foot">Faint barbs are interpolated. Dashed amber marks native parcel top; dashed teal marks effective cloud limit; dashed gray marks surface terrain.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p>` +
+    `</div>`
+  );
 }

@@ -33,6 +33,8 @@ export interface PublishedForecastHour {
     readonly precipitationMmHr: number | null;
     readonly capeJkg: number | null;
     readonly pblHeightM: number | null;
+    readonly cloudCoverTotalPercent: number | null;
+    readonly cloudCoverLowPercent: number | null;
   };
   readonly levels: Readonly<NonNullable<PointFrame['profile']>['levels']>;
   readonly thermalTopM: number | null;

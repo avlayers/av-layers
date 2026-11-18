@@ -2,6 +2,7 @@ import { signal, type ReadonlySignal, type Signal } from '@preact/signals';
 import type { LayerId } from '@av/contracts/layers';
 import type { ModelId } from '@av/contracts/publication';
 import type { PinnedBuild, PointHorizon, UnitSystem } from '@av/client';
+import { DEFAULT_DOCK_VIEW, type DockViewId } from '../features/controls/bottom-dock-model';
 import type { AltitudeReference } from '../features/navigation/url-state';
 import type { CloudStyleChoice, RainStyleChoice } from '../features/map/channel-styles';
 import type { MapTheme } from '../features/map/visual-theme';
@@ -16,6 +17,7 @@ export interface PreviewIntent {
   readonly opacity: number;
   readonly units: UnitSystem;
   readonly theme: MapTheme;
+  readonly dockView: DockViewId;
   readonly cloudStyle: CloudStyleChoice;
   readonly rainStyle: RainStyleChoice;
   readonly liftVisible: boolean;
@@ -33,7 +35,7 @@ export interface PreviewIntent {
   readonly requestedTime: string | null;
 }
 
-type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'cloudStyle' | 'rainStyle' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking'>;
+type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'dockView' | 'cloudStyle' | 'rainStyle' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking'>;
 export type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
 
 export interface ForecastView {
@@ -162,6 +164,7 @@ function applyPatch<T extends object>(target: Signal<T>, update: Partial<T>): vo
 export function createPreviewStore(initial: PreviewInitialState): PreviewStore {
   const normalizedIntent: PreviewIntent = Object.freeze({
     theme: 'stone',
+    dockView: DEFAULT_DOCK_VIEW,
     cloudStyle: 'auto',
     rainStyle: 'auto',
     liftVisible: true,

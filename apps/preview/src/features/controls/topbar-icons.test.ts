@@ -3,8 +3,10 @@ import {
   cleanModelDisplayLabel,
   DOCK_CHANNELS,
   formatModelResolutionKm,
+  formatWindLevelLabel,
   modelApproxKm,
-  THEME_CHIP_LABELS
+  THEME_CHIP_LABELS,
+  WIND_ENCODING_OPTIONS
 } from './topbar-model';
 import { resolveChannelStyles } from '../map/channel-styles';
 import { MAP_THEMES, THEME_OPTIONS } from '../map/visual-theme';
@@ -31,9 +33,14 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     expect(cleanModelDisplayLabel('WRF northern Virginia 1 km (RRFS)')).toBe('WRF northern Virginia (RRFS)');
   });
 
-  it('exposes hover and initial-tap descriptions for lift, clouds, rain, isobars, and peek across themes', () => {
-    expect(DOCK_CHANNELS.map(c => c.key)).toEqual(['lift', 'clouds', 'rain', 'isobars', 'peek']);
-    expect(DOCK_CHANNELS.filter(c => c.hasStyles).map(c => c.key)).toEqual(['clouds', 'rain']);
+  it('normalizes lift, wind, clouds, rain, isobars, and peek in the unified channel dock', () => {
+    expect(DOCK_CHANNELS.map(c => c.key)).toEqual(['lift', 'wind', 'clouds', 'rain', 'isobars', 'peek']);
+    expect(DOCK_CHANNELS.filter(c => c.hasStyles).map(c => c.key)).toEqual(['wind', 'clouds', 'rain']);
+    expect(WIND_ENCODING_OPTIONS.map(opt => opt.id)).toEqual(['trails', 'barbs', 'hybrid']);
+    expect(formatWindLevelLabel('surface', 'metric')).toBe('SFC');
+    expect(formatWindLevelLabel('lift', 'imperial')).toBe('TOL');
+    expect(formatWindLevelLabel(1000, 'metric')).toBe('1,000 m AGL');
+    expect(formatWindLevelLabel(1000, 'imperial')).toBe('3,000 ft AGL');
     for (const channel of DOCK_CHANNELS) {
       for (const theme of MAP_THEMES) {
         expect(channel.detail(theme).length).toBeGreaterThan(15);

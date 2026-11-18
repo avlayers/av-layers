@@ -70,6 +70,10 @@ export interface WindgramReading {
   surfaceWindDirectionDeg: number | null;
   precipitationMmHr: number | null;
   capeJkg: number | null;
+  cloudCoverTotalPercent: number | null;
+  cloudCoverLowPercent: number | null;
+  estimatedClimbMps: number | null;
+  peakClimbMps: number | null;
   cloudBaseM: number | null;
   effectiveCloudLimitM: number | null;
   modelTerrainM: number | null;

@@ -22,7 +22,7 @@ export function fieldSeriesPages(frameIds: readonly string[], fieldCount: number
 }
 // Chart scalars and the inputs to /profile cloud and wind diagnostics.
 const profileFields: readonly LayerId[] = [...diagnostics, 'pbl-height-agl', 'wind-gust-10m',
-  'sfc-temp-c', 'sfc-dewpoint-c', 'cape-jkg'];
+  'sfc-temp-c', 'sfc-dewpoint-c', 'cape-jkg', 'cloud-cover-total', 'cloud-cover-low'];
 
 /** Published map-lift layers and the frames where those layers can be sampled. */
 export function pointLiftExpectation(build: PinnedBuild): { layers: readonly LayerId[]; frames: ReadonlySet<string> } {

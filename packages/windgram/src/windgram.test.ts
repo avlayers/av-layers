@@ -97,7 +97,7 @@ function fixture(hours: readonly number[], mapFrameCount = hours.length) {
   const expectedFrames = build.manifest.frames.map(frame => frame.id);
   const url = `https://api.test/point?lat=${point.lat}&lon=${point.lon}&frame=${expectedFrames.join(',')}&layers=`;
   const sample = fixturePointSample(build, url + 'usable-lift-msl,usable-lift-agl');
-  const profile = fixtureProfileResponse(build, url + 'thermal-top-msl,pbl-height-agl,thermal-velocity,sfc-temp-c,wind-gust-10m');
+  const profile = fixtureProfileResponse(build, url + 'thermal-top-msl,pbl-height-agl,thermal-velocity,sfc-temp-c,wind-gust-10m,cloud-cover-total,cloud-cover-low');
   const forecast = (frames: readonly PointFrame[]) => createPointForecast(build, point)(build.manifest.frames, new Map(frames.map(frame => [frame.id, frame])));
   const view = (frames: readonly PointFrame[], compact = false) => {
     const site = forecast(frames);
@@ -399,12 +399,27 @@ describe('Windgram data', () => {
     });
     expect(htmlSpy).not.toHaveBeenCalled();
 
-    // Toggling height inspection updates mode in-place without replacing SVG innerHTML.
-    const checkbox = visit(root).find(el => el.tag === 'input' && el.type === 'checkbox')!;
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event('change'));
-    expect(htmlSpy).not.toHaveBeenCalled();
-    expect(host.getAttribute('aria-label')).toContain('inspect height');
+    // Magnetic TOL + free-height inspection mounts directly with zero mode-toggle checkbox,
+    // a 1-line telemetry strip, and a visual chart key popover.
+    expect(visit(root).some(el => el.tag === 'input' && el.type === 'checkbox')).toBe(false);
+    expect(host.getAttribute('aria-label')).toContain('magnetic snap on Top of Lift');
+    const bar = visit(root).find(el => el.className === 'av-windgram-bar')!;
+    expect(bar).toBeDefined();
+    expect(visit(bar).map(el => el.textContent).join(' ')).toContain('Key');
+    const keyCard = visit(bar).find(el => el.className === 'av-windgram-key')!;
+    expect(keyCard.innerHTML).toContain('Strong Thermal');
+    expect(keyCard.innerHTML).toContain('Inversion');
+
+    // Selecting an hour with no usable lift keeps 'MSL no usable lift · AGL no usable lift' hidden below the chart.
+    frames[1].layers['usable-lift-msl'] = { ...frames[1].layers['usable-lift-msl']!, value: null, status: 'no-usable-lift' };
+    frames[1].layers['usable-lift-agl'] = { ...frames[1].layers['usable-lift-agl']!, value: 0, status: 'no-usable-lift' };
+    renderPointWindgram(container, { frames }, build, {
+      point, frameId: 'f015', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
+    });
+    const liftSummaryEl = visit(root).find(el => el.className === 'av-windgram-lift-summary')!;
+    expect(liftSummaryEl.hidden).toBe(true);
+    expect(visit(bar).map(el => el.textContent).join(' ')).not.toContain('no usable lift');
+    update('f014');
 
     // Resizing the host recomputes the chart width.
     host.clientWidth = 640;
@@ -424,6 +439,124 @@ describe('Windgram data', () => {
 
     disposePointWindgram(container);
     expect(disconnected).toHaveBeenCalledOnce();
+  });
+
+  it('snaps magnetically within 16px of Top of Lift, glides freely beyond 16px, and re-snaps via snapToTol', () => {
+    const { sample, profile, forecast } = fixture([20, 21]);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
+    frames[0].layers['usable-lift-msl']!.value = 2100;
+    frames[0].layers['usable-lift-agl']!.value = 600;
+    frames[0].layers['cloud-cover-total'] = { ...frames[0].layers['sfc-temp-c']!, value: 35 };
+    const site = forecast(frames);
+    const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, timeZone: site.site.timeZone, hours: site.hours });
+    const cursor = new FakeElement('g');
+    const tolRing = new FakeElement('circle');
+    const badge = new FakeElement('text');
+    const agl = new FakeElement('text');
+    const msl = new FakeElement('text');
+    const meteo = new FakeElement('text');
+    const soar = new FakeElement('text');
+    const markers = new Map([
+      ['[data-windgram-cursor]', cursor],
+      ['[data-cursor-tol-ring]', tolRing],
+      ['[data-cursor-badge]', badge],
+      ['[data-cursor-agl]', agl],
+      ['[data-cursor-msl]', msl],
+      ['[data-cursor-meteo]', meteo],
+      ['[data-cursor-soar]', soar],
+    ]);
+    const svg = {
+      querySelector: (selector: string) => markers.get(selector) ?? null,
+      getScreenCTM: () => ({ inverse: () => ({}) }),
+    };
+    const host = Object.assign(new FakeElement('div'), {
+      ownerDocument: {},
+      querySelector: (selector: string) => (selector === 'svg.windgram' ? svg : null),
+      getBoundingClientRect: () => ({ left: 0, top: 0, right: scene.width, bottom: scene.height }),
+    });
+    vi.stubGlobal('DOMPoint', class {
+      constructor(readonly x: number, readonly y: number) {}
+      matrixTransform() { return this; }
+    });
+    const telemetries: import('./windgram-readout.ts').WindgramTelemetryStrip[] = [];
+    const chart = mountWindgram(host as unknown as HTMLElement, {
+      view: scene,
+      idPrefix: 'magnetic-card',
+      selectedValidAt: scene.hours[0].validAt,
+      inspectionMode: 'magnetic',
+      onTelemetry: item => { if (item) telemetries.push(item); },
+    });
+
+    // Initial selection defaults onto cloud-capped Top of Lift (2100 m < 2500 m thermal top) with concise badge, cardinal wind, TOL climb, and cloud %.
+    expect(badge.textContent).toBe('★ TOP OF LIFT');
+    expect(badge.textContent).not.toContain('drag');
+    expect(agl.textContent).toBe('600 m AGL');
+    expect(agl.textContent).not.toContain('model AGL');
+    expect(meteo.textContent).not.toMatch(/\(\d+°\)/);
+    expect(soar.textContent).toMatch(/Climb \+\d+\.\d m\/s · Cloud 35%/);
+    expect(tolRing.getAttribute('visibility')).toBe('hidden');
+    expect(telemetries.at(-1)?.snappedToTol).toBe(true);
+
+    const tolRatio = (2100 - scene.floorM) / (scene.topM - scene.floorM);
+    const tolY = scene.bottom - tolRatio * scene.plotHeight;
+
+    // Hovering within 16px vertically of TOL snaps onto TOL.
+    host.dispatchEvent(Object.assign(new Event('pointermove'), {
+      pointerType: 'mouse', pointerId: 1, clientX: scene.hours[0].x, clientY: tolY - 11,
+    }));
+    expect(badge.textContent).toBe('★ TOP OF LIFT');
+    expect(agl.textContent).toBe('600 m AGL');
+    expect(tolRing.getAttribute('visibility')).toBe('hidden');
+
+    // Dragging within the convective layer (>16px below TOL) shows stronger mid-layer climb rate and cloud %.
+    const midThermalRatio = (1800 - scene.floorM) / (scene.topM - scene.floorM);
+    const midThermalY = scene.bottom - midThermalRatio * scene.plotHeight;
+    host.dispatchEvent(Object.assign(new Event('pointerdown'), {
+      pointerType: 'touch', pointerId: 2, isPrimary: true, clientX: scene.hours[0].x, clientY: tolY,
+    }));
+    host.dispatchEvent(Object.assign(new Event('pointermove'), {
+      pointerType: 'touch', pointerId: 2, isPrimary: true, clientX: scene.hours[0].x, clientY: midThermalY,
+    }));
+    host.dispatchEvent(Object.assign(new Event('pointerup'), {
+      pointerType: 'touch', pointerId: 2, isPrimary: true, clientX: scene.hours[0].x, clientY: midThermalY,
+    }));
+    expect(badge.textContent).toBe('ALTITUDE');
+    expect(badge.textContent).not.toContain('drag');
+    expect(agl.textContent).toMatch(/^\d+ m AGL$/);
+    expect(agl.textContent).not.toContain('model AGL');
+    expect(tolRing.getAttribute('visibility')).toBe('visible');
+    expect(meteo.textContent).not.toMatch(/\(\d+°\)/);
+    expect(soar.textContent).toMatch(/Climb \+\d+\.\d m\/s · Cloud 35%/);
+    expect(telemetries.at(-1)?.canSnapToTol).toBe(true);
+    expect(telemetries.at(-1)?.altChip).toContain('↺ TOL');
+
+    // Uncapped dry TOL hour (frame 1) in imperial formats Peak +XXX fpm.
+    const imperialScene = buildWindgramView(site, { unitSystem: 'imperial', compact: false, timeZone: site.site.timeZone, hours: site.hours });
+    const imperialReading = readWindgram(imperialScene, 1, imperialScene.hours[1].usableLiftTopM!);
+    expect(imperialReading.peakClimbMps).toBeGreaterThan(0);
+
+    // Tapping the ↺ TOL chip action snaps right back onto Top of Lift.
+    chart.snapToTol();
+    expect(badge.textContent).toBe('★ TOP OF LIFT');
+    expect(agl.textContent).toBe('600 m AGL');
+    expect(tolRing.getAttribute('visibility')).toBe('hidden');
+    expect(telemetries.at(-1)?.snappedToTol).toBe(true);
+
+    // Hovering at the very bottom line of the Windgram jumps to 10 m AGL (where 10 m wind & temp start) instead of 0 m AGL.
+    const unpinnedChart = mountWindgram(host as unknown as HTMLElement, {
+      view: scene,
+      idPrefix: 'magnetic-bottom',
+      selectedValidAt: scene.hours[0].validAt,
+      inspectionMode: 'magnetic',
+    });
+    host.dispatchEvent(Object.assign(new Event('pointermove'), {
+      pointerType: 'mouse', pointerId: 3, clientX: scene.hours[0].x, clientY: scene.bottom,
+    }));
+    expect(badge.textContent).toBe('ALTITUDE');
+    expect(agl.textContent).toBe('10 m AGL');
+    expect(meteo.textContent.length).toBeGreaterThan(0);
+    unpinnedChart.dispose();
+    chart.dispose();
   });
 
   it('restores the selected map lift card after hover and blur, and clears it on Escape', () => {

@@ -1,5 +1,6 @@
 import { formatPlaceTime, placeDateKey } from '@av/client';
 import { solarFluxFactor, sunriseSunsetInRange } from '@av/solar';
+import { DEFAULT_DOCK_VIEW, dockViewOption, type DockViewId } from '../controls/bottom-dock-model';
 import './compact-timeline.css';
 import { PLAYBACK_STEP_MS, type TimelineFrame } from './timeline-model';
 
@@ -12,12 +13,15 @@ export interface CompactTimelineOptions {
   offsetMinutes?: number;
   latitude?: number;
   longitude?: number;
+  variant?: DockViewId;
 }
 export interface CompactTimeline {
   update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void;
   cancelGesture(): { changed: boolean; delivered: boolean } | null;
   setOffsetMinutes(offsetMinutes: number): void;
   setMapCenter(latitude: number, longitude: number): void;
+  setVariant?(variant: DockViewId): void;
+  setReadiness?(ready: number, total: number, loading?: boolean): void;
   pause(): void;
   destroy(): void;
 }
@@ -36,6 +40,14 @@ const FLUX_SAMPLES = 48;
 const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
 const DAY_MINUTES = 1440;
 const MOON_PX = 28;
+const SNAP_GHOST_MIN_PX = 3.5;
+const LOUPE_HALF_PX = 44;
+const EDGE_PULL_DEADZONE_PX = 3;
+const EDGE_BOUNCE_PX = 20;
+const EDGE_REENTER_PX = 10;
+const REBOUNCE_STEP_PX = 32;
+const MAX_RUBBER_PX = 6;
+const MAX_DEAD_STOP_PX = 2.5;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
 
 export interface NightBounds { sunrise: number; sunset: number }
@@ -274,6 +286,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   let latitude = Number.isFinite(options.latitude) ? options.latitude! : Number.NaN;
   let longitude = Number.isFinite(options.longitude) ? options.longitude! : Number.NaN;
   let hasCenter = Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90;
+  let variant: DockViewId = options.variant ?? DEFAULT_DOCK_VIEW;
+
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] => {
     const node = doc.createElement(tag);
     node.className = cls;
@@ -288,6 +302,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   };
 
   const root = el('div', 'compact-timeline');
+  root.dataset.variant = variant;
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', 'Forecast timeline');
   const daysRow = el('div', 'ct-days');
@@ -311,19 +326,41 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const hatches = el('div', 'ct-hatches');
   const marks = el('div', 'ct-marks');
   const moons = el('div', 'ct-moons');
+  const snapGhost = el('div', 'ct-snap-ghost');
   const playhead = el('div', 'ct-playhead');
   const ticks = el('div', 'ct-ticks');
-  for (const node of [ribbon, hatches, marks, moons, playhead, ticks]) node.setAttribute('aria-hidden', 'true');
+  const loupe = el('div', 'ct-loupe');
+  const loupeText = el('span', 'ct-loupe-text');
+  loupe.append(loupeText);
+  const progress = el('div', 'ct-progress');
+  const progressBar = el('div', 'ct-progress-bar');
+  progress.append(progressBar);
+  for (const node of [ribbon, hatches, marks, moons, snapGhost, playhead, ticks, loupe, progress]) node.setAttribute('aria-hidden', 'true');
+  snapGhost.setAttribute('hidden', '');
   playhead.setAttribute('hidden', '');
+  loupe.setAttribute('hidden', '');
+  progress.setAttribute('hidden', '');
   track.tabIndex = -1;
-  track.append(ribbon, hatches, marks, moons, ticks, playhead);
-  controls.append(play, timeLabel, track);
+  track.append(ribbon, hatches, marks, moons, ticks, snapGhost, playhead, progress, loupe);
+
+  const steppers = el('div', 'ct-steppers');
+  steppers.setAttribute('role', 'group');
+  steppers.setAttribute('aria-label', 'Step forecast hour');
+  const stepPrev = btn('ct-step ct-step-prev', 'Previous forecast time', '‹');
+  const stepNext = btn('ct-step ct-step-next', 'Next forecast time', '›');
+  steppers.append(stepPrev, stepNext);
+  if (!dockViewOption(variant).showSteppers) steppers.setAttribute('hidden', '');
+
+  controls.append(play, timeLabel, track, steppers);
   root.append(daysRow, controls);
   host.append(root);
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
   let daySignature = '', selectedIndex = -1, sceneIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
   let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false, lastPointerX = Number.NaN;
+  let scrubMinute: number | null = null;
+  let edgePullDirection: -1 | 0 | 1 = 0, preparedBounceIndex = -1, bounceParity = false;
+  let bounceLock: { direction: -1 | 1; anchorOverPx: number } | null = null;
   let sceneRequest: number | null = null, gestureVersion = 0, gestureChanged = false;
   let framesRevision = 0, decorationKey = '';
   const solarCache = new Map<string, { stops: readonly RibbonStop[] | null; bounds: NightBounds | null }>();
@@ -332,6 +369,24 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const selectedGroup = (): DayGroup | undefined => {
     const day = selectedIndex >= 0 ? placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes) : '';
     return days.find(group => group.day === day && group.indices.length) ?? days.find(group => group.indices.length);
+  };
+  const adjacentGroup = (direction: -1 | 1): DayGroup | undefined => {
+    const current = selectedGroup();
+    if (!current) return undefined;
+    const start = days.indexOf(current);
+    if (start < 0) return undefined;
+    for (let idx = start + direction; idx >= 0 && idx < days.length; idx += direction) {
+      const candidate = days[idx];
+      if (candidate?.indices.length) return candidate;
+    }
+    return undefined;
+  };
+  const setTrackPull = (pullPx: number, armedDirection: -1 | 0 | 1): void => {
+    const transform = pullPx ? `translateX(${pullPx}px)` : '';
+    track.style.transform = transform;
+    edgePullDirection = armedDirection;
+    root.classList.toggle('is-track-pulled', Boolean(transform));
+    root.classList.toggle('is-edge-armed', armedDirection !== 0);
   };
 
   function daySolar(day: string): { stops: readonly RibbonStop[] | null; bounds: NightBounds | null } {
@@ -478,6 +533,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function render(width = trackWidth()): void {
     const scale = currentScale(width);
+    const viewSpec = dockViewOption(variant);
+    const isScrubbing = activePointer !== null && scrubMinute !== null;
+    root.classList.toggle('is-scrubbing', isScrubbing);
     const selectedDay = selectedIndex >= 0 ? placeDateKey(Date.parse(frames[selectedIndex]!.validTime), offsetMinutes) : '';
     const off = controlsDisabled();
     dayButtons.forEach((button, index) => {
@@ -497,17 +555,47 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
       playhead.setAttribute('hidden', '');
+      snapGhost.setAttribute('hidden', '');
+      loupe.setAttribute('hidden', '');
     } else {
       const clock = formatPlaceTime(ms, offsetMinutes, 'clock');
       const split = clock.indexOf(' (');
-      localLabel.textContent = split < 0 ? clock : clock.slice(0, split);
+      const localClock = split < 0 ? clock : clock.slice(0, split);
+      localLabel.textContent = localClock;
       utcLabel.textContent = split < 0 ? '' : clock.slice(split);
       timeLabel.setAttribute('dateTime', frame.validTime);
       track.setAttribute('aria-valuetext', formatPlaceTime(ms, offsetMinutes, 'stamp'));
       if (local) {
+        const frameFraction = placeMinute(scale, local.hour * 60 + local.minute);
+        const headFraction = isScrubbing ? placeMinute(scale, scrubMinute!) : frameFraction;
         playhead.removeAttribute('hidden');
-        playhead.style.left = percent(placeMinute(scale, local.hour * 60 + local.minute));
-      } else playhead.setAttribute('hidden', '');
+        playhead.style.left = percent(headFraction);
+        if (isScrubbing && Math.abs(headFraction - frameFraction) * width >= SNAP_GHOST_MIN_PX) {
+          snapGhost.removeAttribute('hidden');
+          snapGhost.style.left = percent(frameFraction);
+        } else {
+          snapGhost.setAttribute('hidden', '');
+        }
+        if (isScrubbing && viewSpec.showLoupe) {
+          const minFrac = width > LOUPE_HALF_PX * 2 ? LOUPE_HALF_PX / width : 0.5;
+          const clampedLoupe = Math.min(1 - minFrac, Math.max(minFrac, headFraction));
+          const baseText = `${dayButtonLabel(local.day)} · ${localClock}`;
+          const neighbor = edgePullDirection !== 0 ? adjacentGroup(edgePullDirection) : undefined;
+          loupeText.textContent = neighbor
+            ? edgePullDirection > 0
+              ? `${baseText} → ${dayButtonLabel(neighbor.day)}`
+              : `${dayButtonLabel(neighbor.day)} ← ${baseText}`
+            : baseText;
+          loupe.style.left = percent(clampedLoupe);
+          loupe.removeAttribute('hidden');
+        } else {
+          loupe.setAttribute('hidden', '');
+        }
+      } else {
+        playhead.setAttribute('hidden', '');
+        snapGhost.setAttribute('hidden', '');
+        loupe.setAttribute('hidden', '');
+      }
     }
     const group = selectedGroup();
     const latKey = hasCenter ? latitude.toFixed(2) : '';
@@ -534,6 +622,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     play.classList.toggle('is-playing', playing);
     play.setAttribute('aria-pressed', String(playing));
     play.setAttribute('aria-label', playing ? 'Pause forecast playback' : 'Play forecast');
+    stepPrev.disabled = off || selectedIndex <= 0;
+    stepNext.disabled = off || selectedIndex < 0 || selectedIndex >= frames.length - 1;
     const selectedButton = dayButtons.find(button => button.classList.contains('is-selected'));
     if (selectedButton) reveal(selectedButton);
   }
@@ -547,6 +637,10 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     gestureVersion++;
     cancelSceneRequest();
     activePointer = null;
+    scrubMinute = null;
+    preparedBounceIndex = -1;
+    bounceLock = null;
+    setTrackPull(0, 0);
     gestureStart = -1;
     gestureScale = null;
     gestureMoved = false;
@@ -583,14 +677,83 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (moveFocus && !destroyed) track.focus({ preventScroll: true });
   }
 
+  function bounceToDay(neighbor: DayGroup, direction: -1 | 1, overPx: number, width: number, queue: boolean): void {
+    const targetIndex = direction > 0 ? neighbor.indices[0]! : neighbor.indices.at(-1)!;
+    if (targetIndex < 0 || targetIndex >= frames.length) return;
+    const targetFrame = frames[targetIndex];
+    const targetLocal = targetFrame ? localTimeFromMs(Date.parse(targetFrame.validTime), offsetMinutes) : null;
+    scrubMinute = targetLocal ? targetLocal.hour * 60 + targetLocal.minute : (direction > 0 ? 0 : DAY_MINUTES);
+    preparedBounceIndex = -1;
+    setTrackPull(0, 0);
+    bounceParity = !bounceParity;
+    root.dataset.bounce = direction > 0 ? (bounceParity ? 'next-a' : 'next-b') : (bounceParity ? 'prev-a' : 'prev-b');
+    bounceLock = { direction, anchorOverPx: overPx };
+    const version = gestureVersion;
+    selectedIndex = targetIndex;
+    gestureChanged = true;
+    gestureScale = liveScale(width);
+    render(width);
+    options.onIntent?.(targetIndex);
+    if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
+    if (queue) queueScene();
+  }
+
   function seek(clientX: number, queue = true): void {
     const group = selectedGroup();
     if (!group || controlsDisabled()) return;
     const rect = track.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const minute = xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)));
-    const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(minute)));
+    const right = rect.left + rect.width;
+    const direction: -1 | 0 | 1 = clientX < rect.left ? -1 : clientX > right ? 1 : 0;
+    const overPx = direction < 0 ? rect.left - clientX : direction > 0 ? clientX - right : 0;
+    if (bounceLock !== null) {
+      if (direction === bounceLock.direction) {
+        if (overPx >= bounceLock.anchorOverPx + REBOUNCE_STEP_PX) {
+          const stepNeighbor = adjacentGroup(direction);
+          if (stepNeighbor) {
+            bounceToDay(stepNeighbor, direction, overPx, rect.width, queue);
+            return;
+          }
+          bounceLock = { direction, anchorOverPx: overPx };
+        }
+        return;
+      }
+      const reentered = direction === 0
+        ? (bounceLock.direction > 0 ? right - clientX >= EDGE_REENTER_PX : clientX - rect.left >= EDGE_REENTER_PX)
+        : true;
+      if (!reentered) return;
+      bounceLock = null;
+    }
+    const prevPull = edgePullDirection;
+    if (gestureMoved && direction !== 0) {
+      const neighbor = adjacentGroup(direction);
+      if (neighbor && overPx >= EDGE_BOUNCE_PX) {
+        bounceToDay(neighbor, direction, overPx, rect.width, queue);
+        return;
+      }
+      if (overPx > EDGE_PULL_DEADZONE_PX) {
+        const maxPull = neighbor ? MAX_RUBBER_PX : MAX_DEAD_STOP_PX;
+        const t = Math.min(1, (overPx - EDGE_PULL_DEADZONE_PX) / (EDGE_BOUNCE_PX - EDGE_PULL_DEADZONE_PX));
+        const pullPx = Math.round(direction * maxPull * (1 - (1 - t) * (1 - t)) * 10) / 10;
+        setTrackPull(pullPx, neighbor ? direction : 0);
+        if (neighbor) {
+          const previewIdx = direction > 0 ? neighbor.indices[0]! : neighbor.indices.at(-1)!;
+          if (previewIdx >= 0 && previewIdx !== preparedBounceIndex) {
+            preparedBounceIndex = previewIdx;
+            options.onPrepare?.(previewIdx);
+          }
+        }
+      } else if (edgePullDirection !== 0 || track.style.transform) {
+        setTrackPull(0, 0);
+      }
+    } else if (edgePullDirection !== 0 || track.style.transform) {
+      setTrackPull(0, 0);
+    }
+    const rawMinute = Math.min(DAY_MINUTES, Math.max(0, xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)))));
+    const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(rawMinute)));
     const index = nearestFrameIndexForDay(frames, group.indices, offsetMinutes, Math.floor(rounded / 60), rounded % 60);
+    const scrubMoved = scrubMinute === null || Math.abs(rawMinute - scrubMinute) >= 0.05;
+    scrubMinute = rawMinute;
     if (index >= 0 && index !== selectedIndex) {
       const version = gestureVersion;
       selectedIndex = index;
@@ -599,6 +762,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       options.onIntent?.(index);
       if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
       if (queue) queueScene();
+    } else if (scrubMoved || edgePullDirection !== prevPull) {
+      render(rect.width);
     }
   }
 
@@ -608,6 +773,30 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (wasPlaying) options.onPlayback?.(false);
     if (!destroyed) render();
   };
+
+  function wireStepper(button: HTMLButtonElement, delta: -1 | 1): void {
+    const targetIndex = (): number => {
+      if (!frames.length) return -1;
+      if (selectedIndex < 0) return delta > 0 ? 0 : -1;
+      return Math.max(0, Math.min(frames.length - 1, selectedIndex + delta));
+    };
+    const prepareStep = () => {
+      if (button.disabled || controlsDisabled() || !options.onPrepare) return;
+      const idx = targetIndex();
+      if (idx >= 0 && idx !== selectedIndex) options.onPrepare(idx);
+    };
+    button.addEventListener('pointerenter', prepareStep);
+    button.addEventListener('focus', prepareStep);
+    button.addEventListener('pointerdown', prepareStep);
+    button.addEventListener('click', () => {
+      if (button.disabled || controlsDisabled()) return;
+      if (timer !== null) stopPlayback();
+      const idx = targetIndex();
+      if (idx >= 0) select(idx, 'replace', false);
+    });
+  }
+  wireStepper(stepPrev, -1);
+  wireStepper(stepNext, 1);
 
   play.addEventListener('click', () => {
     if (activePointer !== null) {
@@ -645,7 +834,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
     const width = track.getBoundingClientRect().width;
     if (width > 0) gestureScale = liveScale(width);
-    if (!destroyed) render();
+    if (!destroyed) render(width > 0 ? width : undefined);
   });
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
@@ -659,7 +848,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     if (activePointer === null || (pointer.pointerId ?? 1) !== activePointer) return;
     const version = gestureVersion;
-    if (event.type === 'pointerup' && pointer.clientX !== lastPointerX && (gestureMoved || Math.abs(pointer.clientX - gestureOriginX) >= 1)) seek(pointer.clientX, false);
+    if (event.type === 'pointerup' && bounceLock === null && pointer.clientX !== lastPointerX && (gestureMoved || Math.abs(pointer.clientX - gestureOriginX) >= 1)) seek(pointer.clientX, false);
     if (destroyed || controlsDisabled() || activePointer === null || version !== gestureVersion) return;
     const start = gestureStart;
     const changed = gestureChanged;
@@ -731,6 +920,26 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       solarCache.clear();
       syncDays();
       render();
+    },
+    setVariant(next: DockViewId) {
+      if (destroyed || next === variant) return;
+      variant = next;
+      root.dataset.variant = next;
+      if (dockViewOption(next).showSteppers) steppers.removeAttribute('hidden');
+      else steppers.setAttribute('hidden', '');
+      render();
+    },
+    setReadiness(ready: number, total: number, loading = false) {
+      if (destroyed) return;
+      if (!(total > 0) || (ready >= total && !loading)) {
+        progress.setAttribute('hidden', '');
+        progress.classList.toggle('is-loading', false);
+        return;
+      }
+      const ratio = ready >= total ? 1 : Math.min(1, Math.max(0.06, ready / total));
+      progressBar.style.transform = `scaleX(${Math.round(ratio * 1000) / 1000})`;
+      progress.classList.toggle('is-loading', Boolean(loading && ready >= total));
+      progress.removeAttribute('hidden');
     },
     pause() {
       if (!destroyed && timer !== null) stopPlayback();

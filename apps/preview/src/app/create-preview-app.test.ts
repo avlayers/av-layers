@@ -316,3 +316,18 @@ it('marks the default world zoom as a globe and a tight view as local', async ()
   expect(mocks.resolveAutoBuild.mock.calls[1]?.[1]).toMatchObject({ globe: true, lat: 40, lon: -100 });
   test.app.dispose();
 });
+
+it('closes an open windgram on map click instead of selecting a new point, then opens on the next click', async () => {
+  const test = await harness();
+  expect(mocks.point?.current).toEqual({ build: test.build, point: { lat: 40, lon: -100 } });
+
+  // Clicking elsewhere on the map while open closes the windgram rather than jumping to the new coordinate.
+  map.fire('click', { lngLat: { lat: 42.5, lng: -98.25 } });
+  expect(mocks.point?.current).toBeNull();
+  expect(test.app.store.view.point.value.open).toBe(false);
+
+  // Once closed, the next map click opens the windgram at the newly clicked coordinate.
+  map.fire('click', { lngLat: { lat: 42.5, lng: -98.25 } });
+  await vi.waitFor(() => expect(mocks.point?.current).toEqual({ build: test.build, point: { lat: 42.5, lon: -98.25 } }));
+  test.app.dispose();
+});

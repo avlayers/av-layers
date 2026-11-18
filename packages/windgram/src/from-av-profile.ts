@@ -29,7 +29,9 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
       windDirectionDeg: diagnostics?.wind10mDirDeg ?? wind.directionDeg,
       windU: u10, windV: v10,
       windGustMps: read('wind-gust-10m'), precipitationMmHr: read('precip-rate'),
-      capeJkg: read('cape-jkg'), pblHeightM: read('pbl-height-agl')
+      capeJkg: read('cape-jkg'), pblHeightM: read('pbl-height-agl'),
+      cloudCoverTotalPercent: read('cloud-cover-total'),
+      cloudCoverLowPercent: read('cloud-cover-low')
     },
     levels: profile?.status === 'valid' ? profile.levels : [],
     thermalTopM: read('thermal-top-msl'), thermalVelocityMps: read('thermal-velocity'),
