@@ -113,16 +113,36 @@ async function readWindCanvas(page: Page): Promise<{
   });
 }
 
-async function openMenu(page: Page): Promise<void> {
-  const popup = page.locator('.wind-controls-popup');
-  if (!(await popup.isVisible())) await page.locator('.wind-controls-trigger').click();
-  await popup.waitFor({ state: 'visible' });
+async function openWindCard(page: Page): Promise<void> {
+  const styleGroup = page.locator('#weather-dock .channel-hover-card').getByRole('group', { name: 'Wind display style' });
+  if (!(await styleGroup.isVisible())) {
+    await page.locator('#toggle-wind').hover();
+  }
+  await styleGroup.waitFor({ state: 'visible' });
 }
 
-async function chooseStyle(page: Page, label: string): Promise<void> {
-  await openMenu(page);
-  await page.getByRole('radio', { name: label, exact: true }).click();
-  await page.locator('.wind-controls-popup').waitFor({ state: 'hidden' });
+async function dismissWindCard(page: Page): Promise<void> {
+  await page.mouse.move(4, 4);
+  await page.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await page.locator('#weather-dock .channel-hover-card').waitFor({ state: 'hidden' });
+}
+
+async function chooseStyle(page: Page, label: 'Flow' | 'Barbs' | 'Mix'): Promise<void> {
+  await openWindCard(page);
+  await page.locator('#weather-dock .channel-hover-card').getByRole('button', { name: label, exact: true }).click();
+  await dismissWindCard(page);
+}
+
+async function closePointIfOpen(page: Page): Promise<void> {
+  if (await page.locator('#point-card').isVisible()) {
+    await page.keyboard.press('Escape');
+    if (await page.locator('#point-card').isVisible()) {
+      await page.keyboard.press('Escape');
+    }
+    await page.locator('#point-card').waitFor({ state: 'hidden' });
+  }
 }
 
 async function launchBrowser(options: WindFeatureSmokeOptions): Promise<Browser> {
@@ -174,15 +194,19 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
   page.on('pageerror', error => pageErrors.push(error.message));
   try {
     await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
-    await page.locator('.wind-controls-trigger').waitFor({ state: 'visible', timeout: timeoutMs });
+    await page.locator('#toggle-wind').waitFor({ state: 'visible', timeout: timeoutMs });
+    await page.locator('.wind-controls-rail').waitFor({ state: 'visible', timeout: timeoutMs });
 
     await run('wind controls and rail are visible', async () => {
-      const trigger = page.locator('.wind-controls-trigger');
+      const trigger = page.locator('#toggle-wind');
       const rail = page.locator('.wind-controls-rail');
-      assert(await trigger.isVisible(), 'Wind trigger is not visible');
+      const legacyMenu = page.locator('.wind-controls-menu');
+      assert(await trigger.isVisible(), 'Normalized wind channel button is not visible');
+      assert(!(await legacyMenu.isVisible()), 'Legacy floating wind trigger above rail should remain hidden');
       assert(await rail.isVisible(), 'Wind height rail is not visible');
       const label = await trigger.getAttribute('aria-label');
-      assert(label?.startsWith('Wind controls,') === true, `Unexpected trigger label: ${label}`);
+      assert(label?.startsWith('Wind (') === true, `Unexpected wind channel label: ${label}`);
+      assert((await rail.locator('.wind-controls-rail-tag').textContent())?.trim() === 'WIND', 'WIND rail header tag is missing');
       assert((await rail.locator('.wind-controls-surface-title').textContent())?.trim() === 'SFC', 'SFC stop label is missing');
       assert(await rail.locator('.wind-controls-range').isVisible(), 'Wind height slider is not visible');
     });
@@ -200,7 +224,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
 
     await run('barbs layer mounts on a sized map', async () => {
       const root = page.locator('.wind-controls');
-      await chooseStyle(page, 'XC barbs');
+      await chooseStyle(page, 'Barbs');
       assert(await root.getAttribute('data-style') === 'barbs', 'Barbs style did not select');
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
       await waitForMatchingRaster(page, timeoutMs);
@@ -214,13 +238,16 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
     await run('style switching reuses the resident field', async () => {
       const root = page.locator('.wind-controls');
       const before = numericRequests.length;
-      await chooseStyle(page, 'XC barbs');
+      await openWindCard(page);
+      const card = page.locator('#weather-dock .channel-hover-card');
+      await card.getByRole('button', { name: 'Barbs', exact: true }).click();
       assert(await root.getAttribute('data-style') === 'barbs', 'Barbs style did not select');
-      assert(await page.locator('.wind-controls-style[aria-label="XC barbs"]').getAttribute('aria-checked') === 'true', 'Barbs radio is not checked');
-      await chooseStyle(page, 'Flow and sparse barbs');
+      assert(await card.getByRole('button', { name: 'Barbs', exact: true }).getAttribute('aria-pressed') === 'true', 'Barbs pill is not pressed');
+      await card.getByRole('button', { name: 'Mix', exact: true }).click();
       assert(await root.getAttribute('data-style') === 'hybrid', 'Hybrid style did not select');
-      await chooseStyle(page, 'White trails');
+      await card.getByRole('button', { name: 'Flow', exact: true }).click();
       assert(await root.getAttribute('data-style') === 'trails', 'Trails style did not select');
+      await dismissWindCard(page);
       await page.waitForTimeout(400);
       assert(numericRequests.length === before, `Style changes made ${numericRequests.length - before} numeric requests`);
     });
@@ -251,62 +278,42 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(numericRequests.length === before, `Height changes made ${numericRequests.length - before} numeric requests`);
     });
 
-    await run('menu focus stays put without scrolling', async () => {
-      const trigger = page.locator('.wind-controls-trigger');
+    await run('wind inspector card stays clear without scrolling', async () => {
+      const trigger = page.locator('#toggle-wind');
       const rail = page.locator('.wind-controls-rail');
       const beforeTrigger = await trigger.boundingBox();
       const beforeRail = await rail.boundingBox();
       const beforeScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
       await trigger.focus();
-      await page.keyboard.press('Enter');
-      const popup = page.locator('.wind-controls-popup');
-      await popup.waitFor({ state: 'visible' });
-      const selected = await page.locator('.wind-controls-style[aria-checked="true"]').getAttribute('aria-label');
-      const focused = await page.evaluate(() => document.activeElement?.getAttribute('aria-label'));
-      assert(focused === selected, `Focused style ${focused} does not match selected ${selected}`);
+      const card = page.locator('#weather-dock .channel-hover-card');
+      await card.waitFor({ state: 'visible' });
       const afterTrigger = await trigger.boundingBox();
       const afterRail = await rail.boundingBox();
       const afterScroll = await page.evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
-      assert(JSON.stringify(beforeTrigger) === JSON.stringify(afterTrigger), 'Opening the menu moved the trigger');
-      assert(JSON.stringify(beforeRail) === JSON.stringify(afterRail), 'Opening the menu moved the rail');
-      assert(afterScroll.x === beforeScroll.x && afterScroll.y === beforeScroll.y, 'Opening the menu scrolled the page');
-      const triggerRect = rectOf(afterTrigger, 'Wind trigger');
+      assert(JSON.stringify(beforeTrigger) === JSON.stringify(afterTrigger), 'Focusing wind channel moved the trigger');
+      assert(JSON.stringify(beforeRail) === JSON.stringify(afterRail), 'Focusing wind channel moved the rail');
+      assert(afterScroll.x === beforeScroll.x && afterScroll.y === beforeScroll.y, 'Focusing wind channel scrolled the page');
+      const triggerRect = rectOf(afterTrigger, 'Wind channel button');
       const railRect = rectOf(afterRail, 'Wind rail');
-      const popupRect = rectOf(await popup.boundingBox(), 'Wind menu');
-      assert(Math.abs(popupRect.width - 186) <= 2, `Wind menu width is ${popupRect.width}`);
-      assert(popupRect.height >= 96 && popupRect.height <= 124, `Wind menu height is ${popupRect.height}`);
-      assert(Math.abs(popupRect.right - (triggerRect.left - 8)) <= 2, `Wind menu right edge is ${popupRect.right}, trigger left is ${triggerRect.left}`);
-      assert(Math.abs(popupRect.top - triggerRect.top) <= 2, `Wind menu top is ${popupRect.top}, trigger top is ${triggerRect.top}`);
-      assert(!intersects(popupRect, triggerRect), 'Wind menu overlaps its trigger');
-      assert(!intersects(popupRect, railRect), 'Wind menu overlaps the height rail');
-      assert(popupRect.left >= 0 && popupRect.right <= await page.evaluate(() => window.innerWidth), 'Wind menu crosses the viewport edge');
+      const cardRect = rectOf(await card.boundingBox(), 'Wind inspector card');
+      assert(!intersects(cardRect, triggerRect), 'Wind inspector card overlaps its trigger');
+      assert(!intersects(cardRect, railRect), 'Wind inspector card overlaps the height rail');
+      assert(cardRect.left >= 0 && cardRect.right <= await page.evaluate(() => window.innerWidth), 'Wind inspector card crosses the viewport edge');
       const timelineBox = await page.locator('.compact-timeline').boundingBox();
-      if (timelineBox) assert(!intersects(popupRect, rectOf(timelineBox, 'Timeline')), 'Wind menu overlaps the timeline');
-      const keyBox = await page.evaluate(() => {
-        const element = document.querySelector('#legend') ?? document.querySelector('#lift-key') ?? document.querySelector('[data-lift-key]');
-        if (!element) return null;
-        const style = getComputedStyle(element);
-        if (style.display === 'none' || style.visibility === 'hidden') return null;
-        const rect = element.getBoundingClientRect();
-        return rect.width > 0 ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
-      });
-      if (keyBox) assert(!intersects(popupRect, rectOf(keyBox, 'Lift key')), 'Wind menu overlaps the lift key');
-      await page.keyboard.press('Escape');
-      await popup.waitFor({ state: 'hidden' });
-      const returned = await page.evaluate(() => document.activeElement?.classList.contains('wind-controls-trigger'));
-      assert(returned === true, 'Escape did not restore focus to the wind trigger');
+      if (timelineBox) assert(!intersects(cardRect, rectOf(timelineBox, 'Timeline')), 'Wind inspector card overlaps the timeline');
+      await dismissWindCard(page);
     });
 
-    await run('outside pointer closes the menu without stealing focus', async () => {
-      await openMenu(page);
+    await run('outside click dismisses point card and preserves marker lifecycle', async () => {
       const map = await page.locator('#map').boundingBox();
       assert(map !== null, 'Map element is missing');
       await page.mouse.click(map.x + map.width / 2, map.y + map.height / 2);
-      await page.locator('.wind-controls-popup').waitFor({ state: 'hidden' });
-      const focused = await page.evaluate(() => ({ trigger: document.activeElement?.classList.contains('wind-controls-trigger'), tag: document.activeElement?.tagName, label: document.activeElement?.getAttribute('aria-label') }));
-      await page.locator('#point-card').waitFor({ state: 'visible', timeout: 2_000 }).catch(() => {});
-      if (await page.locator('#point-card').isVisible()) await page.locator('#point-close').click();
-      assert(focused.trigger === false, `Outside click stole focus back to the wind trigger from ${focused.tag}`);
+      await page.locator('#point-card').waitFor({ state: 'visible', timeout: timeoutMs });
+      assert(await page.locator('.point-marker').isVisible(), 'Selected point marker dot is not visible');
+      assert((await page.locator('#point-close').count()) === 0, 'Legacy #point-close header row button should not exist');
+      await page.mouse.click(map.x + map.width - 90, map.y + 90);
+      await page.locator('#point-card').waitFor({ state: 'hidden', timeout: timeoutMs });
+      assert(!(await page.locator('.point-marker').isVisible()), 'Point marker dot remained visible after dismissing point card');
     }, false);
 
     await run('unit switch updates map wind labels', async () => {
@@ -338,10 +345,10 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const imperial = (await page.locator('#point-wind').textContent()) ?? '';
       assert(imperial.includes('mph'), `Point wind is not imperial: ${imperial}`);
     }, false);
-    if (await page.locator('#point-card').isVisible()) await page.locator('#point-close').click();
+    await closePointIfOpen(page);
 
     await run('time change redraws wind for the selected hour', async () => {
-      await chooseStyle(page, 'XC barbs');
+      await chooseStyle(page, 'Barbs');
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
       await page.waitForTimeout(350);
       const mapEl = page.locator('#map');
@@ -369,42 +376,30 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.waitForTimeout(350);
       const afterPixels = await page.screenshot({ clip });
       assert(Buffer.compare(beforePixels, afterPixels) !== 0, 'Rendered WebGL map pixels did not update on time change');
-      await chooseStyle(page, 'White trails');
+      await chooseStyle(page, 'Flow');
     });
 
-    await run('320, 390 and 1200 px keep rail, key and timeline clear', async () => {
+    await run('320, 390 and 1200 px keep rail, capsule dock and timeline clear', async () => {
       for (const width of [320, 390, 1200]) {
         await page.setViewportSize({ width, height: viewportHeight(width) });
         await page.waitForTimeout(300);
         const layout = await page.evaluate(() => {
-          const railElement = document.querySelector('.wind-controls-rail');
-          const railStyle = railElement ? getComputedStyle(railElement) : null;
-          const railRect = railElement && railStyle && railStyle.display !== 'none' && railStyle.visibility !== 'hidden' ? railElement.getBoundingClientRect() : null;
-          const rail = railRect && railRect.width > 0 ? { left: railRect.left, right: railRect.right, top: railRect.top, bottom: railRect.bottom, width: railRect.width, height: railRect.height } : null;
-          const triggerElement = document.querySelector('.wind-controls-trigger');
-          const triggerStyle = triggerElement ? getComputedStyle(triggerElement) : null;
-          const triggerRect = triggerElement && triggerStyle && triggerStyle.display !== 'none' && triggerStyle.visibility !== 'hidden' ? triggerElement.getBoundingClientRect() : null;
-          const trigger = triggerRect && triggerRect.width > 0 ? { left: triggerRect.left, right: triggerRect.right, top: triggerRect.top, bottom: triggerRect.bottom, width: triggerRect.width, height: triggerRect.height } : null;
-          const timelineElement = document.querySelector('.compact-timeline') ?? document.querySelector('#timebar');
-          const timelineStyle = timelineElement ? getComputedStyle(timelineElement) : null;
-          const timelineRect = timelineElement && timelineStyle && timelineStyle.display !== 'none' && timelineStyle.visibility !== 'hidden' ? timelineElement.getBoundingClientRect() : null;
-          const timeline = timelineRect && timelineRect.width > 0 ? { left: timelineRect.left, right: timelineRect.right, top: timelineRect.top, bottom: timelineRect.bottom, width: timelineRect.width, height: timelineRect.height } : null;
-          const keyElement = document.querySelector('#legend') ?? document.querySelector('#lift-key') ?? document.querySelector('[data-lift-key]');
-          const keyStyle = keyElement ? getComputedStyle(keyElement) : null;
-          const keyRect = keyElement && keyStyle && keyStyle.display !== 'none' && keyStyle.visibility !== 'hidden' ? keyElement.getBoundingClientRect() : null;
-          const key = keyRect && keyRect.width > 0 ? { left: keyRect.left, right: keyRect.right, top: keyRect.top, bottom: keyRect.bottom, width: keyRect.width, height: keyRect.height } : null;
-          const attributionElement = document.querySelector('.maplibregl-ctrl-attrib');
-          const attributionStyle = attributionElement ? getComputedStyle(attributionElement) : null;
-          const attributionRect = attributionElement && attributionStyle && attributionStyle.display !== 'none' && attributionStyle.visibility !== 'hidden' ? attributionElement.getBoundingClientRect() : null;
-          const attribution = attributionRect && attributionRect.width > 0 ? { left: attributionRect.left, right: attributionRect.right, top: attributionRect.top, bottom: attributionRect.bottom, width: attributionRect.width, height: attributionRect.height } : null;
-          const opacityElement = document.querySelector('#opacity');
-          const opacityStyle = opacityElement ? getComputedStyle(opacityElement) : null;
-          const opacityRect = opacityElement && opacityStyle && opacityStyle.display !== 'none' && opacityStyle.visibility !== 'hidden' ? opacityElement.getBoundingClientRect() : null;
-          const opacity = opacityRect && opacityRect.width > 0 ? { left: opacityRect.left, right: opacityRect.right, top: opacityRect.top, bottom: opacityRect.bottom, width: opacityRect.width, height: opacityRect.height } : null;
-          const statusElement = document.querySelector('.timebar-status');
-          const statusStyle = statusElement ? getComputedStyle(statusElement) : null;
-          const statusRect = statusElement && statusStyle && statusStyle.display !== 'none' && statusStyle.visibility !== 'hidden' ? statusElement.getBoundingClientRect() : null;
-          const status = statusRect && statusRect.width > 0 ? { left: statusRect.left, right: statusRect.right, top: statusRect.top, bottom: statusRect.bottom, width: statusRect.width, height: statusRect.height } : null;
+          const boxOf = (el: Element | null) => {
+            if (!el) return null;
+            const style = getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') return null;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 ? { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height } : null;
+          };
+          const rail = boxOf(document.querySelector('.wind-controls-rail'));
+          const trigger = boxOf(document.querySelector('#toggle-wind'));
+          const dock = boxOf(document.querySelector('#map-dock'));
+          const timeline = boxOf(document.querySelector('.compact-timeline') ?? document.querySelector('#timebar'));
+          const track = boxOf(document.querySelector('.ct-track'));
+          const firstDay = boxOf(document.querySelector('.ct-day'));
+          const key = boxOf(document.querySelector('#legend'));
+          const keyTrigger = boxOf(document.querySelector('#legend-key-toggle'));
+          const attribution = boxOf(document.querySelector('.maplibregl-ctrl-attrib'));
           const unit = document.querySelector('.wind-controls-unit');
           const windBackings: Array<{ width: number; height: number }> = [];
           let mapBacking: { width: number; height: number } | null = null;
@@ -423,11 +418,14 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
             bodyWidth: document.body.scrollWidth,
             rail,
             trigger,
+            dock,
             timeline,
+            track,
+            firstDay,
             key,
-            opacity,
-            status,
+            keyTrigger,
             attribution,
+            hasStatusDom: Boolean(document.querySelector('#frame-status')),
             unit: unit ? { scrollWidth: unit.scrollWidth, clientWidth: unit.clientWidth } : null,
             windBackings,
             mapBacking
@@ -436,32 +434,45 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(layout.documentWidth <= layout.innerWidth + 1, `${width}px page has horizontal overflow`);
         assert(layout.bodyWidth <= layout.innerWidth + 1, `${width}px body has horizontal overflow`);
         assert(layout.appTop === 0, `${width}px app starts at ${layout.appTop}px`);
-        assert(layout.rail !== null && layout.trigger !== null, `${width}px wind rail or trigger is missing`);
+        assert(layout.rail !== null && layout.trigger !== null, `${width}px wind rail or #toggle-wind is missing`);
+        assert(layout.dock !== null && Math.abs(layout.dock.height - 54) <= 2, `${width}px slim capsule dock height is ${layout.dock?.height}`);
         assert(layout.timeline !== null, `${width}px timeline is missing`);
         const sized = layout.windBackings.filter(backing => backing.width > 100 && backing.height > 100);
         const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);
         const mapDrawsWind = sized.length === 0 && (layout.mapBacking?.width ?? 0) > 100 && (layout.mapBacking?.height ?? 0) > 100;
         assert((sized.length > 0 || mapDrawsWind) && sized.length + parked.length === layout.windBackings.length, `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
         assert(Math.abs(layout.rail.width - 48) <= 1, `${width}px rail width is ${layout.rail.width}`);
-        const expectedHeight = width >= 721 ? 240 : 212;
+        const expectedHeight = width >= 721 ? 252 : 226;
         assert(Math.abs(layout.rail.height - expectedHeight) <= 2, `${width}px rail height is ${layout.rail.height}, expected ${expectedHeight}`);
-        for (const [name, rect] of [['rail', layout.rail], ['timeline', layout.timeline], ['key', layout.key]] as const) {
+        for (const [name, rect] of [['rail', layout.rail], ['dock', layout.dock], ['timeline', layout.timeline], ['key', layout.key]] as const) {
           if (!rect) continue;
           assert(rect.left >= -0.5 && rect.right <= layout.innerWidth + 0.5, `${width}px ${name} crosses the viewport edge`);
           assert(rect.top >= -0.5 && rect.bottom <= layout.innerHeight + 0.5, `${width}px ${name} crosses the vertical viewport edge`);
         }
-        assert(!intersects(layout.rail, layout.timeline), `${width}px rail overlaps the timeline`);
-        if (layout.key) assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
+        assert(!intersects(layout.rail, layout.dock), `${width}px rail overlaps the bottom dock`);
+        if (layout.key) {
+          if (width >= 721) {
+            assert(!intersects(layout.key, layout.timeline), `${width}px key overlaps the timeline`);
+          } else {
+            if (layout.track) assert(!intersects(layout.key, layout.track), `${width}px mobile key chip overlaps the scrub track`);
+            if (layout.firstDay) assert(!intersects(layout.key, layout.firstDay), `${width}px mobile key chip overlaps day pills`);
+          }
+          assert(layout.keyTrigger !== null, `${width}px capsule key trigger is missing`);
+        }
         if (layout.key && layout.attribution) assert(!intersects(layout.key, layout.attribution), `${width}px key overlaps attribution`);
-        assert(layout.opacity !== null && layout.opacity.width >= 24, `${width}px opacity slider is missing`);
-        assert(layout.status !== null, `${width}px forecast status is missing`);
-        assert(!intersects(layout.status, layout.opacity), `${width}px status covers the opacity slider`);
-        if (layout.key) assert(!intersects(layout.status, layout.key), `${width}px status covers the legend`);
+        assert(layout.hasStatusDom, `${width}px forecast status region is missing`);
         assert(layout.unit !== null && layout.unit.scrollWidth <= layout.unit.clientWidth + 1, `${width}px rail unit label is clipped`);
-        const timelineFloor = width >= 721 ? width - 320 : width - 40;
+        const timelineFloor = width >= 721 ? 560 : width - 40;
         assert(layout.timeline.width >= timelineFloor, `${width}px timeline width is ${layout.timeline.width}`);
       }
+
+      // Open the capsule key popover at 1200 px and verify the opacity slider inside it is accessible and bounded.
       await page.setViewportSize({ width: 1200, height: viewportHeight(1200) });
+      await page.waitForTimeout(200);
+      await page.locator('#legend-key-toggle').click();
+      const opacityBox = await page.locator('#opacity').boundingBox();
+      assert(opacityBox !== null && opacityBox.width >= 24, 'Capsule key opacity slider is missing when opened');
+      await page.keyboard.press('Escape');
     });
 
     if (pageErrors.length) {
