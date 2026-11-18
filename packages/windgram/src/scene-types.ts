@@ -88,4 +88,7 @@ export interface WindgramReading {
     surfaceToTopShearMps: number | null;
   } | null;
 }
-export interface WindgramSvgOptions { idPrefix?: string }
+export interface WindgramSvgOptions {
+  idPrefix?: string;
+  calloutVariant?: import('./windgram-callout.ts').WindgramCalloutVariant;
+}

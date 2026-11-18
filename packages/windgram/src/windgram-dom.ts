@@ -1,4 +1,5 @@
 import { formatMapLiftCell, formatPlaceTime, formatPointMapLift } from '@av/client';
+import { getWindgramCalloutRenderer, type WindgramCalloutVariant } from './windgram-callout.ts';
 import { renderWindgramSvg } from './windgram-chart.ts';
 import { clamp, formatQuantity, svgNumber as fmt } from './windgram-format.ts';
 import { buildWindgramTelemetry, formatWindgramReading, type WindgramTelemetryStrip } from './windgram-readout.ts';
@@ -19,6 +20,8 @@ export interface WindgramMountOptions {
   selectedValidAt?: string | null;
   /** 'magnetic' snaps within 16px of Top of Lift while allowing free-altitude inspection anywhere else. */
   inspectionMode?: WindgramInspectionMode;
+  /** Pluggable floating hover callout renderer ('tile-2x2' default, 'classic' fallback). */
+  calloutVariant?: WindgramCalloutVariant;
 }
 
 const TOL_SNAP_PX = 16;
@@ -46,6 +49,7 @@ function mountWindgramInspector(
   selectedHourIndex?: () => number,
   options: {
     mode?: WindgramInspectionMode;
+    calloutVariant?: WindgramCalloutVariant;
     onStepHour?: (delta: -1 | 1) => void;
     onTelemetry?: (telemetry: WindgramTelemetryStrip | null) => void;
   } = {},
@@ -68,12 +72,8 @@ function mountWindgramInspector(
   const point = svg?.querySelector<SVGCircleElement>('[data-cursor-point]') ?? null;
   const callout = svg?.querySelector<SVGGElement>('[data-cursor-readout]') ?? null;
   const calloutBack = svg?.querySelector<SVGRectElement>('[data-cursor-back]') ?? null;
-  const badgeLabel = svg?.querySelector<SVGTextElement>('[data-cursor-badge]') ?? null;
-  const aglLabel = svg?.querySelector<SVGTextElement>('[data-cursor-agl]') ?? null;
-  const mslLabel = svg?.querySelector<SVGTextElement>('[data-cursor-msl]') ?? null;
-  const meteoLabel = svg?.querySelector<SVGTextElement>('[data-cursor-meteo]') ?? null;
-  const soarLabel = svg?.querySelector<SVGTextElement>('[data-cursor-soar]') ?? null;
-  const richCallout = Boolean(badgeLabel || meteoLabel || soarLabel);
+  const boundCallout = getWindgramCalloutRenderer(options.calloutVariant).bind(svg);
+
   const originalAttributes = new Map(['tabindex', 'role', 'aria-label', 'aria-describedby'].map((key) => [key, host.getAttribute?.(key) ?? null]));
   const readoutAttributes = new Map(['role', 'aria-live', 'aria-atomic'].map((key) => [key, readout?.getAttribute?.(key) ?? null]));
   const interactionLabel = magneticMode
@@ -229,25 +229,15 @@ function mountWindgramInspector(
       ? (hasAgl ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} AGL` : '')
       : `${formatMapLiftCell(lift.agl, system)} AGL`;
     const mslText = `${!useTol ? formatQuantity(reading.heightM, 'elevation', undefined, system) : formatMapLiftCell(lift.msl, system)} MSL`;
-    if (aglLabel) aglLabel.textContent = aglText;
-    if (mslLabel) {
-      mslLabel.textContent = mslText;
-      if (richCallout) {
-        const mslX = aglText ? Math.round(10 + aglText.length * 6.9 + 8) : 10;
-        mslLabel.setAttribute('x', String(mslX));
-      }
-    }
-    if (badgeLabel) {
-      badgeLabel.textContent = telemetry.calloutBadge;
-      badgeLabel.setAttribute('class', useTol ? 'wg-inspector-badge' : 'wg-inspector-badge is-free');
-    }
-    if (meteoLabel) {
-      meteoLabel.textContent = telemetry.calloutMeteo;
-    }
-    if (soarLabel) {
-      soarLabel.textContent = telemetry.calloutSoar;
-      soarLabel.setAttribute('class', telemetry.hasPositiveClimb ? 'wg-inspector-soar' : 'wg-inspector-soar is-muted');
-    }
+
+    const painted = boundCallout.paint({
+      aglText,
+      mslText,
+      useTol,
+      telemetry,
+      reading,
+      unitSystem: system,
+    });
 
     let visibleLeft = view.left, visibleRight = view.left + view.plotWidth;
     let visibleTop = view.top, visibleBottom = view.bottom;
@@ -264,20 +254,9 @@ function mountWindgramInspector(
       visibleBottom = Math.min(visibleBottom, bottomRight.y);
     }
     const padding = 4;
-    const calloutHeight = richCallout
-      ? (telemetry.calloutSoar ? 58 : telemetry.calloutMeteo ? 46 : 34)
-      : 47;
-    if (richCallout && calloutBack) setNums(calloutBack, { height: calloutHeight });
-    const row2Width = richCallout
-      ? (aglText ? aglText.length * 6.9 + 8 + mslText.length * 5.8 : mslText.length * 6.2)
-      : Math.max(aglText.length * 8.2, mslText.length * 5.8);
-    const textWidth = Math.ceil(Math.max(
-      row2Width,
-      richCallout ? telemetry.calloutBadge.length * 5.8 : 0,
-      richCallout ? telemetry.calloutMeteo.length * 5.8 : 0,
-      richCallout ? telemetry.calloutSoar.length * 5.8 : 0,
-    )) + 20;
-    const calloutWidth = Math.min(textWidth, Math.max(0, visibleRight - visibleLeft - padding * 2));
+    const calloutHeight = painted.height;
+    const calloutWidth = Math.min(painted.width, Math.max(0, visibleRight - visibleLeft - padding * 2));
+    if (calloutWidth < painted.width) setNums(calloutBack, { width: calloutWidth });
     const calloutX = Math.max(
       visibleLeft + padding,
       Math.min(
@@ -293,7 +272,6 @@ function mountWindgramInspector(
       ),
     );
     callout?.setAttribute('transform', `translate(${fmt(calloutX)} ${fmt(calloutY)})`);
-    setNums(calloutBack, { width: calloutWidth });
 
     if (!deferAriaReadout) {
       const altHeadline = aglText ? `${aglText} · ${mslText}` : mslText;
@@ -521,6 +499,7 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
   let disposed = false;
   let view = options.view;
   let mode: WindgramInspectionMode | undefined = options.inspectionMode;
+  let calloutVariant: WindgramCalloutVariant | undefined = options.calloutVariant;
   let selectedValidAt = options.selectedValidAt === undefined ? view.hours[view.selectedHourIndex]?.validAt ?? null : options.selectedValidAt;
   const select = (validAt: string | null) => {
     if (disposed) return;
@@ -545,6 +524,7 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
       options.onSelectHour?.(validAt);
     }, () => view.hours.findIndex(hour => hour.validAt === selectedValidAt), {
       mode,
+      calloutVariant,
       onStepHour: options.onStepHour,
       onTelemetry: options.onTelemetry,
     });
@@ -555,7 +535,7 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
     clearInspector?.();
     clearInspector = null;
     view = next;
-    host.innerHTML = renderWindgramSvg(view, { idPrefix: options.idPrefix });
+    host.innerHTML = renderWindgramSvg(view, { idPrefix: options.idPrefix, calloutVariant });
     const svg = host.querySelector?.<SVGSVGElement>('svg.windgram') ?? null;
     const ownerDocument = host.ownerDocument ?? (typeof document !== 'undefined' ? document : undefined);
     if (svg && ownerDocument && typeof ownerDocument.createElementNS === 'function') {
@@ -579,6 +559,11 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
       if (disposed || mode === nextMode) return;
       mode = nextMode;
       bindInspector();
+    },
+    setCalloutVariant(nextVariant: WindgramCalloutVariant) {
+      if (disposed || calloutVariant === nextVariant) return;
+      calloutVariant = nextVariant;
+      update(view);
     },
     dispose() {
       if (disposed) return;

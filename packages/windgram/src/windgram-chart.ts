@@ -14,6 +14,7 @@ import { displayedBarbSpeed } from './wind-barb.ts';
 import { displayedBarbs, layoutWindgramMarks, type PlacedTemperatureLabel } from './windgram-label-layout.ts';
 import { WINDGRAM_STABILITY, WINDGRAM_STABLE_COLOR, stabilityRange } from './windgram-stability.ts';
 import { heightToY, visibleHeightAnchors } from './windgram-scale.ts';
+import { getWindgramCalloutRenderer, type WindgramCalloutVariant } from './windgram-callout.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import { visibleWindgramHourIndices } from './windgram-time-axis.ts';
 import type { WindgramCloud, WindgramView } from './windgram-view.ts';
@@ -74,9 +75,10 @@ function heightAxisLabels(view: WindgramView, system: UnitSystem) {
 
 export function renderWindgramSvg(
   view: WindgramView,
-  options: { idPrefix?: string; stylesheet?: string } = {},
+  options: { idPrefix?: string; stylesheet?: string; calloutVariant?: WindgramCalloutVariant } = {},
 ): string {
   const system = view.unitSystem;
+  const calloutRenderer = getWindgramCalloutRenderer(options.calloutVariant);
   const id = identifier(options.idPrefix ?? 'windgram');
   const right = view.left + view.plotWidth;
   const labelX = (x: number) => Math.max(view.left + 12, Math.min(right - 12, x));
@@ -220,13 +222,8 @@ export function renderWindgramSvg(
     '<line data-cursor-vertical=""/><line data-cursor-horizontal=""/>' +
     '<circle data-cursor-tol-ring="" r="6.5" visibility="hidden"/>' +
     '<circle data-cursor-point="" r="7"/>' +
-    '<g data-cursor-readout="">' +
-    '<rect data-cursor-back="" height="58" rx="7" class="wg-inspector-back"/>' +
-    '<text x="10" y="13.5" data-cursor-badge="" class="wg-inspector-badge"/>' +
-    '<text x="10" y="27.5" data-cursor-agl="" class="wg-inspector-agl"/>' +
-    '<text x="92" y="27.5" data-cursor-msl="" class="wg-inspector-msl"/>' +
-    '<text x="10" y="41" data-cursor-meteo="" class="wg-inspector-meteo"/>' +
-    '<text x="10" y="53" data-cursor-soar="" class="wg-inspector-soar"/>' +
+    `<g data-cursor-readout="" data-callout-variant="${calloutRenderer.id}">` +
+    calloutRenderer.renderSvg() +
     '</g></g>',
   );
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
