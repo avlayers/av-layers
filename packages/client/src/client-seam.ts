@@ -8,6 +8,7 @@ export const SEAM_SOURCE_ID = 'av-seam';
 export const SEAM_HALO_ID = 'av-seam-halo';
 export const SEAM_LINE_ID = 'av-seam-line';
 export const SEAM_LABEL_ID = 'av-seam-label';
+export const WEATHER_CEILING_ID = 'av-hillshade-top';
 
 /** Coverage parallels for a longitude-wrapping grid. Endpoints stay off exact ±180. */
 export function coverageParallels(bounds: GeographicBounds): GeographicPoint[][] {
@@ -44,6 +45,11 @@ export interface SeamMap {
 }
 
 export function seamInsertBefore(map: { getLayer(id: string): unknown }): string | undefined {
+  if (map.getLayer(WEATHER_CEILING_ID)) return WEATHER_CEILING_ID;
+  return map.getLayer(SEAM_HALO_ID) ? SEAM_HALO_ID : undefined;
+}
+
+export function windInsertBefore(map: { getLayer(id: string): unknown }): string | undefined {
   return map.getLayer(SEAM_HALO_ID) ? SEAM_HALO_ID : undefined;
 }
 

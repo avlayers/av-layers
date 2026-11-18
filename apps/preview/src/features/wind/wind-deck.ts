@@ -1,6 +1,6 @@
 import { MapLibreOverlay } from '@deck.gl/maplibre';
 import { IconLayer } from '@deck.gl/layers';
-import { seamInsertBefore, type PreparationBudget, type PreparationLease } from '@av/client';
+import { windInsertBefore, type PreparationBudget, type PreparationLease } from '@av/client';
 import type { WindPreparedGrid } from '@av/client/wind';
 import { STATUS_MASK, STATUS_VALID } from '@av/contracts/layers';
 import { DISPLAY_KNOTS_PER_MPS, displayedWindSpeed, type WindSpeedSystem } from '@av/contracts/units';
@@ -10,8 +10,18 @@ import { BARB_ICON_SIZE, CALM_BARB_KEY, LABEL_ICON_SIZE, WindBarbAtlas } from '.
 import { WindParticleLayer } from './wind-particle-layer';
 
 export interface WindField { sample(lat: number, lon: number): { u: number | null; v: number | null; status: number } }
-export interface WindDeckOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem }
+export interface WindDeckOptions { style: 'trails' | 'barbs' | 'hybrid'; visible: boolean; paused: boolean; units: WindSpeedSystem; darkChrome?: boolean }
 interface BarbFeature { position: [number, number]; icon: string; angle: number; text: string; dynamic: boolean }
+interface BarbWindow {
+  readonly generation: number;
+  readonly style: WindDeckOptions['style'];
+  readonly units: WindSpeedSystem;
+  readonly zoom: number;
+  readonly west: number;
+  readonly south: number;
+  readonly east: number;
+  readonly north: number;
+}
 
 const MAX_LAT = 85.05112878, DEG = Math.PI / 180, DISPLAY_BYTES = 8 * 1024 * 1024, FALLBACK_GRID_SIZE = 128;
 const PREMULT_PARAMS = {
@@ -47,7 +57,11 @@ export class WindDeck {
   private installedGeneration = 0;
   private renderedGeneration = 0;
   private features: BarbFeature[] = [];
+  private staticFeatures: BarbFeature[] = [];
+  private dynamicFeatures: BarbFeature[] = [];
   private labeledFeatures: BarbFeature[] = [];
+  private barbWindow: BarbWindow | null = null;
+  private renderedEmpty = false;
   private particles = 1408;
   private lease: PreparationLease | null = null;
   private destroyed = false;
@@ -74,18 +88,19 @@ export class WindDeck {
     this.prepared = prepared;
     this.fallbackPrepared = null;
     this.fallbackKey = '';
+    this.barbWindow = null;
     this.frame = frame;
     this.options = options;
     this.generation++;
     this.installedGeneration++;
-    this.refreshBarbs();
+    this.refreshBarbs(true);
     this.render();
   }
 
   setOptions(options: WindDeckOptions): void {
     if (this.destroyed) return;
     this.options = options;
-    this.refreshBarbs();
+    this.refreshBarbs(false);
     this.render();
   }
 
@@ -95,8 +110,11 @@ export class WindDeck {
     this.prepared = null;
     this.fallbackPrepared = null;
     this.fallbackKey = '';
+    this.barbWindow = null;
     this.frame = null;
     this.features = [];
+    this.staticFeatures = [];
+    this.dynamicFeatures = [];
     this.labeledFeatures = [];
     this.generation++;
     this.installedGeneration++;
@@ -125,16 +143,18 @@ export class WindDeck {
   private readonly ensureAttached = (): void => {
     if (this.destroyed || !this.overlay || !this.interleaved) return;
     if (!this.map.isStyleLoaded?.()) return;
-    const beforeId = seamInsertBefore(this.map);
+    const beforeId = windInsertBefore(this.map);
     const groupId = beforeId ? `deck-maplibre-layer-group-before:${beforeId}` : 'deck-maplibre-layer-group-last';
     const hasContent = this.options.visible && !!(this.prepared || this.field);
     if (hasContent && !this.map.getLayer?.(groupId) && !this.map.getLayer?.('deck-maplibre-layer-group-last')) {
+      this.renderedEmpty = false;
       this.render();
     }
   };
 
   private readonly restore = (): void => {
     if (this.destroyed) return;
+    this.renderedEmpty = false;
     if (!this.overlay) {
       this.overlay = this.mount(true) ?? this.mount(false);
       if (this.overlay) this.render();
@@ -168,15 +188,25 @@ export class WindDeck {
     const bounds = this.map.getBounds();
     const west = bounds.getWest(), east = Math.max(west + 0.05, bounds.getEast());
     const south = Math.max(-MAX_LAT, bounds.getSouth()), north = Math.min(MAX_LAT, Math.max(south + 0.05, bounds.getNorth()));
-    const padLon = Math.min(30, (east - west) * 0.2), padLat = (north - south) * 0.2;
+    const padLon = Math.min(30, (east - west) * 0.25), padLat = (north - south) * 0.25;
     const b: [number, number, number, number] = [
       west - padLon,
       Math.max(-MAX_LAT, south - padLat),
       Math.min(west - padLon + 360, east + padLon),
       Math.min(MAX_LAT, north + padLat)
     ];
+    if (
+      this.fallbackPrepared
+      && this.fallbackKey.startsWith(`${this.generation}:`)
+      && west >= this.fallbackPrepared.bounds[0]
+      && east <= this.fallbackPrepared.bounds[2]
+      && south >= this.fallbackPrepared.bounds[1]
+      && north <= this.fallbackPrepared.bounds[3]
+      && (this.fallbackPrepared.bounds[2] - this.fallbackPrepared.bounds[0]) <= Math.max(0.2, (east - west) * 2.2)
+    ) {
+      return this.fallbackPrepared;
+    }
     const key = `${this.generation}:${b.map(v => v.toFixed(2)).join(',')}`;
-    if (this.fallbackPrepared && this.fallbackKey === key) return this.fallbackPrepared;
     const size = FALLBACK_GRID_SIZE;
     const data = new Uint8Array(size * size * 4);
     for (let y = 0; y < size; y++) {
@@ -232,9 +262,17 @@ export class WindDeck {
     const barbs = visible && this.options.style !== 'trails';
     const trails = visible && this.options.style !== 'barbs';
     const prepared = trails ? this.activePrepared() : null;
-    const staticFeatures = barbs ? this.features.filter(feature => !feature.dynamic) : [];
-    const dynamicFeatures = barbs ? this.features.filter(feature => feature.dynamic) : [];
-    const beforeId = this.interleaved ? seamInsertBefore(this.map) : undefined;
+    const hasSomething = (trails && !!prepared) || (barbs && this.features.length > 0);
+    if (!hasSomething) {
+      if (!this.renderedEmpty) {
+        this.renderedEmpty = true;
+        this.overlay.setProps({ layers: [] });
+      }
+      return;
+    }
+    this.renderedEmpty = false;
+
+    const beforeId = this.interleaved ? windInsertBefore(this.map) : undefined;
     const boundsInfo = prepared ? this.computeBounds(prepared) : null;
 
     const layers = [
@@ -245,6 +283,7 @@ export class WindDeck {
         spawnBounds: boundsInfo.spawnBounds,
         numParticles: this.particles,
         paused: this.options.paused || (typeof document !== 'undefined' && document.hidden),
+        darkChrome: Boolean(this.options.darkChrome),
         centerLon: boundsInfo.centerLon,
         zoom: boundsInfo.zoom,
         beforeId,
@@ -253,7 +292,7 @@ export class WindDeck {
       ...(barbs ? [
         new IconLayer<BarbFeature>({
           id: 'av-wind-barbs',
-          data: staticFeatures,
+          data: this.staticFeatures,
           iconAtlas: this.atlas.staticImage as unknown as string,
           iconMapping: this.atlas.mapping,
           textureParameters: ATLAS_SAMPLER,
@@ -267,9 +306,9 @@ export class WindDeck {
           pickable: false,
           parameters: PREMULT_PARAMS
         }),
-        ...(dynamicFeatures.length ? [new IconLayer<BarbFeature>({
+        ...(this.dynamicFeatures.length ? [new IconLayer<BarbFeature>({
           id: 'av-wind-barbs-dynamic',
-          data: dynamicFeatures,
+          data: this.dynamicFeatures,
           iconAtlas: this.atlas.dynamicImage as unknown as string,
           iconMapping: this.atlas.dynamicMapping,
           textureParameters: ATLAS_SAMPLER,
@@ -303,16 +342,77 @@ export class WindDeck {
     this.overlay.setProps({ layers });
   }
 
-  private refreshBarbs(): void {
-    this.features = this.sampleBarbs();
-    this.labeledFeatures = this.features.filter(feature => feature.text.length > 0);
+  private refreshBarbs(force: boolean): void {
+    if (!this.field || !this.options.visible || this.options.style === 'trails') {
+      if (this.features.length > 0) {
+        this.features = [];
+        this.staticFeatures = [];
+        this.dynamicFeatures = [];
+        this.labeledFeatures = [];
+      }
+      this.barbWindow = null;
+      return;
+    }
+
+    const bounds = this.map.getBounds();
+    const zoom = this.map.getZoom();
+    const vw = bounds.getWest();
+    const ve = bounds.getEast();
+    const vs = Math.max(-MAX_LAT, bounds.getSouth());
+    const vn = Math.min(MAX_LAT, bounds.getNorth());
+
+    const win = this.barbWindow;
+    if (
+      !force
+      && win
+      && win.generation === this.generation
+      && win.style === this.options.style
+      && win.units === this.options.units
+      && Math.abs(zoom - win.zoom) < 0.35
+      && vw >= win.west
+      && ve <= win.east
+      && vs >= win.south
+      && vn <= win.north
+    ) {
+      return;
+    }
+
+    const padLon = Math.min(30, Math.max(0.02, ve - vw) * 0.22);
+    const padLat = Math.max(0.02, vn - vs) * 0.22;
+    const sampleWest = vw - padLon;
+    const sampleEast = ve + padLon;
+    const sampleSouth = Math.max(-MAX_LAT, vs - padLat);
+    const sampleNorth = Math.min(MAX_LAT, vn + padLat);
+
+    this.features = this.sampleBarbs(sampleWest, sampleSouth, sampleEast, sampleNorth, zoom);
+    const stat: BarbFeature[] = [];
+    const dyn: BarbFeature[] = [];
+    const lbl: BarbFeature[] = [];
+    for (const f of this.features) {
+      if (f.dynamic) dyn.push(f);
+      else stat.push(f);
+      if (f.text.length > 0) lbl.push(f);
+    }
+    this.staticFeatures = stat;
+    this.dynamicFeatures = dyn;
+    this.labeledFeatures = lbl;
+    this.barbWindow = {
+      generation: this.generation,
+      style: this.options.style,
+      units: this.options.units,
+      zoom,
+      west: sampleWest,
+      south: sampleSouth,
+      east: sampleEast,
+      north: sampleNorth
+    };
   }
 
-  private sampleBarbs(): BarbFeature[] {
-    if (!this.field || !this.options.visible || this.options.style === 'trails') return [];
-    const bounds = this.map.getBounds(), zoom = this.map.getZoom(), size = 512 * 2 ** zoom, step = this.options.style === 'hybrid' ? 64 : 32;
-    const x0 = Math.ceil(((bounds.getWest() + 180) / 360 * size - 16) / step), x1 = Math.floor(((bounds.getEast() + 180) / 360 * size - 16) / step);
-    const y0 = Math.max(0, Math.ceil((worldY(bounds.getNorth(), size) - 16) / step)), y1 = Math.min(Math.floor(size / step), Math.floor((worldY(bounds.getSouth(), size) - 16) / step));
+  private sampleBarbs(west: number, south: number, east: number, north: number, zoom: number): BarbFeature[] {
+    if (!this.field) return [];
+    const size = 512 * 2 ** zoom, step = this.options.style === 'hybrid' ? 64 : 32;
+    const x0 = Math.ceil(((west + 180) / 360 * size - 16) / step), x1 = Math.floor(((east + 180) / 360 * size - 16) / step);
+    const y0 = Math.max(0, Math.ceil((worldY(north, size) - 16) / step)), y1 = Math.min(Math.floor(size / step), Math.floor((worldY(south, size) - 16) / step));
     const stride = Math.max(1, Math.ceil(Math.sqrt(Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1) / 5000)));
     const features: BarbFeature[] = [];
     for (let y = Math.ceil(y0 / stride) * stride; y <= y1; y += stride) for (let x = Math.ceil(x0 / stride) * stride; x <= x1; x += stride) {

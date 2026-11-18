@@ -1,6 +1,7 @@
 import { activePalettes, type PinnedBuild, type UnitSystem } from '@av/client';
 import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
 import { isLiftLayer, shortLayerName } from '../forecast/forecast-model';
+import { themeLiftLegendColors, themeOption, type MapTheme } from '../map/visual-theme';
 
 export interface LegendStop { readonly color: string; readonly label: string }
 export interface LegendModel {
@@ -12,13 +13,14 @@ export interface LegendModel {
   readonly cutoff: string;
 }
 
-export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSystem): LegendModel | null {
+export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSystem, theme: MapTheme = 'stone'): LegendModel | null {
   const palette = activePalettes(build.manifest.descriptors.palettes, layer, build.manifest.descriptors.layers)[0];
   if (!palette) return null;
   const descriptor = build.manifest.descriptors.layers[layer], liftLayer = isLiftLayer(layer);
   const altitudeUnit = units === 'imperial' ? 'ft' : 'm';
-  const colorCount = palette.colors.length;
-  const stops = palette.colors.map((color, index) => {
+  const colors = liftLayer ? themeLiftLegendColors(theme, palette.edges, palette.colors.length) : palette.colors;
+  const colorCount = colors.length;
+  const stops = colors.map((color, index) => {
     const edge = index === colorCount - 1 && palette.edges.length > colorCount ? palette.edges[colorCount] : palette.edges[index];
     const showTick = edge !== undefined && (index === 0 || index === colorCount - 1 || index === Math.floor(colorCount / 3) || index === Math.floor(colorCount * 2 / 3));
     const value = edge === undefined ? 0 : liftLayer ? Math.round(edge * (units === 'imperial' ? 3.280839895 : 1)) : edge;
@@ -31,13 +33,16 @@ export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSyste
   if (liftLayer) {
     const renderStyle = build.manifest.tool.liftRenderStyle;
     const sink = build.manifest.descriptors.methods[descriptor.methodId]?.parameters.sinkRateMps;
+    const opt = themeOption(theme);
+    const classicMslGround = theme === 'xcskies' && layer === 'usable-lift-msl' && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE);
     return {
       title,
       unitLabel: `Lift ${altitudeUnit}`,
       stops,
-      reference: layer === 'usable-lift-agl' ? 'AGL shows usable lift height above ground.' : 'MSL includes ground elevation. Choose AGL to see usable lift height above ground.',
-      noLift: layer === 'usable-lift-msl' && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE)
-        ? 'No usable lift: the map shows ground elevation, including at night.' : 'No usable lift: clear areas on the map.',
+      reference: `${layer === 'usable-lift-agl' ? 'AGL shows usable lift height above ground.' : 'MSL shows top of usable lift above sea level.'} (${opt.shortLabel}: ${opt.summary})`,
+      noLift: classicMslGround
+        ? 'No usable lift: Classic XC Skies MSL colors ground elevation.'
+        : 'No usable lift: clear areas over terrain relief.',
       cutoff: Number.isFinite(sink) && sink > 0 ? `Usable lift requires predicted updrafts above ${sink} m/s. Nearby terrain can cross this cutoff.` : 'Usable lift depends on the predicted updraft and terrain.'
     };
   }

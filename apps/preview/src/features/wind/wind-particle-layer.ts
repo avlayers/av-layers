@@ -11,6 +11,7 @@ export interface WindParticleLayerProps {
   numParticles: number;
   trailSteps?: number;
   paused: boolean;
+  darkChrome?: boolean;
   centerLon: number;
   zoom: number;
   beforeId?: string;
@@ -242,6 +243,7 @@ in vec4 instancePrev;
 out float vAlpha;
 out vec2 vCap;
 out float vHalfWidth;
+out float vCasing;
 out float vFeather;
 
 void main(void) {
@@ -249,7 +251,7 @@ void main(void) {
   int slice = gl_InstanceID / nParticles;
   if (instanceCurr.z <= 0.0 || instancePrev.z <= 0.0 || abs(instanceCurr.w - instancePrev.w) > 0.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vFeather = 1.0;
+    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vCasing = 0.0; vFeather = 1.0;
     return;
   }
   float currLon = instanceCurr.x + 360.0 * floor((windDraw.centerLon - instanceCurr.x) / 360.0 + 0.5);
@@ -260,7 +262,7 @@ void main(void) {
   vec4 currClip = project_position_to_clipspace(vec3(currLon, instanceCurr.y, 0.0), vec3(0.0), vec3(0.0), commonCurr);
   if (prevClip.w <= 0.0 || currClip.w <= 0.0) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vFeather = 1.0;
+    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vCasing = 0.0; vFeather = 1.0;
     return;
   }
   float dpr = max(project.devicePixelRatio, 1.0);
@@ -271,14 +273,15 @@ void main(void) {
   float segLen = length(delta);
   if (segLen <= 0.06 || segLen > 36.0) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
-    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vFeather = 1.0;
+    vAlpha = 0.0; vCap = vec2(0.0); vHalfWidth = 0.0; vCasing = 0.0; vFeather = 1.0;
     return;
   }
   vec2 dir = delta / segLen;
   vec2 normal = vec2(-dir.y, dir.x);
   float halfWidth = windDraw.lineWidth * 0.5;
+  float casing = max(0.75, windDraw.pad0) / dpr;
   float feather = 0.85 / dpr;
-  float ext = halfWidth + feather;
+  float ext = halfWidth + casing + feather;
   bool headSlice = slice == 0;
   vec4 baseClip = mix(prevClip, currClip, positions.x);
   vec2 offsetCss = normal * (positions.y * ext) + (headSlice && positions.x > 0.5 ? dir * ext : vec2(0.0));
@@ -289,6 +292,7 @@ void main(void) {
   vAlpha = windDraw.opacity * fade;
   vCap = vec2(headSlice ? mix(-segLen, ext, positions.x) : -1.0, positions.y * ext);
   vHalfWidth = halfWidth;
+  vCasing = casing;
   vFeather = feather;
 }
 `;
@@ -300,16 +304,24 @@ precision highp float;
 in float vAlpha;
 in vec2 vCap;
 in float vHalfWidth;
+in float vCasing;
 in float vFeather;
 out vec4 fragColor;
 
 void main() {
   if (vAlpha <= 0.002) discard;
   float d = length(vec2(max(vCap.x, 0.0), vCap.y));
-  float edge = 1.0 - smoothstep(max(0.0, vHalfWidth - vFeather * 0.5), vHalfWidth + vFeather * 0.5, d);
-  float a = vAlpha * edge;
-  if (a <= 0.002) discard;
-  fragColor = vec4(1.0, 1.0, 1.0, a);
+  float outerLimit = vHalfWidth + vCasing;
+  float outerMask = 1.0 - smoothstep(outerLimit - vFeather * 0.5, outerLimit + vFeather * 0.5, d);
+  if (outerMask <= 0.002) discard;
+  float coreMask = 1.0 - smoothstep(max(0.0, vHalfWidth - vFeather * 0.45), vHalfWidth + vFeather * 0.45, d);
+  float coreAlpha = vAlpha * coreMask;
+  float caseStrength = windDraw.pad1 > 0.0 ? windDraw.pad1 : 0.68;
+  float caseAlpha = vAlpha * caseStrength * max(0.0, outerMask - coreMask * 0.62);
+  float outAlpha = coreAlpha + caseAlpha * (1.0 - coreAlpha);
+  if (outAlpha <= 0.002) discard;
+  vec3 outRgb = (vec3(1.0) * coreAlpha + vec3(0.05, 0.09, 0.16) * caseAlpha * (1.0 - coreAlpha)) / outAlpha;
+  fragColor = vec4(outRgb, outAlpha);
 }
 `;
 
@@ -336,6 +348,7 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
     numParticles: { type: 'number', value: 1408 },
     trailSteps: { type: 'number', value: DEFAULT_TRAIL_STEPS },
     paused: { type: 'boolean', value: false },
+    darkChrome: { type: 'boolean', value: false },
     centerLon: { type: 'number', value: 0 },
     zoom: { type: 'number', value: 5 }
   };
@@ -386,6 +399,7 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
     if (!model || !transform || !currBuffer || !prevBuffer || !windTexture || !prepared || !visible) return;
 
     const steps = this.state.trailSteps ?? DEFAULT_TRAIL_STEPS;
+    const dark = Boolean(this.props.darkChrome);
     model.setAttributes({ instanceCurr: currBuffer, instancePrev: prevBuffer });
     model.setInstanceCount(this.props.numParticles * (steps - 1));
     model.shaderInputs.setProps({
@@ -396,8 +410,8 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
         opacity: 0.96,
         centerLon: this.props.centerLon,
         stepSec: STEP_SEC,
-        pad0: 0,
-        pad1: 0
+        pad0: dark ? 0.90 : 1.18,
+        pad1: dark ? 0.46 : 0.76
       }
     });
     model.draw(this.context.renderPass);

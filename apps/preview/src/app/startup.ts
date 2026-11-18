@@ -1,5 +1,7 @@
 import { AUTO_MODEL_ID, longitudeOffsetHours, type UnitSystem } from '@av/client';
 import type { ModelId } from '@av/contracts/publication';
+import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleChoice } from '../features/map/channel-styles';
+import { isMapTheme, type MapTheme } from '../features/map/visual-theme';
 import { previewQuery } from '../features/navigation/url-state';
 import { parseWindPreferences, WIND_STOPS, type StoredWindPreferences } from '../features/wind/wind-model';
 import { visibleCustomLayer } from '../features/forecast/forecast-model';
@@ -17,9 +19,15 @@ export interface StorageLike {
 export interface Preferences {
   units(): UnitSystem | null;
   opacity(): number | null;
+  theme(): MapTheme | null;
+  cloudStyle(): CloudStyleChoice | null;
+  rainStyle(): RainStyleChoice | null;
   wind(): StoredWindPreferences | null;
   setUnits(units: UnitSystem): void;
   setOpacity(opacity: number): void;
+  setTheme(theme: MapTheme): void;
+  setCloudStyle(style: CloudStyleChoice): void;
+  setRainStyle(style: RainStyleChoice): void;
 }
 
 export interface StartupSnapshot {
@@ -37,14 +45,23 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const preferences: Preferences = {
     units() { const value = read('preview-units'); return value === 'imperial' ? 'imperial' : value === 'metric' ? 'metric' : null; },
     opacity() { const raw = read('preview-lift-opacity'), value = raw?.trim() ? Number(raw) : Number.NaN; return value >= 0 && value <= 1 ? value : null; },
+    theme() { const value = read('preview-theme'); return isMapTheme(value) ? value : null; },
+    cloudStyle() { const value = read('preview-cloud-style'); return value === 'auto' || isCloudStyleId(value) ? value : null; },
+    rainStyle() { const value = read('preview-rain-style'); return value === 'auto' || isRainStyleId(value) ? value : null; },
     wind() { return parseWindPreferences(read('av.wind-controls.v1')); },
     setUnits(units) { write('preview-units', units); },
-    setOpacity(opacity) { write('preview-lift-opacity', String(opacity)); }
+    setOpacity(opacity) { write('preview-lift-opacity', String(opacity)); },
+    setTheme(theme) { write('preview-theme', theme); },
+    setCloudStyle(style) { write('preview-cloud-style', style); },
+    setRainStyle(style) { write('preview-rain-style', style); }
   };
   const query = previewQuery(search, offline), storedWind = preferences.wind();
   const initialModel = query.model ?? (offline ? fixtureModel : AUTO_MODEL_ID);
-  const initialOpacity = query.opacity ?? preferences.opacity() ?? 0.5;
+  const initialOpacity = query.opacity ?? preferences.opacity() ?? 0.72;
   const initialUnits: UnitSystem = query.units ?? preferences.units() ?? 'metric';
+  const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? 'stone';
+  const initialCloudStyle: CloudStyleChoice = query.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
+  const initialRainStyle: RainStyleChoice = query.rainStyle ?? preferences.rainStyle() ?? 'auto';
   const initialWindHeight = query.windHeight ?? storedWind?.height ?? 'surface';
   const initialFixedHeight = typeof initialWindHeight === 'number' ? initialWindHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
   const browserOffsetMinutes = -new Date().getTimezoneOffset();
@@ -52,6 +69,8 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initial: PreviewInitialState = {
     intent: {
       model: initialModel, reference: query.reference, customLayer: visibleCustomLayer(query.layer), opacity: initialOpacity, units: initialUnits,
+      theme: initialTheme, cloudStyle: initialCloudStyle, rainStyle: initialRainStyle,
+      liftVisible: query.liftVisible ?? true, cloudsVisible: query.cloudsVisible ?? true, rainVisible: query.rainVisible ?? true, isobarsVisible: query.isobarsVisible ?? false, peeking: false,
       windStyle: query.windStyle ?? storedWind?.style ?? 'trails', windVisible: query.windVisible ?? storedWind?.visible ?? true,
       windVisibleOverride: query.windVisible, windPaused: false, windHeight: initialWindHeight, fixedWindHeight: initialFixedHeight,
       pointHorizon: 'day', requestedTime: query.validTime

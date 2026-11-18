@@ -21,7 +21,7 @@ export interface ForecastHooks {
 export interface ForecastSessionOptions {
   readonly api: ApiClient;
   readonly writer: Pick<PreviewWriter, 'forecast' | 'intent' | 'notices'>;
-  readonly intent: () => PreviewIntent;
+  readonly intent: () => Pick<PreviewIntent, 'model' | 'reference' | 'customLayer' | 'requestedTime'>;
   readonly center: () => GeoPoint;
   readonly globe?: () => boolean;
   readonly mapFailed: () => boolean;
