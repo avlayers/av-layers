@@ -555,4 +555,23 @@ describe('wind controls', () => {
     controls.destroy();
     expect(root.parent).toBeNull();
   });
+
+  it('supports rail-only mode with an explicit WIND header and hides the altitude rail when wind is off', () => {
+    const onChange = vi.fn<(state: WindControlState) => void>();
+    const controls = createWindControls(parent as unknown as HTMLElement, { onChange, showTrigger: false });
+    const root = parent.children[0]!;
+    expect(root.getAttribute('data-rail-only')).toBe('true');
+    expect(one(root, 'wind-controls-menu').hidden).toBe(true);
+    expect(one(root, 'wind-controls-rail-tag').textContent).toBe('WIND');
+    expect(one(root, 'wind-controls-rail').hidden).toBe(false);
+
+    controls.setState?.({ visible: false, paused: true });
+    expect(controls.state.visible).toBe(false);
+    expect(controls.state.paused).toBe(true);
+    expect(one(root, 'wind-controls-rail').hidden).toBe(true);
+
+    controls.setState?.({ visible: true });
+    expect(one(root, 'wind-controls-rail').hidden).toBe(false);
+    controls.destroy();
+  });
 });

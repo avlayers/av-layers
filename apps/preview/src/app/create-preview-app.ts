@@ -11,6 +11,7 @@ import { apiBaseUrl, createStartup, offlineFixture, safeStorage } from './startu
 import type { PreviewCommands } from './preview-commands';
 import { preparedAxisReadiness, type PreviewStore } from '../stores/app-store';
 import { createPreviewStore } from '../stores/app-store';
+import { DEFAULT_DOCK_VIEW } from '../features/controls/bottom-dock-model';
 import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createForecastSession } from '../features/forecast/forecast-session';
 import { applyBasemapTheme } from '../features/map/basemap';
@@ -25,7 +26,9 @@ type WindControls = import('../features/wind/wind-controls').WindControls;
 import { WindOverlay } from '../features/wind/wind-overlay';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
 import { createLocationController } from '../features/location/location-controller';
+import { easePointIntoClearView } from '../features/point/point-camera';
 import { createPointFeature, type PointFeature } from '../features/point/point-feature';
+import { createPointMarker, type PointMarker } from '../features/point/point-marker';
 import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 
 export interface PreviewApp {
@@ -111,6 +114,8 @@ export function createPreviewApp(): PreviewApp {
   let startWindControls: () => Promise<void> = async () => {};
   let timeline: CompactTimeline | null = null;
   let pointFeature: PointFeature | null = null;
+  let pointMarker: PointMarker | null = null;
+  let activePointEase: { point: { lat: number; lon: number }; settled: boolean } | null = null;
   let locationController: ReturnType<typeof createLocationController> | null = null;
 
   let mapOffsetMinutes = initialOffset;
@@ -128,6 +133,7 @@ export function createPreviewApp(): PreviewApp {
   const mapFailed = () => forecast().mapFailed;
   const selectedFrame = () => forecast().selectedFrame;
   const aborted = () => lifecycle.signal.aborted;
+  const isPointOpen = () => Boolean(view.point.value.open || pointFeature?.current || pointFeature?.pending);
   const displayedRaster = () => {
     const displayed = view.overlay.value.displayed;
     return displayed ? { build: displayed.build, frame: displayed.frame } : null;
@@ -139,10 +145,18 @@ export function createPreviewApp(): PreviewApp {
 
   function syncRootTheme(): void {
     if (appRoot && 'dataset' in appRoot && appRoot.dataset) {
-      const currentTheme = intent().theme;
-      appRoot.dataset.theme = currentTheme;
-      appRoot.dataset.chrome = themeOption(currentTheme).darkChrome ? 'dark' : 'light';
+      const cur = intent();
+      appRoot.dataset.theme = cur.theme;
+      appRoot.dataset.dock = cur.dockView;
+      appRoot.dataset.chrome = themeOption(cur.theme).darkChrome ? 'dark' : 'light';
     }
+  }
+
+  function syncWindHostVisibility(): void {
+    const supported = Boolean(build()?.manifest.mapData);
+    const cur = intent();
+    const host = rootQuery<HTMLElement>('#wind-controls', appRoot ?? document);
+    if (host) host.hidden = !supported || !cur.windVisible || cur.peeking;
   }
 
   function syncWeatherVisibility(): void {
@@ -160,6 +174,7 @@ export function createPreviewApp(): PreviewApp {
       visible: cur.windVisible && !cur.peeking,
       darkChrome: themeOption(cur.theme).darkChrome
     });
+    syncWindHostVisibility();
   }
 
   const forecastSession = createForecastSession({
@@ -248,14 +263,15 @@ export function createPreviewApp(): PreviewApp {
     const details = new Set(compatible ? raster.detailDrawableFrames ?? raster.detailReadyFrames ?? [] : []);
     const needsWind = Boolean(current?.manifest.mapData) && intent().windVisible;
     const windReady = needsWind ? new Set([...(windSession?.ready ?? [])].filter(([, heights]) => heights.has(intent().windHeight)).map(([frame]) => frame)) : null;
-    writer.notices({ ...preparedAxisReadiness(frames, previews, details, windReady),
+    const readiness = preparedAxisReadiness(frames, previews, details, windReady);
+    writer.notices({ ...readiness,
       preparationLimited: Boolean(raster.limited || (needsWind && windSession?.preparation.limited)) });
+    timeline?.setReadiness?.(readiness.overviewReady, readiness.overviewTotal, raster.viewLoading);
   }
 
   function syncWindSupport(): void {
     const supported = Boolean(build()?.manifest.mapData);
-    const host = rootQuery<HTMLElement>('#wind-controls', appRoot ?? document);
-    if (host) host.hidden = !supported;
+    syncWindHostVisibility();
     writer.wind({ supported });
     if (supported) void startWindControls();
     else windSession?.clear();
@@ -349,14 +365,18 @@ export function createPreviewApp(): PreviewApp {
     history.write({
       model: cur.model, reference: cur.reference, layer: cur.customLayer, opacity: cur.opacity,
       lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime,
-      theme: cur.theme, cloudStyle: cur.cloudStyle, rainStyle: cur.rainStyle,
+      theme: cur.theme, dockView: cur.dockView, cloudStyle: cur.cloudStyle, rainStyle: cur.rainStyle,
       liftVisible: cur.liftVisible, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
       ...(cur.windVisibleOverride !== null ? { windVisible: cur.windVisible } : {}),
       windStyle: cur.windStyle, windHeight: cur.windHeight, units: cur.units
     }, mode, true);
   }
 
-  function closePoint(): void { pointFeature?.close(); }
+  function closePoint(): void {
+    activePointEase = null;
+    pointMarker?.clear();
+    pointFeature?.close();
+  }
 
   function prepareFrameIndex(index: number): void {
     const current = build();
@@ -393,12 +413,14 @@ export function createPreviewApp(): PreviewApp {
     try {
       const requestedLayer = visibleCustomLayer(state.layer);
       const nextTheme = state.theme ?? preferences.theme() ?? 'stone';
+      const nextDockView = state.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
       const nextCloudStyle = state.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
       const nextRainStyle = state.rainStyle ?? preferences.rainStyle() ?? 'auto';
       writer.intent({
         reference: state.reference,
         customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)),
         theme: nextTheme,
+        dockView: nextDockView,
         cloudStyle: nextCloudStyle,
         rainStyle: nextRainStyle,
         liftVisible: state.liftVisible ?? true,
@@ -408,6 +430,7 @@ export function createPreviewApp(): PreviewApp {
         peeking: false
       });
       syncRootTheme();
+      timeline?.setVariant?.(nextDockView);
       applyBasemapTheme(map, nextTheme);
       overlay?.setTheme?.(nextTheme);
       sky?.setTheme(nextTheme);
@@ -429,6 +452,7 @@ export function createPreviewApp(): PreviewApp {
         units: intent().units,
         darkChrome: themeOption(nextTheme).darkChrome
       });
+      syncWindHostVisibility();
       syncWindReservation();
       windSession?.heightChanged(previousHeight);
       if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); overlay?.setOpacity(state.opacity); sky?.setOpacity(state.opacity); syncWeatherVisibility(); }
@@ -481,11 +505,12 @@ export function createPreviewApp(): PreviewApp {
     if (current.templates[target]) overlay?.prepare(target, frame);
   }
 
-  function prepareWeatherChannel(channel: 'lift' | 'clouds' | 'rain' | 'isobars'): void {
+  function prepareWeatherChannel(channel: 'lift' | 'wind' | 'clouds' | 'rain' | 'isobars'): void {
     if (channel === 'lift') {
       prepareLayer('lift');
       return;
     }
+    if (channel === 'wind') return;
     const current = build(), frame = selectedFrame();
     if (!current || !frame) return;
     sky?.prepare(current, frame, channel);
@@ -502,11 +527,21 @@ export function createPreviewApp(): PreviewApp {
 
   function commandSetWind(state: { style: import('../features/wind/wind-model').WindStyle; visible: boolean; paused: boolean; height: import('../features/wind/wind-model').WindHeight }, commit = true): void {
     const previousHeight = intent().windHeight;
+    const nextFixedHeight = typeof state.height === 'number' ? state.height : intent().fixedWindHeight;
     if (state.visible !== lastControlVisible) { lastControlVisible = state.visible; writer.intent({ windVisibleOverride: state.visible }); }
     writer.intent({
-      windStyle: state.style, windVisible: state.visible, windPaused: state.paused, windHeight: state.height,
-      ...(typeof state.height === 'number' ? { fixedWindHeight: state.height } : {})
+      windStyle: state.style,
+      windVisible: state.visible,
+      windPaused: state.paused,
+      windHeight: state.height,
+      fixedWindHeight: nextFixedHeight,
+      ...(commit && state.visible ? { peeking: false } : {})
     });
+    if (commit) {
+      windControls?.setState?.(state);
+      preferences.setWind(state, nextFixedHeight);
+    }
+    syncWeatherVisibility();
     syncWindReservation();
     windOverlay?.setOptions({
       ...state,
@@ -553,6 +588,14 @@ export function createPreviewApp(): PreviewApp {
       windOverlay?.setOptions({ darkChrome: themeOption(theme).darkChrome });
       writeUrl('replace');
     },
+    setDockView(dockView) {
+      if (intent().dockView === dockView) return;
+      writer.intent({ dockView });
+      preferences.setDockView(dockView);
+      syncRootTheme();
+      timeline?.setVariant?.(dockView);
+      writeUrl('replace');
+    },
     setCloudStyle(cloudStyle) {
       if (intent().cloudStyle === cloudStyle) return;
       writer.intent({ cloudStyle, cloudsVisible: true, peeking: false });
@@ -571,6 +614,15 @@ export function createPreviewApp(): PreviewApp {
     },
     toggleWeatherLayer(channel) {
       const cur = intent();
+      if (channel === 'wind') {
+        commandSetWind({
+          style: cur.windStyle,
+          visible: cur.peeking ? true : !cur.windVisible,
+          paused: cur.windPaused,
+          height: cur.windHeight
+        });
+        return;
+      }
       const nextPatch = channel === 'lift' ? { liftVisible: !cur.liftVisible }
         : channel === 'clouds' ? { cloudsVisible: !cur.cloudsVisible }
         : channel === 'rain' ? { rainVisible: !cur.rainVisible }
@@ -682,7 +734,13 @@ export function createPreviewApp(): PreviewApp {
       if (!liveHost || destroyed) return;
       windControls?.destroy();
       windControls = factory(liveHost, {
-        initial: { style: intent().windStyle, visible: intent().windVisible, height: intent().windHeight },
+        showTrigger: false,
+        initial: {
+          style: intent().windStyle,
+          visible: intent().windVisible,
+          paused: intent().windPaused,
+          height: intent().windHeight
+        },
         onChange: state => commandSetWind(state, false),
         onCommit: () => writeUrl('replace')
       });
@@ -690,6 +748,7 @@ export function createPreviewApp(): PreviewApp {
       windControls.setUnits(intent().units);
       windControls.setStatus(view.wind.value.status);
       windControls.setQuality?.(view.wind.value.overview);
+      syncWindHostVisibility();
       syncWindReservation();
     };
     startWindControls = async () => {
@@ -713,6 +772,7 @@ export function createPreviewApp(): PreviewApp {
     if (!timelineHost) throw new Error('Missing element #compact-timeline');
     timeline = createCompactTimeline(timelineHost, {
       offsetMinutes: mapOffsetMinutes,
+      variant: intent().dockView,
       ...(camera?.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, history = 'push') => selectIndex(index, history, true),
       onIntent: index => {
@@ -723,9 +783,11 @@ export function createPreviewApp(): PreviewApp {
       onPlayback: playing => commands.setPlaying(playing)
     });
 
+    pointMarker = createPointMarker(map, root.ownerDocument ?? document);
     pointFeature = createPointFeature({
       root: () => appRoot,
       series: pointSeries,
+      isOpen: () => view.point.value.open,
       getBuild: build,
       getSelectedFrame: selectedFrame,
       getUnits: () => intent().units,
@@ -749,10 +811,37 @@ export function createPreviewApp(): PreviewApp {
         if (cancelled?.changed && intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
       },
       publish: {
-        open: point => writer.point({ open: true, location: `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°` }),
-        close: () => writer.point({ open: false, status: '', wind: '' }),
+        open: point => {
+          const easeToken = { point, settled: false };
+          activePointEase = easeToken;
+          pointMarker?.show(point);
+          writer.point({ open: true, location: `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°` });
+          const schedule = root.ownerDocument?.defaultView?.requestAnimationFrame ?? ((cb: FrameRequestCallback) => { cb(0); return 0; });
+          schedule(() => {
+            if (!destroyed && activePointEase === easeToken && view.point.value.open && map && appRoot) {
+              easePointIntoClearView(map, appRoot, point);
+            }
+          });
+        },
+        close: () => {
+          activePointEase = null;
+          pointMarker?.clear();
+          writer.point({ open: false, status: '', wind: '' });
+        },
         status: text => writer.point({ status: text }),
-        busy: busy => writer.point({ busy }),
+        busy: busy => {
+          writer.point({ busy });
+          const easeToken = activePointEase;
+          if (easeToken && !easeToken.settled && rootQuery('#point-body .av-point-series', root)) {
+            easeToken.settled = true;
+            const schedule = root.ownerDocument?.defaultView?.requestAnimationFrame ?? ((cb: FrameRequestCallback) => { cb(0); return 0; });
+            schedule(() => {
+              if (!destroyed && activePointEase === easeToken && view.point.value.open && map && appRoot) {
+                easePointIntoClearView(map, appRoot, easeToken.point);
+              }
+            });
+          }
+        },
         horizon: (selectable, label) => writer.point({ horizonSelectable: selectable, horizonLabel: label }),
         wind: text => writer.point({ wind: text })
       }
@@ -791,11 +880,19 @@ export function createPreviewApp(): PreviewApp {
     });
 
     const globalListener = { signal: lifecycle.signal };
+    const popoverSelectors = ['#theme-picker[open]', '#model-picker[open]', '#legend-key[open]', '#point-settings[open]', '.av-windgram-key-pop[open]'];
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape' && !event.defaultPrevented) {
-        for (const selector of ['#theme-picker[open]', '#model-picker[open]', '#legend-key[open]']) {
+        let closedPopover = false;
+        for (const selector of popoverSelectors) {
           const openPopover = rootQuery<HTMLDetailsElement>(selector, root);
-          if (openPopover) { openPopover.open = false; event.preventDefault(); }
+          if (openPopover) { openPopover.open = false; closedPopover = true; }
+        }
+        if (closedPopover) {
+          event.preventDefault();
+        } else if (isPointOpen() && !(event.target instanceof Node && rootQuery('#point-body', root)?.contains(event.target))) {
+          closePoint();
+          event.preventDefault();
         }
       }
       if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button,summary')) return;
@@ -811,6 +908,11 @@ export function createPreviewApp(): PreviewApp {
         event.preventDefault();
         spacePeekActive = false;
         commands.setPeeking(!intent().peeking);
+        return;
+      }
+      if ((event.key === 'w' || event.key === 'W') && view.wind.value.supported) {
+        event.preventDefault();
+        commands.toggleWeatherLayer('wind');
         return;
       }
       if (event.key === 'i' || event.key === 'I') {
@@ -850,7 +952,7 @@ export function createPreviewApp(): PreviewApp {
     document.addEventListener('pointerdown', event => {
       const targetEl = event.target && typeof (event.target as Element).closest === 'function' ? event.target as Element : null;
       if (targetEl) {
-        for (const selector of ['#theme-picker[open]', '#model-picker[open]', '#legend-key[open]']) {
+        for (const selector of popoverSelectors) {
           const openEl = rootQuery<HTMLDetailsElement>(selector, root);
           if (openEl && !openEl.contains(targetEl)) openEl.open = false;
         }
@@ -866,16 +968,28 @@ export function createPreviewApp(): PreviewApp {
 
     map.on('click', event => {
       if (mapFailed()) return;
+      if (isPointOpen()) {
+        closePoint();
+        return;
+      }
       const point = normalizePoint(event.lngLat.lat, event.lngLat.lng);
       void pointFeature?.open(point);
     });
-    map.on('move', () => { syncMapClock(false); windSession?.reconcile(); });
-    map.on('movestart', event => { if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event)) { history.cancelRestore(); forecastSession.cancelAuto(); } });
-    map.on('moveend', () => {
-      syncMapClock(true); updateScale();
+    map.on('move', () => { syncMapClock(false); pointMarker?.sync(); windSession?.reconcile(); });
+    map.on('resize', () => { pointMarker?.sync(); });
+    map.on('movestart', event => {
+      if (!('pointCamera' in event)) activePointEase = null;
+      if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event) && !('pointCamera' in event)) {
+        history.cancelRestore();
+        forecastSession.cancelAuto();
+      }
+    });
+    map.on('moveend', event => {
+      syncMapClock(true); pointMarker?.sync(); updateScale();
       if (intent().model !== AUTO_MODEL_ID) updateWind();
       if (build() && !forecast().expired) updateTimeUi();
-      if (intent().model === AUTO_MODEL_ID && !history.restoring()) void forecastSession.loadAuto();
+      const pointCameraMove = Boolean(event && typeof event === 'object' && 'pointCamera' in event);
+      if (intent().model === AUTO_MODEL_ID && !history.restoring() && !pointCameraMove) void forecastSession.loadAuto();
       if (urlReady && !history.restoring()) writeUrl('push');
       refreshSeam();
     });
@@ -908,6 +1022,7 @@ export function createPreviewApp(): PreviewApp {
         () => { resumeModel = forecastSession.suspend(); },
         () => windSession?.clear(), () => windCache.clear(), () => locationController?.reset(),
         () => {
+          pointMarker?.clear();
           if (!pointInterrupted) return;
           try { pointFeature?.suspend(); }
           finally { writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' }); }
@@ -934,6 +1049,7 @@ export function createPreviewApp(): PreviewApp {
         : `Map initialization failed: ${error instanceof Error ? error.message : String(error)}`,
       freshness: ''
     });
+    pointMarker?.clear();
     writer.point({ open: false });
     disposePermanently();
   }
@@ -941,14 +1057,17 @@ export function createPreviewApp(): PreviewApp {
   function disposePermanently(): void {
     if (destroyed) return;
     destroyed = true;
+    activePointEase = null;
     cleanup([
       () => forecastSession.dispose(), () => lifecycle.abort(),
       () => timeline?.destroy(), () => windControls?.destroy(), () => locationController?.dispose(),
-      () => pointFeature?.dispose(), () => pointSeries.close(), () => windSession?.destroy(),
-      () => windOverlay?.destroy(), () => windCache.clear(), () => seam?.destroy(),
-      () => sky?.destroy(), () => overlay?.destroy(), () => forecastScheduler.dispose(), () => map?.remove()
+      () => pointMarker?.dispose(), () => pointFeature?.dispose(), () => pointSeries.close(),
+      () => windSession?.destroy(), () => windOverlay?.destroy(), () => windCache.clear(),
+      () => seam?.destroy(), () => sky?.destroy(), () => overlay?.destroy(),
+      () => forecastScheduler.dispose(), () => map?.remove()
     ]);
-    timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = sky = overlay = null; map = null;
+    timeline = windControls = locationController = null; pointMarker = null; pointFeature = null;
+    windSession = null; windOverlay = seam = sky = overlay = null; map = null;
   }
 
   function cleanup(releases: readonly (() => void)[]): void {

@@ -2,6 +2,7 @@ import { LAYER_IDS, type LayerId } from '@av/contracts/layers';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
+import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../controls/bottom-dock-model';
 import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleChoice } from '../map/channel-styles';
 import { isMapTheme, type MapTheme } from '../map/visual-theme';
 
@@ -35,6 +36,7 @@ export function previewQuery(search: string, offline: boolean) {
   const wstyle = params.get('wstyle');
   const units = params.get('units');
   const theme = params.get('theme');
+  const dock = params.get('dock');
   const cstyle = params.get('cstyle');
   const rstyle = params.get('rstyle');
   return {
@@ -44,6 +46,7 @@ export function previewQuery(search: string, offline: boolean) {
     opacity: opacity === null ? null : Math.min(1, Math.max(0, opacity)),
     validTime: params.get('t'),
     theme: isMapTheme(theme) ? theme : null,
+    dockView: isDockViewId(dock) ? dock : null,
     cloudStyle: cstyle === 'auto' || isCloudStyleId(cstyle) ? (cstyle as CloudStyleChoice) : null,
     rainStyle: rstyle === 'auto' || isRainStyleId(rstyle) ? (rstyle as RainStyleChoice) : null,
     liftVisible: parseFlag(params.get('lift')),
@@ -69,6 +72,7 @@ export function previewUrl(pathname: string, state: {
   zoom: number;
   validTime?: string;
   theme?: MapTheme;
+  dockView?: DockViewId;
   cloudStyle?: CloudStyleChoice;
   rainStyle?: RainStyleChoice;
   liftVisible?: boolean;
@@ -87,6 +91,7 @@ export function previewUrl(pathname: string, state: {
   if (state.layer && state.layer !== 'usable-lift-agl' && state.layer !== 'usable-lift-msl') params.set('layer', state.layer);
   if (state.validTime) params.set('t', state.validTime);
   if (state.theme && state.theme !== 'stone') params.set('theme', state.theme);
+  if (state.dockView && state.dockView !== DEFAULT_DOCK_VIEW) params.set('dock', state.dockView);
   if (state.cloudStyle && state.cloudStyle !== 'auto') params.set('cstyle', state.cloudStyle);
   if (state.rainStyle && state.rainStyle !== 'auto') params.set('rstyle', state.rainStyle);
   if (state.liftVisible === false) params.set('lift', '0');

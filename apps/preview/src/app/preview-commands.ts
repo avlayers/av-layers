@@ -1,12 +1,14 @@
 import type { LayerId } from '@av/contracts/layers';
 import type { ModelId } from '@av/contracts/publication';
 import type { PointHorizon, UnitSystem } from '@av/client';
+import type { DockViewId } from '../features/controls/bottom-dock-model';
+import type { WeatherChannelKey } from '../features/controls/topbar-model';
 import type { CloudStyleChoice, RainStyleChoice } from '../features/map/channel-styles';
 import type { MapTheme } from '../features/map/visual-theme';
 import type { AltitudeReference } from '../features/navigation/url-state';
 import type { WindHeight, WindStyle } from '../features/wind/wind-model';
 
-export type WeatherChannel = 'lift' | 'clouds' | 'rain' | 'isobars';
+export type WeatherChannel = WeatherChannelKey;
 
 export interface PreviewCommands {
   selectModel(model: ModelId): void;
@@ -15,6 +17,7 @@ export interface PreviewCommands {
   prepareLayer(layer: 'lift' | LayerId): void;
   prepareWeatherChannel(channel: WeatherChannel): void;
   setTheme(theme: MapTheme): void;
+  setDockView(dockView: DockViewId): void;
   setCloudStyle(style: CloudStyleChoice): void;
   setRainStyle(style: RainStyleChoice): void;
   toggleWeatherLayer(channel: WeatherChannel): void;

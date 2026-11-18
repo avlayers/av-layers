@@ -11,14 +11,15 @@ export type { WindControlState, WindHeight, WindStatus, WindStyle, WindUnits } f
 export interface WindControlsOptions {
   onChange(state: WindControlState): void;
   onCommit?(): void;
-  initial?: Partial<Pick<WindControlState, 'style' | 'visible' | 'height'>>;
+  initial?: Partial<Pick<WindControlState, 'style' | 'visible' | 'paused' | 'height'>>;
+  showTrigger?: boolean;
 }
 
 export interface WindControls {
   readonly state: WindControlState;
   setStatus(status: WindStatus): void;
   setQuality?(overview: boolean): void;
-  setState?(next: Partial<Pick<WindControlState, 'style' | 'visible' | 'height'>>): void;
+  setState?(next: Partial<Pick<WindControlState, 'style' | 'visible' | 'paused' | 'height'>>): void;
   setUnits(units: WindUnits): void;
   destroy(): void;
 }
@@ -31,6 +32,7 @@ const ICONS = {
   trails: svg(18, 15, 20, 16, stroke, '<path d="M2 4.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4M2 8.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4M2 12.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4"/>'),
   barbs: svg(18, 15, 20, 16, stroke, '<circle cx="4.5" cy="13" r="1.4"/><path d="M5.5 11.8 14.8 2.5m0 0 3.2 2.6m-5.8 0 2.6 2.1"/>'),
   hybrid: svg(18, 15, 20, 16, stroke, '<path d="M1.8 5c2.8-2.2 5.2 2.2 8.2 0s4.4-1.6 6.5.3M1.8 10.2c2.4-1.8 4.4 1.6 7 0"/><path d="M11.2 13.8 17 5.6m0 0 2.2 2"/>'),
+  windMini: svg(11, 9, 16, 12, stroke, '<path d="M1.5 3.5h9.2a1.8 1.8 0 1 0-1.6-2.6M1.5 7h11.5a1.8 1.8 0 1 1-1.6 2.6M1.5 10.2h6.2"/>'),
   tol: svg(11, 11, 16, 16, stroke, '<path d="M8 13.5V3.5m0 0-3 3m3-3 3 3M3 2h10"/>'),
   sfc: svg(12, 11, 16, 15, stroke, '<path d="M2 6.5c2.2-1.8 4.2 1.8 6.4 0s3.4-1.4 5.6.3"/><path d="M1.5 11h13M4.5 11l-1.5 2.4M8.8 11l-1.5 2.4M13.1 11l-1.5 2.4"/>'),
   eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"', eyeBase),
@@ -68,6 +70,7 @@ function compactHeightBadge(height: WindHeight, fixedHeight: number, units: Wind
 
 export function createWindControls(parent: HTMLElement, options: WindControlsOptions): WindControls {
   const doc = parent.ownerDocument, stored = readStored(), init = options.initial;
+  const showTrigger = options.showTrigger !== false;
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] => {
     const n = doc.createElement(tag); n.className = cls; if (text !== undefined) n.textContent = text; return n;
   };
@@ -77,7 +80,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   let state: WindControlState = {
     style: init?.style ?? stored?.style ?? 'trails',
     visible: init?.visible ?? stored?.visible ?? true,
-    paused: false,
+    paused: init?.paused ?? false,
     height: init?.height ?? stored?.height ?? 'surface'
   };
   let fixedHeight = typeof state.height === 'number' ? state.height : stored?.fixedHeight ?? STOPS[0];
@@ -86,6 +89,10 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   let pendingCommit = false;
 
   const root = el('div', 'wind-controls'), menu = el('div', 'wind-controls-menu'), trigger = btn('wind-controls-trigger');
+  if (!showTrigger) {
+    menu.hidden = true;
+    attr(root, { 'data-rail-only': 'true' });
+  }
   attr(trigger, { 'aria-haspopup': 'dialog', 'aria-controls': 'wind-controls-popup' });
   const triggerGlyph = el('span', 'wind-controls-trigger-glyph');
   const triggerMeta = el('span', 'wind-controls-trigger-meta');
@@ -128,7 +135,13 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   const statusLine = el('p', 'wind-controls-status');
   attr(statusLine, { role: 'status', 'aria-live': 'polite' }); statusLine.hidden = true;
 
-  const rail = el('div', 'wind-controls-rail'), lift = btn('wind-controls-lift');
+  const rail = el('div', 'wind-controls-rail');
+  attr(rail, { role: 'group', 'aria-label': 'Wind altitude' });
+  const railHead = el('div', 'wind-controls-rail-head');
+  railHead.setAttribute('aria-hidden', 'true');
+  railHead.append(icon('windMini', 'wind-controls-rail-glyph'), el('span', 'wind-controls-rail-tag', 'WIND'));
+
+  const lift = btn('wind-controls-lift');
   const liftSr = el('span', 'sr-only', 'Top of lift');
   const liftRow = el('span', 'wind-controls-lift-row');
   liftRow.setAttribute('aria-hidden', 'true');
@@ -162,7 +175,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   surfaceRow.append(icon('sfc', 'wind-controls-surface-icon'), el('span', 'wind-controls-surface-title', 'SFC'));
   surface.append(surfaceSr, surfaceRow);
 
-  axis.append(range, readout); scale.append(unitLine, axis); rail.append(lift, scale, surface);
+  axis.append(range, readout); scale.append(unitLine, axis); rail.append(railHead, lift, scale, surface);
   root.append(menu, statusLine, rail); parent.appendChild(root);
 
   const snapshot = (): WindControlState => Object.freeze({ ...state });
@@ -223,6 +236,7 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   function render(): void {
     attr(root, { 'data-style': state.style, 'data-visible': state.visible, 'data-paused': state.paused });
+    if (!showTrigger) rail.hidden = !state.visible;
     const pausedActive = state.visible && state.paused && state.style !== 'barbs';
     triggerGlyph.innerHTML = ICONS[state.style];
     triggerState.innerHTML = !state.visible ? ICONS['eye-off'] : pausedActive ? ICONS.pause : '';
@@ -321,7 +335,13 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
       if (rangeGesture) rangeGesture.cancelled = true;
       const height = next.height !== undefined ? (typeof next.height === 'number' ? storedStop(next.height) ?? fixedHeight : next.height) : state.height;
       if (typeof height === 'number') fixedHeight = height;
-      state = { ...state, ...(next.style ? { style: next.style } : {}), ...(next.visible !== undefined ? { visible: next.visible } : {}), height };
+      state = {
+        ...state,
+        ...(next.style ? { style: next.style } : {}),
+        ...(next.visible !== undefined ? { visible: next.visible } : {}),
+        ...(next.paused !== undefined ? { paused: next.paused } : {}),
+        height
+      };
       delivered = committed = state; committedFixedHeight = fixedHeight; pendingCommit = false;
       render();
     },

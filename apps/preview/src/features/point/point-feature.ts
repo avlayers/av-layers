@@ -16,6 +16,7 @@ export interface PointWind {
 export interface PointFeatureOptions {
   readonly root: () => HTMLElement | null;
   readonly series: PointSeriesController;
+  readonly isOpen?: () => boolean;
   readonly getBuild: () => PinnedBuild | null;
   readonly getSelectedFrame: () => string | null;
   readonly getUnits: () => UnitSystem;
@@ -123,7 +124,8 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     close() {
       if (disposed) return;
       openIntent = null;
-      session?.close();
+      if (session) session.close();
+      else options.publish.close();
       meta()?.replaceChildren();
       for (const id of ['#point-settings', '#point-build-details']) { const node = options.root()?.querySelector<HTMLDetailsElement>(id); if (node) node.open = false; }
     },
@@ -146,8 +148,8 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
       if (container && build && session?.current && !container.children.length) renderBuildDetails(container, build, session.current.point.lon);
     },
     dismiss(target, mapContainer) {
-      if ((!session?.current && !this.pending) || !(target instanceof Node) || mapContainer.contains(target)) return;
-      const controls = ['#point-card', '#theme-bar', '#weather-dock', '#legend', '#locate', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
+      if ((!options.isOpen?.() && !session?.current && !this.pending) || !(target instanceof Node) || mapContainer.contains(target)) return;
+      const controls = ['#point-card', '#map-dock', '#theme-bar', '#weather-dock', '#legend', '#locate', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
       if (controls.some(selector => options.root()?.querySelector(selector)?.contains(target))) return;
       this.close();
     }

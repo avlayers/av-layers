@@ -5,7 +5,7 @@ import { WINDGRAM_STABILITY } from './windgram-stability.ts';
    the data fills: white on #1a142e is 17.7:1, and #1a142e against the worst fill
    (#7777dd) is 4.6:1. */
 export const chartStyles = `
-.windgram { display: block; width: 100%; height: auto; font-family: Arial, Helvetica, sans-serif; }
+.windgram { display: block; width: 100%; height: auto; font-family: Arial, Helvetica, sans-serif; touch-action: none; user-select: none; -webkit-user-select: none; }
 .windgram text { fill: #fff; font-size: 12px; paint-order: stroke; stroke: #1a142e; stroke-width: 3px; stroke-linejoin: round; }
 .windgram .wg-axis { fill: #f5f3ff; font-size: 12px; }
 .windgram .wg-axis-feet { font-size: 12px; font-weight: 650; }
@@ -28,11 +28,19 @@ export const chartStyles = `
 .windgram .wg-cloud { fill: #fff; stroke: #eef0ff; stroke-width: .7; }
 .windgram .wg-cloud-potential { fill: #b4abe8; fill-opacity: .14; stroke: #fff; stroke-width: 1.4; stroke-dasharray: 3 2; }
 .windgram .wg-freezing-mark { fill: #7274bc; stroke: #80fffa; stroke-width: 1.2; }
+.windgram .wg-tol-node { fill: #2563eb; stroke: #ffffff; stroke-width: 1.4; }
 .windgram .wg-inspector { pointer-events: none; }
+.windgram .wg-inspector text { stroke: none; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
 .windgram .wg-inspector line { stroke: #14223f; stroke-width: 1; stroke-dasharray: 3 4; }
-.windgram .wg-inspector circle { fill: none; stroke: #17253e; stroke-width: 2; }
-.windgram .wg-inspector-back { fill: #182c43; fill-opacity: .96; stroke: #fff; stroke-opacity: .7; stroke-width: .75; }
+.windgram .wg-inspector circle[data-cursor-point] { fill: none; stroke: #17253e; stroke-width: 2; }
+.windgram .wg-inspector circle[data-cursor-tol-ring] { fill: #38bdf826; stroke: #38bdf8; stroke-width: 1.6; stroke-dasharray: 2.5 2; }
+.windgram .wg-inspector-back { fill: #122033; fill-opacity: .95; stroke: #ffffff; stroke-opacity: .55; stroke-width: .75; }
+.windgram .wg-inspector-badge { fill: #fbbf24; font-size: 9px; font-weight: 750; letter-spacing: .04em; }
+.windgram .wg-inspector-badge.is-free { fill: #93c5fd; font-weight: 700; }
 .windgram .wg-inspector-agl { fill: #fff; font-size: 12px; font-weight: 750; }
-.windgram .wg-inspector-msl { fill: #e4edf4; font-size: 11px; }
+.windgram .wg-inspector-msl { fill: #94a3b8; font-size: 10.5px; font-weight: 600; }
+.windgram .wg-inspector-meteo { fill: #e2e8f0; font-size: 10.5px; font-weight: 600; }
+.windgram .wg-inspector-soar { fill: #86efac; font-size: 10.5px; font-weight: 650; }
+.windgram .wg-inspector-soar.is-muted { fill: #cbd5e1; font-weight: 600; }
 ${WINDGRAM_STABILITY.map(({ className, color }) => `.windgram .meteo-gram-stab-${className} { fill: ${color}; }`).join('\n')}
 `;

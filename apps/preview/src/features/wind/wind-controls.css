@@ -45,6 +45,8 @@
   height: 42px;
   margin-bottom: 6px;
 }
+.wind-controls-menu[hidden],
+.wind-controls-rail[hidden] { display: none; }
 
 .wind-controls-trigger {
   position: relative;
@@ -206,7 +208,7 @@
 
 .wind-controls-status {
   position: absolute;
-  top: 9px;
+  top: 6px;
   right: calc(100% + 8px);
   margin: 0;
   padding: 4px 7px;
@@ -223,12 +225,12 @@
 }
 .wind-controls-status[hidden] { display: none; }
 
-/* Unified 48px Vertical Altitude Rail: TOL cap + nonlinear AGL slider + SFC icon cap */
+/* Unified 48px Vertical Wind Altitude Rail: WIND eyebrow + TOL cap + nonlinear AGL slider + SFC icon cap */
 .wind-controls-rail {
   display: flex;
   flex-direction: column;
   width: 48px;
-  height: 212px;
+  height: 226px;
   padding: 3px;
   border: 1px solid var(--wind-border);
   border-radius: 8px;
@@ -239,6 +241,28 @@
 }
 .wind-controls[data-visible="false"] .wind-controls-rail { opacity: 0.56; }
 
+.wind-controls-rail-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 2.5px;
+  height: 16px;
+  margin-bottom: 1px;
+  border-bottom: 1px solid var(--wind-border);
+  color: var(--wind-muted);
+}
+.wind-controls-rail-glyph {
+  display: grid;
+  place-items: center;
+  opacity: 0.9;
+}
+.wind-controls-rail-tag {
+  font-size: 7.5px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+}
+
 .wind-controls-lift {
   display: flex;
   flex: none;
@@ -246,11 +270,11 @@
   align-items: center;
   justify-content: center;
   gap: 1px;
-  height: 36px;
+  height: 34px;
   padding: 2px 1px;
   border: 0;
   border-bottom: 1px solid var(--wind-border);
-  border-radius: 5px 5px 3px 3px;
+  border-radius: 4px 4px 3px 3px;
   background: transparent;
   color: var(--wind-text);
   font-family: inherit;
@@ -473,7 +497,7 @@
   flex: none;
   align-items: center;
   justify-content: center;
-  height: 36px;
+  height: 34px;
   padding: 2px 1px;
   border: 0;
   border-top: 1px solid var(--wind-border);
@@ -497,5 +521,5 @@
 }
 
 @media (min-width: 721px) {
-  .wind-controls-rail { height: 240px; }
+  .wind-controls-rail { height: 252px; }
 }
