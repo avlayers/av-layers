@@ -3,7 +3,8 @@ import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { longitudeOffsetHours } from '@av/client';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
-import { naturalBasemapStyle } from './basemap';
+import { compositeBasemapStyle } from './basemap';
+import type { MapTheme } from './visual-theme';
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -11,6 +12,7 @@ export interface MapOptions {
   readonly container: HTMLElement;
   readonly offlineFixture: boolean;
   readonly camera: { center: [number, number]; zoom: number } | null;
+  readonly theme?: MapTheme;
 }
 
 /** Owns the single MapLibre instance for one preview app lifetime. */
@@ -22,7 +24,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
     maxTileCacheZoomLevels: 2,
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : naturalBasemapStyle(window.devicePixelRatio)
+      : compositeBasemapStyle(options.theme ?? 'stone', typeof window !== 'undefined' ? window.devicePixelRatio : 1)
   });
 }
 

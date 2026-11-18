@@ -13,10 +13,13 @@ import { preparedAxisReadiness, type PreviewStore } from '../stores/app-store';
 import { createPreviewStore } from '../stores/app-store';
 import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createForecastSession } from '../features/forecast/forecast-session';
+import { applyBasemapTheme } from '../features/map/basemap';
+import { THEME_OPTIONS, themeOption } from '../features/map/visual-theme';
 import { createMap, createMapCamera, maplibregl, type MapCamera } from '../features/map/map-controller';
-import { RasterOverlay } from '../features/raster/raster-overlay';
+import { RasterOverlay, type OverlayState } from '../features/raster/raster-overlay';
 import { preparationBudgetBytes, WIND_CACHE_CAPACITY_BYTES, windHorizonProtectedBytes } from '../features/raster/raster-budget';
 import { CoverageSeam } from '../features/map/coverage-seam';
+import { SkyComposite } from '../features/sky/sky-composite';
 import { createWindSession } from '../features/wind/wind-session';
 type WindControls = import('../features/wind/wind-controls').WindControls;
 import { WindOverlay } from '../features/wind/wind-overlay';
@@ -30,6 +33,39 @@ export interface PreviewApp {
   readonly commands: PreviewCommands;
   start(root: HTMLElement): void;
   dispose(): void;
+}
+
+function sameOverlaySelection(
+  a: OverlayState['displayed'],
+  b: OverlayState['displayed']
+): boolean {
+  return a === b || (!!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame);
+}
+
+function sameStringList(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (a === b) return true;
+  const la = a?.length ?? 0, lb = b?.length ?? 0;
+  if (la !== lb) return false;
+  for (let i = 0; i < la; i++) if (a![i] !== b![i]) return false;
+  return true;
+}
+
+function overlayUiMeaningfullyChanged(prev: OverlayState, next: OverlayState): boolean {
+  return !(
+    sameOverlaySelection(prev.displayed, next.displayed)
+    && sameOverlaySelection(prev.requested, next.requested)
+    && prev.quality === next.quality
+    && prev.viewLoading === next.viewLoading
+    && prev.overviewReady === next.overviewReady
+    && prev.overviewTotal === next.overviewTotal
+    && prev.overviewFailed === next.overviewFailed
+    && prev.incomplete === next.incomplete
+    && prev.replacementFailed === next.replacementFailed
+    && Boolean(prev.limited) === Boolean(next.limited)
+    && sameStringList(prev.previewReadyFrames, next.previewReadyFrames)
+    && sameStringList(prev.detailReadyFrames, next.detailReadyFrames)
+    && sameStringList(prev.detailDrawableFrames, next.detailDrawableFrames)
+  );
 }
 
 /** Builds the preview's state and commands. Map and renderer resources start on `start`. */
@@ -58,7 +94,7 @@ export function createPreviewApp(): PreviewApp {
   const pointSeries = new PointSeriesController(api);
   const lifecycle = new AbortController();
 
-  preferences.setUnits(initial.intent.units);
+  preferences.setUnits(store.view.intent.value.units);
   const lowMemory = preparationBudget.limit <= 128 * 1024 * 1024;
   const windCache = new WindDataCache(WIND_CACHE_CAPACITY_BYTES, 4096, preparationBudget);
 
@@ -67,6 +103,7 @@ export function createPreviewApp(): PreviewApp {
   const syncSelectedAdmission = () => forecastScheduler.setForegroundPending(++admissionEpoch, rasterPending || windPending);
   let camera: MapCamera | null = null;
   let overlay: RasterOverlay | null = null;
+  let sky: SkyComposite | null = null;
   let seam: CoverageSeam | null = null;
   let windOverlay: WindOverlay | null = null;
   let windSession: ReturnType<typeof createWindSession> | null = null;
@@ -77,12 +114,12 @@ export function createPreviewApp(): PreviewApp {
   let locationController: ReturnType<typeof createLocationController> | null = null;
 
   let mapOffsetMinutes = initialOffset;
-  let urlReady = false, opacityCommitted = false;
-  let lastControlVisible = initial.intent.windVisible;
+  let lastTimelineLat = Number.NaN, lastTimelineLng = Number.NaN;
+  let urlReady = false, opacityCommitted = false, opacityDragging = false, opacityDirty = false, spacePeekActive = false;
+  let lastControlVisible = store.view.intent.value.windVisible;
   let expiryTimer: number | null = null, resumeModel: ModelId | null = null;
   let destroyed = false;
   let appRoot: HTMLElement | null = null;
-
 
   const intent = () => view.intent.value;
   const forecast = () => view.forecast.value;
@@ -99,6 +136,31 @@ export function createPreviewApp(): PreviewApp {
     const displayed = view.overlay.value.displayed;
     return displayed && displayed.build === build() ? displayed.frame : null;
   };
+
+  function syncRootTheme(): void {
+    if (appRoot && 'dataset' in appRoot && appRoot.dataset) {
+      const currentTheme = intent().theme;
+      appRoot.dataset.theme = currentTheme;
+      appRoot.dataset.chrome = themeOption(currentTheme).darkChrome ? 'dark' : 'light';
+    }
+  }
+
+  function syncWeatherVisibility(): void {
+    const cur = intent();
+    const showLift = cur.liftVisible && !cur.peeking;
+    if (overlay && typeof overlay.setVisible === 'function') overlay.setVisible(showLift);
+    else overlay?.setOpacity(showLift ? cur.opacity : 0);
+    sky?.setVisibility({
+      cloudsVisible: cur.cloudsVisible,
+      rainVisible: cur.rainVisible,
+      isobarsVisible: cur.isobarsVisible,
+      peeking: cur.peeking
+    });
+    windOverlay?.setOptions({
+      visible: cur.windVisible && !cur.peeking,
+      darkChrome: themeOption(cur.theme).darkChrome
+    });
+  }
 
   const forecastSession = createForecastSession({
     api, writer, intent,
@@ -128,12 +190,12 @@ export function createPreviewApp(): PreviewApp {
       },
       onCleared(message) {
         urlReady = true;
-        syncWindSupport(); syncLayers(); windSession?.clear(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
+        syncWindSupport(); syncLayers(); windSession?.clear(); closePoint(); overlay?.clear(); sky?.clear(); seam?.sync(null, null); updateTimeUi();
         showError(message); writer.notices({ freshness: 'No viewable build' });
       },
       onExpired() {
         writer.notices({ tileError: '', horizon: '' });
-        windCache.clear(); windSession?.clear(); closePoint(); overlay?.clear(); seam?.sync(null, null); updateTimeUi();
+        windCache.clear(); windSession?.clear(); closePoint(); overlay?.clear(); sky?.clear(); seam?.sync(null, null); updateTimeUi();
         writer.notices({ freshness: 'Expired immutable build' });
         showError('This build has expired. Reload to discover the latest retained build.');
       },
@@ -143,7 +205,6 @@ export function createPreviewApp(): PreviewApp {
       stopTimer() { if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; } }
     }
   });
-
 
   const showError = (message: string): void => { writer.notices({ error: message }); };
   const clearError = (): void => { writer.notices({ error: '' }); };
@@ -193,7 +254,7 @@ export function createPreviewApp(): PreviewApp {
 
   function syncWindSupport(): void {
     const supported = Boolean(build()?.manifest.mapData);
-    const host = rootQuery<HTMLElement>('#wind-controls');
+    const host = rootQuery<HTMLElement>('#wind-controls', appRoot ?? document);
     if (host) host.hidden = !supported;
     writer.wind({ supported });
     if (supported) void startWindControls();
@@ -258,14 +319,17 @@ export function createPreviewApp(): PreviewApp {
     timeline?.update(frames, selectedFrame(), !build() || forecast().expired || forecast().mapFailed);
   }
 
-
   function updateOverlay(): void {
     const layer = activeLayer(build(), intent().reference, intent().customLayer);
     if (!mapReady() || !build() || !selectedFrame() || !layer || !forecastSession.ensureLive()) return;
     updateWind();
     clearError(); selectingOverlay = true;
-    try { overlay!.select(build()!, layer, selectedFrame()!); refreshSeam(); }
-    catch (error) { showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }
+    try {
+      overlay!.select(build()!, layer, selectedFrame()!);
+      sky?.select(build()!, selectedFrame()!);
+      syncWeatherVisibility();
+      refreshSeam();
+    } catch (error) { showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }
     finally { selectingOverlay = false; updatePointSelection(); }
   }
 
@@ -280,17 +344,29 @@ export function createPreviewApp(): PreviewApp {
 
   function writeUrl(mode: 'push' | 'replace'): void {
     if (!map || !mapReady() || !urlReady || forecast().pendingModel) return;
-    const camera = map.getCenter(), current = build();
-    const validTime = intent().model === AUTO_MODEL_ID ? intent().requestedTime ?? undefined : current?.manifest.frames.find(frame => frame.id === selectedFrame())?.validTime;
+    const camera = map.getCenter(), current = build(), cur = intent();
+    const validTime = cur.model === AUTO_MODEL_ID ? cur.requestedTime ?? undefined : current?.manifest.frames.find(frame => frame.id === selectedFrame())?.validTime;
     history.write({
-      model: intent().model, reference: intent().reference, layer: intent().customLayer, opacity: intent().opacity,
+      model: cur.model, reference: cur.reference, layer: cur.customLayer, opacity: cur.opacity,
       lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime,
-      ...(intent().windVisibleOverride !== null ? { windVisible: intent().windVisible } : {}),
-      windStyle: intent().windStyle, windHeight: intent().windHeight, units: intent().units
+      theme: cur.theme, cloudStyle: cur.cloudStyle, rainStyle: cur.rainStyle,
+      liftVisible: cur.liftVisible, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
+      ...(cur.windVisibleOverride !== null ? { windVisible: cur.windVisible } : {}),
+      windStyle: cur.windStyle, windHeight: cur.windHeight, units: cur.units
     }, mode, true);
   }
 
   function closePoint(): void { pointFeature?.close(); }
+
+  function prepareFrameIndex(index: number): void {
+    const current = build();
+    if (!current || !mapReady() || forecast().expired) return;
+    const frame = renderedFrames(current.manifest)[index];
+    if (!frame) return;
+    const layer = activeLayer(current, intent().reference, intent().customLayer);
+    if (layer && current.templates[layer] && intent().liftVisible) overlay?.prepare(layer, frame.id);
+    sky?.prepare(current, frame.id);
+  }
 
   function selectIndex(index: number, history: 'none' | 'push' | 'replace', fromTimeline = false): void {
     const current = build();
@@ -306,7 +382,6 @@ export function createPreviewApp(): PreviewApp {
     }
   }
 
-
   function focusRegion(model: ModelId): void {
     camera?.focusRegion(MODEL_OPTIONS.find(choice => choice.modelId === model)?.bounds);
   }
@@ -317,7 +392,28 @@ export function createPreviewApp(): PreviewApp {
     const state = history.read(window.location.search), change = history.beginRestore();
     try {
       const requestedLayer = visibleCustomLayer(state.layer);
-      writer.intent({ reference: state.reference, customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)) });
+      const nextTheme = state.theme ?? preferences.theme() ?? 'stone';
+      const nextCloudStyle = state.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
+      const nextRainStyle = state.rainStyle ?? preferences.rainStyle() ?? 'auto';
+      writer.intent({
+        reference: state.reference,
+        customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)),
+        theme: nextTheme,
+        cloudStyle: nextCloudStyle,
+        rainStyle: nextRainStyle,
+        liftVisible: state.liftVisible ?? true,
+        cloudsVisible: state.cloudsVisible ?? true,
+        rainVisible: state.rainVisible ?? true,
+        isobarsVisible: state.isobarsVisible ?? false,
+        peeking: false
+      });
+      syncRootTheme();
+      applyBasemapTheme(map, nextTheme);
+      overlay?.setTheme?.(nextTheme);
+      sky?.setTheme(nextTheme);
+      sky?.setChannelStyles({ cloudStyle: nextCloudStyle, rainStyle: nextRainStyle });
+      syncWeatherVisibility();
+
       const nextUnits: UnitSystem = state.units ?? 'metric';
       if (nextUnits !== intent().units) commandSetUnits(nextUnits);
       const nextVisible = state.windVisible ?? (preferences.wind()?.visible ?? true);
@@ -326,10 +422,16 @@ export function createPreviewApp(): PreviewApp {
       lastControlVisible = nextVisible;
       writer.intent({ windVisibleOverride: state.windVisible, windVisible: nextVisible, windStyle: nextStyle, windHeight: nextHeight });
       windControls?.setState?.({ visible: nextVisible, style: nextStyle, height: nextHeight });
-      windOverlay?.setOptions({ style: nextStyle, visible: nextVisible, paused: intent().windPaused, units: intent().units });
+      windOverlay?.setOptions({
+        style: nextStyle,
+        visible: nextVisible && !intent().peeking,
+        paused: intent().windPaused,
+        units: intent().units,
+        darkChrome: themeOption(nextTheme).darkChrome
+      });
       syncWindReservation();
       windSession?.heightChanged(previousHeight);
-      if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); overlay?.setOpacity(state.opacity); }
+      if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); overlay?.setOpacity(state.opacity); sky?.setOpacity(state.opacity); syncWeatherVisibility(); }
       if (state.camera) map?.jumpTo(state.camera, { previewHistory: true });
       writer.intent({ requestedTime: state.validTime });
       if (state.model && state.model !== intent().model) { await forecastSession.load(state.model as ModelId); return; }
@@ -344,12 +446,27 @@ export function createPreviewApp(): PreviewApp {
     } finally { history.endRestore(change); }
   }
 
-  function syncMapClock(): void {
+  function syncMapClock(settled = false): void {
     if (!map || !camera) return;
     const next = camera.sync();
     if (!Number.isFinite(next.center.lat) || !Number.isFinite(next.center.lng)) return;
-    writer.forecast({ mapCenter: next.center });
-    timeline?.setMapCenter(next.center.lat, next.center.lng);
+
+    // Avoid mutating forecast store signal (which re-renders <App />) or rebuilding timeline solar DOM at 60 fps mid-pan.
+    if (settled || next.changed || forecast().mapCenter === null) {
+      writer.forecast({ mapCenter: next.center });
+    }
+    if (
+      settled
+      || next.changed
+      || !Number.isFinite(lastTimelineLat)
+      || Math.abs(next.center.lat - lastTimelineLat) >= 0.20
+      || Math.abs(next.center.lng - lastTimelineLng) >= 0.20
+    ) {
+      lastTimelineLat = next.center.lat;
+      lastTimelineLng = next.center.lng;
+      timeline?.setMapCenter(next.center.lat, next.center.lng);
+    }
+
     if (!next.changed) return;
     mapOffsetMinutes = camera.offsetMinutes();
     writer.forecast({ offsetMinutes: mapOffsetMinutes });
@@ -362,6 +479,16 @@ export function createPreviewApp(): PreviewApp {
     if (!current || !frame) return;
     const target = layer === 'lift' ? (intent().reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl') : layer;
     if (current.templates[target]) overlay?.prepare(target, frame);
+  }
+
+  function prepareWeatherChannel(channel: 'lift' | 'clouds' | 'rain' | 'isobars'): void {
+    if (channel === 'lift') {
+      prepareLayer('lift');
+      return;
+    }
+    const current = build(), frame = selectedFrame();
+    if (!current || !frame) return;
+    sky?.prepare(current, frame, channel);
   }
 
   function commandSetUnits(units: UnitSystem): void {
@@ -381,7 +508,12 @@ export function createPreviewApp(): PreviewApp {
       ...(typeof state.height === 'number' ? { fixedWindHeight: state.height } : {})
     });
     syncWindReservation();
-    windOverlay?.setOptions({ ...state, units: intent().units });
+    windOverlay?.setOptions({
+      ...state,
+      visible: state.visible && !intent().peeking,
+      units: intent().units,
+      darkChrome: themeOption(intent().theme).darkChrome
+    });
     windSession?.heightChanged(previousHeight);
     updateWind(); if (commit) writeUrl('replace');
   }
@@ -396,26 +528,89 @@ export function createPreviewApp(): PreviewApp {
     },
     selectReference(reference) {
       timeline?.cancelGesture();
-      writer.intent({ reference, customLayer: null });
+      writer.intent({ reference, customLayer: null, liftVisible: true, peeking: false });
+      syncWeatherVisibility();
       updateOverlay(); writeUrl('push');
       if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
     },
     selectLayer(layer) {
       timeline?.cancelGesture();
-      writer.intent({ customLayer: layer === 'lift' ? null : layer });
+      writer.intent({ customLayer: layer === 'lift' ? null : layer, liftVisible: true, peeking: false });
+      syncWeatherVisibility();
       updateOverlay(); writeUrl('push');
       if (intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
     },
     prepareLayer,
+    prepareWeatherChannel,
+    setTheme(theme) {
+      if (intent().theme === theme) return;
+      writer.intent({ theme });
+      preferences.setTheme(theme);
+      syncRootTheme();
+      applyBasemapTheme(map, theme);
+      overlay?.setTheme?.(theme);
+      sky?.setTheme(theme);
+      windOverlay?.setOptions({ darkChrome: themeOption(theme).darkChrome });
+      writeUrl('replace');
+    },
+    setCloudStyle(cloudStyle) {
+      if (intent().cloudStyle === cloudStyle) return;
+      writer.intent({ cloudStyle, cloudsVisible: true, peeking: false });
+      preferences.setCloudStyle(cloudStyle);
+      sky?.setChannelStyles({ cloudStyle });
+      syncWeatherVisibility();
+      writeUrl('replace');
+    },
+    setRainStyle(rainStyle) {
+      if (intent().rainStyle === rainStyle) return;
+      writer.intent({ rainStyle, rainVisible: true, peeking: false });
+      preferences.setRainStyle(rainStyle);
+      sky?.setChannelStyles({ rainStyle });
+      syncWeatherVisibility();
+      writeUrl('replace');
+    },
+    toggleWeatherLayer(channel) {
+      const cur = intent();
+      const nextPatch = channel === 'lift' ? { liftVisible: !cur.liftVisible }
+        : channel === 'clouds' ? { cloudsVisible: !cur.cloudsVisible }
+        : channel === 'rain' ? { rainVisible: !cur.rainVisible }
+        : { isobarsVisible: !cur.isobarsVisible };
+      writer.intent({ ...nextPatch, peeking: false });
+      syncWeatherVisibility();
+      writeUrl('replace');
+    },
+    setPeeking(peeking) {
+      if (intent().peeking === peeking) return;
+      writer.intent({ peeking });
+      syncWeatherVisibility();
+    },
     setOpacity(value) {
       const opacity = Math.min(1, Math.max(0, value));
+      if (intent().opacity === opacity) return;
       writer.intent({ opacity });
-      preferences.setOpacity(opacity);
+      const showLift = intent().liftVisible && !intent().peeking;
       overlay?.setOpacity(opacity);
-      writeUrl(opacityCommitted ? 'replace' : 'push'); opacityCommitted = true;
+      if (overlay && typeof overlay.setVisible !== 'function' && !showLift) overlay.setOpacity(0);
+      sky?.setOpacity(opacity);
+      if (opacityDragging) {
+        opacityDirty = true;
+        return;
+      }
+      preferences.setOpacity(opacity);
+      writeUrl(opacityCommitted ? 'replace' : 'push');
+      opacityCommitted = true;
     },
-    beginOpacityGesture() { opacityCommitted = false; },
-    resetOpacityGesture() { opacityCommitted = false; },
+    beginOpacityGesture() { opacityCommitted = false; opacityDragging = true; opacityDirty = false; },
+    resetOpacityGesture() {
+      const shouldCommit = opacityDragging && opacityDirty;
+      opacityDragging = false;
+      opacityDirty = false;
+      if (shouldCommit) {
+        preferences.setOpacity(intent().opacity);
+        writeUrl(opacityCommitted ? 'replace' : 'push');
+      }
+      opacityCommitted = false;
+    },
     setUnits(units) { commandSetUnits(units); },
     setWind: commandSetWind,
     setPointHorizon(horizon) { writer.intent({ pointHorizon: horizon as PointHorizon }); void pointFeature?.setHorizon(horizon as PointHorizon); },
@@ -423,6 +618,7 @@ export function createPreviewApp(): PreviewApp {
     setPlaying(playing) {
       writer.forecast({ playing });
       overlay?.setPlayback(playing);
+      sky?.setPlayback(playing);
       windSession?.setPlaying(playing);
       updateOverlayStatus();
     },
@@ -434,9 +630,10 @@ export function createPreviewApp(): PreviewApp {
   function start(root: HTMLElement): void {
     if (map || destroyed) return;
     appRoot = root;
+    syncRootTheme();
     const container = rootQuery<HTMLElement>('#map', root);
     if (!container) throw new Error('Missing element #map');
-    map = createMap({ container, offlineFixture, camera: startup.query.camera });
+    map = createMap({ container, offlineFixture, camera: startup.query.camera, theme: intent().theme });
     const openedAt = map.getCenter();
     camera = createMapCamera(map, {
       home: { lat: openedAt.lat, lng: openedAt.lng },
@@ -446,26 +643,45 @@ export function createPreviewApp(): PreviewApp {
     });
 
     overlay = new RasterOverlay(map, apiBaseUrl, intent().opacity, state => {
+      const prev = view.overlay.value;
+      if (!overlayUiMeaningfullyChanged(prev, state)) return;
       writer.overlay(state);
       windSession?.reconcile();
       updateOverlayStatus();
     }, forecastScheduler.fetch, spec => forecastScheduler.request(spec), {
-      budget: preparationBudget, requestLimits,
+      budget: preparationBudget, requestLimits, theme: intent().theme,
       protectedBytes: protectedWindBytes,
       beforeReveal: selection => windSession?.beforeRasterReveal(selection),
       onSelectedPending: pending => { rasterPending = pending; syncSelectedAdmission(); }
     });
+    sky = new SkyComposite(map, api, apiBaseUrl, {
+      theme: intent().theme,
+      cloudStyle: intent().cloudStyle,
+      rainStyle: intent().rainStyle,
+      opacity: intent().opacity,
+      cloudsVisible: intent().cloudsVisible,
+      rainVisible: intent().rainVisible,
+      isobarsVisible: intent().isobarsVisible,
+      fetchImpl: forecastScheduler.fetch,
+      request: spec => forecastScheduler.request(spec)
+    });
     seam = new CoverageSeam(map);
     windOverlay = new WindOverlay(map, { budget: preparationBudget });
-    windOverlay.setOptions({ style: intent().windStyle, visible: intent().windVisible, paused: intent().windPaused, units: intent().units });
+    windOverlay.setOptions({
+      style: intent().windStyle,
+      visible: intent().windVisible && !intent().peeking,
+      paused: intent().windPaused,
+      units: intent().units,
+      darkChrome: themeOption(intent().theme).darkChrome
+    });
+    syncWeatherVisibility();
 
-    const windHost = rootQuery<HTMLElement>('#wind-controls', root);
-    if (!windHost) throw new Error('Missing element #wind-controls');
-    startWindControls = async () => {
-      if (windControls || destroyed) return;
-      const { createWindControls } = await import('../features/lazy');
-      if (windControls || destroyed) return;
-      windControls = createWindControls(windHost, {
+    if (!rootQuery<HTMLElement>('#wind-controls', root)) throw new Error('Missing element #wind-controls');
+    const mountWindControls = (factory: typeof import('../features/lazy')['createWindControls']) => {
+      const liveHost = rootQuery<HTMLElement>('#wind-controls', root);
+      if (!liveHost || destroyed) return;
+      windControls?.destroy();
+      windControls = factory(liveHost, {
         initial: { style: intent().windStyle, visible: intent().windVisible, height: intent().windHeight },
         onChange: state => commandSetWind(state, false),
         onCommit: () => writeUrl('replace')
@@ -476,6 +692,22 @@ export function createPreviewApp(): PreviewApp {
       windControls.setQuality?.(view.wind.value.overview);
       syncWindReservation();
     };
+    startWindControls = async () => {
+      const liveHost = rootQuery<HTMLElement>('#wind-controls', root);
+      const alreadyMounted = Boolean(windControls && liveHost && (!('childElementCount' in liveHost) || liveHost.childElementCount > 0));
+      if (alreadyMounted || destroyed) return;
+      const { createWindControls } = await import('../features/lazy');
+      const mountedAfterLoad = Boolean(windControls && liveHost && (!('childElementCount' in liveHost) || liveHost.childElementCount > 0));
+      if (mountedAfterLoad || destroyed) return;
+      mountWindControls(createWindControls);
+    };
+    if (import.meta.hot) {
+      import.meta.hot.accept('../features/lazy', mod => {
+        if (mod && 'createWindControls' in mod && Boolean(build()?.manifest.mapData)) {
+          mountWindControls((mod as unknown as typeof import('../features/lazy')).createWindControls);
+        }
+      });
+    }
 
     const timelineHost = rootQuery<HTMLElement>('#compact-timeline', root);
     if (!timelineHost) throw new Error('Missing element #compact-timeline');
@@ -483,7 +715,11 @@ export function createPreviewApp(): PreviewApp {
       offsetMinutes: mapOffsetMinutes,
       ...(camera?.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, history = 'push') => selectIndex(index, history, true),
-      onIntent: () => { if (intent().model === AUTO_MODEL_ID) forecastSession.cancelAuto(); },
+      onIntent: index => {
+        if (intent().model === AUTO_MODEL_ID) forecastSession.cancelAuto();
+        prepareFrameIndex(index);
+      },
+      onPrepare: index => prepareFrameIndex(index),
       onPlayback: playing => commands.setPlaying(playing)
     });
 
@@ -556,7 +792,40 @@ export function createPreviewApp(): PreviewApp {
 
     const globalListener = { signal: lifecycle.signal };
     document.addEventListener('keydown', event => {
-      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button')) return;
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        for (const selector of ['#theme-picker[open]', '#model-picker[open]', '#legend-key[open]']) {
+          const openPopover = rootQuery<HTMLDetailsElement>(selector, root);
+          if (openPopover) { openPopover.open = false; event.preventDefault(); }
+        }
+      }
+      if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button,summary')) return;
+      if (event.code === 'Space') {
+        event.preventDefault();
+        if (!event.repeat && !intent().peeking) {
+          spacePeekActive = true;
+          commands.setPeeking(true);
+        }
+        return;
+      }
+      if (event.key === 'p' || event.key === 'P') {
+        event.preventDefault();
+        spacePeekActive = false;
+        commands.setPeeking(!intent().peeking);
+        return;
+      }
+      if (event.key === 'i' || event.key === 'I') {
+        event.preventDefault();
+        commands.toggleWeatherLayer('isobars');
+        return;
+      }
+      if (event.key === '[' || event.key === ']') {
+        event.preventDefault();
+        const idx = THEME_OPTIONS.findIndex(item => item.id === intent().theme);
+        const step = event.key === ']' ? 1 : -1;
+        const next = THEME_OPTIONS[(idx + step + THEME_OPTIONS.length) % THEME_OPTIONS.length];
+        if (next) commands.setTheme(next.id);
+        return;
+      }
       if ((event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') || !build() || !forecastSession.ensureLive()) return;
       event.preventDefault();
       const frames = renderedFrames(build()!.manifest), index = frames.findIndex(frame => frame.id === selectedFrame());
@@ -564,7 +833,30 @@ export function createPreviewApp(): PreviewApp {
       selectIndex(Math.max(0, Math.min(frames.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1))), 'replace');
     }, globalListener);
 
-    document.addEventListener('pointerdown', event => { if (map) pointFeature?.dismiss(event.target, map.getContainer()); }, globalListener);
+    document.addEventListener('keyup', event => {
+      if (event.code === 'Space' && spacePeekActive) {
+        spacePeekActive = false;
+        commands.setPeeking(false);
+      }
+    }, globalListener);
+
+    window.addEventListener('blur', () => {
+      if (spacePeekActive) {
+        spacePeekActive = false;
+        commands.setPeeking(false);
+      }
+    }, globalListener);
+
+    document.addEventListener('pointerdown', event => {
+      const targetEl = event.target && typeof (event.target as Element).closest === 'function' ? event.target as Element : null;
+      if (targetEl) {
+        for (const selector of ['#theme-picker[open]', '#model-picker[open]', '#legend-key[open]']) {
+          const openEl = rootQuery<HTMLDetailsElement>(selector, root);
+          if (openEl && !openEl.contains(targetEl)) openEl.open = false;
+        }
+      }
+      if (map) pointFeature?.dismiss(event.target, map.getContainer());
+    }, globalListener);
 
     const timeInput = rootQuery<HTMLInputElement>('#time', root);
     if (timeInput) {
@@ -577,10 +869,10 @@ export function createPreviewApp(): PreviewApp {
       const point = normalizePoint(event.lngLat.lat, event.lngLat.lng);
       void pointFeature?.open(point);
     });
-    map.on('move', () => { syncMapClock(); windSession?.reconcile(); });
+    map.on('move', () => { syncMapClock(false); windSession?.reconcile(); });
     map.on('movestart', event => { if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event)) { history.cancelRestore(); forecastSession.cancelAuto(); } });
     map.on('moveend', () => {
-      syncMapClock(); updateScale();
+      syncMapClock(true); updateScale();
       if (intent().model !== AUTO_MODEL_ID) updateWind();
       if (build() && !forecast().expired) updateTimeUi();
       if (intent().model === AUTO_MODEL_ID && !history.restoring()) void forecastSession.loadAuto();
@@ -607,7 +899,7 @@ export function createPreviewApp(): PreviewApp {
       writer.forecast({ mapReady: true });
       seam!.markReady(); updateOverlay(); refreshSeam(); writeUrl('replace');
     });
-    void forecastSession.load(initial.intent.model);
+    void forecastSession.load(store.view.intent.value.model);
 
     function pageHide(event: PageTransitionEvent): void {
       if (!event.persisted) { disposePermanently(); return; }
@@ -620,6 +912,7 @@ export function createPreviewApp(): PreviewApp {
           try { pointFeature?.suspend(); }
           finally { writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' }); }
         },
+        () => sky?.clear(),
         () => overlay?.clear(true)
       ]);
     }
@@ -653,9 +946,9 @@ export function createPreviewApp(): PreviewApp {
       () => timeline?.destroy(), () => windControls?.destroy(), () => locationController?.dispose(),
       () => pointFeature?.dispose(), () => pointSeries.close(), () => windSession?.destroy(),
       () => windOverlay?.destroy(), () => windCache.clear(), () => seam?.destroy(),
-      () => overlay?.destroy(), () => forecastScheduler.dispose(), () => map?.remove()
+      () => sky?.destroy(), () => overlay?.destroy(), () => forecastScheduler.dispose(), () => map?.remove()
     ]);
-    timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = overlay = null; map = null;
+    timeline = windControls = locationController = null; pointFeature = null; windSession = null; windOverlay = seam = sky = overlay = null; map = null;
   }
 
   function cleanup(releases: readonly (() => void)[]): void {

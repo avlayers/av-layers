@@ -283,7 +283,9 @@ describe('wind controls', () => {
     expect(one(root, 'wind-controls-popup').hidden).toBe(true);
     expect(one(root, 'wind-controls-lift').textContent ?? '').toBe('');
     expect(all(one(root, 'wind-controls-lift')).map(node => node.textContent).join('')).toContain('Top of lift');
-    expect(one(root, 'wind-controls-surface').textContent).toBe('Surface');
+    expect(one(root, 'wind-controls-surface').textContent ?? '').toBe('');
+    expect(all(one(root, 'wind-controls-surface')).map(node => node.textContent).join('')).toContain('Surface');
+    expect(all(one(root, 'wind-controls-surface')).map(node => node.textContent).join('')).toContain('SFC');
     const range = one(root, 'wind-controls-range') as FakeElement & { type: string };
     expect(range.type).toBe('range');
     expect([range.min, range.max, range.step, range.value]).toEqual(['0', '9', '1', '0']);
@@ -307,7 +309,7 @@ describe('wind controls', () => {
     controls.setUnits('imperial');
     expect(controls.state.height).toBe(4000);
     expect(range.value).toBe('9');
-    expect(range.getAttribute('aria-valuetext')).toBe('13,123 ft AGL');
+    expect(range.getAttribute('aria-valuetext')).toBe('13,000 ft AGL');
     controls.destroy();
   });
 
@@ -446,12 +448,12 @@ describe('wind controls', () => {
     controls.destroy();
   });
 
-  it('converts the same physical stops for imperial labels and value text', () => {
+  it('uses logical pilot-friendly imperial AGL stops (100 / 800 / 3k / 13k) for labels and value text', () => {
     const { controls, root } = create();
     controls.setUnits('imperial');
     expect(one(root, 'wind-controls-unit').textContent).toBe('ft AGL');
-    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['66', '820', '3.3k', '13.1k']);
-    expect(one(root, 'wind-controls-value').textContent).toBe('66');
+    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['100', '800', '3k', '13k']);
+    expect(one(root, 'wind-controls-value').textContent).toBe('100');
     expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('Surface');
     expect(controls.state.height).toBe('surface');
     controls.destroy();

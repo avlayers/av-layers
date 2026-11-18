@@ -29,11 +29,11 @@ export class WindOverlay {
   };
 
   private readonly scheduleSync = (): void => {
-    if (this.destroyed || this.mapLost || this.moveRaf !== null) return;
+    if (this.destroyed || this.mapLost || !this.options.visible || this.moveRaf !== null) return;
     if (typeof requestAnimationFrame !== 'function') { this.sync(); return; }
     this.moveRaf = requestAnimationFrame(() => {
       this.moveRaf = null;
-      if (this.destroyed || this.mapLost) return;
+      if (this.destroyed || this.mapLost || !this.options.visible) return;
       try { this.deck.setOptions(this.options); } catch { /* the map is replacing its style */ }
     });
   };

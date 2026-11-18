@@ -3,6 +3,8 @@ import type { LayerId } from '@av/contracts/layers';
 import type { ModelId } from '@av/contracts/publication';
 import type { PinnedBuild, PointHorizon, UnitSystem } from '@av/client';
 import type { AltitudeReference } from '../features/navigation/url-state';
+import type { CloudStyleChoice, RainStyleChoice } from '../features/map/channel-styles';
+import type { MapTheme } from '../features/map/visual-theme';
 import type { OverlayState } from '../features/raster/raster-overlay';
 import type { WindHeight, WindStatus, WindStyle } from '../features/wind/wind-model';
 import type { LayerOption } from '../features/forecast/forecast-model';
@@ -13,6 +15,14 @@ export interface PreviewIntent {
   readonly customLayer: LayerId | null;
   readonly opacity: number;
   readonly units: UnitSystem;
+  readonly theme: MapTheme;
+  readonly cloudStyle: CloudStyleChoice;
+  readonly rainStyle: RainStyleChoice;
+  readonly liftVisible: boolean;
+  readonly cloudsVisible: boolean;
+  readonly rainVisible: boolean;
+  readonly isobarsVisible: boolean;
+  readonly peeking: boolean;
   readonly windStyle: WindStyle;
   readonly windVisible: boolean;
   readonly windVisibleOverride: boolean | null;
@@ -22,6 +32,9 @@ export interface PreviewIntent {
   readonly pointHorizon: PointHorizon;
   readonly requestedTime: string | null;
 }
+
+type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'cloudStyle' | 'rainStyle' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking'>;
+export type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
 
 export interface ForecastView {
   readonly build: PinnedBuild | null;
@@ -110,7 +123,7 @@ export function preparedAxisReadiness(
 }
 
 export interface PreviewInitialState {
-  readonly intent: PreviewIntent;
+  readonly intent: PreviewInitialIntent;
   readonly forecast: ForecastView;
   readonly overlay: OverlayState;
   readonly wind: WindView;
@@ -129,12 +142,36 @@ function signalOf<T>(initial: T): [Signal<T>, ReadonlySignal<T>] {
   return [source, source as ReadonlySignal<T>];
 }
 
+function applyPatch<T extends object>(target: Signal<T>, update: Partial<T>): void {
+  const current = target.value;
+  let changed = false;
+  for (const key of Object.keys(update) as Array<keyof T>) {
+    if (!Object.is(current[key], update[key])) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return;
+  target.value = Object.freeze({ ...current, ...update });
+}
+
 /**
  * The preview's only application UI state boundary. Importing this module has
  * no browser side effects; `createPreviewStore` returns an independent instance.
  */
 export function createPreviewStore(initial: PreviewInitialState): PreviewStore {
-  const [intent, intentView] = signalOf(initial.intent);
+  const normalizedIntent: PreviewIntent = Object.freeze({
+    theme: 'stone',
+    cloudStyle: 'auto',
+    rainStyle: 'auto',
+    liftVisible: true,
+    cloudsVisible: true,
+    rainVisible: true,
+    isobarsVisible: false,
+    peeking: false,
+    ...initial.intent
+  });
+  const [intent, intentView] = signalOf(normalizedIntent);
   const [forecast, forecastView] = signalOf(initial.forecast);
   const [overlay, overlayView] = signalOf(initial.overlay);
   const [wind, windView] = signalOf(initial.wind);
@@ -143,13 +180,13 @@ export function createPreviewStore(initial: PreviewInitialState): PreviewStore {
   const [notices, noticesView] = signalOf(initial.notices);
 
   const writer: PreviewWriter = {
-    intent(update) { intent.value = Object.freeze({ ...intent.value, ...update }); },
-    forecast(update) { forecast.value = Object.freeze({ ...forecast.value, ...update }); },
-    overlay(update) { overlay.value = update; },
-    wind(update) { wind.value = Object.freeze({ ...wind.value, ...update }); },
-    point(update) { point.value = Object.freeze({ ...point.value, ...update }); },
-    location(update) { location.value = Object.freeze({ ...location.value, ...update }); },
-    notices(update) { notices.value = Object.freeze({ ...notices.value, ...update }); }
+    intent(update) { applyPatch(intent, update); },
+    forecast(update) { applyPatch(forecast, update); },
+    overlay(update) { if (overlay.value !== update) overlay.value = update; },
+    wind(update) { applyPatch(wind, update); },
+    point(update) { applyPatch(point, update); },
+    location(update) { applyPatch(location, update); },
+    notices(update) { applyPatch(notices, update); }
   };
 
   return {

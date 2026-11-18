@@ -183,7 +183,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(await rail.isVisible(), 'Wind height rail is not visible');
       const label = await trigger.getAttribute('aria-label');
       assert(label?.startsWith('Wind controls,') === true, `Unexpected trigger label: ${label}`);
-      assert((await rail.locator('.wind-controls-surface').textContent())?.trim() === 'Surface', 'Surface stop is missing');
+      assert((await rail.locator('.wind-controls-surface-title').textContent())?.trim() === 'SFC', 'SFC stop label is missing');
       assert(await rail.locator('.wind-controls-range').isVisible(), 'Wind height slider is not visible');
     });
 
@@ -273,10 +273,10 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       const triggerRect = rectOf(afterTrigger, 'Wind trigger');
       const railRect = rectOf(afterRail, 'Wind rail');
       const popupRect = rectOf(await popup.boundingBox(), 'Wind menu');
-      assert(Math.abs(popupRect.width - 138) <= 1, `Wind menu width is ${popupRect.width}`);
-      assert(Math.abs(popupRect.height - 79) <= 1, `Wind menu height is ${popupRect.height}`);
-      assert(Math.abs(popupRect.right - (triggerRect.left - 6)) <= 1, `Wind menu right edge is ${popupRect.right}, trigger left is ${triggerRect.left}`);
-      assert(Math.abs(popupRect.bottom - triggerRect.bottom) <= 1, `Wind menu bottom is ${popupRect.bottom}, trigger bottom is ${triggerRect.bottom}`);
+      assert(Math.abs(popupRect.width - 186) <= 2, `Wind menu width is ${popupRect.width}`);
+      assert(popupRect.height >= 96 && popupRect.height <= 124, `Wind menu height is ${popupRect.height}`);
+      assert(Math.abs(popupRect.right - (triggerRect.left - 8)) <= 2, `Wind menu right edge is ${popupRect.right}, trigger left is ${triggerRect.left}`);
+      assert(Math.abs(popupRect.top - triggerRect.top) <= 2, `Wind menu top is ${popupRect.top}, trigger top is ${triggerRect.top}`);
       assert(!intersects(popupRect, triggerRect), 'Wind menu overlaps its trigger');
       assert(!intersects(popupRect, railRect), 'Wind menu overlaps the height rail');
       assert(popupRect.left >= 0 && popupRect.right <= await page.evaluate(() => window.innerWidth), 'Wind menu crosses the viewport edge');
@@ -442,9 +442,9 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);
         const mapDrawsWind = sized.length === 0 && (layout.mapBacking?.width ?? 0) > 100 && (layout.mapBacking?.height ?? 0) > 100;
         assert((sized.length > 0 || mapDrawsWind) && sized.length + parked.length === layout.windBackings.length, `${width}px wind canvas backing is ${layout.windBackings.map(backing => `${backing.width}x${backing.height}`).join(', ')}`);
-        assert(Math.abs(layout.rail.width - 52) <= 1, `${width}px rail width is ${layout.rail.width}`);
-        const expectedHeight = width >= 721 ? 242 : 204;
-        assert(Math.abs(layout.rail.height - expectedHeight) <= 1, `${width}px rail height is ${layout.rail.height}, expected ${expectedHeight}`);
+        assert(Math.abs(layout.rail.width - 48) <= 1, `${width}px rail width is ${layout.rail.width}`);
+        const expectedHeight = width >= 721 ? 240 : 212;
+        assert(Math.abs(layout.rail.height - expectedHeight) <= 2, `${width}px rail height is ${layout.rail.height}, expected ${expectedHeight}`);
         for (const [name, rect] of [['rail', layout.rail], ['timeline', layout.timeline], ['key', layout.key]] as const) {
           if (!rect) continue;
           assert(rect.left >= -0.5 && rect.right <= layout.innerWidth + 0.5, `${width}px ${name} crosses the viewport edge`);

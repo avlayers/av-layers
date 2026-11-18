@@ -23,6 +23,24 @@ export const WIND_STATUS_LABELS: Record<WindStatus, string> = {
 export const WIND_STORAGE_KEY = 'av.wind-controls.v1';
 export const METRES_PER_FOOT = 0.3048;
 
+/**
+ * Pilot-friendly nominal imperial AGL altitudes (ft) corresponding to each canonical
+ * server `WIND_HEIGHTS` level (`[20, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000]` m),
+ * giving crisp rail ticks (`100 / 800 / 3k / 13k`) and round drag steps instead of raw conversions.
+ */
+const IMPERIAL_NOMINAL_FEET: Readonly<Record<number, number>> = {
+  20: 100,
+  100: 300,
+  250: 800,
+  500: 1500,
+  750: 2500,
+  1000: 3000,
+  1500: 5000,
+  2000: 6500,
+  3000: 10000,
+  4000: 13000
+};
+
 export const isWindStyle = (value: unknown): value is WindStyle => WIND_STYLES.includes(value as WindStyle);
 
 export function snapWindHeight(value: unknown): number | undefined {
@@ -62,7 +80,8 @@ export function serializeWindPreferences(state: WindControlState, fixedHeight: n
 }
 
 export function windStopValue(metres: number, units: WindUnits): number {
-  return units === 'imperial' ? Math.round(metres / METRES_PER_FOOT) : metres;
+  if (units !== 'imperial') return metres;
+  return IMPERIAL_NOMINAL_FEET[metres] ?? Math.round(metres / METRES_PER_FOOT / 100) * 100;
 }
 
 export function windStopLabel(metres: number, units: WindUnits): string {

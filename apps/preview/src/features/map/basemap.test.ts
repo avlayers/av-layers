@@ -1,5 +1,15 @@
-import { expect, it } from 'vitest';
-import { naturalBasemapStyle } from './basemap';
+import { expect, it, vi } from 'vitest';
+import { WEATHER_CEILING_ID } from '@av/client';
+import {
+  applyBasemapTheme,
+  CLASSIC_BASEMAP_ID,
+  compositeBasemapStyle,
+  naturalBasemapStyle,
+  TERRAIN_BG_ID,
+  TERRAIN_HILLSHADE_BASE_ID,
+  TERRAIN_RELIEF_ID
+} from './basemap';
+import { MAP_THEMES } from './visual-theme';
 
 it('uses XC Skies natural terrain plus the road and label overlay', () => {
   const style = naturalBasemapStyle();
@@ -40,4 +50,41 @@ it('requests XC Skies retina natural tiles at a device pixel ratio of 2', () => 
       'https://s3rend3.xcskies.com/natural/{z}/{x}/{y}@2x.jpg'
     ]
   });
+});
+
+it('builds all 8 soaring themes and toggles cleanly between DEM relief and Classic XC Skies raster', () => {
+  for (const theme of MAP_THEMES) {
+    const style = compositeBasemapStyle(theme, 2);
+    expect(style.sources?.['terrain-dem']).toMatchObject({ type: 'raster-dem', encoding: 'terrarium', maxzoom: 12 });
+    expect(style.sources?.[CLASSIC_BASEMAP_ID]).toMatchObject({ type: 'raster' });
+  }
+
+  const stone = compositeBasemapStyle('stone');
+  const slate = compositeBasemapStyle('slate');
+  const xcskies = compositeBasemapStyle('xcskies');
+  const ids = stone.layers.map(layer => layer.id);
+  expect(ids.slice(0, 5)).toEqual([
+    TERRAIN_BG_ID,
+    CLASSIC_BASEMAP_ID,
+    TERRAIN_RELIEF_ID,
+    TERRAIN_HILLSHADE_BASE_ID,
+    WEATHER_CEILING_ID
+  ]);
+  expect((stone.layers[1] as { layout?: { visibility?: string } }).layout?.visibility).toBe('none');
+  expect((xcskies.layers[1] as { layout?: { visibility?: string } }).layout?.visibility).toBe('visible');
+  expect((xcskies.layers[2] as { layout?: { visibility?: string } }).layout?.visibility).toBe('none');
+  expect((stone.layers[0] as { paint: Record<string, unknown> }).paint['background-color'])
+    .not.toBe((slate.layers[0] as { paint: Record<string, unknown> }).paint['background-color']);
+
+  const setPaintProperty = vi.fn();
+  const setLayoutProperty = vi.fn();
+  applyBasemapTheme({ getLayer: id => ids.includes(id), setPaintProperty, setLayoutProperty }, 'slate');
+  expect(setPaintProperty).toHaveBeenCalledWith(TERRAIN_BG_ID, 'background-color', '#0f1722');
+  expect(setPaintProperty).toHaveBeenCalledWith(WEATHER_CEILING_ID, 'hillshade-exaggeration', 0.52);
+  expect(setLayoutProperty).toHaveBeenCalledWith(CLASSIC_BASEMAP_ID, 'visibility', 'none');
+
+  setLayoutProperty.mockClear();
+  applyBasemapTheme({ getLayer: id => ids.includes(id), setPaintProperty, setLayoutProperty }, 'xcskies');
+  expect(setLayoutProperty).toHaveBeenCalledWith(CLASSIC_BASEMAP_ID, 'visibility', 'visible');
+  expect(setLayoutProperty).toHaveBeenCalledWith(TERRAIN_RELIEF_ID, 'visibility', 'none');
 });

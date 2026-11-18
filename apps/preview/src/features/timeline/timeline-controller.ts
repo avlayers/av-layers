@@ -7,6 +7,7 @@ export type { TimelineFrame } from './timeline-model';
 export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
   onIntent?(index: number): void;
+  onPrepare?(index: number): void;
   onPlayback?(playing: boolean): void;
   offsetMinutes?: number;
   latitude?: number;
@@ -442,12 +443,23 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       const label = dayButtonLabel(group.day);
       const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`, label);
       button.dataset.day = group.day;
+      const targetForDay = (): number => {
+        const current = selectedIndex >= 0 ? frames[selectedIndex] : undefined;
+        const local = current ? localTimeFromMs(Date.parse(current.validTime), offsetMinutes) : null;
+        return nearestFrameIndexForDay(frames, group.indices, offsetMinutes, local?.hour ?? 12, local?.minute ?? 0);
+      };
+      const prepareDay = () => {
+        if (button.disabled || controlsDisabled() || !group.indices.length || !options.onPrepare) return;
+        const idx = targetForDay();
+        if (idx >= 0) options.onPrepare(idx);
+      };
+      button.addEventListener('pointerenter', prepareDay);
+      button.addEventListener('focus', prepareDay);
+      button.addEventListener('pointerdown', prepareDay);
       button.addEventListener('click', () => {
         if (button.disabled || controlsDisabled() || !group.indices.length) return;
         if (timer !== null) stopPlayback();
-        const current = selectedIndex >= 0 ? frames[selectedIndex] : undefined;
-        const local = current ? localTimeFromMs(Date.parse(current.validTime), offsetMinutes) : null;
-        select(nearestFrameIndexForDay(frames, group.indices, offsetMinutes, local?.hour ?? 12, local?.minute ?? 0), 'push', false);
+        select(targetForDay(), 'push', false);
       });
       return button;
     });
@@ -498,8 +510,10 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       } else playhead.setAttribute('hidden', '');
     }
     const group = selectedGroup();
-    const key = [framesRevision, group?.day, offsetMinutes, latitude, longitude, width,
-      ...scale.segments.flatMap(segment => [segment.kind, segment.start, segment.end, segment.folded, segment.x0, segment.x1])].join('|');
+    const latKey = hasCenter ? latitude.toFixed(2) : '';
+    const lonKey = hasCenter ? longitude.toFixed(2) : '';
+    const key = [framesRevision, group?.day, offsetMinutes, latKey, lonKey, Math.round(width),
+      ...scale.segments.flatMap(segment => [segment.kind, segment.start, segment.end, segment.folded, Math.round(segment.x0 * 10), Math.round(segment.x1 * 10)])].join('|');
     if (key !== decorationKey) {
       decorationKey = key;
       const solar = group ? daySolar(group.day) : { stops: null, bounds: null };

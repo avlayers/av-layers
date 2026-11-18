@@ -25,18 +25,26 @@ export interface WindControls {
 
 const svg = (w: number, h: number, vw: number, vh: number, attrs: string, body: string) =>
   `<svg viewBox="0 0 ${vw} ${vh}" width="${w}" height="${h}" ${attrs}>${body}</svg>`;
-const stroke = 'fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"';
-const eyeBase = '<path d="M1 6s2.5-4 7-4 7 4 7 4-2.5 4-7 4-7-4-7-4Z"/>';
+const stroke = 'fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"';
+const eyeBase = '<path d="M1.5 6s2.6-4.2 6.5-4.2S14.5 6 14.5 6s-2.6 4.2-6.5 4.2S1.5 6 1.5 6Z"/><circle cx="8" cy="6" r="1.8"/>';
 const ICONS = {
-  trails: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M1 8c3-3 5 3 9 0s6 3 9 0M1 12c3-3 5 3 9 0s6 3 9 0"/>'),
-  barbs: svg(20, 16, 20, 16, stroke, '<path d="M5 15 14 2m0 0 3 3"/>'),
-  hybrid: svg(20, 16, 20, 16, stroke, '<path d="M1 4c3-3 5 3 9 0s6 3 9 0M11 10 16 3"/>'),
-  eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', eyeBase),
-  'eye-off': svg(14, 11, 16, 12, 'fill="none" stroke="currentColor"', `${eyeBase}<path d="m2 1 12 10"/>`),
-  pause: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1 1h3v10H1zm5 0h3v10H7z"/>'),
-  play: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1 1v10l8-5z"/>')
+  trails: svg(18, 15, 20, 16, stroke, '<path d="M2 4.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4M2 8.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4M2 12.2c3-2.4 5.5 2.4 8.8 0s4.8-1.8 7.2.4"/>'),
+  barbs: svg(18, 15, 20, 16, stroke, '<circle cx="4.5" cy="13" r="1.4"/><path d="M5.5 11.8 14.8 2.5m0 0 3.2 2.6m-5.8 0 2.6 2.1"/>'),
+  hybrid: svg(18, 15, 20, 16, stroke, '<path d="M1.8 5c2.8-2.2 5.2 2.2 8.2 0s4.4-1.6 6.5.3M1.8 10.2c2.4-1.8 4.4 1.6 7 0"/><path d="M11.2 13.8 17 5.6m0 0 2.2 2"/>'),
+  tol: svg(11, 11, 16, 16, stroke, '<path d="M8 13.5V3.5m0 0-3 3m3-3 3 3M3 2h10"/>'),
+  sfc: svg(12, 11, 16, 15, stroke, '<path d="M2 6.5c2.2-1.8 4.2 1.8 6.4 0s3.4-1.4 5.6.3"/><path d="M1.5 11h13M4.5 11l-1.5 2.4M8.8 11l-1.5 2.4M13.1 11l-1.5 2.4"/>'),
+  eye: svg(14, 11, 16, 12, 'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"', eyeBase),
+  'eye-off': svg(14, 11, 16, 12, 'fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"', `${eyeBase}<path d="m2 1.2 12 9.6"/>`),
+  pause: svg(9, 11, 10, 12, 'fill="currentColor"', '<rect x="1" y="1" width="3" height="10" rx="0.8"/><rect x="6" y="1" width="3" height="10" rx="0.8"/>'),
+  play: svg(9, 11, 10, 12, 'fill="currentColor"', '<path d="M1.5 1.2v9.6L9.2 6z"/>')
 } as const;
 type IconName = keyof typeof ICONS;
+
+const STYLE_SHORT_NAMES: Record<WindStyle, string> = {
+  trails: 'Flow',
+  barbs: 'Barbs',
+  hybrid: 'Mix'
+};
 
 const attr = (n: Element, map: Record<string, string | boolean>) => { for (const [k, v] of Object.entries(map)) n.setAttribute(k, String(v)); };
 
@@ -47,6 +55,16 @@ function readStored(): StoredWindPreferences | null {
 const persist = (s: WindControlState, fixedHeight: number) => {
   try { globalThis.localStorage?.setItem(STORAGE_KEY, serializeWindPreferences(s, fixedHeight)); } catch { /* ignore */ }
 };
+
+function compactTickValue(v: number): string {
+  return v >= 1000 ? `${Number((v / 1000).toFixed(1))}k` : String(v);
+}
+
+function compactHeightBadge(height: WindHeight, fixedHeight: number, units: WindUnits): string {
+  if (height === 'surface') return 'SFC';
+  if (height === 'lift') return 'TOL';
+  return compactTickValue(stopValue(fixedHeight, units));
+}
 
 export function createWindControls(parent: HTMLElement, options: WindControlsOptions): WindControls {
   const doc = parent.ownerDocument, stored = readStored(), init = options.initial;
@@ -69,11 +87,20 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
 
   const root = el('div', 'wind-controls'), menu = el('div', 'wind-controls-menu'), trigger = btn('wind-controls-trigger');
   attr(trigger, { 'aria-haspopup': 'dialog', 'aria-controls': 'wind-controls-popup' });
-  const triggerGlyph = el('span', 'wind-controls-trigger-glyph'), triggerState = el('span', 'wind-controls-trigger-state');
-  trigger.append(triggerGlyph, triggerState);
+  const triggerGlyph = el('span', 'wind-controls-trigger-glyph');
+  const triggerMeta = el('span', 'wind-controls-trigger-meta');
+  triggerMeta.setAttribute('aria-hidden', 'true');
+  const triggerState = el('span', 'wind-controls-trigger-state');
+  trigger.append(triggerGlyph, triggerMeta, triggerState);
 
   const popup = el('div', 'wind-controls-popup');
   popup.hidden = true; popup.id = 'wind-controls-popup'; attr(popup, { role: 'dialog', 'aria-label': 'Wind display' });
+
+  const popupHead = el('div', 'wind-controls-head');
+  popupHead.setAttribute('aria-hidden', 'true');
+  const popupTitle = el('span', 'wind-controls-head-title', 'Wind');
+  const popupLevel = el('span', 'wind-controls-head-level');
+  popupHead.append(popupTitle, popupLevel);
 
   const styleGroup = el('div', 'wind-controls-styles');
   attr(styleGroup, { role: 'radiogroup', 'aria-label': 'Wind style' });
@@ -81,7 +108,9 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   for (const style of STYLES) {
     const choice = btn('wind-controls-style');
     attr(choice, { role: 'radio', 'aria-label': STYLE_LABELS[style] });
-    choice.append(icon(style, 'wind-controls-style-icon'));
+    const caption = el('span', 'wind-controls-style-caption', STYLE_SHORT_NAMES[style]);
+    caption.setAttribute('aria-hidden', 'true');
+    choice.append(icon(style, 'wind-controls-style-icon'), caption);
     choice.addEventListener('click', () => { selectStyle(style); closeMenu(true); });
     styleButtons.set(style, choice); styleGroup.append(choice);
   }
@@ -92,14 +121,29 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   visibility.append(visibilityIcon, visibilityLabel);
   const pause = btn('wind-controls-action'), pauseIcon = el('span', 'wind-controls-action-icon'), pauseLabel = el('span', 'wind-controls-action-label');
   pause.append(pauseIcon, pauseLabel);
-  actionGroup.append(visibility, pause); popup.append(styleGroup, actionGroup); menu.append(trigger, popup);
+  actionGroup.append(visibility, pause);
+  popup.append(popupHead, styleGroup, actionGroup);
+  menu.append(trigger, popup);
 
   const statusLine = el('p', 'wind-controls-status');
   attr(statusLine, { role: 'status', 'aria-live': 'polite' }); statusLine.hidden = true;
 
   const rail = el('div', 'wind-controls-rail'), lift = btn('wind-controls-lift');
-  lift.append(el('span', 'wind-controls-lift-title', 'Top of lift'), el('span', 'wind-controls-lift-auto', 'auto'));
+  const liftSr = el('span', 'sr-only', 'Top of lift');
+  const liftRow = el('span', 'wind-controls-lift-row');
+  liftRow.setAttribute('aria-hidden', 'true');
+  liftRow.append(icon('tol', 'wind-controls-lift-icon'), el('span', 'wind-controls-lift-title', 'TOL'));
+  const liftAuto = el('span', 'wind-controls-lift-auto', 'auto');
+  liftAuto.setAttribute('aria-hidden', 'true');
+  lift.append(liftSr, liftRow, liftAuto);
+
   const scale = el('div', 'wind-controls-scale'), unitLine = el('span', 'wind-controls-unit'), axis = el('div', 'wind-controls-axis');
+  const track = el('span', 'wind-controls-track');
+  track.setAttribute('aria-hidden', 'true');
+  const trackFill = el('span', 'wind-controls-track-fill');
+  track.append(trackFill);
+  axis.append(track);
+
   const ticks = STOPS.map((height, index) => {
     const tick = el('span', 'wind-controls-tick');
     tick.setAttribute('aria-hidden', 'true');
@@ -109,7 +153,15 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   });
   const range = Object.assign(el('input', 'wind-controls-range'), { type: 'range', min: '0', max: String(STOPS.length - 1), step: '1', value: String(STOPS.indexOf(fixedHeight)) });
   range.setAttribute('aria-label', 'Wind height');
-  const readout = el('output', 'wind-controls-value'), surface = btn('wind-controls-surface', 'Surface');
+  const readout = el('output', 'wind-controls-value');
+
+  const surface = btn('wind-controls-surface');
+  const surfaceSr = el('span', 'sr-only', 'Surface');
+  const surfaceRow = el('span', 'wind-controls-surface-row');
+  surfaceRow.setAttribute('aria-hidden', 'true');
+  surfaceRow.append(icon('sfc', 'wind-controls-surface-icon'), el('span', 'wind-controls-surface-title', 'SFC'));
+  surface.append(surfaceSr, surfaceRow);
+
   axis.append(range, readout); scale.append(unitLine, axis); rail.append(lift, scale, surface);
   root.append(menu, statusLine, rail); parent.appendChild(root);
 
@@ -148,17 +200,22 @@ export function createWindControls(parent: HTMLElement, options: WindControlsOpt
   function renderHeight(): void {
     const numeric = typeof state.height === 'number', index = STOPS.indexOf(fixedHeight), unit = units === 'imperial' ? 'ft AGL' : 'm AGL';
     const shown = state.height === 'lift' ? STOPS.length - 1 : state.height === 'surface' ? 0 : index;
+    const normPos = String(shown / (STOPS.length - 1));
+    const fixedPos = String(index / (STOPS.length - 1));
+    const valueText = numeric ? `${stopLabel(fixedHeight, units)} ${unit}` : state.height === 'lift' ? 'Top of lift' : 'Surface';
     range.value = String(shown);
-    range.setAttribute('aria-valuetext', numeric ? `${stopLabel(fixedHeight, units)} ${unit}` : state.height === 'lift' ? 'Top of lift' : 'Surface');
+    range.setAttribute('aria-valuetext', valueText);
     unitLine.textContent = unit;
     for (const { tick, height, labelled } of ticks) {
-      const v = stopValue(height, units);
-      tick.textContent = labelled ? v >= 1000 ? `${Number((v / 1000).toFixed(1))}k` : String(v) : '';
+      tick.textContent = labelled ? compactTickValue(stopValue(height, units)) : '';
     }
     readout.textContent = stopLabel(fixedHeight, units);
     readout.hidden = !numeric;
-    readout.style.setProperty('--wind-controls-position', String(index / (STOPS.length - 1)));
+    readout.style.setProperty('--wind-controls-position', fixedPos);
+    trackFill.style.setProperty('--wind-controls-position', normPos);
     scale.setAttribute('data-height', numeric ? 'fixed' : String(state.height));
+    triggerMeta.textContent = compactHeightBadge(state.height, fixedHeight, units);
+    popupLevel.textContent = numeric ? valueText : state.height === 'lift' ? 'TOL (auto)' : 'SFC';
     for (const [b, cls, sel] of [[lift, 'wind-controls-lift', state.height === 'lift'], [surface, 'wind-controls-surface', state.height === 'surface']] as const) {
       b.setAttribute('aria-pressed', String(sel)); b.className = sel ? `${cls} is-selected` : cls;
     }

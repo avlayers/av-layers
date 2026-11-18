@@ -6,12 +6,14 @@ import { addProtocol, removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAP_TEXTURE_POOL_RESERVE_BYTES, MAX_RASTER_SOURCES, rasterSourceBytes, rasterSourceLimit } from './raster-budget';
 import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
 import { boundsAreaKm2, cameraBounds, createViewportWarmth } from '../map/viewport-policy';
+import { isMapTheme, type MapTheme } from '../map/visual-theme';
+import { canRemapTiles, remapTileToBitmap } from './tile-remap';
 
 export interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
 type Selection = RasterSelection;
 class RasterBudgetError extends Error {}
-interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; lease: PreparationLease | null; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean }
-export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number } }
+interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; lease: PreparationLease | null; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean; staleTheme?: boolean }
+export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
 export type DetailReadiness = 'idle' | 'valid-empty' | 'complete' | 'partial' | 'failed' | 'timed-out';
 export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean; previewReadyFrames?: readonly string[]; detailReadyFrames?: readonly string[]; limited?: boolean; detailState?: DetailReadiness; cameraRevision?: number; requiredTiles?: number; loadedTiles?: number; pendingTiles?: number; erroredTiles?: number; coarseReadyFrames?: readonly string[]; detailBytesReadyFrames?: readonly string[]; detailDrawableFrames?: readonly string[] }
 const matches = (a: Selection | null, b: Selection | null): boolean => !!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame;
@@ -46,6 +48,8 @@ export class RasterOverlay {
   private sourceLimits = new globalThis.Map<number, number>();
   private generation = 0;
   private opacity: number;
+  private visible = true;
+  private theme: MapTheme;
   private windActive = true;
   private windResident = true;
   private incomplete = false;
@@ -221,6 +225,7 @@ export class RasterOverlay {
 
   constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch, private readonly request?: (spec: ForecastRequestSpec) => ForecastRequestHandle, private readonly options: RasterOverlayOptions = {}) {
     this.opacity = opacity;
+    this.theme = options.theme ?? 'stone';
     for (const [ev, fn] of this.events) map.on(ev as never, fn as never);
     this.unsubscribeBudget = options.budget?.onRelease(() => {
       if (this.disposed || !this.limited || !this.requested || this.moving || this.map.isMoving?.()) return;
@@ -259,16 +264,16 @@ export class RasterOverlay {
     this.enforceBudget();
     if (!this.moving) this.prepareOverview(this.requested);
     this.replacementFailed = false; this.incomplete = this.problem(this.active);
-    if (matches(this.active, this.requested)) {
+    if (matches(this.active, this.requested) && !this.active?.staleTheme) {
       for (const s of this.slots) if (s !== this.active) s.transport.setInteractive(false);
       this.cancelPrefetch(); this.update(); this.emit(); return;
     }
-    let target = this.slots.find(s => matches(s, this.requested));
+    let target = this.slots.find(s => matches(s, this.requested) && !s.staleTheme);
     if (target && this.problem(target)) { this.drop(target); target = undefined; }
     const ready = this.isPrepared(build, layer, frame), future = this.predicted(this.requested);
     for (const s of [...this.slots]) {
       if (s === this.active || s === target) continue;
-      if (s.build !== build || this.problem(s) || ((!s.successful || !this.tilesSettled(s)) && (!ready || !future.some(v => matches(s, v))))) this.drop(s);
+      if (s.build !== build || s.staleTheme || this.problem(s) || ((!s.successful || !this.tilesSettled(s)) && (!ready || !future.some(v => matches(s, v))))) this.drop(s);
       else s.transport.setInteractive(false);
     }
     if (target) { target.transport.setInteractive(true); this.cancelPrefetch(); this.emit(); this.update(); return; }
@@ -279,7 +284,7 @@ export class RasterOverlay {
   }
 
   private loadDetail(sel: Selection): void {
-    if (!matches(sel, this.requested) || this.slots.some(s => matches(s, sel))) return;
+    if (!matches(sel, this.requested) || this.slots.some(s => matches(s, sel) && !s.staleTheme)) return;
     const limit = this.slotLimit(sel);
     if (!limit) { this.cancelRefinement(); this.cancelPrefetch(); this.replacementFailed = true; this.armExpiry(); this.emit(); return; }
     for (const s of [...this.slots]) if (s !== this.active) this.drop(s);
@@ -294,7 +299,7 @@ export class RasterOverlay {
             this.addSlot(sel, true);
           } catch (retryError) {
             if (retryError instanceof RasterBudgetError && this.active) {
-              if (this.overview?.ready(this.active.build, this.active.layer, this.active.frame) && this.overview.show(this.active.build, this.active.layer, this.active.frame, this.opacity)) {
+              if (this.overview?.ready(this.active.build, this.active.layer, this.active.frame) && this.overview.show(this.active.build, this.active.layer, this.active.frame, this.effectiveOpacity())) {
                 this.coarse = { build: this.active.build, layer: this.active.layer, frame: this.active.frame };
               }
               this.drop(this.active);
@@ -331,12 +336,33 @@ export class RasterOverlay {
     if (changed) { this.preferred = null; this.cancelPrefetch(); this.armExpiry(); this.emit(); }
   }
 
+  private effectiveOpacity(): number { return this.visible ? this.opacity : 0; }
+
   setOpacity(value: number): void {
     this.opacity = value;
+    const eff = this.effectiveOpacity();
     const coarse = this.pendingOverview ?? (this.pendingPaint ? null : this.coarse);
-    if (coarse) { this.overview?.show(coarse.build, coarse.layer, coarse.frame, value); return; }
+    if (coarse) { this.overview?.show(coarse.build, coarse.layer, coarse.frame, eff); return; }
     const visible = this.pendingPaint ?? this.active;
-    if (visible) this.map.setPaintProperty(visible.id, 'raster-opacity', value);
+    if (visible) this.map.setPaintProperty(visible.id, 'raster-opacity', eff);
+  }
+
+  setVisible(visible: boolean): void {
+    if (this.visible === visible) return;
+    this.visible = visible;
+    this.setOpacity(this.opacity);
+  }
+
+  setTheme(theme: MapTheme): void {
+    if (this.theme === theme || this.disposed) return;
+    this.theme = theme;
+    this.overview?.setTheme(theme);
+    for (const s of [...this.slots]) if (s !== this.active) this.drop(s);
+    if (this.active) this.active.staleTheme = true;
+    const sel = this.requested;
+    if (sel && !this.moving && !this.map.isMoving?.() && sel.build.expiresAtMs > Date.now()) {
+      try { this.loadDetail(sel); } catch {}
+    }
   }
 
   setPlayback(playing: boolean): void {
@@ -405,7 +431,7 @@ export class RasterOverlay {
       return;
     }
     if (this.pendingPaint) return;
-    const next = this.slots.find(s => matches(s, this.requested));
+    const next = this.slots.find(s => matches(s, this.requested) && !s.staleTheme);
     if (next === this.active && !this.coarse && !(this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame))) { this.prepareNext(); return; }
     if (next && (next.successful || next.failed.size) && this.tilesSettled(next)) {
       if (this.stagingSelection && matches(next, this.stagingSelection)) {
@@ -415,7 +441,7 @@ export class RasterOverlay {
       if (!next.successful) { this.abandon(next); return; }
       if (this.problem(next) && this.overview?.ready(next.build, next.layer, next.frame)) { this.abandon(next); this.stageOverview(); return; }
       if (!matches(this.coarse ?? this.active, next)) this.options.beforeReveal?.(next);
-      this.map.setPaintProperty(next.id, 'raster-opacity', this.opacity);
+      this.map.setPaintProperty(next.id, 'raster-opacity', this.effectiveOpacity());
       if (this.active && this.active !== next) this.map.setPaintProperty(this.active.id, 'raster-opacity', 0);
       this.overview?.hide(); this.pendingPaint = next; this.cancelPrefetch(); return;
     }
@@ -424,24 +450,25 @@ export class RasterOverlay {
 
   private cancelPaint(): void {
     if (!this.pendingPaint && !this.pendingOverview) return;
+    const eff = this.effectiveOpacity();
     if (this.pendingPaint) this.map.setPaintProperty(this.pendingPaint.id, 'raster-opacity', 0);
     if (this.coarse && this.overviewRevealed) this.options.beforeReveal?.(this.coarse);
-    if (this.pendingOverview && this.coarse && this.overview?.cancelStage?.(this.opacity)) {
+    if (this.pendingOverview && this.coarse && this.overview?.cancelStage?.(eff)) {
       this.pendingPaint = this.pendingOverview = this.overviewRevealed = null;
       return;
     }
     this.pendingPaint = this.pendingOverview = this.overviewRevealed = null;
     if (this.coarse) this.options.beforeReveal?.(this.coarse);
-    if (this.coarse && this.overview?.show(this.coarse.build, this.coarse.layer, this.coarse.frame, this.opacity)) return;
+    if (this.coarse && this.overview?.show(this.coarse.build, this.coarse.layer, this.coarse.frame, eff)) return;
     this.coarse = null; this.overview?.hide();
-    if (this.active) { this.options.beforeReveal?.(this.active); this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity); }
+    if (this.active) { this.options.beforeReveal?.(this.active); this.map.setPaintProperty(this.active.id, 'raster-opacity', eff); }
   }
 
   private revealOverview(next: Selection): void {
     if (matches(this.overviewRevealed, next)) return;
     const previous = this.coarse ?? this.active, changed = !matches(previous, next);
     if (previous && changed) this.options.beforeReveal?.(next);
-    if (!this.overview?.show(next.build, next.layer, next.frame, this.opacity)) {
+    if (!this.overview?.show(next.build, next.layer, next.frame, this.effectiveOpacity())) {
       this.pendingOverview = null;
       if (previous && changed) this.options.beforeReveal?.(previous);
       return;
@@ -469,7 +496,7 @@ export class RasterOverlay {
   private clearOverview(): void {
     if (this.coarse && this.active && !matches(this.coarse, this.active)) this.drop(this.active);
     this.pendingOverview = this.coarse = this.overviewRevealed = null; this.overview?.clear();
-    if (this.active && !this.pendingPaint) this.map.setPaintProperty(this.active.id, 'raster-opacity', this.opacity);
+    if (this.active && !this.pendingPaint) this.map.setPaintProperty(this.active.id, 'raster-opacity', this.effectiveOpacity());
   }
 
   private prepareOverview(sel: Selection): void {
@@ -508,8 +535,31 @@ export class RasterOverlay {
   private ensureProtocol(): void {
     if (this.protocol) return;
     this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request, budget: this.options.budget, ...(this.options.requestLimits ?? { maxActive: 24, maxPrefetchActive: 20 }) });
-    addProtocol(this.protocol.scheme, this.protocol.load);
-    this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); }, this.options);
+    addProtocol(this.protocol.scheme, async (params, controller) => {
+      const hashIdx = params.url.indexOf('#');
+      const cleanUrl = hashIdx >= 0 ? params.url.slice(0, hashIdx) : params.url;
+      const hashTheme = hashIdx >= 0 ? params.url.slice(hashIdx + 1) : '';
+      const slotTheme: MapTheme = isMapTheme(hashTheme) ? hashTheme : this.theme;
+      const response = await this.protocol!.load({ ...params, url: cleanUrl }, controller);
+      if (slotTheme === 'xcskies' || response.data.byteLength <= 48 || !canRemapTiles()) return response;
+      const httpIdx = cleanUrl.indexOf('http');
+      const rawUrl = httpIdx >= 0 ? cleanUrl.slice(httpIdx) : cleanUrl;
+      let maskData: ArrayBuffer | null = null;
+      if (rawUrl.includes('/usable-lift-msl/')) {
+        const aglUrl = rawUrl.replace('/usable-lift-msl/', '/usable-lift-agl/');
+        const maskRes = await this.protocol!.requestTile(aglUrl, { priority: 'foreground', signal: controller.signal }).response.catch(() => null);
+        if (maskRes) { maskData = maskRes.data; maskRes.release(); }
+      }
+      const bitmap = await remapTileToBitmap(
+        response.data,
+        rawUrl.includes('/precip-rate/') ? 'rain' : 'lift',
+        slotTheme,
+        maskData,
+        { priority: 'foreground', signal: controller.signal, transferInput: true }
+      );
+      return { ...response, data: bitmap };
+    });
+    this.overview = new RasterOverview(this.map, this.protocol, () => { this.update(); this.emit(); }, { ...this.options, theme: this.theme });
     if (this.playing) (this.overview as { setPlayback?(playing: boolean): void }).setPlayback?.(true);
   }
 
@@ -537,7 +587,8 @@ export class RasterOverlay {
     this.slots.push({ ...sel, id, transport, lease, successful: false, pending: new Set(), failed: new Set(), sourceFailed: false });
     if (!interactive) this.armStagingWatchdog(sel);
     const source = previewRasterSource(sel.build.templates[sel.layer], sel.frame, layerMaxZoom(sel.build.manifest, sel.layer), sel.build.manifest.descriptors.attribution);
-    source.tiles = source.tiles.map(url => transport.url(url));
+    const suffix = canRemapTiles() ? `#${this.theme}` : '';
+    source.tiles = source.tiles.map(url => `${transport.url(url)}${suffix}`);
     this.map.addSource(id, source);
     const layer = previewRasterLayer(0);
     this.map.addLayer({ ...layer, id, source: id, paint: { ...layer.paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
@@ -722,7 +773,7 @@ export class RasterOverlay {
         }
         if (!resized) {
           this.limited = true;
-          if (this.overview?.ready(active.build, active.layer, active.frame) && this.overview.show(active.build, active.layer, active.frame, this.opacity)) {
+          if (this.overview?.ready(active.build, active.layer, active.frame) && this.overview.show(active.build, active.layer, active.frame, this.effectiveOpacity())) {
             this.coarse = { build: active.build, layer: active.layer, frame: active.frame };
             this.drop(active);
           } else {

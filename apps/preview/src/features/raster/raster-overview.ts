@@ -4,6 +4,8 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, requiredSourceZoom, type RasterCrop } from './raster-crop';
+import type { MapTheme } from '../map/visual-theme';
+import { canRemapTiles, remapTileToBitmap } from './tile-remap';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 
@@ -46,7 +48,7 @@ interface ImageSourceLike {
 }
 export interface RasterOverviewState { ready: number; total: number; failed: number }
 export interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
-export interface RasterOverviewOptions { budget?: PreparationBudget; requestLimits?: { maxActive: number; maxPrefetchActive: number } }
+export interface RasterOverviewOptions { budget?: PreparationBudget; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
 
 const SELECTED_PREVIEW_SLOTS = 4;
 const DECODE_LEASE_BYTES = 4 * (MAX_TILE_BYTES + RASTER_TILE_SIZE ** 2 * 4);
@@ -118,12 +120,16 @@ export class RasterOverview {
   private coverageCache: { key: string; preview: boolean } | null = null;
   private expiry: ReturnType<typeof setTimeout> | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private themeWarmTimer: ReturnType<typeof setTimeout> | null = null;
+  private warmingPaused = false;
+  private theme: MapTheme;
   private disposed = false;
   private limited = false;
   private deferred: { build: PinnedBuild; layer: LayerId; frame: string } | null = null;
   private readonly unsubscribeBudget: (() => void) | null;
 
   constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void, private readonly options: RasterOverviewOptions = {}) {
+    this.theme = options.theme ?? 'stone';
     this.canvas = typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function' && typeof map.getCanvas === 'function'
       ? new OffscreenCanvas(RASTER_TILE_SIZE, RASTER_TILE_SIZE) : null;
     this.supported = !!this.canvas?.getContext('2d') && typeof this.canvas.transferToImageBitmap === 'function';
@@ -350,6 +356,24 @@ export class RasterOverview {
 
   relievePressure(_required = 1): boolean { return false; }
 
+  setTheme(theme: MapTheme): void {
+    if (this.theme === theme || this.disposed) return;
+    this.theme = theme;
+    const context = this.context, selected = this.selected;
+    if (context && selected) {
+      const { build, layer } = context;
+      this.reset(true);
+      this.warmingPaused = true;
+      this.select(build, layer, selected);
+      this.themeWarmTimer = setTimeout(() => {
+        this.themeWarmTimer = null;
+        if (this.disposed) return;
+        this.warmingPaused = false;
+        this.pump();
+      }, 280);
+    }
+  }
+
   refresh(): void {
     const context = this.context;
     if (!context) return;
@@ -430,6 +454,8 @@ export class RasterOverview {
     this.context = null; this.selected = null; this.composing = null; this.fetching = 0; this.failedImage = null;
     if (this.expiry !== null) clearTimeout(this.expiry); this.expiry = null;
     if (this.retryTimer !== null) clearTimeout(this.retryTimer); this.retryTimer = null;
+    if (this.themeWarmTimer !== null) clearTimeout(this.themeWarmTimer); this.themeWarmTimer = null;
+    this.warmingPaused = false;
     const previewImages = new Set(this.previews.values());
     const ownedShown = !!this.shown && previewImages.has(this.shown);
     const surviving: Image[] = [];
@@ -560,6 +586,7 @@ export class RasterOverview {
         if (isSelected) {
           if (this.compressedBytes() >= maxPendingBytes) break;
         } else {
+          if (this.warmingPaused) break;
           if (this.fetching - selectedFetching >= maxBackground) break;
           if ((this.fetching - selectedFetching) * inFlightReserve + this.compressedBytes(this.selected) + inFlightReserve > maxBackgroundBytes) break;
         }
@@ -690,9 +717,26 @@ export class RasterOverview {
 
   private decode(job: Job, index: number): void {
     const context = this.context, tile = job.tiles[index], data = tile.data;
-    if (!this.ownsJob(job, context) || this.composing !== job || tile.state !== 'compressed' || !data) return;
+    if (!context || !this.ownsJob(job, context) || this.composing !== job || tile.state !== 'compressed' || !data) return;
     tile.state = 'decoding'; this.decoding++;
-    void Promise.resolve().then(() => this.ownsJob(job, context) ? createImageBitmap(new Blob([data], { type: 'image/webp' })) : null).then(image => {
+    const location = job.crop.tiles[index], theme = this.theme;
+    const priority = job.frame === this.selected ? 'foreground' : 'background';
+    const prepareBitmap = async (): Promise<ImageBitmap | null> => {
+      let maskData: ArrayBuffer | null = null;
+      if (context.layer === 'usable-lift-msl' && context.build.templates['usable-lift-agl'] && typeof this.protocol.requestTile === 'function') {
+        const aglUrl = frameTileUrl(context.build.templates['usable-lift-agl'], job.frame)
+          .replaceAll('{z}', String(location.z)).replaceAll('{x}', String(location.canonicalX)).replaceAll('{y}', String(location.y));
+        const maskRes = await this.protocol.requestTile(aglUrl, { priority }).response.catch(() => null);
+        if (maskRes) { maskData = maskRes.data; maskRes.release(); }
+      }
+      if (!this.ownsJob(job, context)) return null;
+      return remapTileToBitmap(data, context.layer === 'precip-rate' ? 'rain' : 'lift', theme, maskData, { priority });
+    };
+    void Promise.resolve().then(() => {
+      if (!this.ownsJob(job, context)) return null;
+      if (theme === 'xcskies' || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
+      return prepareBitmap();
+    }).then(image => {
       if (!image) return;
       if (!this.ownsJob(job, context) || image.width !== RASTER_TILE_SIZE || image.height !== RASTER_TILE_SIZE) {
         image.close(); this.fail(job); return;
