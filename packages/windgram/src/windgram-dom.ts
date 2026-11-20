@@ -1,14 +1,20 @@
 import { formatMapLiftCell, formatPlaceTime, formatPointMapLift } from '@av/client';
-import { getWindgramCalloutRenderer, type WindgramCalloutVariant } from './windgram-callout.ts';
+import {
+  getWindgramCalloutRenderer,
+  placeWindgramCallout,
+  type CalloutHorizontalSide,
+  type WindgramCalloutVariant,
+} from './windgram-callout.ts';
 import { renderWindgramSvg } from './windgram-chart.ts';
 import { clamp, formatQuantity, svgNumber as fmt } from './windgram-format.ts';
 import { buildWindgramTelemetry, formatWindgramReading, type WindgramTelemetryStrip } from './windgram-readout.ts';
 import { heightToY, yToHeight } from './windgram-scale.ts';
 import { readWindgram } from './windgram-inspector.ts';
 import { hourX, visibleWindgramHourIndices } from './windgram-time-axis.ts';
-import type { WindgramView } from './windgram-view.ts';
+import type { WindgramDayPanel, WindgramView } from './windgram-view.ts';
 
 export type WindgramInspectionMode = 'magnetic' | 'lift' | 'height';
+export type WindgramCalloutTrigger = 'always' | 'interact';
 
 export interface WindgramMountOptions {
   /** Unique among charts in the host document. */
@@ -16,12 +22,19 @@ export interface WindgramMountOptions {
   readout?: HTMLElement | null;
   onSelectHour?: (validAt: string) => void;
   onStepHour?: (delta: -1 | 1) => void;
+  onSelectDay?: (dateKey: string) => void;
+  onZoomMode?: (direction: 'in' | 'out', dateKey?: string) => void;
   onTelemetry?: (telemetry: WindgramTelemetryStrip | null) => void;
   selectedValidAt?: string | null;
   /** 'magnetic' snaps within 16px of Top of Lift while allowing free-altitude inspection anywhere else. */
   inspectionMode?: WindgramInspectionMode;
   /** Pluggable floating hover callout renderer ('tile-2x2' default, 'classic' fallback). */
   calloutVariant?: WindgramCalloutVariant;
+  /**
+   * 'interact' keeps the floating callout hidden at rest until pointer hover, touch/tap,
+   * or keyboard navigation so 0% of the chart is covered when opened; 'always' shows it immediately.
+   */
+  calloutTrigger?: WindgramCalloutTrigger;
 }
 
 const TOL_SNAP_PX = 16;
@@ -40,6 +53,16 @@ interface CachedSvgGeometry {
   readonly vh: number;
 }
 
+function panelContainingHour(panels: readonly WindgramDayPanel[] | undefined, hourIndex: number): WindgramDayPanel | null {
+  if (!panels?.length) return null;
+  return panels.find(p => p.endHourIndex >= p.startHourIndex && hourIndex >= p.startHourIndex && hourIndex <= p.endHourIndex) ?? null;
+}
+
+function panelContainingX(panels: readonly WindgramDayPanel[] | undefined, x: number): WindgramDayPanel | null {
+  if (!panels?.length) return null;
+  return panels.find(p => x >= p.left && x <= p.left + p.width) ?? null;
+}
+
 /** Inspect the published lift ceiling, free physical height, or magnetic Top-of-Lift + free height. */
 function mountWindgramInspector(
   host: HTMLElement,
@@ -50,7 +73,10 @@ function mountWindgramInspector(
   options: {
     mode?: WindgramInspectionMode;
     calloutVariant?: WindgramCalloutVariant;
+    calloutTrigger?: WindgramCalloutTrigger;
     onStepHour?: (delta: -1 | 1) => void;
+    onSelectDay?: (dateKey: string) => void;
+    onZoomMode?: (direction: 'in' | 'out', dateKey?: string) => void;
     onTelemetry?: (telemetry: WindgramTelemetryStrip | null) => void;
   } = {},
 ): WindgramInspector {
@@ -61,6 +87,8 @@ function mountWindgramInspector(
     return Object.assign(() => {}, { select: (_index: number | null) => {}, snapToTol: () => {} });
   }
   const mode: WindgramInspectionMode = options.mode ?? 'lift';
+  const calloutTrigger: WindgramCalloutTrigger = options.calloutTrigger ?? 'always';
+  const interactiveOnly = calloutTrigger === 'interact';
   const heightMode = mode === 'height';
   const magneticMode = mode === 'magnetic';
   const freeCapable = heightMode || magneticMode;
@@ -73,6 +101,15 @@ function mountWindgramInspector(
   const callout = svg?.querySelector<SVGGElement>('[data-cursor-readout]') ?? null;
   const calloutBack = svg?.querySelector<SVGRectElement>('[data-cursor-back]') ?? null;
   const boundCallout = getWindgramCalloutRenderer(options.calloutVariant).bind(svg);
+
+  // Precompute convective dome ceiling Y samples once per scene for O(1) anti-clobber callout placement.
+  const ceilingSamples = view.hours.map((h, i) => {
+    const z = h.usableLiftTopM ?? view.sourceHours[i]?.thermalTopM ?? null;
+    return {
+      x: h.x,
+      ceilingY: z !== null && z >= view.floorM && z <= view.topM ? heightToY(view, z) : null,
+    };
+  });
 
   const originalAttributes = new Map(['tabindex', 'role', 'aria-label', 'aria-describedby'].map((key) => [key, host.getAttribute?.(key) ?? null]));
   const readoutAttributes = new Map(['role', 'aria-live', 'aria-atomic'].map((key) => [key, readout?.getAttribute?.(key) ?? null]));
@@ -93,7 +130,11 @@ function mountWindgramInspector(
   let activeHeightM: number | null = null;
   let snappedToTol = !heightMode;
   let pinned = false;
+  let hovering = false;
+  let preferredSide: CalloutHorizontalSide = 'right';
   let pointerStart: { x: number; y: number; id: number; moved: boolean } | null = null;
+  const activeTouches = new Map<number, { x: number; y: number }>();
+  let pinchStartSpan: number | null = null;
   let cachedGeo: CachedSvgGeometry | null = null;
   let lastText = readout?.textContent ?? '';
   let disposed = false;
@@ -144,11 +185,16 @@ function mountWindgramInspector(
     lastText = text;
   };
 
-  const clear = () => {
-    pinned = false;
-    activeHour = null;
+  const hideFloatingCursor = () => {
     cursor?.setAttribute('visibility', 'hidden');
     tolRing?.setAttribute('visibility', 'hidden');
+  };
+
+  const clear = () => {
+    pinned = false;
+    hovering = false;
+    activeHour = null;
+    hideFloatingCursor();
     writeReadout(instructions);
     options.onTelemetry?.(null);
   };
@@ -194,8 +240,7 @@ function mountWindgramInspector(
     if (heightM !== null) activeHeightM = heightM;
 
     if (heightM === null || heightM < view.floorM || heightM > view.topM) {
-      cursor?.setAttribute('visibility', 'hidden');
-      tolRing?.setAttribute('visibility', 'hidden');
+      hideFloatingCursor();
       const reading = readWindgram(view, hourIndex, minFloorM);
       if (!deferAriaReadout) {
         writeReadout(`${when} · ${formatPointMapLift(lift, system)} · ${formatWindgramReading(view, reading, 'surface').join(' · ')}`);
@@ -208,12 +253,34 @@ function mountWindgramInspector(
     const telemetry = buildWindgramTelemetry(view, reading, lift, useTol, tolM !== null);
     options.onTelemetry?.(telemetry);
 
+    const hasAgl = useTol || reading.heightAglM !== null;
+    const aglText = !useTol
+      ? (hasAgl ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} AGL` : '')
+      : `${formatMapLiftCell(lift.agl, system)} AGL`;
+    const mslText = `${!useTol ? formatQuantity(reading.heightM, 'elevation', undefined, system) : formatMapLiftCell(lift.msl, system)} MSL`;
+
+    if (!deferAriaReadout) {
+      const altHeadline = aglText ? `${aglText} · ${mslText}` : mslText;
+      const title = `${when} · ${!useTol ? 'Inspected height' : 'Map usable lift'} · ${altHeadline}`;
+      const values = formatWindgramReading(view, reading, 'height');
+      writeReadout(`${title} · ${values.join(' · ')}`, title);
+    }
+
+    // In 'interact' mode, keep the floating callout & crosshairs hidden at rest until pointer/keyboard interaction.
+    if (interactiveOnly && !hovering && !pinned) {
+      hideFloatingCursor();
+      return;
+    }
+
     const y = heightToY(view, heightM);
     const setNums = (element: Element | null, values: Record<string, number>) => {
       for (const [key, value] of Object.entries(values)) element?.setAttribute(key, String(fmt(value)));
     };
+    const panel = panelContainingHour(view.dayPanels, hourIndex);
+    const hLeft = panel ? panel.left : view.left;
+    const hRight = panel ? panel.left + panel.width : view.left + view.plotWidth;
     setNums(vertical, { x1: x, x2: x, y1: view.top, y2: view.bottom });
-    setNums(horizontal, { x1: view.left, x2: view.left + view.plotWidth, y1: y, y2: y });
+    setNums(horizontal, { x1: hLeft, x2: hRight, y1: y, y2: y });
     setNums(point, { cx: x, cy: y });
     if (tolRing) {
       if (!useTol && tolM !== null) {
@@ -224,11 +291,6 @@ function mountWindgramInspector(
       }
     }
     cursor?.setAttribute('visibility', 'visible');
-    const hasAgl = useTol || reading.heightAglM !== null;
-    const aglText = !useTol
-      ? (hasAgl ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} AGL` : '')
-      : `${formatMapLiftCell(lift.agl, system)} AGL`;
-    const mslText = `${!useTol ? formatQuantity(reading.heightM, 'elevation', undefined, system) : formatMapLiftCell(lift.msl, system)} MSL`;
 
     const painted = boundCallout.paint({
       aglText,
@@ -254,31 +316,34 @@ function mountWindgramInspector(
       visibleBottom = Math.min(visibleBottom, bottomRight.y);
     }
     const padding = 4;
-    const calloutHeight = painted.height;
-    const calloutWidth = Math.min(painted.width, Math.max(0, visibleRight - visibleLeft - padding * 2));
-    if (calloutWidth < painted.width) setNums(calloutBack, { width: calloutWidth });
-    const calloutX = Math.max(
-      visibleLeft + padding,
-      Math.min(
-        x + 12 + calloutWidth <= visibleRight - padding ? x + 12 : x - 12 - calloutWidth,
-        visibleRight - calloutWidth - padding,
-      ),
-    );
-    const calloutY = Math.max(
-      visibleTop + padding,
-      Math.min(
-        y - calloutHeight - 12 >= visibleTop + padding ? y - calloutHeight - 12 : y + 12,
-        visibleBottom - calloutHeight - padding,
-      ),
-    );
-    callout?.setAttribute('transform', `translate(${fmt(calloutX)} ${fmt(calloutY)})`);
+    const visibleSpan = Math.max(0, visibleRight - visibleLeft);
+    const mobileScale = visibleSpan > 0 && visibleSpan < 336 ? 0.9 : 1;
+    const effectiveWidth = Math.min(painted.width * mobileScale, Math.max(0, visibleSpan - padding * 2));
+    const effectiveHeight = painted.height * mobileScale;
+    if (effectiveWidth / mobileScale < painted.width) setNums(calloutBack, { width: effectiveWidth / mobileScale });
 
-    if (!deferAriaReadout) {
-      const altHeadline = aglText ? `${aglText} · ${mslText}` : mslText;
-      const title = `${when} · ${!useTol ? 'Inspected height' : 'Map usable lift'} · ${altHeadline}`;
-      const values = formatWindgramReading(view, reading, 'height');
-      writeReadout(`${title} · ${values.join(' · ')}`, title);
-    }
+    const placed = placeWindgramCallout({
+      cursorX: x,
+      cursorY: y,
+      width: effectiveWidth,
+      height: effectiveHeight,
+      bounds: { left: visibleLeft, top: visibleTop, right: visibleRight, bottom: visibleBottom },
+      ceilingSamples,
+      preferredSide,
+    });
+    preferredSide = placed.side;
+    callout?.setAttribute(
+      'transform',
+      mobileScale === 1
+        ? `translate(${fmt(placed.x)} ${fmt(placed.y)})`
+        : `translate(${fmt(placed.x)} ${fmt(placed.y)}) scale(${mobileScale})`,
+    );
+  };
+
+  const resolveDayBannerTarget = (target: EventTarget | null): string | null => {
+    if (!target || typeof (target as Element).closest !== 'function') return null;
+    const banner = (target as Element).closest('[data-windgram-day]');
+    return banner?.getAttribute('data-windgram-day') ?? null;
   };
 
   const resolvePointer = (event: PointerEvent): { hourIndex: number; heightM?: number; snapTol: boolean } | null => {
@@ -286,9 +351,11 @@ function mountWindgramInspector(
     if (!geo) return null;
     const position = new DOMPoint(event.clientX, event.clientY).matrixTransform(geo.inverse);
     if (position.x < view.left || position.x > view.left + view.plotWidth) return null;
-    const dataLeft = view.hours[0].x - view.columnWidth / 2;
-    const dataRight = view.hours.at(-1)!.x + view.columnWidth / 2;
-    if (position.x < dataLeft || position.x > dataRight) return null;
+    if (!view.dayPanels?.length) {
+      const dataLeft = view.hours[0].x - view.columnWidth / 2;
+      const dataRight = view.hours.at(-1)!.x + view.columnWidth / 2;
+      if (position.x < dataLeft || position.x > dataRight) return null;
+    }
     const hourIndex = visibleHours.reduce((best, index) =>
       Math.abs(view.hours[index].x - position.x) < Math.abs(view.hours[best].x - position.x) ? index : best);
     if (position.y < view.top || position.y > view.bottom) {
@@ -314,9 +381,18 @@ function mountWindgramInspector(
   };
 
   const endHover = () => {
+    hovering = false;
     invalidateGeometry();
-    if (heightMode) cursor?.setAttribute('visibility', 'hidden');
-    else if (activeHour !== null) {
+    if (heightMode || (interactiveOnly && !pinned)) {
+      hideFloatingCursor();
+      if (interactiveOnly && !pinned && activeHour !== null) {
+        const selected = selectedHourIndex?.() ?? view.selectedHourIndex;
+        if (visibleHours.includes(selected)) {
+          snappedToTol = true;
+          update(selected, false, undefined, true);
+        }
+      }
+    } else if (activeHour !== null) {
       const selected = selectedHourIndex?.() ?? view.selectedHourIndex;
       if (!visibleHours.includes(selected)) clear();
       else if (selected !== activeHour || (magneticMode && !snappedToTol && !pinned)) {
@@ -327,6 +403,34 @@ function mountWindgramInspector(
   };
 
   const onMove = (event: PointerEvent) => {
+    if (event.pointerType === 'touch' && event.pointerId !== undefined && activeTouches.has(event.pointerId)) {
+      activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activeTouches.size === 2 && pinchStartSpan !== null && options.onZoomMode) {
+        const pts = [...activeTouches.values()];
+        const span = Math.abs(pts[0]!.x - pts[1]!.x);
+        if (span > pinchStartSpan * 1.42 && view.dayPanels?.length) {
+          const midX = (pts[0]!.x + pts[1]!.x) / 2;
+          const geo = readGeometry();
+          const svgPt = geo ? new DOMPoint(midX, pts[0]!.y).matrixTransform(geo.inverse) : null;
+          const panel = svgPt ? panelContainingX(view.dayPanels, svgPt.x) : null;
+          pinchStartSpan = null;
+          options.onZoomMode('in', panel?.dateKey);
+          return;
+        }
+        if (span < pinchStartSpan * 0.68 && !view.dayPanels?.length) {
+          pinchStartSpan = null;
+          options.onZoomMode('out');
+          return;
+        }
+      }
+      if (activeTouches.size >= 2) return;
+    }
+
+    if (resolveDayBannerTarget(event.target)) {
+      if (!pinned) endHover();
+      return;
+    }
+
     const dragging = pointerStart?.id === event.pointerId;
     if (dragging && Math.hypot(event.clientX - pointerStart!.x, event.clientY - pointerStart!.y) > 6) {
       pointerStart!.moved = true;
@@ -334,6 +438,7 @@ function mountWindgramInspector(
     if (magneticMode && dragging && pointerStart!.moved) {
       const p = resolvePointer(event);
       if (p) {
+        hovering = true;
         if (!p.snapTol && p.hourIndex === activeHour && !snappedToTol && p.heightM !== undefined && p.heightM === activeHeightM) {
           return;
         }
@@ -347,7 +452,9 @@ function mountWindgramInspector(
     if (event.pointerType !== 'mouse' || pinned) return;
     const p = resolvePointer(event);
     if (p && (p.heightM !== undefined || !magneticMode)) {
-      if (magneticMode && !p.snapTol && p.hourIndex === activeHour && !snappedToTol && p.heightM !== undefined && p.heightM === activeHeightM) {
+      const wasHovering = hovering;
+      hovering = true;
+      if (wasHovering && magneticMode && !p.snapTol && p.hourIndex === activeHour && !snappedToTol && p.heightM !== undefined && p.heightM === activeHeightM) {
         return;
       }
       update(p.hourIndex, false, p.heightM, p.snapTol);
@@ -357,8 +464,18 @@ function mountWindgramInspector(
   };
 
   const onDown = (event: PointerEvent) => {
+    if (event.pointerType === 'touch' && event.pointerId !== undefined) {
+      activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (activeTouches.size === 2) {
+        const pts = [...activeTouches.values()];
+        pinchStartSpan = Math.max(24, Math.abs(pts[0]!.x - pts[1]!.x));
+        pointerStart = null;
+        return;
+      }
+    }
     if (event.isPrimary === false) return;
     if (event.button !== undefined && event.button !== 0) return;
+    if (resolveDayBannerTarget(event.target)) return;
     invalidateGeometry();
     pointerStart = { x: event.clientX, y: event.clientY, id: event.pointerId, moved: false };
     if (magneticMode && typeof host.setPointerCapture === 'function' && event.pointerId !== undefined) {
@@ -367,12 +484,21 @@ function mountWindgramInspector(
   };
 
   const releaseCapture = (pointerId: number | undefined) => {
+    if (pointerId !== undefined) activeTouches.delete(pointerId);
+    if (activeTouches.size < 2) pinchStartSpan = null;
     if (pointerId !== undefined && typeof host.releasePointerCapture === 'function') {
       try { host.releasePointerCapture(pointerId); } catch { /* ignore */ }
     }
   };
 
   const onUp = (event: PointerEvent) => {
+    const dayKey = resolveDayBannerTarget(event.target);
+    if (dayKey) {
+      pointerStart = null;
+      releaseCapture(event.pointerId);
+      options.onSelectDay?.(dayKey);
+      return;
+    }
     const start = pointerStart;
     pointerStart = null;
     invalidateGeometry();
@@ -387,9 +513,38 @@ function mountWindgramInspector(
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) return;
     const p = resolvePointer(event);
     if (!p) return;
+    hovering = true;
     pinned = true;
     update(p.hourIndex, false, p.heightM, p.snapTol, false);
     onSelectHour?.(view.hours[p.hourIndex].validAt);
+  };
+
+  const onDblClick = (event: MouseEvent) => {
+    if (!view.dayPanels?.length || !options.onSelectDay) return;
+    const bannerDay = resolveDayBannerTarget(event.target);
+    if (bannerDay) {
+      options.onSelectDay(bannerDay);
+      return;
+    }
+    const geo = readGeometry();
+    if (!geo) return;
+    const pos = new DOMPoint(event.clientX, event.clientY).matrixTransform(geo.inverse);
+    const panel = panelContainingX(view.dayPanels, pos.x);
+    if (panel) options.onSelectDay(panel.dateKey);
+  };
+
+  const onWheel = (event: WheelEvent) => {
+    if (!options.onZoomMode || (!event.altKey && !event.ctrlKey)) return;
+    if (Math.abs(event.deltaY) < 4) return;
+    event.preventDefault();
+    if (event.deltaY < 0 && view.dayPanels?.length) {
+      const geo = readGeometry();
+      const pos = geo ? new DOMPoint(event.clientX, event.clientY).matrixTransform(geo.inverse) : null;
+      const panel = pos ? panelContainingX(view.dayPanels, pos.x) : null;
+      options.onZoomMode('in', panel?.dateKey);
+    } else if (event.deltaY > 0 && !view.dayPanels?.length) {
+      options.onZoomMode('out');
+    }
   };
 
   const onCancel = (event: PointerEvent) => {
@@ -399,9 +554,10 @@ function mountWindgramInspector(
   };
   const onLeave = () => {
     if (!pinned) endHover();
-    else invalidateGeometry();
+    else { hovering = false; invalidateGeometry(); }
   };
   const onBlur = () => {
+    hovering = false;
     invalidateGeometry();
     if (!pinned) return;
     pinned = false;
@@ -409,14 +565,26 @@ function mountWindgramInspector(
     else endHover();
   };
   const onKey = (event: KeyboardEvent) => {
+    const bannerDay = resolveDayBannerTarget(event.target);
+    if (bannerDay && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      options.onSelectDay?.(bannerDay);
+      return;
+    }
     if (event.key === 'Escape') {
       clear();
       return;
     }
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', ...(freeCapable ? ['ArrowUp', 'ArrowDown'] : [])].includes(event.key)) return;
     event.preventDefault();
+    hovering = true;
     pinned = true;
-    let hourIndex = Math.max(0, selectedHourIndex?.() ?? activeHour ?? view.selectedHourIndex);
+    const explicitSelected = selectedHourIndex?.();
+    if (explicitSelected === -1 && activeHour === null && options.onStepHour && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      options.onStepHour(event.key === 'ArrowLeft' ? -1 : 1);
+      return;
+    }
+    let hourIndex = Math.max(0, (explicitSelected !== undefined && explicitSelected >= 0 ? explicitSelected : undefined) ?? activeHour ?? view.selectedHourIndex);
     if (event.key === 'ArrowLeft') {
       let previous = visibleHours.length - 1;
       while (previous >= 0 && visibleHours[previous] >= hourIndex) previous--;
@@ -452,18 +620,23 @@ function mountWindgramInspector(
   host.addEventListener('pointerup', onUp);
   host.addEventListener('pointercancel', onCancel);
   host.addEventListener('pointerleave', onLeave);
+  host.addEventListener('dblclick', onDblClick);
+  host.addEventListener('wheel', onWheel, { passive: false });
   host.addEventListener('scroll', invalidateGeometry);
   host.addEventListener('keydown', onKey);
   host.addEventListener('blur', onBlur);
   return Object.assign(() => {
     if (disposed) return;
     disposed = true;
+    activeTouches.clear();
     invalidateGeometry();
     host.removeEventListener?.('pointermove', onMove);
     host.removeEventListener?.('pointerdown', onDown);
     host.removeEventListener?.('pointerup', onUp);
     host.removeEventListener?.('pointercancel', onCancel);
     host.removeEventListener?.('pointerleave', onLeave);
+    host.removeEventListener?.('dblclick', onDblClick);
+    host.removeEventListener?.('wheel', onWheel);
     host.removeEventListener?.('scroll', invalidateGeometry);
     host.removeEventListener?.('keydown', onKey);
     host.removeEventListener?.('blur', onBlur);
@@ -475,8 +648,7 @@ function mountWindgramInspector(
       if (value === null) readout?.removeAttribute?.(name);
       else readout?.setAttribute?.(name, value);
     }
-    cursor?.setAttribute('visibility', 'hidden');
-    tolRing?.setAttribute('visibility', 'hidden');
+    hideFloatingCursor();
   }, {
     select: (index: number | null) => {
       if (disposed) return;
@@ -488,6 +660,7 @@ function mountWindgramInspector(
       const target = activeHour ?? selectedHourIndex?.() ?? view.selectedHourIndex;
       if (!visibleHours.includes(target)) return;
       snappedToTol = true;
+      pinned = false;
       update(target, false, undefined, true);
     },
   });
@@ -500,6 +673,7 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
   let view = options.view;
   let mode: WindgramInspectionMode | undefined = options.inspectionMode;
   let calloutVariant: WindgramCalloutVariant | undefined = options.calloutVariant;
+  const calloutTrigger: WindgramCalloutTrigger | undefined = options.calloutTrigger;
   let selectedValidAt = options.selectedValidAt === undefined ? view.hours[view.selectedHourIndex]?.validAt ?? null : options.selectedValidAt;
   const select = (validAt: string | null) => {
     if (disposed) return;
@@ -510,10 +684,36 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
     if (cursor) {
       cursor.setAttribute('visibility', index >= 0 ? 'visible' : 'hidden');
       if (index >= 0) {
-        const left = Math.max(view.left, hourX(view.hours, index - 0.5, view.columnWidth));
-        const right = Math.min(view.left + view.plotWidth, hourX(view.hours, index + 0.5, view.columnWidth));
+        const panel = panelContainingHour(view.dayPanels, index);
+        const colW = panel ? panel.columnWidth : view.columnWidth;
+        const pLeft = panel ? panel.left : view.left;
+        const pRight = panel ? panel.left + panel.width : view.left + view.plotWidth;
+        const sliceHours = panel ? view.hours.slice(panel.startHourIndex, panel.endHourIndex + 1) : view.hours;
+        const localIdx = panel ? index - panel.startHourIndex : index;
+        const left = Math.max(pLeft, hourX(sliceHours, localIdx - 0.5, colW));
+        const right = Math.min(pRight, hourX(sliceHours, localIdx + 0.5, colW));
         cursor.setAttribute('x', String(left));
-        cursor.setAttribute('width', String(right - left));
+        cursor.setAttribute('width', String(Math.max(2, right - left)));
+      }
+    }
+    const tolDot = host.querySelector?.<SVGCircleElement>('[data-selected-tol-dot]') ?? null;
+    if (tolDot) {
+      const tolM = index >= 0 ? view.hours[index]?.usableLiftTopM ?? null : null;
+      if (index >= 0 && tolM !== null && tolM >= view.floorM && tolM <= view.topM) {
+        tolDot.setAttribute('cx', String(fmt(view.hours[index]!.x)));
+        tolDot.setAttribute('cy', String(fmt(heightToY(view, tolM))));
+        tolDot.setAttribute('visibility', 'visible');
+      } else {
+        tolDot.setAttribute('visibility', 'hidden');
+      }
+    }
+    if (view.dayPanels?.length && typeof host.querySelectorAll === 'function') {
+      const activePanel = index >= 0 ? panelContainingHour(view.dayPanels, index) : null;
+      for (const el of host.querySelectorAll('[data-windgram-day]')) {
+        const dayKey = el.getAttribute('data-windgram-day');
+        const isBest = Boolean(view.dayPanels.find(p => p.dateKey === dayKey)?.isBestDay);
+        const isSelected = Boolean(activePanel && dayKey === activePanel.dateKey);
+        el.setAttribute('class', `wg-day-banner${isSelected ? ' is-selected' : ''}${isBest ? ' is-best' : ''}`);
       }
     }
   };
@@ -525,7 +725,10 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
     }, () => view.hours.findIndex(hour => hour.validAt === selectedValidAt), {
       mode,
       calloutVariant,
+      calloutTrigger,
       onStepHour: options.onStepHour,
+      onSelectDay: options.onSelectDay,
+      onZoomMode: options.onZoomMode,
       onTelemetry: options.onTelemetry,
     });
     select(selectedValidAt);
@@ -539,13 +742,21 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
     const svg = host.querySelector?.<SVGSVGElement>('svg.windgram') ?? null;
     const ownerDocument = host.ownerDocument ?? (typeof document !== 'undefined' ? document : undefined);
     if (svg && ownerDocument && typeof ownerDocument.createElementNS === 'function') {
+      const inspectorGroup = svg.querySelector?.('[data-windgram-cursor]') ?? null;
       const selected = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'rect');
       for (const [key, value] of Object.entries({
         y: view.top, height: view.plotHeight, width: view.columnWidth,
-        fill: '#237e81', 'fill-opacity': 0.04, stroke: '#237e81', 'stroke-width': 1,
+        fill: '#237e81', 'fill-opacity': 0.06, stroke: '#1e3a8a', 'stroke-opacity': 0.35, 'stroke-width': 1,
         'pointer-events': 'none', 'data-selected-hour': '',
       })) selected.setAttribute(key, String(value));
-      svg.insertBefore?.(selected, svg.querySelector?.('[data-windgram-cursor]') ?? null);
+      svg.insertBefore?.(selected, inspectorGroup);
+
+      const selectedTolDot = ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      for (const [key, value] of Object.entries({
+        r: '5.2', fill: 'none', stroke: '#fbbf24', 'stroke-width': '2',
+        visibility: 'hidden', 'pointer-events': 'none', 'data-selected-tol-dot': '',
+      })) selectedTolDot.setAttribute(key, String(value));
+      svg.insertBefore?.(selectedTolDot, inspectorGroup);
     }
     bindInspector();
   };

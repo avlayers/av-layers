@@ -1,4 +1,5 @@
 import { AUTO_MODEL_ID, longitudeOffsetHours, type UnitSystem } from '@av/client';
+import type { PointViewMode } from '@av/windgram';
 import type { ModelId } from '@av/contracts/publication';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../features/controls/bottom-dock-model';
 import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleChoice } from '../features/map/channel-styles';
@@ -29,6 +30,7 @@ export interface Preferences {
   opacity(): number | null;
   theme(): MapTheme | null;
   dockView(): DockViewId | null;
+  pointViewMode(): PointViewMode | null;
   cloudStyle(): CloudStyleChoice | null;
   rainStyle(): RainStyleChoice | null;
   wind(): StoredWindPreferences | null;
@@ -36,6 +38,7 @@ export interface Preferences {
   setOpacity(opacity: number): void;
   setTheme(theme: MapTheme): void;
   setDockView(dockView: DockViewId): void;
+  setPointViewMode(mode: PointViewMode): void;
   setCloudStyle(style: CloudStyleChoice): void;
   setRainStyle(style: RainStyleChoice): void;
   setWind(state: WindControlState, fixedHeight: number): void;
@@ -58,6 +61,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     opacity() { const raw = read('preview-lift-opacity'), value = raw?.trim() ? Number(raw) : Number.NaN; return value >= 0 && value <= 1 ? value : null; },
     theme() { const value = read('preview-theme'); return isMapTheme(value) ? value : null; },
     dockView() { const value = read('preview-dock-view'); return isDockViewId(value) ? value : null; },
+    pointViewMode() { const value = read('preview-point-view'); return value === '3d' ? '3d' : value === '1d' ? '1d' : null; },
     cloudStyle() { const value = read('preview-cloud-style'); return value === 'auto' || isCloudStyleId(value) ? value : null; },
     rainStyle() { const value = read('preview-rain-style'); return value === 'auto' || isRainStyleId(value) ? value : null; },
     wind() { return parseWindPreferences(read(WIND_STORAGE_KEY)); },
@@ -65,6 +69,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     setOpacity(opacity) { write('preview-lift-opacity', String(opacity)); },
     setTheme(theme) { write('preview-theme', theme); },
     setDockView(dockView) { write('preview-dock-view', dockView); },
+    setPointViewMode(mode) { write('preview-point-view', mode); },
     setCloudStyle(style) { write('preview-cloud-style', style); },
     setRainStyle(style) { write('preview-rain-style', style); },
     setWind(state, fixedHeight) { write(WIND_STORAGE_KEY, serializeWindPreferences(state, fixedHeight)); }
@@ -75,6 +80,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initialUnits: UnitSystem = query.units ?? preferences.units() ?? 'metric';
   const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? 'stone';
   const initialDockView: DockViewId = query.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
+  const initialPointViewMode: PointViewMode = preferences.pointViewMode() ?? '3d';
   const initialCloudStyle: CloudStyleChoice = query.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
   const initialRainStyle: RainStyleChoice = query.rainStyle ?? preferences.rainStyle() ?? 'auto';
   const initialWindHeight = query.windHeight ?? storedWind?.height ?? 'surface';
@@ -88,7 +94,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
       liftVisible: query.liftVisible ?? true, cloudsVisible: query.cloudsVisible ?? true, rainVisible: query.rainVisible ?? true, isobarsVisible: query.isobarsVisible ?? false, peeking: false,
       windStyle: query.windStyle ?? storedWind?.style ?? 'trails', windVisible: query.windVisible ?? storedWind?.visible ?? true,
       windVisibleOverride: query.windVisible, windPaused: false, windHeight: initialWindHeight, fixedWindHeight: initialFixedHeight,
-      pointHorizon: 'day', requestedTime: query.validTime
+      pointHorizon: initialPointViewMode === '3d' ? 'forecast' : 'day', pointViewMode: initialPointViewMode, requestedTime: query.validTime
     },
     forecast: {
       build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],

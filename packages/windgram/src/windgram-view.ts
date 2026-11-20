@@ -68,6 +68,21 @@ interface WindgramSeries {
   dash: string | null;
   path: string;
 }
+export interface WindgramDayPanel {
+  readonly dateKey: string;
+  readonly label: string;
+  readonly isBestDay: boolean;
+  readonly isSelectedDay: boolean;
+  readonly left: number;
+  readonly width: number;
+  readonly columnWidth: number;
+  readonly startHourIndex: number;
+  readonly endHourIndex: number;
+  readonly visibleAxisIndices: readonly number[];
+  readonly seamX: number | null;
+  readonly seamWidth: number;
+  readonly uncoveredSpans: readonly { readonly x: number; readonly width: number }[];
+}
 export interface WindgramHour extends PublicHour {
   temperatureF: number | null;
   gustKt: number | null;
@@ -81,6 +96,7 @@ export interface WindgramView extends WindgramLayout {
   presentation: WindgramPresentation;
   anchors: HeightAnchor[];
   hours: WindgramHour[];
+  dayPanels?: readonly WindgramDayPanel[];
   /** Daylight axis includes empty columns outside the selected run's coverage. */
   timeAxis: WindgramTimeTick[];
   fields: { className: string; path: string }[];

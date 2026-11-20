@@ -1395,3 +1395,29 @@ it('previews elastic edge pull, bounces across gap days at 20px overscroll, and 
   expect(onSelect).toHaveBeenLastCalledWith(0, 'push');
   timeline.destroy();
 });
+
+it('highlights multi-day window pills cleanly and clears them when closed', () => {
+  const { host, timeline } = setup();
+  const root = host.children[0]!;
+  const multiDay: TimelineFrame[] = [
+    { id: 'f12', validTime: '2026-11-13T12:00:00Z' },
+    { id: 's12', validTime: '2026-11-15T12:00:00Z' },
+    { id: 'm12', validTime: '2026-11-16T12:00:00Z' }
+  ];
+  timeline.update(multiDay, 'f12');
+  const days = named(root, 'ct-day');
+  expect(days.map(d => d.dataset.day)).toEqual(['2026-11-13', '2026-11-14', '2026-11-15', '2026-11-16']);
+
+  // Highlight Fri 13, unavailable gap Sat 14, and Sun 15: only available days receive .is-in-window.
+  timeline.setHighlightedDays?.(['2026-11-13', '2026-11-14', '2026-11-15']);
+  expect(days.map(d => d.classList.contains('is-in-window'))).toEqual([true, false, true, false]);
+
+  // Preserved across frame selection updates.
+  timeline.update(multiDay, 's12');
+  expect(days.map(d => d.classList.contains('is-in-window'))).toEqual([true, false, true, false]);
+
+  // Cleared when point card closes.
+  timeline.setHighlightedDays?.(null);
+  expect(days.map(d => d.classList.contains('is-in-window'))).toEqual([false, false, false, false]);
+  timeline.destroy();
+});

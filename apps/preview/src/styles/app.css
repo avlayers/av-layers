@@ -1294,6 +1294,22 @@ a { color: #1c6b8a; }
   }
 }
 
+@media (max-width: 520px) {
+  #point-card {
+    --av-bar-reserve-right: 26px;
+  }
+  #point-status {
+    padding-right: 28px;
+  }
+  #point-info-trigger {
+    padding: 0 5px;
+    gap: 0;
+  }
+  #point-info-trigger .point-info-coords {
+    display: none;
+  }
+}
+
 @media (max-width: 660px) {
   .dock-group-tag { display: none; }
   .theme-selected-copy { display: none; }

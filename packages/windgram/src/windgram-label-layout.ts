@@ -36,7 +36,7 @@ function placeTemperatureLabels(
   view: Pick<
     WindgramView,
     'contours' | 'clouds' | 'barbs' | 'compact' | 'columnWidth' | 'left' | 'top' | 'bottom' | 'plotWidth' | 'unitSystem'
-  > & Partial<Pick<WindgramView, 'presentation' | 'freezing'>>,
+  > & Partial<Pick<WindgramView, 'presentation' | 'freezing' | 'dayPanels'>>,
   cloudScale: number,
   clouds: readonly WindgramCloud[] = view.clouds,
   barbs: readonly WindgramBarb[] = view.barbs,
@@ -49,66 +49,85 @@ function placeTemperatureLabels(
   ];
   const winds = barbs.map(b => windBarbGlyph(b, presentation, system).bounds);
   const placed: PlacedTemperatureLabel[] = [];
-  const usedValues = new Set<string>();
   const displayTemp = (f: number) => convertQuantity(fahrenheitToCelsius(f), 'temperature', system)!;
+  const scopes = view.dayPanels?.length
+    ? view.dayPanels.map(panel => ({
+        minX: panel.left + 3,
+        maxX: panel.left + panel.width - 3,
+        columnWidth: panel.columnWidth,
+        panelLeft: panel.left - 0.5,
+        panelRight: panel.left + panel.width + 0.5,
+      }))
+    : [{
+        minX: view.left + 3,
+        maxX: view.left + view.plotWidth - 3,
+        columnWidth: view.columnWidth,
+        panelLeft: -Infinity,
+        panelRight: Infinity,
+      }];
 
-  for (const contour of view.contours as readonly TemperatureContour[]) {
-    for (const component of contour.components) {
-      const valueText = `${Math.round(displayTemp(contour.temperatureF))}°`;
-      if (usedValues.has(valueText)) continue;
-      // Arial's tabular digits plus the degree mark and 3px horizontal padding.
-      const width = Math.ceil([...valueText].reduce((sum, c) => sum + (c === '°' ? 0.4 : /[-−]/.test(c) ? 0.333 : 0.556), 0) * presentation.fonts.primary + 6);
-      const height = presentation.fonts.primary + 6;
-      const middleX = (component.minX + component.maxX) / 2, middleY = (component.minY + component.maxY) / 2;
-      // Geometry candidates cover short branches between source-hour labels and
-      // provide another place on the line when the central candidate is cloudy.
-      const stride = Math.max(1, Math.ceil(component.segments.length / 40));
-      const anchors = [
-        ...component.candidates,
-        ...component.segments
-          .filter((_, i) => i % stride === 0)
-          .map((segment) => ({ x: (segment.x1 + segment.x2) / 2, y: (segment.y1 + segment.y2) / 2 })),
-      ];
-      const positions = anchors.flatMap((point) =>
-        [0, -view.columnWidth * 0.24, view.columnWidth * 0.24].flatMap((offset) => {
-          if (offset === 0) return [point];
-          const x = point.x + offset;
-          const crossings = component.segments
-            .filter((segment) => segment.x1 !== segment.x2 && x >= Math.min(segment.x1, segment.x2) && x <= Math.max(segment.x1, segment.x2))
-            .map((segment) => segment.y1 + ((segment.y2 - segment.y1) * (x - segment.x1)) / (segment.x2 - segment.x1))
-            .sort((a, b) => Math.abs(a - point.y) - Math.abs(b - point.y));
-          return crossings.length && Math.abs(crossings[0] - point.y) < 24 ? [{ x, y: crossings[0] }] : [];
-        }),
-      );
-      positions.sort(
-        (a, b) => Math.abs(a.x - middleX) + Math.abs(a.y - middleY) * 0.15 - (Math.abs(b.x - middleX) + Math.abs(b.y - middleY) * 0.15),
-      );
-      const boxes = positions
-        .map((position) => ({ x: position.x - width / 2, y: position.y - height / 2, width, height }))
-        .filter(
-          (box) =>
-            box.x >= view.left + 3 &&
-            box.x + width <= view.left + view.plotWidth - 3 &&
-            box.y >= view.top + 3 &&
-            box.y + height <= view.bottom - 3 &&
-            !occupied.some((other) => overlaps(box, other, 4)),
+  for (const scope of scopes) {
+    const usedValues = new Set<string>();
+    for (const contour of view.contours as readonly TemperatureContour[]) {
+      for (const component of contour.components) {
+        const middleX = (component.minX + component.maxX) / 2;
+        if (middleX < scope.panelLeft || middleX > scope.panelRight) continue;
+        const valueText = `${Math.round(displayTemp(contour.temperatureF))}°`;
+        if (usedValues.has(valueText)) continue;
+        // Arial's tabular digits plus the degree mark and 3px horizontal padding.
+        const width = Math.ceil([...valueText].reduce((sum, c) => sum + (c === '°' ? 0.4 : /[-−]/.test(c) ? 0.333 : 0.556), 0) * presentation.fonts.primary + 6);
+        const height = presentation.fonts.primary + 6;
+        const middleY = (component.minY + component.maxY) / 2;
+        // Geometry candidates cover short branches between source-hour labels and
+        // provide another place on the line when the central candidate is cloudy.
+        const stride = Math.max(1, Math.ceil(component.segments.length / 40));
+        const anchors = [
+          ...component.candidates,
+          ...component.segments
+            .filter((_, i) => i % stride === 0)
+            .map((segment) => ({ x: (segment.x1 + segment.x2) / 2, y: (segment.y1 + segment.y2) / 2 })),
+        ];
+        const positions = anchors.flatMap((point) =>
+          [0, -scope.columnWidth * 0.24, scope.columnWidth * 0.24].flatMap((offset) => {
+            if (offset === 0) return [point];
+            const x = point.x + offset;
+            const crossings = component.segments
+              .filter((segment) => segment.x1 !== segment.x2 && x >= Math.min(segment.x1, segment.x2) && x <= Math.max(segment.x1, segment.x2))
+              .map((segment) => segment.y1 + ((segment.y2 - segment.y1) * (x - segment.x1)) / (segment.x2 - segment.x1))
+              .sort((a, b) => Math.abs(a - point.y) - Math.abs(b - point.y));
+            return crossings.length && Math.abs(crossings[0] - point.y) < 24 ? [{ x, y: crossings[0] }] : [];
+          }),
         );
-      if (!boxes.length) continue;
-      const box = boxes.find((candidate) => !winds.some((wind) => overlaps(candidate, wind, 1))) ??
-        boxes.reduce((best, candidate) => {
-          const cost = (box: LabelBox) => winds.reduce((sum, wind, i) => sum + (overlaps(box, wind, 1) ? (barbs[i].interpolated ? 1 : 2) : 0), 0);
-          return cost(candidate) < cost(best) ? candidate : best;
+        positions.sort(
+          (a, b) => Math.abs(a.x - middleX) + Math.abs(a.y - middleY) * 0.15 - (Math.abs(b.x - middleX) + Math.abs(b.y - middleY) * 0.15),
+        );
+        const boxes = positions
+          .map((position) => ({ x: position.x - width / 2, y: position.y - height / 2, width, height }))
+          .filter(
+            (box) =>
+              box.x >= scope.minX &&
+              box.x + width <= scope.maxX &&
+              box.y >= view.top + 3 &&
+              box.y + height <= view.bottom - 3 &&
+              !occupied.some((other) => overlaps(box, other, 4)),
+          );
+        if (!boxes.length) continue;
+        const box = boxes.find((candidate) => !winds.some((wind) => overlaps(candidate, wind, 1))) ??
+          boxes.reduce((best, candidate) => {
+            const cost = (box: LabelBox) => winds.reduce((sum, wind, i) => sum + (overlaps(box, wind, 1) ? (barbs[i].interpolated ? 1 : 2) : 0), 0);
+            return cost(candidate) < cost(best) ? candidate : best;
+          });
+        occupied.push(box);
+        usedValues.add(valueText);
+        placed.push({
+          temperatureF: contour.temperatureF,
+          valueText,
+          box,
+          textX: box.x + width / 2,
+          textY: box.y + height / 2 + presentation.fonts.primary * 0.35,
+          freezing: contour.temperatureF === 32,
         });
-      occupied.push(box);
-      usedValues.add(valueText);
-      placed.push({
-        temperatureF: contour.temperatureF,
-        valueText,
-        box,
-        textX: box.x + width / 2,
-        textY: box.y + height / 2 + presentation.fonts.primary * 0.35,
-        freezing: contour.temperatureF === 32,
-      });
+      }
     }
   }
   return placed;

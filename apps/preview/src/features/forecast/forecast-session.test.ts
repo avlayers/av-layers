@@ -23,7 +23,7 @@ function harness() {
     theme: 'stone', dockView: 'capsule', cloudStyle: 'auto', rainStyle: 'auto',
     liftVisible: true, cloudsVisible: true, rainVisible: true, isobarsVisible: false, peeking: false,
     windStyle: 'trails', windVisible: true, windVisibleOverride: null, windPaused: false,
-    windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', requestedTime: null
+    windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', pointViewMode: '1d', requestedTime: null
   };
   let current = { ...intent };
   let center = { lat: 40, lon: -100 };
