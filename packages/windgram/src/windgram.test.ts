@@ -4,13 +4,14 @@ import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
-import { buildWindgramView, createPointForecast, readWindgram } from './model.ts';
+import { buildStitchedWindgramView, buildWindgramView, createPointForecast, readWindgram } from './model.ts';
+import { findBestSoaringDayKey, formatDayWindowLabel, resolveStitchedDayWindow } from './point-view-mode.ts';
 import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
 
 import { barbGeometry, displayedBarbSpeed, quantizedBarbSpeed } from './wind-barb.ts';
-import { classifyParagliderWind, cloudOktasSegments, getWindgramCalloutRenderer } from './windgram-callout.ts';
+import { classifyParagliderWind, cloudOktasSegments, getWindgramCalloutRenderer, placeWindgramCallout } from './windgram-callout.ts';
 import { windBarbGlyph } from './windgram-glyphs.ts';
 import { resolveWindgramPresentation } from './windgram-presentation.ts';
 import { elevationTickMeters, mpsToKnots, roundedElevationLabel } from './windgram-format.ts';
@@ -376,7 +377,7 @@ describe('Windgram data', () => {
     const onFrame = vi.fn();
 
     renderPointWindgram(container, { frames: frames.slice(0, 2) }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: true, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', viewMode: '1d', totalFrames: 5, loading: true, onFrame
     });
     const host = visit(root).find(el => el.className === 'av-windgram-host')!;
     expect(host.ownerDocument).toBe(owner);
@@ -396,7 +397,7 @@ describe('Windgram data', () => {
 
     // Appending later-day frames keeps Day 1's mounted SVG untouched.
     const update = renderPointWindgram(container, { frames }, build, {
-      point, frameId: 'f014', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
+      point, frameId: 'f014', unitSystem: 'metric', viewMode: '1d', totalFrames: 5, loading: false, onFrame
     });
     expect(htmlSpy).not.toHaveBeenCalled();
 
@@ -415,7 +416,7 @@ describe('Windgram data', () => {
     frames[1].layers['usable-lift-msl'] = { ...frames[1].layers['usable-lift-msl']!, value: null, status: 'no-usable-lift' };
     frames[1].layers['usable-lift-agl'] = { ...frames[1].layers['usable-lift-agl']!, value: 0, status: 'no-usable-lift' };
     renderPointWindgram(container, { frames }, build, {
-      point, frameId: 'f015', unitSystem: 'metric', totalFrames: 5, loading: false, onFrame
+      point, frameId: 'f015', unitSystem: 'metric', viewMode: '1d', totalFrames: 5, loading: false, onFrame
     });
     const liftSummaryEl = visit(root).find(el => el.className === 'av-windgram-lift-summary')!;
     expect(liftSummaryEl.hidden).toBe(true);
@@ -698,9 +699,9 @@ describe('Windgram data', () => {
       reading: { ...baseReading, speedKt: mpsToKnots(4.5), directionDeg: 270, precipitationMmHr: 0, windShear: null },
       unitSystem: 'metric',
     });
-    expect(size).toEqual({ width: 194, height: 84 });
+    expect(size).toEqual({ width: 178, height: 74 });
     expect(badge.textContent).toBe('★ TOL');
-    expect(windArrow.getAttribute('transform')).toBe('translate(18 37.5) rotate(90)');
+    expect(windArrow.getAttribute('transform')).toBe('translate(16.5 33) rotate(90)');
     expect(windSpeed.textContent).toBe('16 km/h');
     expect(windSpeed.getAttribute('class')).toContain('is-ok');
     expect(windDir.textContent).toBe('W');
@@ -752,5 +753,163 @@ describe('Windgram data', () => {
     mounted.setCalloutVariant('tile-2x2');
     expect(swapHost.innerHTML).toContain('data-callout-variant="tile-2x2"');
     mounted.dispose();
+  });
+
+  it('places the floating callout in calm sky pockets away from cursor bullseye and convective dome with hysteresis', () => {
+    const bounds = { left: 46, top: 46, right: 616, bottom: 296 };
+    const ceilingSamples = [
+      { x: 100, ceilingY: 220 },
+      { x: 260, ceilingY: 85 },
+      { x: 300, ceilingY: 72 },
+      { x: 340, ceilingY: 80 },
+      { x: 520, ceilingY: 230 },
+    ];
+    // Cursor at high convective peak (x=300, y=72): callout avoids covering (300, 72) and avoids sitting inside the high dome.
+    const peakPlaced = placeWindgramCallout({
+      cursorX: 300,
+      cursorY: 72,
+      width: 178,
+      height: 74,
+      bounds,
+      ceilingSamples,
+      preferredSide: 'right',
+    });
+    const overlapsCursor =
+      300 >= peakPlaced.x - 8 && 300 <= peakPlaced.x + 178 + 8 &&
+      72 >= peakPlaced.y - 8 && 72 <= peakPlaced.y + 74 + 8;
+    expect(overlapsCursor).toBe(false);
+    expect(peakPlaced.x).toBeGreaterThanOrEqual(bounds.left + 4);
+    expect(peakPlaced.x + 178).toBeLessThanOrEqual(bounds.right - 4);
+
+    // Hysteresis keeps preferredSide steady across symmetric sky pockets.
+    const flatSamples = [{ x: 150, ceilingY: 230 }, { x: 450, ceilingY: 230 }];
+    const rightPref = placeWindgramCallout({ cursorX: 330, cursorY: 210, width: 178, height: 74, bounds, ceilingSamples: flatSamples, preferredSide: 'right' });
+    const leftPref = placeWindgramCallout({ cursorX: 330, cursorY: 210, width: 178, height: 74, bounds, ceilingSamples: flatSamples, preferredSide: 'left' });
+    expect(rightPref.side).toBe('right');
+    expect(leftPref.side).toBe('left');
+  });
+
+  it('stitches 3 daylight panels with zero plotHeight/plotWidth shrinkage, midnight isolation, interact-only hover, and chip-free bar controls', () => {
+    // 3 days of daylight hours in Etc/GMT+5 (14..21 UTC = 09:00..16:00 local)
+    const day1 = [14, 16, 18, 20];
+    const day2 = [38, 40, 42, 44];
+    const day3 = [62, 64, 66, 68];
+    const day4 = [86, 88, 90];
+    const { build, sample, profile, forecast } = fixture([...day1, ...day2, ...day3, ...day4], 15);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+    // Make Day 2 the clear best soaring day, and Day 3 strong but blown out by 45 km/h (12.5 m/s) gale surface winds.
+    for (const i of [4, 5, 6, 7]) {
+      frames[i]!.layers['usable-lift-msl']!.value = 2650;
+      frames[i]!.layers['usable-lift-agl']!.value = 1150;
+      frames[i]!.layers['thermal-velocity']!.value = 2.8;
+    }
+    for (const i of [8, 9, 10, 11]) {
+      frames[i]!.layers['usable-lift-msl']!.value = 2750;
+      frames[i]!.layers['usable-lift-agl']!.value = 1250;
+      frames[i]!.layers['thermal-velocity']!.value = 2.9;
+    }
+    const site = forecast(frames);
+    const allDays = [...new Set(site.hours.map(h => h.validAt.slice(0, 10)))];
+    expect(allDays.length).toBeGreaterThanOrEqual(3);
+    const win3 = resolveStitchedDayWindow(allDays, { focusDayKey: allDays[0] });
+    expect(win3.windowDays).toHaveLength(3);
+    expect(formatDayWindowLabel(win3.windowDays)).toContain('–');
+
+    const hoursByDay = new Map(allDays.map(d => [d, site.hours.filter(h => h.validAt.startsWith(d)).map(h => ({ validAt: h.validAt }))]));
+    const fhMap = new Map(site.hours.map(h => [h.validAt, {
+      usableLiftTopM: h.mapLift.mslM,
+      terrainM: h.mapLift.terrainM,
+      thermalVelocityMps: h.thermalVelocityMps,
+      surfaceWindMps: h.validAt.startsWith(allDays[2]!) ? 12.5 : h.surface.windSpeedMps,
+    }]));
+    expect(findBestSoaringDayKey(allDays.slice(0, 3), hoursByDay, fhMap)).toBe(allDays[1]);
+
+    const oneDay = buildWindgramView(site, {
+      unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: site.site.timeZone,
+      widthPx: 620, heightPx: 320, hours: { timeZone: site.site.timeZone, dateKey: allDays[0]! },
+    });
+    const threeDay = buildStitchedWindgramView(site, {
+      unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: site.site.timeZone,
+      widthPx: 620, heightPx: 320, dateKeys: win3.windowDays, selectedDateKey: allDays[0], bestDateKey: allDays[1],
+    });
+    const threeDayInternal = sceneData(threeDay);
+    // Zero shrinkage guarantee: 3-Day stitched view preserves identical plotHeight, plotWidth, top, and bottom.
+    expect(threeDay.plotHeight).toBe(oneDay.plotHeight);
+    expect(threeDay.plotWidth).toBe(oneDay.plotWidth);
+    expect(threeDay.top).toBe(oneDay.top);
+    expect(threeDay.bottom).toBe(oneDay.bottom);
+    expect(threeDayInternal.dayPanels).toHaveLength(3);
+
+    const stitchedSvg = renderWindgramSvg(threeDay);
+    expect(stitchedSvg).toContain('windgram-stitched');
+    expect(stitchedSvg.match(/data-night-seam/g)).toHaveLength(2);
+    expect(stitchedSvg.match(/data-windgram-day=/g)).toHaveLength(3);
+    // Each stitched day panel places its own isotherm temperature callout pills independently.
+    const labelRects = [...stitchedSvg.matchAll(/class="wg-temperature-label"[^>]*><rect x="([^"]+)"/g)].map(m => Number(m[1]));
+    for (const panel of threeDayInternal.dayPanels!) {
+      expect(labelRects.some(x => x >= panel.left && x <= panel.left + panel.width)).toBe(true);
+    }
+    // Usable lift path has 3 separate M subpaths (never connected across midnight).
+    const liftPath = threeDayInternal.series.find(s => s.key === 'usableLiftTopM')?.path ?? '';
+    expect(liftPath.match(/M/g)).toHaveLength(3);
+
+    // Verify 3-Day default mode, initial today/first-day window anchoring even when Day 4 is selected on timeline,
+    // chip-free bar, 0% resting clobber ('interact' trigger), 3d <-> 1d toggle, and stable SVG across cross-day selection.
+    const head = new FakeElement('head');
+    const owner = {
+      head,
+      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
+      createElement: (tag: string) => new FakeElement(tag, owner as unknown as Document),
+      defaultView: Object.assign(new EventTarget(), {
+        getComputedStyle: () => ({ maxHeight: '300px' }),
+      }),
+    };
+    const root = owner.createElement('div');
+    const onFrame = vi.fn();
+    const onViewModeChange = vi.fn();
+    const onVisibleDaysChange = vi.fn();
+    // Omit viewMode -> defaults to '3d'; pass Day 4 frame (frames[12]) -> still opens starting on first day (win3.windowDays)!
+    const update = renderPointWindgram(root as unknown as HTMLElement, { frames }, build, {
+      point, frameId: frames[12]!.id, unitSystem: 'metric',
+      onFrame, onViewModeChange, onVisibleDaysChange,
+    });
+    const bar = visit(root).find(el => el.className === 'av-windgram-bar')!;
+    expect(bar.children).toHaveLength(2);
+    const barText = visit(bar).map(el => el.textContent).join(' ');
+    expect(barText).toContain('1-Day');
+    expect(barText).toContain('3-Day');
+    expect(barText).not.toContain('Sfc ');
+    expect(barText).not.toContain('Cloud ');
+    const host = visit(root).find(el => el.className === 'av-windgram-host')!;
+    // Defaults to stitched 3-day view anchored to first/today window despite Day 4 timeline selection.
+    expect(host.innerHTML).toContain('windgram-stitched');
+    expect(onVisibleDaysChange).toHaveBeenLastCalledWith(win3.windowDays);
+    // At rest in 'interact' mode, cursor group starts hidden (0% chart covered).
+    expect(host.innerHTML).toContain('data-windgram-cursor="" visibility="hidden"');
+
+    // Toggle to '1-Day' and back to '3-Day'.
+    const btn1d = visit(bar).find(el => el.getAttribute('data-point-view') === '1d')!;
+    const btn3d = visit(bar).find(el => el.getAttribute('data-point-view') === '3d')!;
+    btn1d.dispatchEvent(new Event('click'));
+    expect(onViewModeChange).toHaveBeenCalledExactlyOnceWith('1d');
+    expect(host.innerHTML).not.toContain('windgram-stitched');
+    btn3d.dispatchEvent(new Event('click'));
+    expect(onViewModeChange).toHaveBeenLastCalledWith('3d');
+    expect(host.innerHTML).toContain('windgram-stitched');
+
+    // Jump back to Day 1 so win3 is active, then verify selecting Day 2 inside the same 3-day window does NOT rebuild host.innerHTML.
+    update(frames[0]!.id);
+    expect(onVisibleDaysChange).toHaveBeenLastCalledWith(win3.windowDays);
+    const htmlSpy = vi.fn();
+    let currentSvg = host.innerHTML;
+    Object.defineProperty(host, 'innerHTML', {
+      get: () => currentSvg,
+      set: (next: string) => { htmlSpy(); currentSvg = next; },
+    });
+    update(frames[5]!.id);
+    expect(htmlSpy).not.toHaveBeenCalled();
+
+    disposePointWindgram(root as unknown as HTMLElement);
+    expect(onVisibleDaysChange).toHaveBeenLastCalledWith(null);
   });
 });

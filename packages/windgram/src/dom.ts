@@ -2,10 +2,15 @@ import type { WindgramView } from './model.ts';
 import { sceneData } from './scene-store.ts';
 import { chartStyles } from './chart-styles.ts';
 import type { WindgramCalloutVariant } from './windgram-callout.ts';
-import { mountWindgram as mount, type WindgramInspectionMode, type WindgramMountOptions } from './windgram-dom.ts';
+import {
+  mountWindgram as mount,
+  type WindgramCalloutTrigger,
+  type WindgramInspectionMode,
+  type WindgramMountOptions,
+} from './windgram-dom.ts';
 
 export type WindgramMount = ReturnType<typeof mountWindgram>;
-export type { WindgramCalloutVariant, WindgramInspectionMode, WindgramMountOptions };
+export type { WindgramCalloutTrigger, WindgramCalloutVariant, WindgramInspectionMode, WindgramMountOptions };
 
 /** Mount a chart and install its stylesheet in the host document. */
 export function mountWindgram(host: HTMLElement, options: WindgramMountOptions & { view: WindgramView }) {

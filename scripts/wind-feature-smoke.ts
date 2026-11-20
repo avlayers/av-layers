@@ -151,7 +151,10 @@ async function launchBrowser(options: WindFeatureSmokeOptions): Promise<Browser>
   try { return await chromium.launch({ headless: !options.headed }); }
   catch (error) {
     try { return await chromium.launch({ headless: !options.headed, channel: 'chrome' }); }
-    catch { throw error; }
+    catch {
+      try { return await chromium.launch({ headless: !options.headed, args: ['--no-sandbox', '--single-process'] }); }
+      catch { throw error; }
+    }
   }
 }
 
@@ -313,6 +316,10 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(await page.locator('.point-marker').isVisible(), 'Selected point marker dot is not visible');
       assert((await page.locator('#point-close').count()) === 0, 'Legacy #point-close header row button should not exist');
       await page.waitForTimeout(450);
+      const btn3d = page.locator('[data-point-view="3d"]');
+      if (await btn3d.isVisible()) {
+        assert(await btn3d.getAttribute('aria-pressed') === 'true', '3-Day view should be active by default');
+      }
       await page.mouse.click(map.x + map.width - 200, map.y + 200);
       await page.locator('#point-card').waitFor({ state: 'hidden', timeout: timeoutMs });
       assert(!(await page.locator('.point-marker').isVisible()), 'Point marker dot remained visible after dismissing point card');

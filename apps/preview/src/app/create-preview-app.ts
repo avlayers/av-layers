@@ -374,6 +374,7 @@ export function createPreviewApp(): PreviewApp {
 
   function closePoint(): void {
     activePointEase = null;
+    timeline?.setHighlightedDays?.(null);
     pointMarker?.clear();
     pointFeature?.close();
   }
@@ -665,7 +666,20 @@ export function createPreviewApp(): PreviewApp {
     },
     setUnits(units) { commandSetUnits(units); },
     setWind: commandSetWind,
-    setPointHorizon(horizon) { writer.intent({ pointHorizon: horizon as PointHorizon }); void pointFeature?.setHorizon(horizon as PointHorizon); },
+    setPointHorizon(horizon) {
+      const next = horizon as PointHorizon;
+      if (intent().pointHorizon === next) return;
+      writer.intent({ pointHorizon: next });
+      void pointFeature?.setHorizon(next);
+    },
+    setPointViewMode(mode) {
+      const nextHorizon: PointHorizon = mode === '3d' ? 'forecast' : intent().pointHorizon;
+      const horizonChanged = nextHorizon !== intent().pointHorizon;
+      writer.intent({ pointViewMode: mode, pointHorizon: nextHorizon });
+      preferences.setPointViewMode(mode);
+      if (horizonChanged) void pointFeature?.setHorizon(nextHorizon);
+      else pointFeature?.syncViewMode?.();
+    },
     selectFrame(index, history) { selectIndex(index, history); },
     setPlaying(playing) {
       writer.forecast({ playing });
@@ -792,6 +806,7 @@ export function createPreviewApp(): PreviewApp {
       getSelectedFrame: selectedFrame,
       getUnits: () => intent().units,
       getHorizon: () => intent().pointHorizon,
+      getViewMode: () => intent().pointViewMode,
       getMapOffset: () => mapOffsetMinutes,
       getDisplayedFrame: displayedPointFrame,
       getWind: () => {
@@ -810,6 +825,11 @@ export function createPreviewApp(): PreviewApp {
         if (cancelled?.changed) writeUrl(cancelled.delivered ? 'push' : 'replace');
         if (cancelled?.changed && intent().model === AUTO_MODEL_ID) void forecastSession.loadAuto();
       },
+      onViewModeChange: mode => commands.setPointViewMode?.(mode),
+      onRequestFullHorizon: () => {
+        if (intent().pointHorizon !== 'forecast') commands.setPointHorizon('forecast');
+      },
+      onVisibleDaysChange: days => timeline?.setHighlightedDays?.(days),
       publish: {
         open: point => {
           const easeToken = { point, settled: false };
@@ -825,6 +845,7 @@ export function createPreviewApp(): PreviewApp {
         },
         close: () => {
           activePointEase = null;
+          timeline?.setHighlightedDays?.(null);
           pointMarker?.clear();
           writer.point({ open: false, status: '', wind: '' });
         },
@@ -918,6 +939,11 @@ export function createPreviewApp(): PreviewApp {
       if (event.key === 'i' || event.key === 'I') {
         event.preventDefault();
         commands.toggleWeatherLayer('isobars');
+        return;
+      }
+      if ((event.key === '1' || event.key === '3') && isPointOpen()) {
+        event.preventDefault();
+        commands.setPointViewMode?.(event.key === '3' ? '3d' : '1d');
         return;
       }
       if (event.key === '[' || event.key === ']') {

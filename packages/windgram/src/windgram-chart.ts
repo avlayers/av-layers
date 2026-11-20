@@ -48,9 +48,9 @@ function renderTemperatureLabelsSvg(labels: readonly PlacedTemperatureLabel[]): 
 
 function heightAxisHeader(view: WindgramView, system: UnitSystem) {
   const x = view.left - 8;
-  return text(x, 16, `${unitLabel('elevation', system)} MSL`, 'text-anchor="end" class="wg-axis-unit"') +
-    text(x, 31, 'Lift w*', 'text-anchor="end" class="wg-lift"') +
-    text(x, 42, unitLabel('lift', system), 'text-anchor="end" class="wg-axis-unit"');
+  return text(x, 15, `${unitLabel('elevation', system)} MSL`, 'text-anchor="end" class="wg-axis-unit"') +
+    text(x, 29.5, 'Lift w*', 'text-anchor="end" class="wg-lift"') +
+    text(x, 41.5, unitLabel('lift', system), 'text-anchor="end" class="wg-axis-unit"');
 }
 
 function elevationTicks(view: WindgramView, system: UnitSystem): { y: number; label: string }[] {
@@ -67,7 +67,7 @@ function heightAxisLabels(view: WindgramView, system: UnitSystem) {
   }).join('');
   if (view.compact) return altitudes;
   const pressures = visibleHeightAnchors(view).map(anchor => {
-    const mark = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>"/>`;
+    const mark = `<path d="M${view.left - 5} ${fmt(anchor.y)}h5" stroke="#fff" stroke-width="1"/>`;
     return mark + text(view.left - 10, anchor.y - 3, anchor.pressureHpa === null ? '' : formatQuantity(anchor.pressureHpa, 'pressure', undefined, system), 'text-anchor="end" class="wg-axis"');
   }).join('');
   return pressures + altitudes;
@@ -81,33 +81,43 @@ export function renderWindgramSvg(
   const calloutRenderer = getWindgramCalloutRenderer(options.calloutVariant);
   const id = identifier(options.idPrefix ?? 'windgram');
   const right = view.left + view.plotWidth;
-  const labelX = (x: number) => Math.max(view.left + 12, Math.min(right - 12, x));
-  const visibleHours = new Set(visibleWindgramHourIndices({
-    hours: view.timeAxis.map(tick => ({ x: labelX(tick.x) })), compact: view.compact,
-  }));
-  // Cloud outlines show the published parcel base or effective limit.
+  const dayPanels = view.dayPanels;
+  const stitched = Boolean(dayPanels && dayPanels.length > 0);
+  const labelX = (x: number, panelLeft = view.left, panelRight = right) =>
+    Math.max(panelLeft + 10, Math.min(panelRight - 10, x));
+  const visibleHours = stitched
+    ? new Set(dayPanels!.flatMap(panel => panel.visibleAxisIndices))
+    : new Set(visibleWindgramHourIndices({
+        hours: view.timeAxis.map(tick => ({ x: labelX(tick.x) })), compact: view.compact,
+      }));
+  const panelForX = (x: number) => dayPanels?.find(p => x >= p.left - 0.5 && x <= p.left + p.width + 0.5) ?? null;
+
   const clouds = view.clouds.filter(cloud => cloud.kind === 'potential');
   const cloudScale = windgramCloudScale(view);
-  const { barbs, labels } = layoutWindgramMarks(view, cloudScale, clouds,
+  const laidOut = layoutWindgramMarks(view, cloudScale, clouds,
     displayedBarbs(view, new Set(view.hours.map((_, i) => i))));
+  const barbs = laidOut.barbs;
+  const labels = stitched
+    ? laidOut.labels.filter(({ box }) => !dayPanels!.some(p =>
+        p.seamX !== null && box.x < p.seamX + p.seamWidth / 2 + 2 && box.x + box.width > p.seamX - p.seamWidth / 2 - 2))
+    : laidOut.labels;
   const parts: string[] = [
     styleTag(options.stylesheet),
-    `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`,
+    `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8 0" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`,
     `<rect width="${fmt(view.width)}" height="${fmt(view.height)}" rx="6" fill="${WINDGRAM_STABLE_COLOR}"/>`,
     heightAxisHeader(view, system),
     view.compact ? '' : text(right + 12, view.top - 14, `${unitLabel('elevation', system)} MSL`, 'class="wg-axis-unit"'),
     `<g clip-path="url(#${id}-plot)"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}" fill="${WINDGRAM_STABLE_COLOR}"/>`,
   ];
-  // Fix humidity hatch path cleanly: M0 0L8 8M0 8L8 0
-  parts[1] = `<defs><clipPath id="${id}-plot"><rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}"/></clipPath><pattern id="${id}-missing" width="8" height="8" patternUnits="userSpaceOnUse"><rect width="8" height="8" fill="#a7a4c0"/><path d="M0 0L8 8M-2 6L2 10M6-2L10 2" stroke="#77758f" stroke-width="1"/></pattern><pattern id="${id}-humidity" width="8" height="8" patternUnits="userSpaceOnUse"><path d="M0 0L8 8M0 8L8 0" fill="none" stroke="#fff" stroke-width=".8" opacity=".75"/></pattern></defs>`;
   for (const field of view.fields) {
     parts.push(
       `<path d="${escape(field.path)}" class="${escape(field.className)}" fill-rule="evenodd"${field.className === 'windgram-missing' ? ` fill="url(#${id}-missing)"` : ''}/>`,
     );
   }
   const firstData = view.hours[0], lastData = view.hours.at(-1);
-  const uncovered =
-    firstData && lastData
+  const uncovered = stitched
+    ? dayPanels!.flatMap(panel => panel.uncoveredSpans)
+    : firstData && lastData
       ? [
           { x: view.left, width: firstData.x - view.columnWidth / 2 - view.left },
           { x: lastData.x + view.columnWidth / 2, width: right - lastData.x - view.columnWidth / 2 },
@@ -135,9 +145,10 @@ export function renderWindgramSvg(
       );
     }
     if (series.key === 'usableLiftTopM') {
+      const nodeRadius = stitched ? '2.7' : '3.4';
       for (const hour of view.hours) {
         const z = hour.usableLiftTopM;
-        if (z !== null) parts.push(`<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="3.4" class="wg-tol-node" fill="${series.color}" stroke="#ffffff" stroke-width="1.3" data-map-lift-ceiling=""/>`);
+        if (z !== null) parts.push(`<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="${nodeRadius}" class="wg-tol-node" fill="${series.color}" stroke="#ffffff" stroke-width="1.25" data-map-lift-ceiling=""/>`);
       }
     }
   }
@@ -171,8 +182,20 @@ export function renderWindgramSvg(
       `<path d="${SNOWFLAKE_PATH}" transform="translate(${fmt(freeze.x)} ${fmt(freeze.y)})" class="wg-freezing-mark"><title>Lowest freezing level · ${formatQuantity(0, 'temperature', undefined, system)}</title></path>`,
     );
   }
-  // Potential cloud-base symbols are outlines so the lapse-rate color stays visible.
   for (const cloud of clouds) parts.push(cloudGlyph(cloud, cloudScale, system));
+  if (stitched) {
+    for (const panel of dayPanels!) {
+      if (panel.seamX !== null && panel.seamWidth > 0) {
+        parts.push(
+          `<g class="wg-night-seam" data-night-seam=""><title>Overnight hours folded</title>` +
+          `<rect x="${fmt(panel.seamX - panel.seamWidth / 2)}" y="${view.top}" width="${fmt(panel.seamWidth)}" height="${fmt(view.plotHeight)}" class="wg-night-seam-fill"/>` +
+          `<line x1="${fmt(panel.seamX)}" x2="${fmt(panel.seamX)}" y1="${view.top}" y2="${fmt(view.bottom)}" class="wg-night-seam-line"/>` +
+          `<text x="${fmt(panel.seamX)}" y="${fmt(view.top + 11.5)}" text-anchor="middle" class="wg-night-seam-moon">☾</text>` +
+          `</g>`,
+        );
+      }
+    }
+  }
   parts.push('</g>');
   parts.push(`<rect x="${view.left}" y="${view.top}" width="${fmt(view.plotWidth)}" height="${fmt(view.plotHeight)}" fill="none" stroke="#eeebff" stroke-width="1"/>`);
   parts.push(heightAxisLabels(view, system));
@@ -182,27 +205,43 @@ export function renderWindgramSvg(
       parts.push(text(right + 10, tick.y + 4, tick.label, 'class="wg-axis-feet"'));
     }
   }
+  if (stitched) {
+    for (const panel of dayPanels!) {
+      const pillX = panel.left + 1.5;
+      const pillW = Math.max(16, panel.width - 3);
+      const pillCx = pillX + pillW / 2;
+      const classes = `wg-day-banner${panel.isSelectedDay ? ' is-selected' : ''}${panel.isBestDay ? ' is-best' : ''}`;
+      const pillTitle = `${panel.isBestDay ? '★ ' : ''}${panel.label}`;
+      parts.push(
+        `<g class="${classes}" data-windgram-day="${escape(panel.dateKey)}" role="button" tabindex="0" aria-label="${escape(`Zoom to ${panel.label} 1-day windgram`)}">` +
+        `<title>${escape(`Open ${panel.label} 1-day windgram`)}</title>` +
+        `<rect x="${fmt(pillX)}" y="2.5" width="${fmt(pillW)}" height="14" rx="4.5" class="wg-day-banner-pill"/>` +
+        text(pillCx, 12.2, pillTitle, 'text-anchor="middle" class="wg-day-banner-label"') +
+        `</g>`,
+      );
+      if (panel.seamX !== null) {
+        parts.push(`<line x1="${fmt(panel.seamX)}" x2="${fmt(panel.seamX)}" y1="${fmt(view.bottom)}" y2="${fmt(view.bottom + 28)}" class="wg-night-seam-line"/>`);
+      }
+    }
+  }
   for (const [axisIndex, tick] of view.timeAxis.entries()) {
     const hour = tick.hourIndex === null ? null : view.hours[tick.hourIndex];
     parts.push(`<line x1="${fmt(tick.x)}" x2="${fmt(tick.x)}" y1="${fmt(view.bottom)}" y2="${fmt(view.bottom + 5)}" stroke="#fff"/>`);
     if (!visibleHours.has(axisIndex)) continue;
-    const x = labelX(tick.x);
-    parts.push(text(x, 16, tick.label, 'text-anchor="middle" class="wg-hour wg-hour-top"'));
-    parts.push(
-      text(
-        x,
-        31,
-        hour?.thermalVelocityMps == null ? '—' : `${Number(convertQuantity(hour.thermalVelocityMps, 'lift', system)!.toFixed(system === 'metric' ? 1 : 0))}`,
-        'text-anchor="middle" class="wg-lift"',
-      ),
-    );
-    parts.push(text(x, view.bottom + 15, tick.label, 'text-anchor="middle" class="wg-hour"'));
+    const panel = stitched ? panelForX(tick.x) : null;
+    const x = panel ? labelX(tick.x, panel.left, panel.left + panel.width) : labelX(tick.x);
+    const liftStr = hour?.thermalVelocityMps == null
+      ? '—'
+      : `${Number(convertQuantity(hour.thermalVelocityMps, 'lift', system)!.toFixed(system === 'metric' ? 1 : 0))}`;
+    parts.push(text(x, stitched ? 28 : 16, tick.label, `text-anchor="middle" class="wg-hour wg-hour-top${stitched ? ' wg-hour-stitched' : ''}"`));
+    parts.push(text(x, stitched ? 41.5 : 31, liftStr, `text-anchor="middle" class="wg-lift${stitched ? ' wg-lift-stitched' : ''}"`));
+    parts.push(text(x, view.bottom + 15, tick.label, `text-anchor="middle" class="wg-hour${stitched ? ' wg-hour-stitched' : ''}"`));
     parts.push(
       text(
         x,
         view.bottom + 28,
         hour?.temperatureF == null ? '—' : `${Math.round(temperature(hour.temperatureF, system))}°`,
-        'text-anchor="middle" class="wg-surface-temp"',
+        `text-anchor="middle" class="wg-surface-temp${stitched ? ' wg-hour-stitched' : ''}"`,
       ),
     );
   }
@@ -227,9 +266,10 @@ export function renderWindgramSvg(
     '</g></g>',
   );
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
+  const dayDesc = stitched ? ` (${dayPanels!.map(p => p.label).join(', ')})` : '';
   const coverage = uncovered.length && firstData && lastData ? ` Forecast available ${firstData.label}–${lastData.label}; hatched hours unavailable.` : !view.hours.length ? ' Daylight forecast unavailable in this run.' : '';
-  const description = `Windgram${first ? ` ${first.label}–${last.label}` : ''}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
-  return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-labelledby="${id}-title ${id}-description" class="windgram${view.compact ? ' windgram-compact' : ''}"><title id="${id}-title">Wind, temperature and clouds by hour and altitude</title><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
+  const description = `Windgram${dayDesc}${first ? ` ${first.label}–${last.label}` : ''}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Crosshatching marks interpolated RH of at least ${CLOUD_RH_THRESHOLD_PERCENT}%. Dark hatching marks unavailable atmosphere. The blue series shows map usable lift.`;
+  return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-labelledby="${id}-title ${id}-description" class="windgram${view.compact ? ' windgram-compact' : ''}${stitched ? ' windgram-stitched' : ''}"><title id="${id}-title">Wind, temperature and clouds by hour and altitude</title><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
 }
 
 export function renderWindgramKey(system: UnitSystem, usesDsm = false): string {

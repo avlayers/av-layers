@@ -2,6 +2,7 @@ import {
   formatPlaceTime, longitudeOffsetHours, pointSeriesSelection,
   type GeoPoint, type PinnedBuild, type PointHorizon, type PointSeriesContext, type PointSeriesController, type UnitSystem
 } from '@av/client';
+import type { PointViewMode } from '@av/windgram';
 import { displayedWindSpeed, windSpeedUnitLabel } from '@av/contracts/units';
 import { renderBuildDetails } from './build-details';
 import type { PointSession } from './point-session';
@@ -21,12 +22,16 @@ export interface PointFeatureOptions {
   readonly getSelectedFrame: () => string | null;
   readonly getUnits: () => UnitSystem;
   readonly getHorizon: () => PointHorizon;
+  readonly getViewMode?: () => PointViewMode;
   readonly getMapOffset: () => number;
   readonly getDisplayedFrame: () => string | null;
   readonly getWind: () => PointWind | null;
   readonly ensureLive: () => boolean;
   readonly pauseTimeline: () => void;
   readonly selectFrameById: (id: string) => void;
+  readonly onViewModeChange?: (mode: PointViewMode) => void;
+  readonly onRequestFullHorizon?: () => void;
+  readonly onVisibleDaysChange?: (days: readonly string[] | null) => void;
   readonly publish: {
     open(point: GeoPoint): void;
     close(): void;
@@ -41,6 +46,7 @@ export interface PointFeature {
   open(point: GeoPoint): Promise<void>;
   close(): void;
   syncSelection(): void;
+  syncViewMode?(): void;
   followMapFrame(frameId: string | null): void;
   syncWind(): void;
   setHorizon(horizon: PointHorizon): Promise<void>;
@@ -73,11 +79,15 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
         getSelectedFrame: options.getSelectedFrame,
         getUnits: options.getUnits,
         getHorizon: options.getHorizon,
+        getViewMode: options.getViewMode,
         getMapOffset: options.getMapOffset,
         getDisplayedFrame: options.getDisplayedFrame,
         ensureLive: options.ensureLive,
         pauseTimeline: options.pauseTimeline,
         selectFrameById: options.selectFrameById,
+        onViewModeChange: options.onViewModeChange,
+        onRequestFullHorizon: options.onRequestFullHorizon,
+        onVisibleDaysChange: options.onVisibleDaysChange,
         publish: {
           open: point => { meta()?.replaceChildren(); options.publish.open(point); },
           close: () => { options.publish.close(); },
@@ -125,11 +135,12 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
       if (disposed) return;
       openIntent = null;
       if (session) session.close();
-      else options.publish.close();
+      else { options.onVisibleDaysChange?.(null); options.publish.close(); }
       meta()?.replaceChildren();
       for (const id of ['#point-settings', '#point-build-details']) { const node = options.root()?.querySelector<HTMLDetailsElement>(id); if (node) node.open = false; }
     },
     syncSelection() { session?.updateSelection(); syncWind(); },
+    syncViewMode() { session?.syncViewMode?.(); },
     followMapFrame(frameId) { session?.followMapFrame(frameId); session?.updateSelection(); syncWind(); },
     syncWind,
     async setHorizon(horizon) { await session?.loadRange(); void horizon; },

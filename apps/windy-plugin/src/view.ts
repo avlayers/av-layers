@@ -1,5 +1,5 @@
 import { DEFAULT_OPACITY, PointSeriesController, populateModelOptions, pointSeriesSelection, type ApiClient, type PinnedBuild, type GeoPoint, type UnitSystem } from '@av/client';
-import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
+import { DEFAULT_POINT_VIEW_MODE, disposePointWindgram, renderPointWindgram, type PointViewMode } from '@av/windgram';
 import type { ControllerState } from './controller';
 import config from './pluginConfig';
 
@@ -68,6 +68,7 @@ export class PluginPanel {
   private readonly pointHorizonLabel = node('label', undefined, 'Point horizon');
   private readonly pointSeries: PointSeriesController;
   private unitSystem: UnitSystem = 'metric';
+  private pointViewMode: PointViewMode = DEFAULT_POINT_VIEW_MODE;
   private selectedFrameId: string | null = null;
   private mapFrameId: string | null = null;
   private updatePoint: ReturnType<typeof renderPointWindgram> | null = null;
@@ -221,6 +222,20 @@ export class PluginPanel {
         if (!loading) this.setPointStatus();
         this.updatePoint = renderPointWindgram(this.pointBody, payload, build, {
           point, frameId: this.pointSeries.frameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading,
+          viewMode: this.pointViewMode,
+          onViewModeChange: mode => {
+            this.pointViewMode = mode;
+            if (mode === '3d' && this.pointHorizon.value !== 'forecast' && !this.pointHorizon.hidden) {
+              this.pointHorizon.value = 'forecast';
+              void this.loadPointRange();
+            }
+          },
+          onRequestFullHorizon: () => {
+            if (this.pointHorizon.value !== 'forecast' && !this.pointHorizon.hidden) {
+              this.pointHorizon.value = 'forecast';
+              void this.loadPointRange();
+            }
+          },
           onFrame: id => {
             if (!canRender() || !this.pointSeries.selectFrame(context, id)) return;
             this.updatePoint?.(id, this.unitSystem, this.mapFrameId);

@@ -239,13 +239,6 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
           <div class="point-settings-body">
             <p id="point-location">{point.location}</p>
             <p id="point-wind" role="status" hidden={!point.wind}>{point.wind}</p>
-            <label id="point-horizon-label" class="point-units" hidden={!point.horizonSelectable}>
-              Horizon
-              <select id="point-horizon" value={intent.pointHorizon} onChange={event => commands.setPointHorizon((event.currentTarget as HTMLSelectElement).value === 'forecast' ? 'forecast' : 'day')}>
-                <option value="day">{point.horizonLabel}</option>
-                <option value="forecast">Full forecast</option>
-              </select>
-            </label>
             <details id="point-build-details" onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) commands.refreshPointDiagnostics(); }}>
               <summary>Build details</summary>
               <dl id="meta" />

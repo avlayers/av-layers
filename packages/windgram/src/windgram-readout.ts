@@ -31,6 +31,7 @@ function formatClimbRate(mps: number, system: UnitSystem): string {
 
 export interface WindgramTelemetryStrip {
   readonly timeChip: string;
+  readonly compactTime?: string;
   readonly altChip: string;
   readonly snappedToTol: boolean;
   readonly canSnapToTol: boolean;
@@ -49,9 +50,24 @@ export function buildWindgramTelemetry(
   hasTolAtHour: boolean,
 ): WindgramTelemetryStrip {
   const system = view.unitSystem;
-  const clockRaw = formatPlaceTime(Date.parse(reading.validAt), view.offsetMinutes, 'clock');
+  const validMs = Date.parse(reading.validAt);
+  const clockRaw = formatPlaceTime(validMs, view.offsetMinutes, 'clock');
   const split = clockRaw.indexOf(' (');
   const timeChip = split < 0 ? clockRaw : clockRaw.slice(0, split);
+  const compactClock = (() => {
+    if (!Number.isFinite(validMs)) return '';
+    const shifted = new Date(validMs + view.offsetMinutes * 60_000);
+    const h24 = shifted.getUTCHours();
+    const mins = shifted.getUTCMinutes();
+    const suffix = h24 >= 12 ? 'p' : 'a';
+    const h12 = h24 % 12 || 12;
+    const hm = mins === 0 ? `${h12}${suffix}` : `${h12}:${String(mins).padStart(2, '0')}${suffix}`;
+    if (view.dayPanels?.length) {
+      const wk = shifted.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' });
+      return `${wk} ${hm}`;
+    }
+    return hm;
+  })();
 
   const aglDisplay = snappedToTol && hasTolAtHour
     ? `${formatMapLiftCell(lift.agl, system)} AGL`
@@ -126,6 +142,7 @@ export function buildWindgramTelemetry(
 
   return {
     timeChip,
+    compactTime: compactClock,
     altChip,
     snappedToTol,
     canSnapToTol: !snappedToTol && hasTolAtHour,

@@ -22,6 +22,7 @@ export interface CompactTimeline {
   setMapCenter(latitude: number, longitude: number): void;
   setVariant?(variant: DockViewId): void;
   setReadiness?(ready: number, total: number, loading?: boolean): void;
+  setHighlightedDays?(days: readonly string[] | null): void;
   pause(): void;
   destroy(): void;
 }
@@ -356,6 +357,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   host.append(root);
 
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], dayButtons: HTMLButtonElement[] = [];
+  let highlightedDays = new Set<string>(), highlightedKey = '';
   let daySignature = '', selectedIndex = -1, sceneIndex = -1, disabled = false, timer: ReturnType<typeof setInterval> | null = null, destroyed = false;
   let activePointer: number | null = null, gestureStart = -1, paintedWidth = -1, gestureScale: DayScale | null = null, gestureOriginX = Number.NaN, gestureMoved = false, lastPointerX = Number.NaN;
   let scrubMinute: number | null = null;
@@ -542,7 +544,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       const group = days[index];
       const available = Boolean(group?.indices.length);
       const selected = Boolean(group && group.day === selectedDay && available);
+      const inWindow = Boolean(group && available && highlightedDays.has(group.day));
       button.classList.toggle('is-selected', selected);
+      button.classList.toggle('is-in-window', inWindow);
       button.classList.toggle('is-unavailable', !available);
       button.setAttribute('aria-pressed', String(selected));
       button.disabled = off || !available;
@@ -940,6 +944,18 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       progressBar.style.transform = `scaleX(${Math.round(ratio * 1000) / 1000})`;
       progress.classList.toggle('is-loading', Boolean(loading && ready >= total));
       progress.removeAttribute('hidden');
+    },
+    setHighlightedDays(nextDays) {
+      if (destroyed) return;
+      const nextKey = nextDays?.length ? nextDays.join(',') : '';
+      if (nextKey === highlightedKey) return;
+      highlightedKey = nextKey;
+      highlightedDays = new Set(nextDays ?? []);
+      dayButtons.forEach((button, index) => {
+        const group = days[index];
+        const available = Boolean(group?.indices.length);
+        button.classList.toggle('is-in-window', Boolean(group && available && highlightedDays.has(group.day)));
+      });
     },
     pause() {
       if (!destroyed && timer !== null) stopPlayback();

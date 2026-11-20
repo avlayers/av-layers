@@ -30,6 +30,17 @@ export const chartStyles = `
 .windgram .wg-cloud-potential { fill: #b4abe8; fill-opacity: .14; stroke: #fff; stroke-width: 1.4; stroke-dasharray: 3 2; }
 .windgram .wg-freezing-mark { fill: #7274bc; stroke: #80fffa; stroke-width: 1.2; }
 .windgram .wg-tol-node { fill: #2563eb; stroke: #ffffff; stroke-width: 1.4; }
+.windgram .wg-night-seam-fill { fill: #353778; fill-opacity: .94; }
+.windgram .wg-night-seam-line { stroke: #c7d2fe; stroke-width: .9; stroke-dasharray: 2 2.5; stroke-opacity: .72; }
+.windgram .wg-night-seam-moon { fill: #e0e7ff; stroke: none; font-size: 6.5px; font-weight: 700; }
+.windgram .wg-day-banner { cursor: pointer; }
+.windgram .wg-day-banner-pill { fill: #585ac0; stroke: #a5b4fc; stroke-opacity: .65; stroke-width: .75; transition: fill .12s ease; }
+.windgram .wg-day-banner:hover .wg-day-banner-pill { fill: #4346a8; stroke-opacity: .95; }
+.windgram .wg-day-banner.is-selected .wg-day-banner-pill { fill: #16324f; stroke: #fde68a; stroke-opacity: .9; stroke-width: .95; }
+.windgram .wg-day-banner-label { fill: #f8fafc; stroke: none; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; font-size: 9.5px; font-weight: 750; letter-spacing: .01em; }
+.windgram .wg-day-banner.is-selected .wg-day-banner-label, .windgram .wg-day-banner.is-best .wg-day-banner-label { fill: #fde68a; }
+.windgram .wg-hour.wg-hour-stitched { font-size: 10.5px; }
+.windgram .wg-lift.wg-lift-stitched { font-size: 12px; }
 .windgram .wg-inspector { pointer-events: none; }
 .windgram .wg-inspector text { stroke: none; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
 .windgram .wg-inspector line[data-cursor-vertical], .windgram .wg-inspector line[data-cursor-horizontal] { stroke: #14223f; stroke-width: 1; stroke-dasharray: 3 4; }
