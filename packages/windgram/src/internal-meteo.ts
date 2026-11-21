@@ -38,9 +38,16 @@ export interface PublishedForecastHour {
   };
   readonly levels: Readonly<NonNullable<PointFrame['profile']>['levels']>;
   readonly thermalTopM: number | null;
+  readonly nativeUsableLiftTopM?: number | null;
   readonly thermalVelocityMps: number | null;
   readonly surfaceLclM: number | null;
+  readonly mixedLayerLclM?: number | null;
   readonly effectiveCloudLimitM: number | null;
+  readonly cuPotentialM?: number | null;
+  readonly odPotentialM?: number | null;
+  readonly buoyancyShearRatio?: number | null;
+  readonly overdeveloped?: boolean | null;
+  readonly cloudCapped?: boolean | null;
   readonly layerWind: WindgramReading['publishedLayerWind'];
 }
 

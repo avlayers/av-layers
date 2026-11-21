@@ -1,19 +1,18 @@
 // Physical readings at an hour and height, with published diagnostic context.
 
+import { windFromComponents } from '@av/soaring';
 import {
-  LENSCHOW_F_MAX,
-  lenschowNormalizedUpdraft,
-  SINK_RATE_MPS,
-  usableLiftDepthM,
-  windFromComponents,
-} from '@av/soaring';
+  effectiveHourUsableLiftTopM,
+  estimateThermalClimbAtHeight,
+  omegaToVerticalVelocityMps,
+} from './windgram-atmosphere.ts';
 import {
   celsiusToFahrenheit,
   clamp,
   mpsToKnots,
   finiteScalar,
 } from './windgram-format.ts';
-import { sampleHeight } from './windgram-sampling.ts';
+import { sampleField, sampleHeight } from './windgram-sampling.ts';
 import type { WindgramView } from './windgram-view.ts';
 
 import type { WindgramReading } from './scene-types.ts';
@@ -29,42 +28,17 @@ function windShearAtHeight(sample: WindgramView['sampling'][number] | undefined,
   return { lowerM: a.altitudeM, upperM: b.altitudeM, vectorChangeMps, perKmMps: vectorChangeMps * 1000 / (b.altitudeM - a.altitudeM) };
 }
 
-function estimateThermalClimb(
-  zM: number,
-  groundM: number | null,
-  usableTopM: number | null,
-  thermalTopM: number | null,
-  cloudCapM: number | null,
-  thermalVelocityMps: number | null,
-): { estimatedClimbMps: number | null; peakClimbMps: number | null } {
-  if (
-    groundM === null
-    || usableTopM === null
-    || usableTopM <= groundM
-    || thermalVelocityMps === null
-    || thermalVelocityMps <= 0
-  ) {
-    return { estimatedClimbMps: null, peakClimbMps: null };
-  }
-  const peakClimb = thermalVelocityMps * LENSCHOW_F_MAX - SINK_RATE_MPS;
-  if (peakClimb <= 0) return { estimatedClimbMps: null, peakClimbMps: null };
-  if (zM < groundM || zM > usableTopM + 0.5) {
-    return { estimatedClimbMps: 0, peakClimbMps: peakClimb };
-  }
-  const usableDepthM = usableTopM - groundM;
-  const cloudCapped = cloudCapM !== null && usableTopM >= cloudCapM - 2;
-  let convectiveDepthM: number;
-  if (!cloudCapped) {
-    const unitCrit = usableLiftDepthM(1, thermalVelocityMps);
-    convectiveDepthM = unitCrit !== null && unitCrit > 0 ? usableDepthM / unitCrit : usableDepthM;
-  } else {
-    const nativeDepthM = thermalTopM !== null && thermalTopM > groundM ? thermalTopM - groundM : 0;
-    convectiveDepthM = Math.max(usableDepthM, nativeDepthM);
-  }
-  if (!(convectiveDepthM > 0)) return { estimatedClimbMps: 0, peakClimbMps: peakClimb };
-  const zeta = clamp((zM - groundM) / convectiveDepthM, 0, 1);
-  const netClimb = Math.max(0, thermalVelocityMps * lenschowNormalizedUpdraft(zeta) - SINK_RATE_MPS);
-  return { estimatedClimbMps: netClimb, peakClimbMps: peakClimb };
+function samplePressureHpaAtHeight(levels: WindgramView['sourceHours'][number]['levels'] | undefined, zM: number): number | null {
+  if (!levels?.length) return null;
+  const nodes = levels
+    .filter((l): l is typeof l & { heightM: number; pressureHpa: number } =>
+      l.heightM !== null && Number.isFinite(l.heightM) && l.pressureHpa !== null && Number.isFinite(l.pressureHpa) && l.pressureHpa > 0,
+    )
+    .sort((a, b) => a.heightM - b.heightM)
+    .map(l => ({ altitudeM: l.heightM, value: Math.log(l.pressureHpa) }));
+  if (!nodes.length) return null;
+  const lnP = sampleField(nodes, zM, 'altitudeM');
+  return lnP === null ? null : Math.exp(lnP);
 }
 
 function clampCloudPercent(value: number | null | undefined): number | null {
@@ -85,14 +59,18 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   );
   const source = view.sourceHours[index];
   const omega = sample ? sampleHeight(sample.verticalVelocityPaS, z) : null;
+  const pressureHpa = samplePressureHpaAtHeight(source?.levels, z);
+  const waveVelocityMps = omegaToVerticalVelocityMps(omega, t, pressureHpa, z);
   const nativeWind = wind.speedMps !== null && sample?.windU.some(n => Math.abs(n.altitudeM - z) < .00001 && Number.isFinite(n.value));
   const surface = source?.surface;
   const pblDepthM = surface?.pblHeightM ?? null;
   const modelTerrainM = source?.modelTerrainM ?? null;
   const fineTerrainM = source?.mapLift.terrainM ?? null;
   const groundM = fineTerrainM ?? modelTerrainM;
-  const usableTopM = view.hours[index]?.usableLiftTopM ?? null;
-  const climb = estimateThermalClimb(
+  const usableTopM = source
+    ? effectiveHourUsableLiftTopM(source, view.hours[index]?.usableLiftTopM)
+    : (view.hours[index]?.usableLiftTopM ?? null);
+  const climb = estimateThermalClimbAtHeight(
     z,
     groundM,
     usableTopM,
@@ -100,6 +78,19 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     source?.effectiveCloudLimitM ?? null,
     finiteScalar(source?.thermalVelocityMps),
   );
+
+  const cloudLayers = view.cloudLayersByHour?.[index] ?? [];
+  const highCloudOnly = view.highCloudOnlyByHour?.[index] ?? false;
+  const activeCloudLayer =
+    cloudLayers.find(l => l.kind === 'stratiform' && l.saturated && z >= l.baseM - 5 && z <= l.topM + 5) ??
+    cloudLayers.find(l => l.kind === 'stratiform' && z >= l.baseM - 5 && z <= l.topM + 5) ??
+    cloudLayers.find(l => l.kind !== 'stratiform' && z >= l.baseM - 15 && z <= l.topM + 10) ??
+    null;
+  const basesAbove = cloudLayers.filter(l => l.baseM > z + 15).map(l => l.baseM);
+  const topsBelow = cloudLayers.filter(l => l.topM < z - 15).map(l => l.topM);
+  const nearestCloudBaseAboveM = basesAbove.length ? Math.min(...basesAbove) : null;
+  const nearestCloudTopBelowM = topsBelow.length ? Math.max(...topsBelow) : null;
+
   return {
     hourIndex: index,
     validAt: view.hours[index]?.validAt ?? '',
@@ -127,8 +118,18 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     cloudCoverLowPercent: clampCloudPercent(surface?.cloudCoverLowPercent),
     estimatedClimbMps: climb.estimatedClimbMps,
     peakClimbMps: climb.peakClimbMps,
+    lapseCPer1000Ft: sample ? sampleHeight(sample.lapseCPer1000Ft, z) : null,
+    waveVelocityMps,
+    buoyancyShearRatio: finiteScalar(source?.buoyancyShearRatio),
+    cloudLayers,
+    activeCloudLayer,
+    nearestCloudBaseAboveM,
+    nearestCloudTopBelowM,
+    highCloudOnly,
     cloudBaseM: source?.surfaceLclM ?? null,
     effectiveCloudLimitM: source?.effectiveCloudLimitM ?? null,
+    overdeveloped: source?.overdeveloped ?? null,
+    cloudCapped: source?.cloudCapped ?? null,
     modelTerrainM,
     nativeThermalTopM: source?.thermalTopM ?? null,
     modelPblTopM: pblDepthM === null || modelTerrainM === null ? null : modelTerrainM + pblDepthM,

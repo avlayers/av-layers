@@ -43,7 +43,23 @@ export interface WindgramOptions extends WindgramHourFilterOptions {
   compact?: boolean;
   /** Vertical extent; single-day charts retain sunrise through sunset. */
   heightRange?: 'soaring' | 'full';
+  /** Pluggable background field mode ('hybrid-climb' default, 'lapse' classic environmental lapse rate). */
+  fieldMode?: import('./windgram-atmosphere.ts').WindgramFieldMode;
 }
+export type SkyCoverageCode = 'CLR' | 'FEW' | 'SCT' | 'BKN' | 'OVC';
+
+export interface WindgramCloudLayerSummary {
+  readonly kind: 'stratiform' | 'cumulus' | 'overdeveloped';
+  readonly altitudeBand: 'low' | 'mid' | 'high';
+  readonly baseM: number;
+  readonly topM: number;
+  readonly depthM: number;
+  readonly coverageCode: SkyCoverageCode;
+  readonly coverPercent: number;
+  readonly maxRhPercent: number | null;
+  readonly saturated: boolean;
+}
+
 export interface WindgramReading {
   hourIndex: number;
   validAt: string;
@@ -74,8 +90,26 @@ export interface WindgramReading {
   cloudCoverLowPercent: number | null;
   estimatedClimbMps: number | null;
   peakClimbMps: number | null;
+  /** Local environmental temperature gradient (°C per 1,000 ft; > 0 indicates a temperature inversion). */
+  lapseCPer1000Ft?: number | null;
+  /** Hydrostatic vertical air velocity w (m/s, positive upward) converted from omegaPaS. */
+  waveVelocityMps?: number | null;
+  /** Dimensionless w* / BL vector wind shear ratio from @av/soaring (RASP B/S = 10x this value). */
+  buoyancyShearRatio?: number | null;
+  /** Discrete vertical cloud layers resolved in this column (ordered lowest to highest). */
+  cloudLayers?: readonly WindgramCloudLayerSummary[];
+  /** Cloud layer physically containing `heightM` (if cursor sits inside a stratiform deck or Cu tower). */
+  activeCloudLayer?: WindgramCloudLayerSummary | null;
+  /** Lowest cloud base strictly above `heightM` (metres MSL), if any. */
+  nearestCloudBaseAboveM?: number | null;
+  /** Highest cloud top strictly below `heightM` (metres MSL), if any. */
+  nearestCloudTopBelowM?: number | null;
+  /** True when sky cover >= 50% comes solely from high cirrus above the soaring chart domain. */
+  highCloudOnly?: boolean;
   cloudBaseM: number | null;
   effectiveCloudLimitM: number | null;
+  overdeveloped?: boolean | null;
+  cloudCapped?: boolean | null;
   modelTerrainM: number | null;
   nativeThermalTopM: number | null;
   modelPblTopM: number | null;

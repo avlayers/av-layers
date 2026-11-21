@@ -103,6 +103,9 @@ export function buildWindgramTelemetry(
   } else if (reading.estimatedClimbMps !== null) {
     hasPositiveClimb = reading.estimatedClimbMps >= 0.05;
     climbPart = `Climb ${formatClimbRate(hasPositiveClimb ? reading.estimatedClimbMps : 0, system)}`;
+  } else if (reading.waveVelocityMps != null && reading.waveVelocityMps >= 0.35) {
+    hasPositiveClimb = true;
+    climbPart = `Wave ${formatClimbRate(reading.waveVelocityMps, system)}`;
   }
 
   const totalCloud = reading.cloudCoverTotalPercent === null

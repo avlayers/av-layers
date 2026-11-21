@@ -1,8 +1,12 @@
 // Vertical altitude/pressure scale construction and screen-coordinate transforms
 // for Windgram charts.
 
+import { windFromComponents } from '@av/soaring';
+import { relativeHumidityFromTempAndDewpointPercent } from '@av/thermodynamics';
 import type { SiteForecast } from './internal-meteo.ts';
-import { finiteScalar } from './windgram-format.ts';
+import { omegaToVerticalVelocityMps, WAVE_ASCENT_MIN_MPS, WAVE_MIN_WIND_KT } from './windgram-atmosphere.ts';
+import { finiteScalar, mpsToKnots } from './windgram-format.ts';
+import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import { median } from './windgram-time-axis.ts';
 
 export interface HeightAnchor {
@@ -82,8 +86,27 @@ export function buildWindgramVerticalScale(
   const grounds = known(hours.map(hour => hour.modelTerrainM));
   const fineTerrain = known(hours.map(hour => hour.mapLift.terrainM));
   const liftTops = known(hours.map(hour => hour.mapLift.mslM));
+  const nativeLiftTops = known(hours.map(hour => hour.nativeUsableLiftTopM ?? null));
+  const waveTops = known(
+    hours.flatMap(hour => {
+      const precip = finiteScalar(hour.surface.precipitationMmHr);
+      if (precip !== null && precip >= 0.08) return [];
+      return hour.levels.map(l => {
+        if (l.heightM === null || !Number.isFinite(l.heightM) || l.heightM > 7500) return null;
+        const rh = l.temperatureC !== null && l.dewPointC !== null
+          ? relativeHumidityFromTempAndDewpointPercent(l.temperatureC, l.dewPointC)
+          : null;
+        if (rh !== null && Number.isFinite(rh) && rh >= CLOUD_RH_THRESHOLD_PERCENT) return null;
+        const wind = windFromComponents(finiteScalar(l.uWindMps), finiteScalar(l.vWindMps));
+        const speedKt = wind.speedMps === null ? null : mpsToKnots(wind.speedMps);
+        if (speedKt !== null && speedKt < WAVE_MIN_WIND_KT) return null;
+        const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
+        return w !== null && w >= WAVE_ASCENT_MIN_MPS ? l.heightM : null;
+      });
+    }),
+  );
   const heights = known(hours.flatMap(hour => hour.levels.map(level => level.heightM)));
-  const referenceHeights = [...grounds, ...fineTerrain, ...heights, ...liftTops];
+  const referenceHeights = [...grounds, ...fineTerrain, ...heights, ...liftTops, ...nativeLiftTops];
   // Add room around an isolated ceiling so its marker fits inside the plot.
   const floorM = referenceHeights.length ? Math.min(...referenceHeights, ...liftTops.map(height => height - 50)) : 0;
   const focused = options.heightRange === 'soaring' || (compact && options.heightRange !== 'full');
@@ -125,10 +148,25 @@ export function buildWindgramVerticalScale(
   const highest = Math.max(floorM + 800, ...referenceHeights);
   const fullTopM = highest + (highest - floorM) * 0.04;
 
-  const peakM = Math.max(floorM, ...grounds, ...fineTerrain, ...liftTops);
+  const soaringTops = liftTops.length ? liftTops : nativeLiftTops;
+  const activeCuTops = known(
+    hours.map(hour => {
+      if ((hour.thermalVelocityMps ?? 0) <= 0) return null;
+      const limits = [hour.effectiveCloudLimitM, hour.surfaceLclM].filter((v): v is number => v !== null && Number.isFinite(v));
+      if (!limits.length) return null;
+      const baseM = Math.min(...limits);
+      const liftTop = hour.mapLift.mslM ?? hour.nativeUsableLiftTopM ?? null;
+      const top = Math.max(hour.thermalTopM ?? -Infinity, liftTop ?? -Infinity);
+      if (!(Number.isFinite(top) && (hour.cloudCapped === true || hour.overdeveloped === true || top >= baseM - 25))) {
+        return null;
+      }
+      return Math.min(Math.max(baseM + 200, top), baseM + 1000, floorM + 4500);
+    }),
+  );
+  const peakM = Math.max(floorM, ...grounds, ...fineTerrain, ...soaringTops, ...activeCuTops, ...waveTops);
   const focusedTopM = Math.ceil(Math.max(floorM + 1000, peakM + Math.max(500, (peakM - floorM) * 0.25)) / 250) * 250;
   const calmDay = hours.length > 0 && hours.every(hour => hour.thermalVelocityMps === 0);
-  const topM = focused && (liftTops.length || calmDay) ? Math.min(fullTopM, focusedTopM) : fullTopM;
+  const topM = focused && (soaringTops.length || waveTops.length || calmDay) ? Math.min(fullTopM, focusedTopM) : fullTopM;
 
   const modelGround = grounds.length ? Math.min(...grounds) : null;
   const spanM = Math.max(1, topM - floorM);
