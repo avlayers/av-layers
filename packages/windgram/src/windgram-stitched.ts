@@ -1,13 +1,24 @@
 // Multi-day Stitched Daylight Windgram scene builder.
 // Crops each day in a 2–3 day window to its solar daylight interval, shares a single
-// vertical altitude scale across all panels, and computes stability bands, isotherms,
-// wind barbs, and lift curves independently per day panel so nothing bleeds across midnight.
+// vertical altitude scale across all panels, and computes climb domes, inversions,
+// wave ascent, isotherms, cloud decks, wind barbs, and lift curves independently
+// per day panel so nothing bleeds across midnight.
 
 import { longitudeOffsetHours } from '@av/client';
 import { windFromComponents } from '@av/soaring';
 import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast } from './internal-meteo.ts';
 import { formatShortDayLabel } from './point-view-mode.ts';
-import type { WindgramOptions } from './scene-types.ts';
+import type { WindgramCloudLayerSummary, WindgramOptions } from './scene-types.ts';
+import {
+  analyzeHourCloudLayers,
+  buildClimbDomeFieldPaths,
+  buildInversionAndCloudDeckPaths,
+  buildSkyCoverSpans,
+  classifyConvectiveCloudRegime,
+  DEFAULT_WINDGRAM_FIELD_MODE,
+  type SkyCoverSpan,
+  type WindgramFieldMode,
+} from './windgram-atmosphere.ts';
 import {
   celsiusToFahrenheit,
   finiteScalar,
@@ -50,6 +61,8 @@ export function buildStitchedWindgramView(
   options: StitchedWindgramOptions,
 ): WindgramView {
   const system: UnitSystem = options.unitSystem;
+  const fieldMode: WindgramFieldMode = options.fieldMode ?? DEFAULT_WINDGRAM_FIELD_MODE;
+  const hybrid = fieldMode === 'hybrid-climb';
   const compact = options.compact ?? true;
   const timeZone = options.timeZone;
   const dateKeys = options.dateKeys.slice(0, 4);
@@ -59,7 +72,6 @@ export function buildStitchedWindgramView(
       timeZone,
       hours: { timeZone, dateKey },
     });
-    // If a day has hours only outside sunrise..sunset (e.g. tail of run), retain its available hours rather than blanking if no daylight overlap.
     const effective = daySelection.hours.length === 0 && daySelection.daySource && daySelection.daySource.length > 0 && !daySelection.daylight
       ? { ...daySelection, hours: daySelection.daySource }
       : daySelection;
@@ -73,12 +85,12 @@ export function buildStitchedWindgramView(
       hour.modelTerrainM,
       hour.mapLift.terrainM,
       hour.mapLift.mslM,
+      hour.nativeUsableLiftTopM ?? null,
       ...hour.levels.map((level) => level.heightM),
     ])
     .filter((height): height is number => typeof height === 'number' && Number.isFinite(height))
     .map((height) => `${roundedElevationLabel(height, system)}${compact ? '' : system === 'metric' ? ' m' : ' ft'}`);
 
-  // Exact same outer width, height, top=46, bottomMargin=45, and plotHeight as 1-Day Windgram (zero shrinkage).
   const presentation = resolveWindgramPresentation({
     compact,
     widthPx: options.widthPx,
@@ -110,30 +122,54 @@ export function buildStitchedWindgramView(
   const viewHours: WindgramHour[] = [];
   const sourceHours: ProfileHour[] = [];
   const sampling: HourSampling[] = [];
+  const cloudLayersByHour: (readonly WindgramCloudLayerSummary[])[] = [];
+  const highCloudOnlyByHour: boolean[] = [];
   const timeAxis: WindgramTimeTick[] = [];
   const dayPanels: WindgramDayPanel[] = [];
+  const orderedFieldOrder: string[] = [];
   const fieldsByClass = new Map<string, string[]>();
   const pushField = (className: string, path: string) => {
     if (!path) return;
     const list = fieldsByClass.get(className);
     if (list) list.push(path);
-    else fieldsByClass.set(className, [path]);
+    else {
+      orderedFieldOrder.push(className);
+      fieldsByClass.set(className, [path]);
+    }
   };
+  const cloudDeckOrder: string[] = [];
+  const cloudDeckByClass = new Map<string, string[]>();
+  const pushCloudDeck = (className: string, path: string) => {
+    if (!path) return;
+    const list = cloudDeckByClass.get(className);
+    if (list) list.push(path);
+    else {
+      cloudDeckOrder.push(className);
+      cloudDeckByClass.set(className, [path]);
+    }
+  };
+  const skyCoverSpans: SkyCoverSpan[] = [];
 
   const scale = { anchors, top, bottom, floorM, topM };
   const y = (z: number) => heightToY(scale, z);
 
+  const convectiveOnly = (hour: ProfileHour) => !hybrid || (hour.thermalVelocityMps ?? 0) > 0;
   const seriesDefs = [
-    ['thermalTopM', 'Native thermal top (parcel)', '#a56800', '7 5', (hour: ProfileHour) => hour.thermalTopM],
+    ['thermalTopM', 'Native thermal top (parcel)', hybrid ? '#fcd34d' : '#a56800', '6 5', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.thermalTopM : null)],
     ['usableLiftTopM', 'Map usable lift', '#134ac4', null, (hour: ProfileHour) => hour.mapLift.mslM],
-    ['terrainM', 'Fine surface elevation', '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
-    ['surfaceLclM', 'Native potential cloud base (surface LCL)', '#426173', '2 5', (hour: ProfileHour) => hour.surfaceLclM],
+    ...(hybrid
+      ? [['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
+          hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const]
+      : []),
+    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
+    ['surfaceLclM', 'Native potential cloud base (surface LCL)', hybrid ? '#f9a8d4' : '#426173', '3 4', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.surfaceLclM : null)],
     [
       'effectiveCloudLimitM',
       'Native effective cloud limit',
-      '#247e73',
+      hybrid ? '#5eead4' : '#247e73',
       '5 2',
       (hour: ProfileHour) => {
+        if (!convectiveOnly(hour)) return null;
         const { surfaceLclM: base, effectiveCloudLimitM: limit } = hour;
         return limit !== null && (base === null || Math.abs(limit - base) >= 1) ? limit : null;
       },
@@ -149,6 +185,7 @@ export function buildStitchedWindgramView(
 
   let sumColumnWidths = 0;
   let columnWidthCount = 0;
+  const deferredMissingMasks: string[] = [];
 
   slices.forEach((slice, panelIdx) => {
     const panelLeft = left + panelIdx * (panelWidth + seamWidth);
@@ -170,6 +207,7 @@ export function buildStitchedWindgramView(
     const startHourIndex = viewHours.length;
     const panelHours = slice.selection.hours;
     const panelSampling = panelHours.map(hourSampling);
+    const panelCloudAnalyses = panelHours.map((h, idx) => analyzeHourCloudLayers(h, panelSampling[idx], topM));
     const localViewHours: WindgramHour[] = panelHours.map((h) => {
       const temp = finiteScalar(h.surface.temperatureC);
       const gust = finiteScalar(h.surface.windGustMps);
@@ -186,10 +224,13 @@ export function buildStitchedWindgramView(
 
     for (const h of panelHours) sourceHours.push(h);
     for (const s of panelSampling) sampling.push(s);
+    for (const ca of panelCloudAnalyses) {
+      cloudLayersByHour.push(ca.layers);
+      highCloudOnlyByHour.push(ca.highCloudOnly);
+    }
     for (const vh of localViewHours) viewHours.push(vh);
     const endHourIndex = viewHours.length - 1;
 
-    // Panel time ticks (clamped inside this day's sub-panel)
     const panelTicks: WindgramTimeTick[] = [
       ...subTime.emptyTimes.map((t): WindgramTimeTick => ({
         validAt: new Date(t).toISOString(),
@@ -212,7 +253,6 @@ export function buildStitchedWindgramView(
     const localVisibleTickIndices = (() => {
       if (panelTicks.length <= 2) return panelTicks.map((_, idx) => firstAxisIdx + idx);
       if (panelWidth < 135) {
-        // On compact mobile 3-day panels, anchor morning, midday peak, and afternoon rather than 5am/5pm edges.
         const targets = panelWidth < 82
           ? [panelLeft + panelWidth * 0.28, panelLeft + panelWidth * 0.72]
           : [panelLeft + panelWidth * 0.18, panelLeft + panelWidth * 0.5, panelLeft + panelWidth * 0.82];
@@ -239,7 +279,6 @@ export function buildStitchedWindgramView(
       ).map((idx) => firstAxisIdx + idx);
     })();
 
-    // Uncovered spans inside this day panel (e.g. run starts mid-day or ends mid-afternoon)
     const firstData = localViewHours[0];
     const lastData = localViewHours.at(-1);
     const uncoveredSpans =
@@ -289,7 +328,40 @@ export function buildStitchedWindgramView(
       return nodes.map((n) => ({ distanceFromBottomPx: bottom - y(n.altitudeM), value: n.value }));
     });
 
-    if (stabilityPixelNodes.some((nodes) => nodes.length)) {
+    if (hybrid) {
+      const { inversionFields, waveFields, cloudDeckFields } = buildInversionAndCloudDeckPaths({
+        sourceHours: panelHours,
+        sampling: panelSampling,
+        hours: localViewHours,
+        scale,
+        columnWidth: colW,
+        leftBound: panelLeft,
+        rightBound: panelRight,
+      });
+      for (const f of inversionFields) pushField(f.className, f.path);
+      for (const f of waveFields) pushField(f.className, f.path);
+      for (const f of cloudDeckFields) pushCloudDeck(f.className, f.path);
+      const climbFields = buildClimbDomeFieldPaths({
+        sourceHours: panelHours,
+        viewHours: localViewHours,
+        scale,
+        columnWidth: colW,
+        leftBound: panelLeft,
+        rightBound: panelRight,
+      });
+      for (const f of climbFields) pushField(f.className, f.path);
+      skyCoverSpans.push(
+        ...buildSkyCoverSpans({
+          sourceHours: panelHours,
+          sampling: panelSampling,
+          viewHours: localViewHours,
+          columnWidth: colW,
+          leftBound: panelLeft,
+          rightBound: panelRight,
+          topM,
+        }),
+      );
+    } else if (stabilityPixelNodes.some((nodes) => nodes.length)) {
       const panelFields = buildStabilityFieldPaths({
         nodesByHour: stabilityPixelNodes,
         hours: localViewHours,
@@ -320,22 +392,22 @@ export function buildStitchedWindgramView(
         if (missingSpan && Math.abs(missingSpan.topY - baseY) < 0.05) missingSpan.topY = topY;
         else {
           if (missingSpan && missingSpan.baseY > missingSpan.topY) {
-            pushField('windgram-missing', `M${bLeft},${missingSpan.topY}h${bWidth}v${missingSpan.baseY - missingSpan.topY}h-${bWidth}Z`);
+            deferredMissingMasks.push(`M${bLeft},${missingSpan.topY}h${bWidth}v${missingSpan.baseY - missingSpan.topY}h-${bWidth}Z`);
           }
           missingSpan = { baseY, topY };
         }
       }
       if (missingSpan && missingSpan.baseY > missingSpan.topY) {
-        pushField('windgram-missing', `M${bLeft},${missingSpan.topY}h${bWidth}v${missingSpan.baseY - missingSpan.topY}h-${bWidth}Z`);
+        deferredMissingMasks.push(`M${bLeft},${missingSpan.topY}h${bWidth}v${missingSpan.baseY - missingSpan.topY}h-${bWidth}Z`);
       }
       const missingHeight = validNodes.length ? bottom - highestValidPx - top : plotHeight;
       if (missingHeight > 0) {
-        pushField('windgram-missing', `M${bLeft},${top}h${bWidth}v${missingHeight}h-${bWidth}Z`);
+        deferredMissingMasks.push(`M${bLeft},${top}h${bWidth}v${missingHeight}h-${bWidth}Z`);
       }
       const modelTerrainM = panelHours[i]!.modelTerrainM;
       if (validNodes.length && modelTerrainM !== null && modelTerrainM > floorM) {
         const groundY = y(modelTerrainM);
-        pushField('windgram-missing', `M${bLeft},${groundY}h${bWidth}v${bottom - groundY}h-${bWidth}Z`);
+        deferredMissingMasks.push(`M${bLeft},${groundY}h${bWidth}v${bottom - groundY}h-${widthOrZero(bWidth)}Z`);
       }
     });
 
@@ -351,7 +423,6 @@ export function buildStitchedWindgramView(
     );
     contours.push(...panelContours);
 
-    // Thin barb columns inside an 8px horizontal inset so feathers stay crisp and never bleed across night seams.
     const barbInset = Math.min(8, panelWidth * 0.1);
     const barbHourIndices = new Set(
       visibleWindgramHourIndices(
@@ -407,9 +478,31 @@ export function buildStitchedWindgramView(
           cloudBands.push({ x: bLeft, width: bWidth, y: y(layer.topM), height: y(layer.baseM) - y(layer.topM) });
         }
       }
-      const base = h.surfaceLclM;
+      const regime = classifyConvectiveCloudRegime(h);
+      const activeCu = regime !== 'none';
+      const convLayer = panelCloudAnalyses[i]?.convectiveLayer ?? null;
+      const cuLimits = [h.effectiveCloudLimitM, h.surfaceLclM].filter((v): v is number => v !== null && Number.isFinite(v));
+      const base = activeCu && hybrid
+        ? (convLayer?.baseM ?? (cuLimits.length ? Math.min(...cuLimits) : null))
+        : h.surfaceLclM;
       if (base !== null && base >= floorM && base <= topM) {
-        clouds.push({ hourIndex: globalIdx, x, y: y(base), baseM: base, topM: base, kind: 'potential' });
+        clouds.push({
+          hourIndex: globalIdx,
+          x,
+          y: y(base),
+          baseM: base,
+          topM: activeCu && convLayer ? convLayer.topM : base,
+          kind: 'potential',
+          cumulus: activeCu,
+          regime,
+          capeJkg: finiteScalar(h.surface.capeJkg),
+          colWidth: bWidth > 0 ? bWidth : colW,
+          panelLeft,
+          panelRight,
+          ...(activeCu && convLayer
+            ? { depthM: convLayer.depthM, coverageCode: convLayer.coverageCode, coverPercent: convLayer.coverPercent }
+            : {}),
+        });
       }
     });
 
@@ -427,6 +520,20 @@ export function buildStitchedWindgramView(
     }
   });
 
+  // Ensure inversions -> wave lift -> thermal climb domes -> missing masks layer cleanly.
+  const sortedClasses = [...orderedFieldOrder].sort((a, b) => {
+    const rank = (cls: string) =>
+      cls.startsWith('wg-inversion-') ? 0 : cls.startsWith('wg-wave-') ? 1 : cls.startsWith('wg-climb-') ? 2 : 3;
+    return rank(a) - rank(b);
+  });
+  const finalFields = sortedClasses.map(className => ({
+    className,
+    path: fieldsByClass.get(className)!.join(''),
+  }));
+  if (deferredMissingMasks.length) {
+    finalFields.push({ className: 'windgram-missing', path: deferredMissingMasks.join('') });
+  }
+
   const avgColumnWidth = columnWidthCount > 0 ? sumColumnWidths / columnWidthCount : plotWidth / Math.max(1, viewHours.length);
   const visibleHours = visibleWindgramHourIndices({ hours: viewHours, compact, left, plotWidth }, 0);
   const selectedHourIndex = visibleHours.reduce(
@@ -437,6 +544,7 @@ export function buildStitchedWindgramView(
 
   return {
     unitSystem: system,
+    fieldMode,
     presentation,
     width: presentation.width,
     height: presentation.height,
@@ -456,11 +564,15 @@ export function buildStitchedWindgramView(
     timeZone,
     anchors,
     sampling,
+    cloudLayersByHour,
+    highCloudOnlyByHour,
     compact,
     timeAxis,
     hours: viewHours,
     dayPanels,
-    fields: [...fieldsByClass.entries()].map(([className, paths]) => ({ className, path: paths.join('') })),
+    fields: finalFields,
+    cloudDeckFields: cloudDeckOrder.map(className => ({ className, path: cloudDeckByClass.get(className)!.join('') })),
+    skyCoverSpans,
     contours,
     barbs,
     clouds,
@@ -475,4 +587,8 @@ export function buildStitchedWindgramView(
     })),
     selectedHourIndex,
   };
+}
+
+function widthOrZero(w: number): number {
+  return w > 0 ? w : 0;
 }

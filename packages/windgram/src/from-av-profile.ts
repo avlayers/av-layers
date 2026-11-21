@@ -1,6 +1,13 @@
 import type { LayerId } from '@av/contracts/layers';
 import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/client';
-import { windFromComponents } from '@av/soaring';
+import {
+  LENSCHOW_F_MAX,
+  LENSCHOW_PEAK_ZETA,
+  lenschowNormalizedUpdraft,
+  SINK_RATE_MPS,
+  usableLiftDepthM,
+  windFromComponents,
+} from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 
 function timeZoneForLongitude(lon: number): string {
@@ -8,6 +15,44 @@ function timeZoneForLongitude(lon: number): string {
   if (offsetHours === 0) return 'Etc/UTC';
   const sign = offsetHours > 0 ? '-' : '+';
   return `Etc/GMT${sign}${Math.abs(offsetHours)}`;
+}
+
+/**
+ * Computes native-column usable lift ceiling (MSL) for forecast hours beyond `mapFrameCount`
+ * where fine-grid `usable-lift-msl` is `'unavailable'`, using the identical 1.2 m/s Lenschow
+ * sink solver and effective cloud cap as the fine map surface.
+ * Never overrides an explicit `'no-usable-lift'` or `'outside-domain'` fine-surface status.
+ */
+function resolveNativeFallbackLiftTopM(args: {
+  mapLiftStatus: string | undefined;
+  modelTerrainM: number | null;
+  thermalTopM: number | null;
+  thermalVelocityMps: number | null;
+  effectiveCloudLimitM: number | null;
+  derivedV2TopM: number | null;
+}): number | null {
+  const { mapLiftStatus, modelTerrainM, thermalTopM, thermalVelocityMps, effectiveCloudLimitM, derivedV2TopM } = args;
+  if (mapLiftStatus && mapLiftStatus !== 'unavailable') return null;
+  if (
+    modelTerrainM === null ||
+    thermalTopM === null ||
+    thermalVelocityMps === null ||
+    thermalTopM <= modelTerrainM ||
+    thermalVelocityMps * LENSCHOW_F_MAX < SINK_RATE_MPS
+  ) {
+    return null;
+  }
+  const depth = thermalTopM - modelTerrainM;
+  const usableDepth = usableLiftDepthM(depth, thermalVelocityMps, { sinkRateMps: SINK_RATE_MPS });
+  if (usableDepth === null) return derivedV2TopM;
+  const cap = effectiveCloudLimitM !== null && Number.isFinite(effectiveCloudLimitM)
+    ? Math.min(thermalTopM, effectiveCloudLimitM)
+    : thermalTopM;
+  const zeta = (cap - modelTerrainM) / depth;
+  if (zeta <= 0 || (zeta <= LENSCHOW_PEAK_ZETA && thermalVelocityMps * lenschowNormalizedUpdraft(zeta) < SINK_RATE_MPS)) {
+    return null;
+  }
+  return Math.min(modelTerrainM + usableDepth, cap);
 }
 
 function chartHour(validAt: string, frame: PointFrame | undefined, build: PinnedBuild): PublishedForecastHour {
@@ -19,10 +64,26 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
   const diagnostics = frame?.derived;
   const u10 = read('wind-10m-u'), v10 = read('wind-10m-v');
   const wind = windFromComponents(u10, v10);
+  const modelTerrainM = profile?.modelTerrainM ?? null;
+  const mapLift = pointMapLift(frame, build);
+  const thermalTopM = read('thermal-top-msl');
+  const thermalVelocityMps = read('thermal-velocity');
+  const effectiveCloudLimitM = diagnostics?.effectiveCloudLimitM ?? null;
+  const nativeUsableLiftTopM = mapLift.mslM !== null
+    ? null
+    : resolveNativeFallbackLiftTopM({
+        mapLiftStatus: mapLift.msl?.status,
+        modelTerrainM,
+        thermalTopM,
+        thermalVelocityMps,
+        effectiveCloudLimitM,
+        derivedV2TopM: diagnostics?.usableLiftTopV2M ?? null,
+      });
+
   return {
     validAt,
-    modelTerrainM: profile?.modelTerrainM ?? null,
-    mapLift: pointMapLift(frame, build),
+    modelTerrainM,
+    mapLift,
     surface: {
       temperatureC: read('sfc-temp-c'), dewPointC: read('sfc-dewpoint-c'),
       windSpeedMps: diagnostics?.wind10mSpeedMps ?? wind.speedMps,
@@ -34,8 +95,17 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
       cloudCoverLowPercent: read('cloud-cover-low')
     },
     levels: profile?.status === 'valid' ? profile.levels : [],
-    thermalTopM: read('thermal-top-msl'), thermalVelocityMps: read('thermal-velocity'),
-    surfaceLclM: read('surface-lcl-msl'), effectiveCloudLimitM: diagnostics?.effectiveCloudLimitM ?? null,
+    thermalTopM,
+    nativeUsableLiftTopM,
+    thermalVelocityMps,
+    surfaceLclM: read('surface-lcl-msl'),
+    mixedLayerLclM: diagnostics?.mixedLayerLclM ?? null,
+    effectiveCloudLimitM,
+    cuPotentialM: diagnostics?.cuPotentialM ?? null,
+    odPotentialM: diagnostics?.odPotentialM ?? null,
+    buoyancyShearRatio: diagnostics?.buoyancyShearRatio ?? null,
+    overdeveloped: diagnostics?.overdeveloped ?? null,
+    cloudCapped: diagnostics?.cloudCapped ?? null,
     layerWind: diagnostics ? {
       meanSpeedMps: diagnostics.blMeanWindSpeedMps, meanDirectionDeg: diagnostics.blMeanWindDirDeg,
       topSpeedMps: diagnostics.blTopWindSpeedMps, topDirectionDeg: diagnostics.blTopWindDirDeg,

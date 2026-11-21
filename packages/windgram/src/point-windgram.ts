@@ -40,6 +40,7 @@ import {
 } from './point-view-mode.ts';
 import { renderPointSeries } from './scalar-point.ts';
 import { renderWindgramKey } from './svg.ts';
+import { DEFAULT_WINDGRAM_FIELD_MODE, type WindgramFieldMode } from './windgram-atmosphere.ts';
 import type { WindgramTelemetryStrip } from './windgram-readout.ts';
 import { daylightForDate } from './windgram-time-axis.ts';
 
@@ -63,6 +64,7 @@ export interface PointWindgramOptions {
   readonly mapOffsetMinutes?: number;
   readonly calloutVariant?: WindgramCalloutVariant;
   readonly calloutTrigger?: WindgramCalloutTrigger;
+  readonly fieldMode?: WindgramFieldMode;
   readonly viewMode?: PointViewMode;
   readonly onViewModeChange?: (mode: PointViewMode) => void;
   readonly onRequestFullHorizon?: () => void;
@@ -304,6 +306,7 @@ function createPointWindgram(
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
   const todayLocalKey = localDateKey(new Date().toISOString(), initialProbeSite.timeZone);
   const initialWindowStartKey = resolveInitialWindowStartKey(manifestCalendar.dayKeys, todayLocalKey);
+  let fieldMode: WindgramFieldMode = options.fieldMode ?? DEFAULT_WINDGRAM_FIELD_MODE;
   let viewMode: PointViewMode = supportsMultiDay ? (options.viewMode ?? DEFAULT_POINT_VIEW_MODE) : '1d';
   let windowAnchorKey: string | null = initialWindowStartKey;
   let keepWindowAnchor = true;
@@ -312,7 +315,7 @@ function createPointWindgram(
   let onRequestFullHorizon = options.onRequestFullHorizon;
   let onVisibleDaysChange = options.onVisibleDaysChange;
   let lastPublishedDaysKey = '';
-  let keyUnits: UnitSystem | null = null;
+  let keySignature = '';
   let activeWidth = 0;
   let activeHeight: number | undefined;
   let singleDayCache: { key: string; frames: readonly (PointFrame | undefined)[]; daylight: WindgramView; full?: WindgramView } | null = null;
@@ -437,11 +440,11 @@ function createPointWindgram(
 
   const dayViews = (dayKey: string, hours: readonly DayHour[], widthPx: number, heightPx: number | undefined) => {
     const frames = hours.map(hour => data.loaded.get(hour.id));
-    const key = `${dayKey}|${units}|${widthPx}|${heightPx}|${hours.length}`;
+    const key = `${dayKey}|${units}|${fieldMode}|${widthPx}|${heightPx}|${hours.length}`;
     if (singleDayCache?.key !== key || singleDayCache.frames.some((frame, i) => frame !== frames[i])) {
       const timeZone = data.forecast.site.timeZone;
       const daylight = buildWindgramView(data.forecast, {
-        unitSystem: units, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: { timeZone, dateKey: dayKey },
+        unitSystem: units, fieldMode, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: { timeZone, dateKey: dayKey },
       });
       singleDayCache = { key, frames, daylight };
     }
@@ -456,10 +459,11 @@ function createPointWindgram(
     heightPx: number | undefined,
   ): WindgramView => {
     const frames = windowDays.flatMap(d => (data.days.get(d) ?? []).map(h => data.loaded.get(h.id)));
-    const key = `${windowDays.join(',')}|${bestDayKey ?? ''}|${units}|${widthPx}|${heightPx}|${frames.length}`;
+    const key = `${windowDays.join(',')}|${bestDayKey ?? ''}|${units}|${fieldMode}|${widthPx}|${heightPx}|${frames.length}`;
     if (stitchedCache?.key !== key || stitchedCache.frames.some((frame, i) => frame !== frames[i])) {
       const view = buildStitchedWindgramView(data.forecast, {
         unitSystem: units,
+        fieldMode,
         timeZone: data.forecast.site.timeZone,
         widthPx,
         heightPx,
@@ -522,9 +526,10 @@ function createPointWindgram(
       return;
     }
 
-    if (keyUnits !== units) {
-      keyCard.innerHTML = renderWindgramKey(units, usesDsm);
-      keyUnits = units;
+    const nextKeySig = `${units}|${fieldMode}`;
+    if (keySignature !== nextKeySig) {
+      keyCard.innerHTML = renderWindgramKey(units, usesDsm, fieldMode);
+      keySignature = nextKeySig;
     }
 
     // Update [1-Day | 3-Day] segmented toggle state + Day/Window stepper
@@ -578,7 +583,7 @@ function createPointWindgram(
       const selectedInDaylight = selectedValidAt === null || visibleDayHours.some(hour => hour.validAt === selectedValidAt);
       const useDaylightCrop = selectedInDaylight && visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
       view = useDaylightCrop ? daylightView : (views.full ??= buildWindgramView(data.forecast, {
-        unitSystem: units, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours,
+        unitSystem: units, fieldMode, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours,
       }));
     }
 
@@ -616,6 +621,9 @@ function createPointWindgram(
     onViewModeChange = nextOptions.onViewModeChange;
     onRequestFullHorizon = nextOptions.onRequestFullHorizon;
     onVisibleDaysChange = nextOptions.onVisibleDaysChange;
+    if (nextOptions.fieldMode !== undefined) {
+      fieldMode = nextOptions.fieldMode;
+    }
     if (nextOptions.viewMode !== undefined && supportsMultiDay) {
       viewMode = nextOptions.viewMode;
     }

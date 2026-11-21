@@ -11,6 +11,13 @@ import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
 import { formatWindgramReading } from './windgram-readout.ts';
 
 import { barbGeometry, displayedBarbSpeed, quantizedBarbSpeed } from './wind-barb.ts';
+import {
+  analyzeHourCloudLayers,
+  classifyConvectiveCloudRegime,
+  omegaToVerticalVelocityMps,
+  skyCoverageCode,
+  windBarbSpeedColor,
+} from './windgram-atmosphere.ts';
 import { classifyParagliderWind, cloudOktasSegments, getWindgramCalloutRenderer, placeWindgramCallout } from './windgram-callout.ts';
 import { windBarbGlyph } from './windgram-glyphs.ts';
 import { resolveWindgramPresentation } from './windgram-presentation.ts';
@@ -310,12 +317,18 @@ describe('Windgram data', () => {
     expect(renderWindgramKey('imperial')).toContain('Map usable lift');
   });
 
-  it('formats horizontal wind thresholds in displayed units while keeping knot feather increments', () => {
+  it('formats WMO-aligned horizontal wind thresholds in displayed units without adjectives while keeping knot feather increments', () => {
     const metric = renderWindgramKey('metric'), imperial = renderWindgramKey('imperial');
     expect(metric).toContain('Wind · half 5 / full 10 / flag 50 kt');
-    expect(metric).toContain('Green wind is below 16.7 km/h');
+    expect(metric).toContain('Green wind is below 23.2 km/h · yellow ≥32 km/h · red ≥51 km/h · magenta ≥88 km/h');
+    expect(metric).toContain('Cu &amp; OD');
+    expect(metric).not.toContain('Cb');
+    expect(metric).not.toContain('⚡');
+    expect(metric).not.toMatch(/amber\/red strong/i);
     expect(imperial).toContain('Wind · half 5 / full 10 / flag 50 kt');
-    expect(imperial).toContain('Green wind is below 10.4 mph');
+    expect(imperial).toContain('Green wind is below 14.4 mph · yellow ≥20 mph · red ≥32 mph · magenta ≥55 mph');
+    expect(imperial).not.toMatch(/amber\/red strong/i);
+    expect(renderWindgramKey('metric', false, 'lapse')).toContain('Green wind is below 16.7 km/h');
   });
 
   it('uses pinned CAPE and gust semantics for an older build of the same model', () => {
@@ -609,13 +622,16 @@ describe('Windgram data', () => {
     chart.dispose();
   });
 
-  it('renders Option B 2x2 Instrument Tile by default with PG wind thresholds, vario bar, cloud oktas, conditional rain, and pluggable variant swapping', () => {
+  it('renders Option B 2x2 Instrument Tile by default with WMO 2.5+5n kt wind tiers, surface-only gusts, METAR sky code + Clear vs Whiteout disambiguation, dewpoint, dual-halo crosshairs, and pluggable variant swapping', () => {
     expect(classifyParagliderWind(null)).toBe('missing');
-    expect(classifyParagliderWind(0.2)).toBe('calm');
-    expect(classifyParagliderWind(4.0)).toBe('ok');      // 14.4 km/h (<20 km/h)
-    expect(classifyParagliderWind(7.0)).toBe('caution'); // 25.2 km/h (20-30 km/h)
-    expect(classifyParagliderWind(9.5)).toBe('danger');  // 34.2 km/h (>30 km/h)
+    expect(classifyParagliderWind(1.0)).toBe('calm');      // 1.9 kt (<2.5 kt WMO calm circle)
+    expect(classifyParagliderWind(5.5)).toBe('ok');        // 10.7 kt (2.5–12.5 kt: 5 & 10 kt barbs green)
+    expect(classifyParagliderWind(7.5)).toBe('moderate');  // 14.6 kt (12.5–17.5 kt: 15 kt barb white)
+    expect(classifyParagliderWind(13.0)).toBe('caution');  // 25.3 kt (17.5–27.5 kt: 20 & 25 kt barbs yellow)
+    expect(classifyParagliderWind(16.0)).toBe('danger');   // 31.1 kt (27.5–47.5 kt: 30–45 kt barbs coral)
+    expect(classifyParagliderWind(26.0)).toBe('pennant');  // 50.5 kt (>=47.5 kt: 50+ kt WMO pennant magenta)
     expect([0, 4, 15, 35, 75, 95].map(cloudOktasSegments)).toEqual([0, 0, 1, 2, 4, 5]);
+    expect([0, 5, 18, 40, 72, 95].map(skyCoverageCode)).toEqual(['CLR', 'CLR', 'FEW', 'SCT', 'BKN', 'OVC']);
 
     const { sample, profile, forecast } = fixture([20, 21]);
     const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
@@ -624,10 +640,16 @@ describe('Windgram data', () => {
     const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, timeZone: site.site.timeZone, hours: site.hours });
 
     const defaultSvg = renderWindgramSvg(scene);
+    expect(defaultSvg).toContain('windgram-hybrid');
     expect(defaultSvg).toContain('data-callout-variant="tile-2x2"');
+    expect(defaultSvg).toContain('data-cursor-vertical-halo=""');
+    expect(defaultSvg).toContain('data-cursor-horizontal-halo=""');
+    expect(defaultSvg).toContain('data-cursor-point-halo=""');
     expect(defaultSvg).toContain('data-tile-wind-arrow=""');
     expect(defaultSvg).toContain('data-tile-climb-fill=""');
     expect(defaultSvg).toContain('data-tile-okta="4"');
+    expect(defaultSvg).toContain('data-tile-sky-code=""');
+    expect(defaultSvg).toContain('data-tile-dewpoint=""');
     expect(defaultSvg).toContain('data-tile-rain-icon=""');
 
     const classicSvg = renderWindgramSvg(scene, { calloutVariant: 'classic' });
@@ -635,7 +657,7 @@ describe('Windgram data', () => {
     expect(classicSvg).toContain('data-cursor-soar=""');
     expect(classicSvg).not.toContain('data-tile-wind-arrow=""');
 
-    // Bind Option B 2x2 DOM nodes directly and verify live painting across dry, caution-wind/rain, and in-cloud states.
+    // Bind Option B 2x2 DOM nodes directly and verify live painting across dry, surface-gust, caution-wind/rain, and in-cloud states.
     const back = new FakeElement('rect');
     const badgePill = new FakeElement('rect');
     const badge = new FakeElement('text');
@@ -652,9 +674,11 @@ describe('Windgram data', () => {
     const climbSub = new FakeElement('text');
     const cloudBg = new FakeElement('rect');
     const oktas = [0, 1, 2, 3, 4].map(() => new FakeElement('rect'));
+    const skyCodeEl = new FakeElement('text');
     const cloudText = new FakeElement('text');
     const rainBg = new FakeElement('rect');
     const tempEl = new FakeElement('text');
+    const dewpointEl = new FakeElement('text');
     const rainIcon = new FakeElement('path');
     const hazardEl = new FakeElement('text');
     const tileNodes = new Map<string, FakeElement>([
@@ -674,9 +698,11 @@ describe('Windgram data', () => {
       ['[data-tile-climb-sub]', climbSub],
       ['[data-tile-cloud-bg]', cloudBg],
       ...oktas.map((el, i) => [`[data-tile-okta="${i}"]`, el] as const),
+      ['[data-tile-sky-code]', skyCodeEl],
       ['[data-tile-cloud-text]', cloudText],
       ['[data-tile-rain-bg]', rainBg],
       ['[data-tile-temp]', tempEl],
+      ['[data-tile-dewpoint]', dewpointEl],
       ['[data-tile-rain-icon]', rainIcon],
       ['[data-tile-hazard]', hazardEl],
     ]);
@@ -690,16 +716,16 @@ describe('Windgram data', () => {
       calloutBadge: '★ TOP OF LIFT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: true, chips: [],
     };
 
-    // 1) Flyable wind (270° W blowing East -> downwind arrow rotated 90°), dry sky (rain icon hidden), 35% cloud (2/5 oktas).
+    // 1) Flyable wind (270° W blowing East -> downwind arrow rotated 90°), clear air under SCT 35% sky, dewpoint Td 2°, no surface gust aloft at 300 m AGL.
     const size = bound.paint({
       aglText: '500 m AGL',
       mslText: '2,000 m MSL',
       useTol: true,
       telemetry: dummyTelemetry,
-      reading: { ...baseReading, speedKt: mpsToKnots(4.5), directionDeg: 270, precipitationMmHr: 0, windShear: null },
+      reading: { ...baseReading, heightAglM: 300, speedKt: mpsToKnots(4.5), gustKt: 22, directionDeg: 270, precipitationMmHr: 0, windShear: null },
       unitSystem: 'metric',
     });
-    expect(size).toEqual({ width: 178, height: 74 });
+    expect(size).toEqual({ width: 204, height: 74 });
     expect(badge.textContent).toBe('★ TOL');
     expect(windArrow.getAttribute('transform')).toBe('translate(16.5 33) rotate(90)');
     expect(windSpeed.textContent).toBe('16 km/h');
@@ -707,11 +733,25 @@ describe('Windgram data', () => {
     expect(windDir.textContent).toBe('W');
     expect(Number(climbFill.getAttribute('height'))).toBeGreaterThan(0);
     expect(oktas.map(el => el.getAttribute('class')?.includes('is-lit') ?? false)).toEqual([true, true, false, false, false]);
-    expect(cloudText.textContent).toBe('Cloud 35%');
+    expect(skyCodeEl.textContent).toBe('SCT 35%');
+    expect(cloudText.textContent).toBe('Clear · RH 50%');
+    expect(dewpointEl.textContent).toBe('Td 2°');
     expect(rainIcon.getAttribute('visibility')).toBe('hidden');
     expect(hazardEl.textContent).toBe('Dry');
 
-    // 2) Caution wind (25 km/h WNW), active precipitation (0.8 mm/h), freezing air (-2°C), and in-cloud RH >=94%.
+    // 1b) Near-surface launch hover (<=150 m AGL) surfaces 10m gusts (W · G41) and promotes caution border without inventing upper-air gusts.
+    bound.paint({
+      aglText: '80 m AGL',
+      mslText: '1,580 m MSL',
+      useTol: false,
+      telemetry: dummyTelemetry,
+      reading: { ...baseReading, heightAglM: 80, speedKt: 10, gustKt: 22, directionDeg: 270, precipitationMmHr: 0, windShear: null },
+      unitSystem: 'metric',
+    });
+    expect(windDir.textContent).toBe('W · G41');
+    expect(back.getAttribute('class')).toContain('is-caution');
+
+    // 2) Yellow-tier wind (20.4 kt / 38 km/h WNW — zero adjectives!), active precipitation (0.8 mm/h), freezing air (-2°C), and saturated IMC whiteout (RH >=94%).
     bound.paint({
       aglText: '900 m AGL',
       mslText: '2,400 m MSL',
@@ -719,9 +759,13 @@ describe('Windgram data', () => {
       telemetry: dummyTelemetry,
       reading: {
         ...baseReading,
-        speedKt: mpsToKnots(7.0),
+        heightAglM: 900,
+        speedKt: mpsToKnots(10.5),
+        gustKt: 24,
         directionDeg: 292.5,
         temperatureF: 28.4,
+        dewPointC: -2.4,
+        relativeHumidityPercent: 96,
         cloud: 'humidity',
         cloudCoverTotalPercent: 85,
         precipitationMmHr: 0.8,
@@ -731,10 +775,13 @@ describe('Windgram data', () => {
     expect(badge.textContent).toBe('ALT');
     expect(back.getAttribute('class')).toContain('is-caution');
     expect(windBg.getAttribute('class')).toContain('is-caution');
-    expect(windDir.textContent).toBe('WNW · Caution');
+    expect(windDir.textContent).toBe('WNW');
+    expect(windDir.textContent).not.toMatch(/Caution|Strong|G/i);
     expect(cloudBg.getAttribute('class')).toContain('is-cloud');
-    expect(cloudText.textContent).toBe('IN CLOUD · 85%');
+    expect(skyCodeEl.textContent).toBe('IMC');
+    expect(cloudText.textContent).toBe('☁ Whiteout · RH 96%');
     expect(tempEl.textContent).toBe('❄ -2°C');
+    expect(dewpointEl.textContent).toBe('Td -2°');
     expect(tempEl.getAttribute('class')).toContain('is-freeze');
     expect(rainIcon.getAttribute('visibility')).toBe('visible');
     expect(hazardEl.textContent).toBe('Rain 0.8 mm/h');
@@ -753,6 +800,148 @@ describe('Windgram data', () => {
     mounted.setCalloutVariant('tile-2x2');
     expect(swapHost.innerHTML).toContain('data-callout-variant="tile-2x2"');
     mounted.dispose();
+  });
+
+  it('models cloud depth, FEW/SCT/BKN/OVC scatteredness, multi-layer cloud decks, high cirrus vs low OVC, and Clear vs Whiteout/Cu-tower hover states', () => {
+    const { build, sample, profile } = fixture([15, 17, 19], 3);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+
+    // Hour 0 (15Z): Two distinct stratiform layers inside soaring domain (low OVC valley stratus 1700..1950m, clear slot at 2250m, mid SCT/BKN altocumulus 2650..3050m), w* = 0
+    frames[0]!.layers['usable-lift-msl']!.value = null;
+    frames[0]!.layers['usable-lift-msl']!.status = 'no-usable-lift';
+    frames[0]!.layers['usable-lift-agl']!.value = 0;
+    frames[0]!.layers['usable-lift-agl']!.status = 'no-usable-lift';
+    frames[0]!.layers['thermal-velocity']!.value = 0;
+    frames[0]!.layers['cloud-cover-low']!.value = 90;
+    frames[0]!.layers['cloud-cover-total']!.value = 92;
+    frames[0]!.profile.levels = [
+      { pressureHpa: 900, heightM: 1700, temperatureC: 10, dewPointC: 9.8, uWindMps: 3, vWindMps: 2, omegaPaS: 0 },   // ~99% RH (OVC stratus)
+      { pressureHpa: 875, heightM: 1950, temperatureC: 8.5, dewPointC: 8.0, uWindMps: 4, vWindMps: 2, omegaPaS: 0 },  // ~97% RH
+      { pressureHpa: 845, heightM: 2250, temperatureC: 7.0, dewPointC: -4.0, uWindMps: 5, vWindMps: 3, omegaPaS: 0 }, // ~45% RH (clear VMC window!)
+      { pressureHpa: 805, heightM: 2650, temperatureC: 2.0, dewPointC: -0.2, uWindMps: 7, vWindMps: 4, omegaPaS: 0 }, // ~85% RH (SCT/BKN alto deck)
+      { pressureHpa: 765, heightM: 3050, temperatureC: -1.0, dewPointC: -3.0, uWindMps: 8, vWindMps: 5, omegaPaS: 0 }, // ~86% RH
+    ];
+
+    // Hour 1 (17Z): Towering SCT Cumulus (base = 2200 m, parcel top = 3450 m -> 1,250 m deep, w* = 2.8 m/s, cloud-cover-low = 38%) + Cloud suck!
+    frames[1]!.layers['usable-lift-msl']!.value = 2200;
+    frames[1]!.layers['usable-lift-agl']!.value = 700;
+    frames[1]!.layers['surface-lcl-msl'] = { ...frames[1]!.layers['sfc-temp-c']!, value: 2200 };
+    frames[1]!.layers['thermal-top-msl']!.value = 3450;
+    frames[1]!.layers['thermal-velocity']!.value = 2.8;
+    frames[1]!.layers['cloud-cover-low']!.value = 38;
+    frames[1]!.layers['cloud-cover-total']!.value = 38;
+    frames[1]!.derived.effectiveCloudLimitM = 2200;
+    frames[1]!.derived.cuPotentialM = 1250;
+    frames[1]!.derived.cloudCapped = true;
+    frames[1]!.derived.overdeveloped = false;
+
+    // Hour 2 (19Z): Sunny blue thermals with strong BL shear (buoyancyShearRatio = 0.28 -> B/S 3) under 95% High Cirrus ONLY (cloud-cover-low = 0%, dry column)
+    frames[2]!.layers['usable-lift-msl']!.value = 2400;
+    frames[2]!.layers['usable-lift-agl']!.value = 900;
+    frames[2]!.layers['thermal-top-msl']!.value = 2550;
+    frames[2]!.layers['surface-lcl-msl'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 3500 };
+    frames[2]!.layers['thermal-velocity']!.value = 2.0;
+    frames[2]!.layers['cloud-cover-low']!.value = 0;
+    frames[2]!.layers['cloud-cover-total']!.value = 95;
+    frames[2]!.derived.effectiveCloudLimitM = 3500;
+    frames[2]!.derived.cloudCapped = false;
+    frames[2]!.derived.overdeveloped = false;
+    frames[2]!.derived.buoyancyShearRatio = 0.28;
+
+    const site = createPointForecast(build, point)(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const scene = buildWindgramView(site, {
+      unitSystem: 'metric',
+      compact: false,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      hours: site.hours,
+    });
+    const svg = renderWindgramSvg(scene);
+
+    // Chart SVG renders patterned SCT/BKN & solid OVC stratiform decks, vertical Cu depth tower, and HI OVC cirrus badge!
+    expect(svg).toContain('class="wg-cloud-deck-sct"');
+    expect(svg).toContain('class="wg-cloud-deck-ovc"');
+    expect(svg).toContain('data-cu-tower="cu"');
+    expect(svg).toContain('data-sky-high="true"');
+    expect(svg).toContain('>HI OVC<');
+
+    // Direct multi-layer analysis verification on Hour 0
+    const h0Analysis = analyzeHourCloudLayers(site.hours[0], hourSampling(site.hours[0]!), scene.topM);
+    expect(h0Analysis.layers).toHaveLength(2);
+    expect(h0Analysis.layers[0]!.saturated).toBe(true);
+    expect(h0Analysis.layers[1]!.saturated).toBe(false);
+
+    // Bind tile-2x2 and verify hover states across all 3 hours
+    const climbSub = new FakeElement('text');
+    const skyCodeEl = new FakeElement('text');
+    const cloudText = new FakeElement('text');
+    const cloudBg = new FakeElement('rect');
+    const hazardEl = new FakeElement('text');
+    const oktas = [0, 1, 2, 3, 4].map(() => new FakeElement('rect'));
+    const tileMap = new Map<string, FakeElement>([
+      ['[data-tile-climb-sub]', climbSub],
+      ['[data-tile-sky-code]', skyCodeEl],
+      ['[data-tile-cloud-text]', cloudText],
+      ['[data-tile-cloud-bg]', cloudBg],
+      ['[data-tile-hazard]', hazardEl],
+      ...oktas.map((el, i) => [`[data-tile-okta="${i}"]`, el] as const),
+    ]);
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => tileMap.get(sel) ?? null,
+    } as unknown as ParentNode);
+    const dummyTel = {
+      timeChip: '12:00 PM', altChip: '', snappedToTol: false, canSnapToTol: false,
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false, chips: [],
+    };
+
+    // a) Hour 0 at 1,820 m (inside lower saturated OVC stratus): 'IMC' + '☁ Whiteout · ... m'
+    const inLowOvc = readWindgram(scene, 0, 1820);
+    bound.paint({ aglText: '320 m AGL', mslText: '1,820 m MSL', useTol: false, telemetry: dummyTel, reading: inLowOvc, unitSystem: 'metric' });
+    expect(skyCodeEl.textContent).toBe('IMC');
+    expect(cloudText.textContent).toMatch(/^☁ Whiteout · \d+ m$/);
+    expect(cloudBg.getAttribute('class')).toContain('is-cloud');
+
+    // b) Hour 0 at 2,250 m (clear VMC slot between low OVC deck and mid SCT/BKN deck): '2 LYR' + 'Clear · Base +...' + 'Dry · 2 layers'
+    const betweenLayers = readWindgram(scene, 0, 2250);
+    bound.paint({ aglText: '750 m AGL', mslText: '2,250 m MSL', useTol: false, telemetry: dummyTel, reading: betweenLayers, unitSystem: 'metric' });
+    expect(skyCodeEl.textContent).toBe('2 LYR');
+    expect(cloudText.textContent).toMatch(/^Clear · Base \+\d+ m$/);
+    expect(cloudBg.getAttribute('class')).not.toContain('is-cloud');
+    expect(hazardEl.textContent).toBe('Dry · 2 layers');
+
+    // c) Hour 0 at 2,850 m (inside upper non-saturated altocumulus band): '☁ SCT/BKN deck · ... m'
+    const inMidDeck = readWindgram(scene, 0, 2850);
+    bound.paint({ aglText: '1,350 m AGL', mslText: '2,850 m MSL', useTol: false, telemetry: dummyTel, reading: inMidDeck, unitSystem: 'metric' });
+    expect(cloudText.textContent).toMatch(/^☁ (SCT|BKN) deck · \d+ m$/);
+    expect(cloudBg.getAttribute('class')).toContain('is-cloud');
+
+    // d) Hour 1 below Cu base (1,850 m), at ★ TOL Cu base (2,200 m), and inside towering Cu (2,650 m)
+    const belowCu = readWindgram(scene, 1, 1850);
+    bound.paint({ aglText: '350 m AGL', mslText: '1,850 m MSL', useTol: false, telemetry: dummyTel, reading: belowCu, unitSystem: 'metric' });
+    expect(skyCodeEl.textContent).toBe('SCT 38%');
+    expect(cloudText.textContent).toBe('Clear · Base +350 m');
+
+    const atCuTol = readWindgram(scene, 1, 2200);
+    bound.paint({ aglText: '700 m AGL', mslText: '2,200 m MSL', useTol: true, telemetry: dummyTel, reading: atCuTol, unitSystem: 'metric' });
+    expect(climbSub.textContent).toBe('▲ Cu base');
+    expect(cloudText.textContent).toBe('Cu base · 1,250 m deep');
+    expect(hazardEl.textContent).toBe('⚠ Cloud suck');
+
+    const inCuTower = readWindgram(scene, 1, 2650);
+    bound.paint({ aglText: '1,150 m AGL', mslText: '2,650 m MSL', useTol: false, telemetry: dummyTel, reading: inCuTower, unitSystem: 'metric' });
+    expect(climbSub.textContent).toBe('☁ In Cu tower');
+    expect(skyCodeEl.textContent).toBe('SCT Cu');
+    expect(cloudText.textContent).toBe('☁ In Cu · 1,250 m deep');
+    expect(hazardEl.textContent).toBe('⚠ Cloud suck');
+
+    // e) Hour 2 at 1,900 m (sheared thermal under 95% high cirrus only): 'HI 95%' + 'Clear · High cirrus' + '▲ Sheared lift' + 'B/S 3 · Sheared'
+    const underHighCirrus = readWindgram(scene, 2, 1900);
+    bound.paint({ aglText: '400 m AGL', mslText: '1,900 m MSL', useTol: false, telemetry: dummyTel, reading: underHighCirrus, unitSystem: 'metric' });
+    expect(skyCodeEl.textContent).toBe('HI 95%');
+    expect(cloudText.textContent).toBe('Clear · High cirrus');
+    expect(oktas[0]!.getAttribute('class')).toContain('is-high');
+    expect(climbSub.textContent).toBe('▲ Sheared lift');
+    expect(hazardEl.textContent).toBe('B/S 3 · Sheared');
   });
 
   it('places the floating callout in calm sky pockets away from cursor bullseye and convective dome with hysteresis', () => {
@@ -911,5 +1100,332 @@ describe('Windgram data', () => {
 
     disposePointWindgram(root as unknown as HTMLElement);
     expect(onVisibleDaysChange).toHaveBeenLastCalledWith(null);
+  });
+
+  it('renders Concept 1 hybrid-climb physics by default: Lenschow climb dome bounded by TOL, inversion lids, contoured RH cloud decks, OVC ceiling strip, active Cu only at LCL, no root SVG title tooltip, and pluggable lapse mode', () => {
+    const day1 = [14, 16, 18, 20];
+    const day2 = [38, 40, 42, 44];
+    const { sample, profile, forecast } = fixture([...day1, ...day2], 8);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+
+    // Day 1: morning surface inversion at 14Z (7a/9a), strong Cu-capped afternoon thermal at 18Z (thermalTop=2850 >= LCL=2800), and 100% high overcast at 18Z-20Z.
+    frames[0]!.layers['usable-lift-msl']!.value = null;
+    frames[0]!.layers['usable-lift-msl']!.status = 'no-usable-lift';
+    frames[0]!.layers['usable-lift-agl']!.value = 0;
+    frames[0]!.layers['usable-lift-agl']!.status = 'no-usable-lift';
+    frames[0]!.layers['thermal-velocity']!.value = 0;
+    // Create a true morning temperature inversion (+2°C warmer at 1800m than 2m surface)
+    frames[0]!.layers['sfc-temp-c']!.value = 8;
+    frames[0]!.profile.levels[0]!.temperatureC = 11;
+
+    // Peak afternoon hour (index 2): strong w* = 2.4 m/s reaching effectiveCloudLimitM (2800m) + 100% total sky cover
+    frames[2]!.layers['usable-lift-msl']!.value = 2800;
+    frames[2]!.layers['usable-lift-agl']!.value = 1300;
+    frames[2]!.layers['thermal-top-msl']!.value = 2850;
+    frames[2]!.layers['surface-lcl-msl'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 2800 };
+    frames[2]!.layers['thermal-velocity']!.value = 2.4;
+    frames[2]!.layers['cloud-cover-total']!.value = 100;
+    frames[3]!.layers['cloud-cover-total']!.value = 95;
+
+    // Day 2: completely dead overcast day (w* = 0, no usable lift, saturated RH >= 95% cloud layer, and an elevated unstable lapse layer aloft that must NOT paint a false thermal blob!)
+    for (const i of [4, 5, 6, 7]) {
+      frames[i]!.layers['usable-lift-msl']!.value = null;
+      frames[i]!.layers['usable-lift-msl']!.status = 'no-usable-lift';
+      frames[i]!.layers['usable-lift-agl']!.value = 0;
+      frames[i]!.layers['usable-lift-agl']!.status = 'no-usable-lift';
+      frames[i]!.layers['thermal-velocity']!.value = 0;
+      frames[i]!.layers['cloud-cover-total']!.value = 100;
+      // Saturated overcast cloud layer at 2400..3000m (T === Td)
+      frames[i]!.profile.levels[1]!.dewPointC = frames[i]!.profile.levels[1]!.temperatureC;
+      frames[i]!.profile.levels[2]!.dewPointC = frames[i]!.profile.levels[2]!.temperatureC;
+    }
+
+    const site = forecast(frames);
+    const allDays = [...new Set(site.hours.map(h => h.validAt.slice(0, 10)))];
+
+    // 1) Stitched 2-day hybrid-climb default scene
+    const stitched = buildStitchedWindgramView(site, {
+      unitSystem: 'imperial',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      widthPx: 620,
+      heightPx: 320,
+      dateKeys: allDays,
+    });
+    const internal = sceneData(stitched);
+    expect(internal.fieldMode).toBe('hybrid-climb');
+
+    // Day 1 has climb dome paths & morning inversion; Day 2 (dead overcast) has ZERO climb paths inside its x-span!
+    const climbFields = internal.fields.filter(f => f.className.startsWith('wg-climb-'));
+    expect(climbFields.length).toBeGreaterThanOrEqual(3);
+    const day2Left = internal.dayPanels![1]!.left;
+    for (const cf of climbFields) {
+      const xs = [...cf.path.matchAll(/[ML](-?\d+(?:\.\d+)?)/g)].map(m => Number(m[1]));
+      expect(xs.every(x => x < day2Left)).toBe(true);
+    }
+    expect(internal.fields.some(f => f.className.startsWith('wg-inversion-'))).toBe(true);
+    expect(internal.cloudDeckFields?.some(f => f.className === 'wg-cloud-deck-ovc')).toBe(true);
+    expect(internal.skyCoverSpans?.some(s => s.tier === 'ovc')).toBe(true);
+
+    const svg = renderWindgramSvg(stitched);
+    // Root SVG uses aria-label + aria-describedby with NO root <title> tooltip before <desc>.
+    expect(svg).toContain('aria-label="Wind, temperature and clouds by hour and altitude"');
+    expect(svg).not.toMatch(/<svg[^>]*><title/);
+    // High-contrast haloed TOL curve, top OVC sky-cover strip, contoured cloud deck, and active Cu only where lift reaches LCL.
+    expect(svg).toContain('class="wg-tol-halo"');
+    expect(svg).toContain('class="wg-tol-core"');
+    expect(svg).toContain('data-sky-cover="ovc"');
+    expect(svg).toContain('>OVC<');
+    expect(svg).toContain('class="wg-cloud-deck-ovc"');
+    expect(svg).toContain('data-cumulus="cu"');
+    expect(svg).not.toContain('class="wg-cloud-potential"');
+
+    // 2) Classic 'lapse' mode remains cleanly swappable via fieldMode: 'lapse'.
+    const lapseScene = buildWindgramView(site, {
+      unitSystem: 'imperial',
+      fieldMode: 'lapse',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      hours: { timeZone: site.site.timeZone, dateKey: allDays[0]! },
+    });
+    const lapseSvg = renderWindgramSvg(lapseScene);
+    expect(lapseSvg).toContain('meteo-gram-stab-');
+    expect(lapseSvg).toContain('class="wg-cloud-potential"');
+    expect(renderWindgramKey('imperial', true, 'hybrid-climb')).toContain('Net climb · ft/min');
+    expect(renderWindgramKey('imperial', true, 'lapse')).toContain('Lapse rate · °F/1,000 ft');
+  });
+
+  it('models multi-regime soaring days faithfully: native-tail continuity past mapFrameCount, OD cumulus with zero fake lightning, Scorer-gated mountain wave w(ω), WMO 2.5+5n kt wind barbs, and -20..0°C SLW icing', () => {
+    // 1) Exact hydrostatic vertical velocity conversion & WMO 2.5+5n knot wind barb speed coding
+    // At 750 hPa, 0°C (273.15 K), ω = -10 Pa/s -> w = (10 * 287.05 * 273.15) / (75000 * 9.80665) ≈ +1.066 m/s (+210 fpm)
+    const wWave = omegaToVerticalVelocityMps(-10, 0, 750, 2500);
+    expect(wWave).toBeCloseTo(1.066, 2);
+    expect(omegaToVerticalVelocityMps(8, 0, 750, 2500)).toBeLessThan(-0.8);
+    expect([1.5, 8.5, 11.5, 15, 24, 26, 32, 52].map(windBarbSpeedColor)).toEqual([
+      '#78ff78', '#78ff78', '#78ff78', '#ffffff', '#fde047', '#fde047', '#fca5a5', '#e879f9',
+    ]);
+
+    // 2) Multi-day forecast where mapFrameCount covers ONLY Day 1 (4 frames), Day 2 is native-tail ('unavailable' fine surface),
+    // and Day 3 is a 0-fpm winter mountain-wave day with strong resolved ascent aloft in statically stable air.
+    const day1 = [14, 16, 18, 20];
+    const day2 = [38, 40, 42, 44];
+    const day3 = [62, 64, 66, 68];
+    const { build, sample, profile } = fixture([...day1, ...day2, ...day3], 4);
+    const sampleMap = new Map(sample.frames.map(f => [f.id, f]));
+    const frames = profile.frames.map(frame => {
+      const fine = sampleMap.get(frame.id);
+      return fine ? { ...frame, layers: { ...frame.layers, ...fine.layers } } : frame;
+    });
+
+    // Day 1 afternoon: Frame 2 has OD spreadout (overdeveloped = true, CAPE = 400), Frame 3 has high instability (CAPE = 1450 J/kg) + 30 kt & 52 kt upper winds (no fake lightning!)
+    frames[2]!.layers['usable-lift-msl']!.value = 2500;
+    frames[2]!.layers['usable-lift-agl']!.value = 1000;
+    frames[2]!.layers['thermal-top-msl']!.value = 2600;
+    frames[2]!.layers['surface-lcl-msl'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 2450 };
+    frames[2]!.layers['thermal-velocity']!.value = 2.2;
+    frames[2]!.layers['cape-jkg'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 400 };
+    frames[2]!.derived.overdeveloped = true;
+    frames[2]!.derived.cloudCapped = true;
+
+    frames[3]!.layers['usable-lift-msl']!.value = 2550;
+    frames[3]!.layers['usable-lift-agl']!.value = 1050;
+    frames[3]!.layers['thermal-top-msl']!.value = 2700;
+    frames[3]!.layers['surface-lcl-msl'] = { ...frames[3]!.layers['sfc-temp-c']!, value: 2500 };
+    frames[3]!.layers['thermal-velocity']!.value = 2.6;
+    frames[3]!.layers['cape-jkg'] = { ...frames[3]!.layers['sfc-temp-c']!, value: 1450 };
+    frames[3]!.derived.overdeveloped = true;
+    frames[3]!.derived.cloudCapped = true;
+
+    // Day 2 (indices 4..7): beyond mapFrameCount -> fine usable-lift-msl is 'unavailable', but native w* = 2.3 m/s & thermal-top-msl = 2750 m!
+    for (const i of [5, 6]) {
+      frames[i]!.layers['thermal-velocity']!.value = 2.3;
+      frames[i]!.layers['thermal-top-msl']!.value = 2750;
+      frames[i]!.derived.effectiveCloudLimitM = 2900;
+    }
+    frames[4]!.layers['thermal-velocity']!.value = 0;
+    frames[7]!.layers['thermal-velocity']!.value = 0;
+
+    // Day 3 (indices 8..11): 0 fpm winter mountain wave day (w* = 0) with strong 29 kt..52.5 kt upper wind & resolved wave ascent (omegaPaS = -14..-16 Pa/s at 2400..3000m)
+    for (const i of [8, 9, 10, 11]) {
+      frames[i]!.layers['thermal-velocity']!.value = 0;
+      frames[i]!.layers['thermal-top-msl']!.value = 1500;
+      frames[i]!.profile.levels[1]!.omegaPaS = -14;
+      frames[i]!.profile.levels[1]!.uWindMps = 15; // 29.2 kt (#fca5a5 coral)
+      frames[i]!.profile.levels[1]!.vWindMps = 0;
+      frames[i]!.profile.levels[2]!.omegaPaS = -16;
+      frames[i]!.profile.levels[2]!.uWindMps = 27; // 52.5 kt WMO pennant (#e879f9 magenta)
+      frames[i]!.profile.levels[2]!.vWindMps = 0;
+    }
+
+    const site = createPointForecast(build, point)(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const allDays = [...new Set(site.hours.map(h => h.validAt.slice(0, 10)))];
+
+    // Verify native-tail Day 2 keeps usableLiftTopM === null while populating nativeUsableLiftTopM, and high CAPE never synthesizes fake 'cb' lightning!
+    expect(site.hours[5]!.mapLift.mslM).toBeNull();
+    expect(site.hours[5]!.nativeUsableLiftTopM).toBeGreaterThan(2400);
+    expect(classifyConvectiveCloudRegime(site.hours[2]!)).toBe('od');
+    expect(classifyConvectiveCloudRegime(site.hours[3]!)).toBe('od');
+
+    // Pure native-tail 1-day view on Day 2 scales to soaring ceiling (not 15 km full atmosphere!) and renders climb dome + dashed native ceiling
+    const day2Scene = buildWindgramView(site, {
+      unitSystem: 'metric',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      hours: { timeZone: site.site.timeZone, dateKey: allDays[1]! },
+    });
+    expect(day2Scene.topM).toBeLessThan(5000);
+    const day2Svg = renderWindgramSvg(day2Scene);
+    expect(day2Svg).toContain('class="wg-climb-');
+    expect(day2Svg).toContain('data-native-lift-ceiling=""');
+    const day2MidReading = readWindgram(day2Scene, 1, 2000);
+    expect(day2MidReading.estimatedClimbMps).toBeGreaterThan(1.0);
+
+    // Pure winter wave 1-day view on Day 3 scales to encompass wave lift at 3000 m and renders cyan wave contours without false thermal climb
+    const day3Scene = buildWindgramView(site, {
+      unitSystem: 'metric',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      hours: { timeZone: site.site.timeZone, dateKey: allDays[2]! },
+    });
+    expect(day3Scene.topM).toBeGreaterThanOrEqual(3000);
+    const day3Svg = renderWindgramSvg(day3Scene);
+    expect(day3Svg).toContain('class="wg-wave-lift"');
+    expect(day3Svg).toContain('class="wg-wave-strong"');
+    expect(day3Svg).not.toContain('class="wg-climb-');
+    const waveReading = readWindgram(day3Scene, 1, 2400);
+    expect(waveReading.estimatedClimbMps).toBeNull();
+    expect(waveReading.waveVelocityMps).toBeGreaterThan(1.2);
+    expect(waveReading.lapseCPer1000Ft).toBeGreaterThan(-2.45);
+
+    // Adversarial Scorer check: a dry-adiabatic convective chimney (-3.05 °C/1kft) must NOT emit laminar wave contours!
+    const adiabaticFrames = frames.slice(8, 12).map(frame => ({
+      ...frame,
+      profile: {
+        ...frame.profile,
+        levels: [
+          { ...frame.profile.levels[0]!, heightM: 1800, temperatureC: 18, dewPointC: -4, uWindMps: 14, vWindMps: 0, omegaPaS: -15 },
+          { ...frame.profile.levels[1]!, heightM: 2400, temperatureC: 12, dewPointC: -6, uWindMps: 15, vWindMps: 0, omegaPaS: -16 },
+          { ...frame.profile.levels[2]!, heightM: 3000, temperatureC: 6, dewPointC: -8, uWindMps: 15, vWindMps: 0, omegaPaS: -16 },
+          { ...frame.profile.levels[3]!, heightM: 3600, temperatureC: 0, dewPointC: -10, uWindMps: 15, vWindMps: 0, omegaPaS: -14 },
+        ],
+      },
+    }));
+    const adiabaticSite = createPointForecast(build, point)(build.manifest.frames.slice(8, 12), new Map(adiabaticFrames.map(f => [f.id, f])));
+    const adiabaticScene = buildWindgramView(adiabaticSite, {
+      unitSystem: 'metric',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: adiabaticSite.site.timeZone,
+      hours: adiabaticSite.hours,
+    });
+    expect(renderWindgramSvg(adiabaticScene)).not.toContain('class="wg-wave-lift"');
+
+    // Stitched 3-day SVG renders OD cloud (zero fake lightning bolts), coral 30kt & magenta 50kt+ wind barbs, dashed native Day 2 ceiling, and Day 3 wave band
+    const stitched = buildStitchedWindgramView(site, {
+      unitSystem: 'imperial',
+      compact: true,
+      heightRange: 'soaring',
+      timeZone: site.site.timeZone,
+      widthPx: 640,
+      heightPx: 340,
+      dateKeys: allDays.slice(0, 3),
+    });
+    const stitchedSvg = renderWindgramSvg(stitched);
+    expect(stitchedSvg).toContain('data-cumulus="od"');
+    expect(stitchedSvg).not.toContain('data-cumulus="cb"');
+    expect(stitchedSvg).not.toContain('wg-cloud-cb-bolt');
+    expect(stitchedSvg).toContain('style="color:#fca5a5"');
+    expect(stitchedSvg).toContain('style="color:#e879f9"');
+    expect(stitchedSvg).toContain('data-native-lift-ceiling=""');
+    expect(stitchedSvg).toContain('class="wg-wave-lift"');
+
+    // Verify tile-2x2 hover callout across Cu-base TOL, Wave vs Ascent, -20..0°C SLW icing vs -35°C cirrus, plain CAPE, Inversion, and unit-aware shear
+    const climbVal = new FakeElement('text');
+    const climbSub = new FakeElement('text');
+    const climbFill = new FakeElement('rect');
+    const tempEl = new FakeElement('text');
+    const hazardEl = new FakeElement('text');
+    const tileMap = new Map<string, FakeElement>([
+      ['[data-tile-climb-val]', climbVal],
+      ['[data-tile-climb-sub]', climbSub],
+      ['[data-tile-climb-fill]', climbFill],
+      ['[data-tile-temp]', tempEl],
+      ['[data-tile-hazard]', hazardEl],
+    ]);
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => tileMap.get(sel) ?? null,
+    } as unknown as ParentNode);
+    const dummyTelemetry = {
+      timeChip: '2:00 PM', altChip: '', snappedToTol: false, canSnapToTol: false,
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false, chips: [],
+    };
+
+    // a) Cu-capped TOL + OD spreadout
+    const odTolReading = readWindgram(stitched, 2, 2500);
+    bound.paint({ aglText: '3,280 ft AGL', mslText: '8,200 ft MSL', useTol: true, telemetry: dummyTelemetry, reading: odTolReading, unitSystem: 'imperial' });
+    expect(climbSub.textContent).toBe('▲ Cu base');
+    expect(hazardEl.textContent).toBe('OD spreadout');
+
+    // b) High CAPE instability (plain CAPE text, zero fake lightning bolt!)
+    const capeReading = readWindgram(stitched, 3, 2200);
+    bound.paint({ aglText: '2,300 ft AGL', mslText: '7,200 ft MSL', useTol: false, telemetry: dummyTelemetry, reading: capeReading, unitSystem: 'imperial' });
+    expect(hazardEl.textContent).toBe('CAPE 1450');
+    expect(hazardEl.textContent).not.toContain('⚡');
+
+    // c) Statically stable mountain wave ('▲ Wave') vs adiabatic plume ('▲ Ascent') & lee-wave sink
+    bound.paint({ aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry, reading: waveReading, unitSystem: 'imperial' });
+    expect(climbSub.textContent).toBe('▲ Wave');
+    expect(climbFill.getAttribute('class')).toContain('is-wave');
+    bound.paint({
+      aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, lapseCPer1000Ft: -2.9 },
+      unitSystem: 'imperial',
+    });
+    expect(climbSub.textContent).toBe('▲ Ascent');
+    bound.paint({
+      aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, waveVelocityMps: -1.4 },
+      unitSystem: 'imperial',
+    });
+    expect(climbVal.textContent).toMatch(/^-\d+ fpm$/);
+    expect(climbSub.textContent).toBe('▼ Wave sink');
+
+    // d) Supercooled liquid water icing (-4°C in cloud -> '❄ Icing risk') vs -35°C glaciated cirrus (no icing risk)
+    bound.paint({
+      aglText: '4,000 ft AGL', mslText: '8,900 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, temperatureF: 24.8, cloud: 'humidity', precipitationMmHr: 0 },
+      unitSystem: 'metric',
+    });
+    expect(tempEl.textContent).toBe('❄ -4°C');
+    expect(hazardEl.textContent).toBe('❄ Icing risk');
+    expect(climbSub.textContent).toBe('No thermal');
+
+    bound.paint({
+      aglText: '28,000 ft AGL', mslText: '33,000 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, temperatureF: -31, cloud: 'humidity', precipitationMmHr: 0, capeJkg: 0, windShear: null, overdeveloped: false },
+      unitSystem: 'metric',
+    });
+    expect(tempEl.textContent).toBe('❄ -35°C');
+    expect(hazardEl.textContent).toBe('Dry');
+
+    // e) Temperature inversion lid & unit-aware vertical wind shear
+    bound.paint({
+      aglText: '1,200 ft AGL', mslText: '6,100 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, waveVelocityMps: 0, lapseCPer1000Ft: 1.2, cloud: null, relativeHumidityPercent: 42, windShear: null, capeJkg: 0, overdeveloped: false },
+      unitSystem: 'imperial',
+    });
+    expect(climbSub.textContent).toBe('Inversion lid');
+    expect(hazardEl.textContent).toBe('Inversion');
+
+    bound.paint({
+      aglText: '2,000 ft AGL', mslText: '6,900 ft MSL', useTol: false, telemetry: dummyTelemetry,
+      reading: { ...waveReading, waveVelocityMps: 0, lapseCPer1000Ft: -1.5, cloud: null, relativeHumidityPercent: 45, windShear: { lowerM: 1800, upperM: 2400, vectorChangeMps: 4.5, perKmMps: 7.5 }, capeJkg: 0, overdeveloped: false },
+      unitSystem: 'imperial',
+    });
+    expect(hazardEl.textContent).toBe('Shear 5.1 mph/kft');
   });
 });

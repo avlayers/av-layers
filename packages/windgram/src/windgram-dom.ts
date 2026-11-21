@@ -94,9 +94,12 @@ function mountWindgramInspector(
   const freeCapable = heightMode || magneticMode;
   const ownerDocument = host.ownerDocument ?? (typeof document !== 'undefined' ? document : undefined);
   const cursor = svg?.querySelector<SVGGElement>('[data-windgram-cursor]') ?? null;
+  const verticalHalo = svg?.querySelector<SVGLineElement>('[data-cursor-vertical-halo]') ?? null;
+  const horizontalHalo = svg?.querySelector<SVGLineElement>('[data-cursor-horizontal-halo]') ?? null;
   const vertical = svg?.querySelector<SVGLineElement>('[data-cursor-vertical]') ?? null;
   const horizontal = svg?.querySelector<SVGLineElement>('[data-cursor-horizontal]') ?? null;
   const tolRing = svg?.querySelector<SVGCircleElement>('[data-cursor-tol-ring]') ?? null;
+  const pointHalo = svg?.querySelector<SVGCircleElement>('[data-cursor-point-halo]') ?? null;
   const point = svg?.querySelector<SVGCircleElement>('[data-cursor-point]') ?? null;
   const callout = svg?.querySelector<SVGGElement>('[data-cursor-readout]') ?? null;
   const calloutBack = svg?.querySelector<SVGRectElement>('[data-cursor-back]') ?? null;
@@ -104,7 +107,7 @@ function mountWindgramInspector(
 
   // Precompute convective dome ceiling Y samples once per scene for O(1) anti-clobber callout placement.
   const ceilingSamples = view.hours.map((h, i) => {
-    const z = h.usableLiftTopM ?? view.sourceHours[i]?.thermalTopM ?? null;
+    const z = h.usableLiftTopM ?? view.sourceHours[i]?.nativeUsableLiftTopM ?? view.sourceHours[i]?.thermalTopM ?? null;
     return {
       x: h.x,
       ceilingY: z !== null && z >= view.floorM && z <= view.topM ? heightToY(view, z) : null,
@@ -279,8 +282,11 @@ function mountWindgramInspector(
     const panel = panelContainingHour(view.dayPanels, hourIndex);
     const hLeft = panel ? panel.left : view.left;
     const hRight = panel ? panel.left + panel.width : view.left + view.plotWidth;
+    setNums(verticalHalo, { x1: x, x2: x, y1: view.top, y2: view.bottom });
+    setNums(horizontalHalo, { x1: hLeft, x2: hRight, y1: y, y2: y });
     setNums(vertical, { x1: x, x2: x, y1: view.top, y2: view.bottom });
     setNums(horizontal, { x1: hLeft, x2: hRight, y1: y, y2: y });
+    setNums(pointHalo, { cx: x, cy: y });
     setNums(point, { cx: x, cy: y });
     if (tolRing) {
       if (!useTol && tolM !== null) {
