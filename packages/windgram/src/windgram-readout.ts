@@ -164,11 +164,18 @@ function surfaceDetails(view: WindgramView, reading: WindgramReading): string[] 
   const layer = reading.publishedLayerWind;
   const wind = (speed: number | null, direction: number | null) => speed === null ? 'unavailable'
     : `${formatQuantity(speed, 'wind', undefined, system)}${direction === null || speed === 0 ? '' : ` from ${degrees(direction)}`}`;
+  const fineTerrainDetail =
+    reading.fineTerrainM != null && reading.terrainDeltaM != null && Math.abs(reading.terrainDeltaM) >= 5
+      ? `Fine surface elevation ${formatQuantity(reading.fineTerrainM, 'elevation', undefined, system)} MSL (${reading.terrainDeltaM > 0 ? '+' : ''}${formatQuantity(reading.terrainDeltaM, 'elevation', undefined, system)} vs model ground)`
+      : reading.fineTerrainM != null
+        ? `Fine surface elevation ${formatQuantity(reading.fineTerrainM, 'elevation', undefined, system)} MSL`
+        : null;
   return [
     `Model surface wind ${wind(reading.surfaceWindSpeedMps, reading.surfaceWindDirectionDeg)}`,
     reading.gustKt === null ? null : `${view.gustLabel} ${barbSpeed(reading.gustKt, system)}`,
     reading.precipitationMmHr === null ? 'Rain rate unavailable' : `${rainLabel} ${formatQuantity(reading.precipitationMmHr, 'rainRate', undefined, system)}`,
     `${view.capeLabel} ${reading.capeJkg === null ? 'unavailable' : `${Math.round(reading.capeJkg)} J/kg`}`,
+    fineTerrainDetail,
     ...([['Model ground', reading.modelTerrainM], ['Native potential cloud base (surface LCL)', reading.cloudBaseM],
       ['Native effective cloud limit', reading.effectiveCloudLimitM],
       ['Native thermal top (parcel)', reading.nativeThermalTopM],

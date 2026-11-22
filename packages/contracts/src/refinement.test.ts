@@ -233,4 +233,36 @@ describe('configured refinement geometry', () => {
     const excessive = config(feature('zone-001', [rectangle(-10, 20, 10, 40)]));
     expect(() => planRefinements(excessive, options)).toThrow('cell budget');
   });
+
+  it('plans refinements on Lambert-conformal source grids and supports configurable spacingM', () => {
+    const lambertSource = {
+      kind: 'lambert-conformal' as const,
+      width: 120,
+      height: 120,
+      earthRadiusM: 6_371_229,
+      centralMeridianDeg: 45,
+      latitudeOfOriginDeg: 40,
+      standardParallel1Deg: 38.5,
+      standardParallel2Deg: 41.5,
+      x0M: -180_000,
+      y0M: 180_000,
+      dxM: 3_000,
+      dyM: -3_000,
+      wrapLongitude: false as const,
+    };
+    const zone = config(feature('zone-caucasus', [rectangle(44.2, 39.6, 45.4, 40.6)]));
+    const [plan1km] = planRefinements(zone, { sourceGrid: lambertSource, bounds: [42, 38, 48, 42], haloCells: 2 });
+    const [plan500m] = planRefinements(zone, { sourceGrid: lambertSource, bounds: [42, 38, 48, 42], haloCells: 2, spacingM: 500 });
+    expect(plan1km.bounds).toEqual([44.2, 39.6, 45.4, 40.6]);
+    expect(plan1km.grid.dxM).toBe(1000);
+    expect(plan500m.grid.dxM).toBe(500);
+    expect(plan500m.grid.dyM).toBe(-500);
+    expect(plan500m.grid.width).toBeGreaterThan(plan1km.grid.width);
+    expect(containsRefinement(plan500m, 40.1, 44.8)).toBe(true);
+
+    expect(() => planRefinements(zone, { sourceGrid: { ...lambertSource, width: 1 }, bounds: [42, 38, 48, 42], haloCells: 1 })).toThrow('2x2');
+    for (const spacingM of [0, 50, 60_000, NaN]) {
+      expect(() => planRefinements(zone, { ...options, spacingM })).toThrow('spacing');
+    }
+  });
 });

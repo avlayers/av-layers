@@ -9,6 +9,7 @@ import { windFromComponents } from '@av/soaring';
 import type { HourSampling, PublishedForecastHour as ProfileHour, SiteForecast } from './internal-meteo.ts';
 import { formatShortDayLabel } from './point-view-mode.ts';
 import type { WindgramCloudLayerSummary, WindgramOptions } from './scene-types.ts';
+import { timeZoneOffsetMinutesAt } from './time-zone.ts';
 import {
   analyzeHourCloudLayers,
   buildClimbDomeFieldPaths,
@@ -83,7 +84,7 @@ export function buildStitchedWindgramView(
   const altitudeLabels = altitudeSource
     .flatMap((hour) => [
       hour.modelTerrainM,
-      hour.mapLift.terrainM,
+      hour.fineTerrainM ?? hour.mapLift.terrainM,
       hour.mapLift.mslM,
       hour.nativeUsableLiftTopM ?? null,
       ...hour.levels.map((level) => level.heightM),
@@ -161,7 +162,7 @@ export function buildStitchedWindgramView(
       ? [['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
           hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const]
       : []),
-    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
+    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.fineTerrainM ?? hour.mapLift.terrainM],
     ['surfaceLclM', 'Native potential cloud base (surface LCL)', hybrid ? '#f9a8d4' : '#426173', '3 4', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.surfaceLclM : null)],
     [
       'effectiveCloudLimitM',
@@ -471,7 +472,10 @@ export function buildStitchedWindgramView(
         freezing.push({ x, y: y(freeze), hourIndex: globalIdx });
       }
       const { left: bLeft, width: bWidth } = bounds[i]!;
-      for (const layer of moistLayers(sample.relativeHumidityPercent)) {
+      const moistSource = hybrid
+        ? (sample.cloudHumidityPercent ?? sample.relativeHumidityPercent)
+        : sample.relativeHumidityPercent;
+      for (const layer of moistLayers(moistSource)) {
         if (layer.baseM >= topM || layer.topM <= floorM) continue;
         clouds.push({ ...layer, hourIndex: globalIdx, x, y: y(layer.baseM), kind: 'humidity' });
         if (bWidth > 0) {
@@ -500,7 +504,13 @@ export function buildStitchedWindgramView(
           panelLeft,
           panelRight,
           ...(activeCu && convLayer
-            ? { depthM: convLayer.depthM, coverageCode: convLayer.coverageCode, coverPercent: convLayer.coverPercent }
+            ? {
+                depthM: convLayer.depthM,
+                coverageCode: convLayer.coverageCode,
+                coverPercent: convLayer.coverPercent,
+                topTempC: convLayer.topTempC,
+                glaciated: convLayer.glaciated,
+              }
             : {}),
         });
       }
@@ -541,6 +551,12 @@ export function buildStitchedWindgramView(
       (viewHours[index]!.thermalVelocityMps ?? -1) > (viewHours[best]!.thermalVelocityMps ?? -1) ? index : best,
     visibleHours[0] ?? 0,
   );
+  const refInstantMs = sourceHours[0] ? Date.parse(sourceHours[0].validAt) : NaN;
+  const offsetMinutes = Number.isFinite(refInstantMs)
+    ? timeZoneOffsetMinutesAt(refInstantMs, timeZone)
+    : Number.isFinite(profile.site.longitude)
+      ? longitudeOffsetHours(profile.site.longitude) * 60
+      : 0;
 
   return {
     unitSystem: system,
@@ -560,7 +576,7 @@ export function buildStitchedWindgramView(
     capeLabel: profile.semantics.capeLabel ?? 'CAPE',
     precipitationSemantics: profile.semantics.precipitation,
     sourceHours,
-    offsetMinutes: Number.isFinite(profile.site.longitude) ? longitudeOffsetHours(profile.site.longitude) * 60 : 0,
+    offsetMinutes,
     timeZone,
     anchors,
     sampling,

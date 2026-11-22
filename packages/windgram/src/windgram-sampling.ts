@@ -7,7 +7,10 @@ import {
   type HourSampling,
   type PublishedForecastHour as ProfileHour,
 } from './internal-meteo.ts';
-import { relativeHumidityFromTempAndDewpointPercent } from '@av/thermodynamics';
+import {
+  effectiveCloudHumidityPercent,
+  relativeHumidityFromTempAndDewpointPercent,
+} from '@av/thermodynamics';
 import { finiteScalar } from './windgram-format.ts';
 
 export type Point = { x: number; y: number };
@@ -15,7 +18,7 @@ export const CLOUD_RH_THRESHOLD_PERCENT = 94;
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
-/** Linear interpolation in physical height. Never bridge an explicitly missing level. */
+/** Linear interpolation in physical height. Gaps block interpolation across missing levels. */
 export function sampleHeight(nodes: readonly FieldNode[], heightM: number): number | null {
   return sampleField(nodes, heightM, 'altitudeM');
 }
@@ -125,6 +128,10 @@ export function hourSampling(hour: ProfileHour): HourSampling {
     relativeHumidityPercent: temperatureC.map((p, i) => ({
       altitudeM: p.altitudeM,
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
+    })),
+    cloudHumidityPercent: temperatureC.map((p, i) => ({
+      altitudeM: p.altitudeM,
+      value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
     })),
     windU: winds.map(p => ({ altitudeM: p.altitudeM, value: p.uMps })),
     windV: winds.map(p => ({ altitudeM: p.altitudeM, value: p.vMps })),

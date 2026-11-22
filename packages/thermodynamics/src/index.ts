@@ -61,9 +61,48 @@ export const saturationVaporPressureHpa = (tempC: number): number => {
   );
 };
 
+/**
+ * Murphy & Koop (2005) saturation vapor pressure e_si (hPa) over hexagonal ice for T <= 0 °C,
+ * joining liquid-water saturation continuously at 0 °C.
+ */
+export const saturationVaporPressureIceHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  const tk = tempC + ZERO_CELSIUS_K;
+  if (!(tk > 0)) return NaN;
+  const lnPa = 9.550426 - 5723.265 / tk + 3.53068 * Math.log(tk) - 0.00728332 * tk;
+  return Math.exp(lnPa) / THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal;
+};
+
+/**
+ * Mixed-phase saturation vapor pressure (hPa): pure liquid water at T >= 0 °C,
+ * pure ice at T <= -23 °C, and quadratic mixed-phase ramp across -23 °C < T < 0 °C.
+ */
+export const mixedPhaseSaturationVaporPressureHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  if (tempC <= -23) return saturationVaporPressureIceHpa(tempC);
+  const liquidFraction = ((tempC + 23) / 23) ** 2;
+  return (
+    liquidFraction * saturationVaporPressureHpa(tempC) +
+    (1 - liquidFraction) * saturationVaporPressureIceHpa(tempC)
+  );
+};
+
 /** Relative humidity (%) over liquid water from temperature and dewpoint (°C). */
 export function relativeHumidityFromTempAndDewpointPercent(temperatureC: number, dewPointC: number): number {
   return Math.max(0, Math.min(100, 100 * saturationVaporPressureHpa(dewPointC) / saturationVaporPressureHpa(temperatureC)));
+}
+
+/**
+ * Phase-aware cloud relative humidity (%) comparing vapor pressure from Bolton dewpoint
+ * against mixed-phase liquid/ice saturation at ambient temperature.
+ */
+export function effectiveCloudHumidityPercent(temperatureC: number, dewPointC: number): number {
+  return Math.max(
+    0,
+    Math.min(100, (100 * saturationVaporPressureHpa(dewPointC)) / mixedPhaseSaturationVaporPressureHpa(temperatureC))
+  );
 }
 
 /**

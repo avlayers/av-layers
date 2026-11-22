@@ -71,6 +71,8 @@ export interface CalloutPlacementInput {
   /** Optional convective dome ceiling Y per visible hour (smaller Y = higher in sky). */
   readonly ceilingSamples?: readonly { readonly x: number; readonly ceilingY: number | null }[];
   readonly preferredSide?: CalloutHorizontalSide;
+  /** True during touch interaction so the floating card stays clear above the user's finger. */
+  readonly touchMode?: boolean;
 }
 
 export interface CalloutPlacementResult {
@@ -81,26 +83,27 @@ export interface CalloutPlacementResult {
 
 /**
  * Places the floating hover callout inside `bounds` while minimizing occlusion of:
- * 1) The active cursor crosshair bullseye `(cursorX, cursorY)`
+ * 1) The active cursor crosshair bullseye `(cursorX, cursorY)` (plus thumb pad in `touchMode`)
  * 2) The active convective thermal dome (`y >= ceilingY`)
  * 3) Rapid side-flipping during smooth horizontal scrubbing (`preferredSide` hysteresis)
  */
 export function placeWindgramCallout(input: CalloutPlacementInput): CalloutPlacementResult {
   const pad = 4;
-  const { cursorX, cursorY, width, height, bounds, ceilingSamples, preferredSide = 'right' } = input;
+  const { cursorX, cursorY, width, height, bounds, ceilingSamples, preferredSide = 'right', touchMode = false } = input;
   const minX = bounds.left + pad;
   const maxX = Math.max(minX, bounds.right - width - pad);
   const minY = bounds.top + pad;
   const maxY = Math.max(minY, bounds.bottom - height - pad);
 
-  const rightNearX = clamp(cursorX + 14, minX, maxX);
-  const leftNearX = clamp(cursorX - 14 - width, minX, maxX);
+  const hGap = touchMode ? 22 : 14;
+  const rightNearX = clamp(cursorX + hGap, minX, maxX);
+  const leftNearX = clamp(cursorX - hGap - width, minX, maxX);
   const farRightX = maxX;
   const farLeftX = minX;
 
   const skyTopY = minY;
-  const aboveCursorY = clamp(cursorY - height - 12, minY, maxY);
-  const belowCursorY = clamp(cursorY + 14, minY, maxY);
+  const aboveCursorY = clamp(cursorY - height - (touchMode ? 28 : 12), minY, maxY);
+  const belowCursorY = clamp(cursorY + (touchMode ? 48 : 14), minY, maxY);
 
   const rawCandidates: Array<{ x: number; y: number; side: CalloutHorizontalSide }> = [
     { x: rightNearX, y: skyTopY, side: 'right' },
@@ -117,19 +120,22 @@ export function placeWindgramCallout(input: CalloutPlacementInput): CalloutPlace
     { x: farLeftX, y: maxY, side: 'left' },
   ];
 
-  const clearance = 10;
+  const clearanceX = touchMode ? 24 : 10;
+  const clearanceYAbove = touchMode ? 20 : 10;
+  const clearanceYBelow = touchMode ? 44 : 10;
+  const skyWeight = touchMode ? 1.55 : 0.65;
   let best = rawCandidates[0]!;
   let bestCost = Infinity;
 
   for (const cand of rawCandidates) {
     let cost = 0;
 
-    // 1) Strong penalty if candidate box covers or crowds the cursor bullseye
-    const overlapsCursorX = cursorX >= cand.x - clearance && cursorX <= cand.x + width + clearance;
-    const overlapsCursorY = cursorY >= cand.y - clearance && cursorY <= cand.y + height + clearance;
+    // 1) Strong penalty if candidate box covers or crowds the cursor bullseye or thumb pad
+    const overlapsCursorX = cursorX >= cand.x - clearanceX && cursorX <= cand.x + width + clearanceX;
+    const overlapsCursorY = cursorY >= cand.y - clearanceYBelow && cursorY <= cand.y + height + clearanceYAbove;
     if (overlapsCursorX && overlapsCursorY) {
-      const dx = Math.min(cursorX - (cand.x - clearance), cand.x + width + clearance - cursorX);
-      const dy = Math.min(cursorY - (cand.y - clearance), cand.y + height + clearance - cursorY);
+      const dx = Math.min(cursorX - (cand.x - clearanceX), cand.x + width + clearanceX - cursorX);
+      const dy = Math.min(cursorY - (cand.y - clearanceYBelow), cand.y + height + clearanceYAbove - cursorY);
       cost += 12_000 + Math.min(dx, dy) * 200;
     }
 
@@ -156,10 +162,10 @@ export function placeWindgramCallout(input: CalloutPlacementInput): CalloutPlace
       }
     }
 
-    // 4) Prefer floating in the calm upper sky rather than covering surface barbs at the bottom
-    cost += (cand.y - minY) * 0.65;
+    // 4) Float in the calm upper sky to keep surface barbs and touch zone unobstructed
+    cost += (cand.y - minY) * skyWeight;
 
-    // 5) Mild proximity preference so the eye doesn't jump across a 650px chart unnecessarily
+    // 5) Mild proximity preference so eye travel across wide charts stays short
     const boxCenterX = cand.x + width / 2;
     cost += Math.abs(boxCenterX - cursorX) * 0.28;
 
@@ -443,15 +449,21 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           Number.isFinite(reading.buoyancyShearRatio) &&
           reading.buoyancyShearRatio <= 0.35;
 
-        // Quadrant 1: Wind vector + speed + compass direction + surface-only 10m gust (zero opinionated adjectives)
+        // Quadrant 1: Wind vector + speed + compass direction + launch/surface 10m gust
         const speedMps = reading.speedKt === null ? null : knotsToMps(reading.speedKt);
         const pgWind = classifyParagliderWind(speedMps);
-        const nearSurface = reading.heightAglM !== null && reading.heightAglM <= 150;
+        const modelAglM = reading.modelTerrainM !== null && reading.heightM >= reading.modelTerrainM
+          ? reading.heightM - reading.modelTerrainM
+          : null;
+        const nearSurface =
+          (reading.heightAglM !== null && reading.heightAglM <= 150) ||
+          (modelAglM !== null && modelAglM <= 150);
+        const gustSpreadGateKt = reading.gustKt !== null && reading.gustKt >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt ? 4 : 5;
         const hasSurfaceGust = nearSurface
           && reading.gustKt !== null
           && Number.isFinite(reading.gustKt)
           && reading.speedKt !== null
-          && reading.gustKt - reading.speedKt >= 5;
+          && reading.gustKt - reading.speedKt >= gustSpreadGateKt;
         const gustTag = hasSurfaceGust
           ? ` · G${Math.round(convertQuantity(knotsToMps(reading.gustKt!), 'wind', unitSystem) ?? 0)}`
           : '';
@@ -517,7 +529,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(windDir, 'class', borderMod ? `wg-tile-sub${borderMod}` : 'wg-tile-sub');
         }
 
-        // Quadrant 2: Variometer Climb Rate (Thermal, Sheared Lift, Cu-Base TOL, Cu Tower, Wave vs Ascent, or Inversion Lid)
+        // Quadrant 2: Variometer Climb Rate (Thermal, Sheared Lift, Cu-Base TOL, Cu Tower, Wave vs Ascent, Rotor, or Inversion Lid)
         let displayClimbMps: number | null = null;
         let climbCaption = inInversion && !useTol ? 'Inversion lid' : 'No thermal';
         let climbSubClass = 'wg-tile-sub';
@@ -540,15 +552,20 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           }
         } else if (!hasRain && !inSaturatedCloud && reading.waveVelocityMps != null && reading.waveVelocityMps >= 0.5) {
           const isStableWave =
-            (reading.lapseCPer1000Ft == null || reading.lapseCPer1000Ft > WAVE_MIN_LAPSE_C_PER_1000FT)
+            !reading.waveCriticalLevel
+            && (reading.lapseCPer1000Ft == null || reading.lapseCPer1000Ft > WAVE_MIN_LAPSE_C_PER_1000FT)
             && (reading.speedKt == null || reading.speedKt >= WAVE_MIN_WIND_KT);
           displayClimbMps = reading.waveVelocityMps;
           climbCaption = isStableWave ? '▲ Wave' : '▲ Ascent';
           climbSubClass = 'wg-tile-sub is-wave';
           waveMode = 'up';
         } else if (!hasRain && reading.waveVelocityMps != null && reading.waveVelocityMps <= -0.6) {
+          const lowRotor =
+            reading.heightAglM !== null &&
+            reading.heightAglM <= 500 &&
+            Math.max(reading.speedKt ?? 0, nearSurface ? (reading.gustKt ?? 0) : 0) >= 18;
           displayClimbMps = reading.waveVelocityMps;
-          climbCaption = '▼ Wave sink';
+          climbCaption = lowRotor ? '▼ Wave rotor' : '▼ Wave sink';
           climbSubClass = 'wg-tile-sub is-danger';
           waveMode = 'down';
         } else if (inConvectiveTower) {
@@ -692,7 +709,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(cloudText, 'class', 'wg-tile-sub');
         }
 
-        // Quadrant 4: Temperature + Dewpoint (Td) + Conditional Precipitation / Icing / Cloud Suck / CAPE / Shear / OD / Inversion
+        // Quadrant 4: Temperature + Dewpoint (Td) + Compound Hazard De-Multiplexing
         let tempC: number | null = null;
         let freezing = false;
         if (reading.temperatureF == null) {
@@ -715,32 +732,63 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
 
         const icingRisk = inSaturatedCloud && tempC !== null && tempC <= 0 && tempC >= -20;
         const cuDepthM = cuLayer?.depthM ?? 0;
+        const inCuColumn =
+          !useTol &&
+          cuLayer !== null &&
+          reading.heightM > cuLayer.baseM + 20 &&
+          reading.heightM <= cuLayer.topM + 10;
         const cloudSuckRisk =
-          !reading.overdeveloped &&
-          (inConvectiveTower || (useTol && Boolean(reading.cloudCapped))) &&
+          (inConvectiveTower || inCuColumn || (useTol && Boolean(reading.cloudCapped))) &&
           cuDepthM >= 1000 &&
-          (reading.peakClimbMps ?? 0) >= 1.8 &&
-          (reading.capeJkg === null || reading.capeJkg < HIGH_INSTABILITY_CAPE_JKG);
+          (reading.peakClimbMps ?? 0) >= 1.8;
+        const highCape = reading.capeJkg !== null && reading.capeJkg >= HIGH_INSTABILITY_CAPE_JKG;
+        const capeRounded = highCape ? Math.round(reading.capeJkg!) : 0;
+        if (
+          effectiveAlert !== 'pennant' &&
+          (reading.freezingRainRisk || cloudSuckRisk || (nearSurface && Boolean(reading.surfaceWindShift)))
+        ) {
+          setAttr(back, 'class', 'wg-tile-back is-danger');
+        }
 
         if (hasRain) {
-          setAttr(rainBg, 'class', 'wg-tile-cell-tint is-rain');
+          setAttr(rainBg, 'class', reading.freezingRainRisk || cloudSuckRisk ? 'wg-tile-cell-tint is-danger' : 'wg-tile-cell-tint is-rain');
           setAttr(rainIcon, 'visibility', 'visible');
           setAttr(hazardEl, 'x', '118.5');
-          setText(hazardEl, `Rain ${formatQuantity(precipMm, 'rainRate', undefined, unitSystem)}`);
-          setAttr(hazardEl, 'class', 'wg-tile-sub is-rain');
+          if (reading.freezingRainRisk) {
+            setText(hazardEl, `❄ Frz rain ${formatQuantity(precipMm, 'rainRate', undefined, unitSystem)}`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (cloudSuckRisk) {
+            setText(hazardEl, 'Rain · ⚠ Suck');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (highCape) {
+            setText(hazardEl, `Rain · CAPE ${capeRounded}`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else {
+            setText(hazardEl, `Rain ${formatQuantity(precipMm, 'rainRate', undefined, unitSystem)}`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-rain');
+          }
         } else {
           setAttr(rainBg, 'class', 'wg-tile-cell-tint');
           setAttr(rainIcon, 'visibility', 'hidden');
           setAttr(hazardEl, 'x', '110');
-          if (icingRisk) {
+          if (icingRisk && cloudSuckRisk) {
+            setText(hazardEl, '❄ Ice · ⚠ Suck');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (icingRisk) {
             setText(hazardEl, '❄ Icing risk');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (cloudSuckRisk && highCape) {
+            setText(hazardEl, `⚠ Suck · CAPE ${capeRounded}`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (cloudSuckRisk) {
             setText(hazardEl, '⚠ Cloud suck');
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
-          } else if (reading.capeJkg !== null && reading.capeJkg >= HIGH_INSTABILITY_CAPE_JKG) {
-            setText(hazardEl, `CAPE ${Math.round(reading.capeJkg)}`);
-            setAttr(hazardEl, 'class', reading.capeJkg >= 1800 ? 'wg-tile-sub is-danger' : 'wg-tile-sub is-caution');
+          } else if (nearSurface && reading.surfaceWindShift) {
+            setText(hazardEl, '⚠ Gust front');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (highCape) {
+            setText(hazardEl, `CAPE ${capeRounded}`);
+            setAttr(hazardEl, 'class', capeRounded >= 1800 ? 'wg-tile-sub is-danger' : 'wg-tile-sub is-caution');
           } else if (reading.windShear !== null && reading.windShear.perKmMps >= 6) {
             const shearLabel = unitSystem === 'imperial'
               ? `Shear ${((reading.windShear.perKmMps * MPH_PER_MPS * METRES_PER_THOUSAND_FEET) / 1000).toFixed(1)} mph/kft`
@@ -748,8 +796,9 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
             setText(hazardEl, shearLabel);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
           } else if (reading.overdeveloped) {
-            setText(hazardEl, 'OD spreadout');
-            setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
+            const glaciatedAnvil = Boolean(cuLayer?.glaciated && cuDepthM >= 1500);
+            setText(hazardEl, glaciatedAnvil ? 'Deep OD · Anvil' : 'OD spreadout');
+            setAttr(hazardEl, 'class', glaciatedAnvil ? 'wg-tile-sub is-danger' : 'wg-tile-sub is-caution');
           } else if (!inSaturatedCloud && displayClimbMps !== null && displayClimbMps >= 0.2 && shearedLift) {
             const raspBs = Math.max(1, Math.round(reading.buoyancyShearRatio! * 10));
             setText(hazardEl, `B/S ${raspBs} · Sheared`);

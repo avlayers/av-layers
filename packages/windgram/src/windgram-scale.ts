@@ -2,9 +2,14 @@
 // for Windgram charts.
 
 import { windFromComponents } from '@av/soaring';
-import { relativeHumidityFromTempAndDewpointPercent } from '@av/thermodynamics';
+import { effectiveCloudHumidityPercent } from '@av/thermodynamics';
 import type { SiteForecast } from './internal-meteo.ts';
-import { omegaToVerticalVelocityMps, WAVE_ASCENT_MIN_MPS, WAVE_MIN_WIND_KT } from './windgram-atmosphere.ts';
+import {
+  hasWaveCriticalLevelBelow,
+  omegaToVerticalVelocityMps,
+  WAVE_ASCENT_MIN_MPS,
+  WAVE_MIN_WIND_KT,
+} from './windgram-atmosphere.ts';
 import { finiteScalar, mpsToKnots } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import { median } from './windgram-time-axis.ts';
@@ -84,7 +89,7 @@ export function buildWindgramVerticalScale(
   const { compact, top, bottom, plotHeight } = options;
   const known = (values: (number | null)[]) => values.filter((value): value is number => value !== null);
   const grounds = known(hours.map(hour => hour.modelTerrainM));
-  const fineTerrain = known(hours.map(hour => hour.mapLift.terrainM));
+  const fineTerrain = known(hours.map(hour => hour.fineTerrainM ?? hour.mapLift.terrainM));
   const liftTops = known(hours.map(hour => hour.mapLift.mslM));
   const nativeLiftTops = known(hours.map(hour => hour.nativeUsableLiftTopM ?? null));
   const waveTops = known(
@@ -94,12 +99,13 @@ export function buildWindgramVerticalScale(
       return hour.levels.map(l => {
         if (l.heightM === null || !Number.isFinite(l.heightM) || l.heightM > 7500) return null;
         const rh = l.temperatureC !== null && l.dewPointC !== null
-          ? relativeHumidityFromTempAndDewpointPercent(l.temperatureC, l.dewPointC)
+          ? effectiveCloudHumidityPercent(l.temperatureC, l.dewPointC)
           : null;
         if (rh !== null && Number.isFinite(rh) && rh >= CLOUD_RH_THRESHOLD_PERCENT) return null;
         const wind = windFromComponents(finiteScalar(l.uWindMps), finiteScalar(l.vWindMps));
         const speedKt = wind.speedMps === null ? null : mpsToKnots(wind.speedMps);
         if (speedKt !== null && speedKt < WAVE_MIN_WIND_KT) return null;
+        if (hasWaveCriticalLevelBelow(hour, l.heightM)) return null;
         const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
         return w !== null && w >= WAVE_ASCENT_MIN_MPS ? l.heightM : null;
       });

@@ -13,6 +13,7 @@ export interface HourSampling {
   readonly dewPointC: readonly FieldNode[];
   readonly lapseCPer1000Ft: readonly FieldNode[];
   readonly relativeHumidityPercent: readonly FieldNode[];
+  readonly cloudHumidityPercent?: readonly FieldNode[];
   readonly windU: readonly FieldNode[];
   readonly windV: readonly FieldNode[];
   readonly verticalVelocityPaS: readonly FieldNode[];
@@ -21,6 +22,7 @@ export interface HourSampling {
 export interface PublishedForecastHour {
   readonly validAt: string;
   readonly modelTerrainM: number | null;
+  readonly fineTerrainM?: number | null;
   readonly mapLift: ReturnType<typeof pointMapLift>;
   readonly surface: {
     readonly temperatureC: number | null;

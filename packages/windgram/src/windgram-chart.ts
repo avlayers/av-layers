@@ -57,6 +57,7 @@ function renderConvectiveTowerSvg(cloud: WindgramCloud, view: WindgramView, syst
   if (hPx < 4) return '';
 
   const isOd = cloud.regime === 'od';
+  const glaciatedOd = Boolean(isOd && cloud.glaciated && (cloud.depthM ?? (cloud.topM - cloud.baseM)) >= 1500);
   const colW = cloud.colWidth && cloud.colWidth > 0 ? cloud.colWidth : view.columnWidth;
   const cov = cloud.coverageCode ?? (isOd ? 'BKN' : 'SCT');
   const widthFactor = isOd || cov === 'OVC' ? 0.86 : cov === 'BKN' ? 0.66 : cov === 'SCT' ? 0.46 : 0.32;
@@ -66,13 +67,16 @@ function renderConvectiveTowerSvg(cloud: WindgramCloud, view: WindgramView, syst
   const x0 = clamp(cloud.x - rawW / 2, pLeft + 1, pRight - 2);
   const x1 = clamp(cloud.x + rawW / 2, x0 + 4, pRight - 1);
   const w = x1 - x0;
-  const domeRx = fmt(Math.min(w / 2, isOd ? 5 : Math.min(12, hPx * 0.55)));
+  const domeRx = fmt(Math.min(w / 2, isOd ? (glaciatedOd ? 3 : 5) : Math.min(12, hPx * 0.55)));
   const elevUnit = unitLabel('elevation', system);
   const depthStr = `${altitude(cloud.depthM ?? (cloud.topM - cloud.baseM), system)} ${elevUnit}`;
   const covStr = cloud.coverPercent != null ? `${cov} ${cloud.coverPercent}%` : cov;
-  const label = `${isOd ? 'Overdeveloped spreadout' : 'Cumulus tower'} (${covStr}) · ${altitude(cloud.baseM, system)}–${altitude(cloud.topM, system)} ${elevUnit} MSL (${depthStr} deep)`;
+  const topTempStr = cloud.topTempC != null ? ` · top ${formatQuantity(cloud.topTempC, 'temperature', 0, system)}` : '';
+  const prefix = glaciatedOd ? 'Deep glaciated OD anvil' : isOd ? 'Overdeveloped spreadout' : 'Cumulus tower';
+  const label = `${prefix} (${covStr}) · ${altitude(cloud.baseM, system)}–${altitude(cloud.topM, system)} ${elevUnit} MSL (${depthStr} deep${topTempStr})`;
   const d = `M${fmt(x0)} ${fmt(yBase)}V${fmt(yTop + Number(domeRx))}Q${fmt(x0)} ${fmt(yTop)} ${fmt(x0 + Number(domeRx))} ${fmt(yTop)}H${fmt(x1 - Number(domeRx))}Q${fmt(x1)} ${fmt(yTop)} ${fmt(x1)} ${fmt(yTop + Number(domeRx))}V${fmt(yBase)}Z`;
-  return `<path d="${d}" class="${isOd ? 'wg-od-tower' : 'wg-cu-tower'}" data-cu-tower="${isOd ? 'od' : 'cu'}"><title>${escape(label)}</title></path>`;
+  const cls = glaciatedOd ? 'wg-od-tower wg-od-glaciated' : isOd ? 'wg-od-tower' : 'wg-cu-tower';
+  return `<path d="${d}" class="${cls}" data-cu-tower="${isOd ? 'od' : 'cu'}"><title>${escape(label)}</title></path>`;
 }
 
 function cloudGlyph(cloud: WindgramCloud, scale: number, system: UnitSystem, hybrid: boolean) {

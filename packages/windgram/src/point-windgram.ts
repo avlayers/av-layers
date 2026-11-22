@@ -40,6 +40,7 @@ import {
 } from './point-view-mode.ts';
 import { renderPointSeries } from './scalar-point.ts';
 import { renderWindgramKey } from './svg.ts';
+import { timeZoneOffsetMinutesAt } from './time-zone.ts';
 import { DEFAULT_WINDGRAM_FIELD_MODE, type WindgramFieldMode } from './windgram-atmosphere.ts';
 import type { WindgramTelemetryStrip } from './windgram-readout.ts';
 import { daylightForDate } from './windgram-time-axis.ts';
@@ -59,6 +60,7 @@ export interface PointWindgramOptions {
   readonly frameId: string | null;
   readonly mapFrameId?: string | null;
   readonly unitSystem: UnitSystem;
+  readonly timeZone?: string;
   readonly totalFrames?: number;
   readonly loading?: boolean;
   readonly mapOffsetMinutes?: number;
@@ -165,7 +167,7 @@ function createPointWindgram(
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
   const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
-  const toForecast = createPointForecast(build, options.point);
+  const toForecast = createPointForecast(build, options.point, { timeZone: options.timeZone });
 
   // Full manifest calendar lets us know immediately whether 2+ daylight forecast days exist in this model run.
   const initialProbeForecast = toForecast([], new Map());
@@ -214,7 +216,7 @@ function createPointWindgram(
         h.validAt,
         {
           usableLiftTopM: h.mapLift.mslM,
-          terrainM: h.mapLift.terrainM ?? h.modelTerrainM,
+          terrainM: h.fineTerrainM ?? h.mapLift.terrainM ?? h.modelTerrainM,
           thermalVelocityMps: h.thermalVelocityMps,
           surfaceWindMps: h.surface.windSpeedMps,
         },
@@ -299,8 +301,16 @@ function createPointWindgram(
   section.append(chartHost, liftSummary, time, profileStatus, incomplete, srReadout, bar);
   container.replaceChildren(section);
 
+  const resolvePointOffsetMinutes = (validIso?: string | null): number => {
+    const ms = validIso ? Date.parse(validIso) : NaN;
+    if (options.timeZone && Number.isFinite(ms)) {
+      return timeZoneOffsetMinutesAt(ms, initialProbeSite.timeZone);
+    }
+    return longitudeOffsetHours(options.point.lon) * 60;
+  };
+
   let units: UnitSystem = options.unitSystem;
-  let mapOffsetMinutes = options.mapOffsetMinutes ?? longitudeOffsetHours(options.point.lon) * 60;
+  let mapOffsetMinutes = options.mapOffsetMinutes ?? resolvePointOffsetMinutes(build.manifest.frames[0]?.validTime);
   let loading = options.loading ?? false;
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
@@ -353,12 +363,12 @@ function createPointWindgram(
   };
 
   const selectDay = (targetDayKey: string) => {
-    const pointOffset = longitudeOffsetHours(options.point.lon) * 60;
     const dayHours = data.days.get(targetDayKey) ?? manifestCalendar.days.get(targetDayKey);
     if (!dayHours?.length) return;
     if (!data.days.has(targetDayKey)) {
       onRequestFullHorizon?.();
     }
+    const pointOffset = resolvePointOffsetMinutes(dayHours[0]!.validAt);
     const targetFrameId = pickRepresentativeFrameInDay(dayHours, currentPointValidTime(), pointOffset);
     if (targetFrameId && targetFrameId !== selectedFrameId) {
       onFrame(targetFrameId);
@@ -500,7 +510,7 @@ function createPointWindgram(
     const loadedFrame = frameId === null ? undefined : data.loaded.get(frameId);
     const pointFrame = loadedFrame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
-    const pointOffset = longitudeOffsetHours(options.point.lon) * 60;
+    const pointOffset = resolvePointOffsetMinutes(pointFrame?.validTime);
     time.textContent = formatPointMapTimes(
       pointFrame ? { validTime: pointFrame.validTime, offsetMinutes: pointOffset } : null,
       mapFrame ? { validTime: mapFrame.validTime, offsetMinutes: mapOffsetMinutes } : null,

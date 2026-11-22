@@ -4,6 +4,7 @@ import { windFromComponents } from '@av/soaring';
 import {
   effectiveHourUsableLiftTopM,
   estimateThermalClimbAtHeight,
+  hasWaveCriticalLevelBelow,
   omegaToVerticalVelocityMps,
 } from './windgram-atmosphere.ts';
 import {
@@ -46,6 +47,38 @@ function clampCloudPercent(value: number | null | undefined): number | null {
   return raw === null ? null : clamp(raw, 0, 100);
 }
 
+function surfaceWindVector(surface: WindgramView['sourceHours'][number]['surface']): { u: number; v: number } | null {
+  const u = finiteScalar(surface.windU), v = finiteScalar(surface.windV);
+  if (u !== null && v !== null) return { u, v };
+  const speed = finiteScalar(surface.windSpeedMps), dir = finiteScalar(surface.windDirectionDeg);
+  if (speed === null || dir === null) return null;
+  const rad = (dir * Math.PI) / 180;
+  return { u: -speed * Math.sin(rad), v: -speed * Math.cos(rad) };
+}
+
+function detectSurfaceWindShift(
+  sourceHours: WindgramView['sourceHours'],
+  index: number,
+  gustKt: number | null,
+): WindgramReading['surfaceWindShift'] {
+  if (index <= 0) return null;
+  const cur = sourceHours[index], prev = sourceHours[index - 1];
+  if (!cur || !prev) return null;
+  const dtHours = (Date.parse(cur.validAt) - Date.parse(prev.validAt)) / 3_600_000;
+  if (!(dtHours > 0 && dtHours <= 1.5)) return null;
+  const w1 = surfaceWindVector(cur.surface), w0 = surfaceWindVector(prev.surface);
+  if (!w1 || !w0) return null;
+  const s1 = Math.hypot(w1.u, w1.v), s0 = Math.hypot(w0.u, w0.v);
+  if (s1 < 3.0 || s0 < 3.0) return null;
+  const deltaKt = mpsToKnots(Math.hypot(w1.u - w0.u, w1.v - w0.v));
+  if (deltaKt < 10) return null;
+  const cosAngle = clamp((w1.u * w0.u + w1.v * w0.v) / (s1 * s0), -1, 1);
+  const shiftDeg = (Math.acos(cosAngle) * 180) / Math.PI;
+  const peakKt = Math.max(mpsToKnots(s1), gustKt ?? 0);
+  if (shiftDeg < 45 || peakKt < 18) return null;
+  return { deltaKt: Math.round(deltaKt), shiftDeg: Math.round(shiftDeg) };
+}
+
 export function readWindgram(view: WindgramView, hourIndex: number, heightM: number): WindgramReading {
   const index = clamp(Math.round(hourIndex), 0, view.hours.length - 1);
   const sample = view.sampling[index];
@@ -61,11 +94,13 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const omega = sample ? sampleHeight(sample.verticalVelocityPaS, z) : null;
   const pressureHpa = samplePressureHpaAtHeight(source?.levels, z);
   const waveVelocityMps = omegaToVerticalVelocityMps(omega, t, pressureHpa, z);
+  const waveCriticalLevel = source ? hasWaveCriticalLevelBelow(source, z) : false;
   const nativeWind = wind.speedMps !== null && sample?.windU.some(n => Math.abs(n.altitudeM - z) < .00001 && Number.isFinite(n.value));
   const surface = source?.surface;
   const pblDepthM = surface?.pblHeightM ?? null;
   const modelTerrainM = source?.modelTerrainM ?? null;
-  const fineTerrainM = source?.mapLift.terrainM ?? null;
+  const fineTerrainM = source?.fineTerrainM ?? source?.mapLift.terrainM ?? null;
+  const terrainDeltaM = fineTerrainM !== null && modelTerrainM !== null ? fineTerrainM - modelTerrainM : null;
   const groundM = fineTerrainM ?? modelTerrainM;
   const usableTopM = source
     ? effectiveHourUsableLiftTopM(source, view.hours[index]?.usableLiftTopM)
@@ -78,6 +113,20 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     source?.effectiveCloudLimitM ?? null,
     finiteScalar(source?.thermalVelocityMps),
   );
+
+  const precipMmHr = finiteScalar(surface?.precipitationMmHr);
+  const freezeTempC = t ?? (groundM !== null && z >= groundM ? finiteScalar(surface?.temperatureC) : null);
+  const freezingRainRisk = Boolean(
+    precipMmHr !== null &&
+    precipMmHr > 0.04 &&
+    freezeTempC !== null &&
+    freezeTempC <= -0.5 &&
+    sample?.temperatureC.some(
+      node => node.altitudeM > z && node.altitudeM <= z + 3500 && Number.isFinite(node.value) && node.value > 1.0,
+    ),
+  );
+  const gustKt = view.hours[index]?.gustKt ?? null;
+  const surfaceWindShift = detectSurfaceWindShift(view.sourceHours, index, gustKt);
 
   const cloudLayers = view.cloudLayersByHour?.[index] ?? [];
   const highCloudOnly = view.highCloudOnlyByHour?.[index] ?? false;
@@ -100,7 +149,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     temperatureF: t === null ? null : celsiusToFahrenheit(t),
     speedKt: wind.speedMps === null ? null : mpsToKnots(wind.speedMps),
     directionDeg: wind.directionDeg,
-    gustKt: view.hours[index]?.gustKt ?? null,
+    gustKt,
     cloud: cloud?.kind ?? null,
     dewPointC,
     relativeHumidityPercent: sample ? sampleHeight(sample.relativeHumidityPercent, z) : null,
@@ -112,7 +161,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     verticalVelocityUnavailableReason: omega === null ? 'Vertical motion unavailable at this height.' : null,
     surfaceWindSpeedMps: finiteScalar(surface?.windSpeedMps),
     surfaceWindDirectionDeg: finiteScalar(surface?.windDirectionDeg),
-    precipitationMmHr: finiteScalar(surface?.precipitationMmHr),
+    precipitationMmHr: precipMmHr,
     capeJkg: finiteScalar(surface?.capeJkg),
     cloudCoverTotalPercent: clampCloudPercent(surface?.cloudCoverTotalPercent),
     cloudCoverLowPercent: clampCloudPercent(surface?.cloudCoverLowPercent),
@@ -120,6 +169,9 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     peakClimbMps: climb.peakClimbMps,
     lapseCPer1000Ft: sample ? sampleHeight(sample.lapseCPer1000Ft, z) : null,
     waveVelocityMps,
+    waveCriticalLevel,
+    freezingRainRisk,
+    surfaceWindShift,
     buoyancyShearRatio: finiteScalar(source?.buoyancyShearRatio),
     cloudLayers,
     activeCloudLayer,
@@ -131,6 +183,8 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     overdeveloped: source?.overdeveloped ?? null,
     cloudCapped: source?.cloudCapped ?? null,
     modelTerrainM,
+    fineTerrainM,
+    terrainDeltaM,
     nativeThermalTopM: source?.thermalTopM ?? null,
     modelPblTopM: pblDepthM === null || modelTerrainM === null ? null : modelTerrainM + pblDepthM,
     publishedLayerWind: source?.layerWind ?? null,

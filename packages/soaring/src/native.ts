@@ -125,11 +125,13 @@ function mixedLayerLcl(input: NativeDiagnosticInput, count: number, top: number 
 
 /** Integrate ground to top, anchoring the source 10 m vector at ground as Windgrams V2 does. */
 function layerWind(input: NativeDiagnosticInput, count: number, top: number | null) {
-  const empty = { blMeanWindU: null, blMeanWindV: null, blTopWindU: null, blTopWindV: null };
+  const empty = { blMeanWindU: null, blMeanWindV: null, blTopWindU: null, blTopWindV: null, blMaxWindShearMps: null };
   const { terrainM, levels, wind10mU, wind10mV } = input;
   if (!finite(top) || top < terrainM || !finite(wind10mU) || !finite(wind10mV)) return empty;
-  if (top === terrainM) return { blMeanWindU: wind10mU, blMeanWindV: wind10mV, blTopWindU: wind10mU, blTopWindV: wind10mV };
-  let z = terrainM, u = wind10mU, v = wind10mV, sumU = 0, sumV = 0;
+  if (top === terrainM) {
+    return { blMeanWindU: wind10mU, blMeanWindV: wind10mV, blTopWindU: wind10mU, blTopWindV: wind10mV, blMaxWindShearMps: 0 };
+  }
+  let z = terrainM, u = wind10mU, v = wind10mV, sumU = 0, sumV = 0, maxShear = 0;
   for (let i = 0; i < count; i++) {
     const level = levels[i];
     if (level.heightM <= terrainM + P.minimumLevelAglM) continue;
@@ -138,7 +140,16 @@ function layerWind(input: NativeDiagnosticInput, count: number, top: number | nu
     const nextZ = Math.min(top, upperZ), fraction = (nextZ - z) / (upperZ - z);
     const nextU = u + fraction * (upperU - u), nextV = v + fraction * (upperV - v), dz = nextZ - z;
     sumU += 0.5 * (u + nextU) * dz; sumV += 0.5 * (v + nextV) * dz;
-    if (upperZ >= top) return { blMeanWindU: sumU / (top - terrainM), blMeanWindV: sumV / (top - terrainM), blTopWindU: nextU, blTopWindV: nextV };
+    maxShear = Math.max(maxShear, Math.hypot(nextU - wind10mU, nextV - wind10mV));
+    if (upperZ >= top) {
+      return {
+        blMeanWindU: sumU / (top - terrainM),
+        blMeanWindV: sumV / (top - terrainM),
+        blTopWindU: nextU,
+        blTopWindV: nextV,
+        blMaxWindShearMps: maxShear
+      };
+    }
     z = nextZ; u = nextU; v = nextV;
   }
   return empty;

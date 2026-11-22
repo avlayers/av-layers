@@ -27,7 +27,7 @@ export const chartStyles = `
 .windgram .wg-barb { fill: none; stroke: currentColor; stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
 .windgram .wg-barb-native { opacity: 1; }
 .windgram .wg-barb-interpolated { opacity: .72; }
-.windgram .wg-barb-rim { fill: none; stroke: #14192d; stroke-opacity: .86; stroke-width: 2.35; stroke-linecap: round; stroke-linejoin: round; }
+.windgram .wg-barb-rim { fill: none; stroke: #0b1120; stroke-opacity: .95; stroke-width: 2.85; stroke-linecap: round; stroke-linejoin: round; }
 .windgram .wg-cloud { fill: #fff; stroke: #eef0ff; stroke-width: .7; }
 .windgram .wg-cloud-cu { fill: #f8fafc; fill-opacity: .95; stroke: #475569; stroke-opacity: .85; stroke-width: 1.35; }
 .windgram .wg-cloud-cu-base { stroke: #64748b; stroke-width: 2.2; stroke-linecap: round; opacity: .82; }
@@ -36,6 +36,7 @@ export const chartStyles = `
 .windgram .wg-cloud-potential { fill: #b4abe8; fill-opacity: .14; stroke: #fff; stroke-width: 1.35; stroke-dasharray: 3 2; }
 .windgram .wg-cu-tower { fill: #f8fafc; fill-opacity: .24; stroke: #e2e8f0; stroke-opacity: .46; stroke-width: .8; stroke-dasharray: 2.5 2; }
 .windgram .wg-od-tower { fill: #64748b; fill-opacity: .38; stroke: #1e293b; stroke-opacity: .56; stroke-width: .9; }
+.windgram .wg-od-tower.wg-od-glaciated { fill: #475569; fill-opacity: .48; stroke: #0f172a; stroke-opacity: .78; stroke-width: 1.1; }
 .windgram .wg-cloud-deck-sct { stroke: #cbd5e1; stroke-opacity: .24; stroke-width: .55; stroke-dasharray: 4 3; }
 .windgram .wg-cloud-deck-bkn { stroke: #cbd5e1; stroke-opacity: .34; stroke-width: .65; stroke-dasharray: 6 2.5; }
 .windgram .wg-cloud-deck-ovc { fill: #f8fafc; fill-opacity: .60; stroke: #94a3b8; stroke-opacity: .52; stroke-width: .85; }

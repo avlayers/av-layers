@@ -1,5 +1,5 @@
 import type { LayerId } from '@av/contracts/layers';
-import { longitudeOffsetHours, pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/client';
+import { pointMapLift, type GeoPoint, type PinnedBuild, type PointFrame } from '@av/client';
 import {
   LENSCHOW_F_MAX,
   LENSCHOW_PEAK_ZETA,
@@ -9,53 +9,52 @@ import {
   windFromComponents,
 } from '@av/soaring';
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
-
-function timeZoneForLongitude(lon: number): string {
-  const offsetHours = longitudeOffsetHours(lon);
-  if (offsetHours === 0) return 'Etc/UTC';
-  const sign = offsetHours > 0 ? '-' : '+';
-  return `Etc/GMT${sign}${Math.abs(offsetHours)}`;
-}
+import { timeZoneForLongitude } from './time-zone.ts';
 
 /**
  * Computes native-column usable lift ceiling (MSL) for forecast hours beyond `mapFrameCount`
  * where fine-grid `usable-lift-msl` is `'unavailable'`, using the identical 1.2 m/s Lenschow
  * sink solver and effective cloud cap as the fine map surface.
- * Never overrides an explicit `'no-usable-lift'` or `'outside-domain'` fine-surface status.
+ * Preserves explicit `'no-usable-lift'` and `'outside-domain'` fine-surface statuses.
  */
 function resolveNativeFallbackLiftTopM(args: {
   mapLiftStatus: string | undefined;
-  modelTerrainM: number | null;
+  groundTerrainM: number | null;
   thermalTopM: number | null;
   thermalVelocityMps: number | null;
   effectiveCloudLimitM: number | null;
   derivedV2TopM: number | null;
 }): number | null {
-  const { mapLiftStatus, modelTerrainM, thermalTopM, thermalVelocityMps, effectiveCloudLimitM, derivedV2TopM } = args;
+  const { mapLiftStatus, groundTerrainM, thermalTopM, thermalVelocityMps, effectiveCloudLimitM, derivedV2TopM } = args;
   if (mapLiftStatus && mapLiftStatus !== 'unavailable') return null;
   if (
-    modelTerrainM === null ||
+    groundTerrainM === null ||
     thermalTopM === null ||
     thermalVelocityMps === null ||
-    thermalTopM <= modelTerrainM ||
+    thermalTopM <= groundTerrainM ||
     thermalVelocityMps * LENSCHOW_F_MAX < SINK_RATE_MPS
   ) {
     return null;
   }
-  const depth = thermalTopM - modelTerrainM;
+  const depth = thermalTopM - groundTerrainM;
   const usableDepth = usableLiftDepthM(depth, thermalVelocityMps, { sinkRateMps: SINK_RATE_MPS });
   if (usableDepth === null) return derivedV2TopM;
   const cap = effectiveCloudLimitM !== null && Number.isFinite(effectiveCloudLimitM)
     ? Math.min(thermalTopM, effectiveCloudLimitM)
     : thermalTopM;
-  const zeta = (cap - modelTerrainM) / depth;
+  const zeta = (cap - groundTerrainM) / depth;
   if (zeta <= 0 || (zeta <= LENSCHOW_PEAK_ZETA && thermalVelocityMps * lenschowNormalizedUpdraft(zeta) < SINK_RATE_MPS)) {
     return null;
   }
-  return Math.min(modelTerrainM + usableDepth, cap);
+  return Math.min(groundTerrainM + usableDepth, cap);
 }
 
-function chartHour(validAt: string, frame: PointFrame | undefined, build: PinnedBuild): PublishedForecastHour {
+function chartHour(
+  validAt: string,
+  frame: PointFrame | undefined,
+  build: PinnedBuild,
+  fineTerrainM: number | null,
+): PublishedForecastHour {
   const read = (layer: LayerId) => {
     const cell = frame?.layers[layer];
     return cell?.status === 'valid' ? cell.value : null;
@@ -66,6 +65,7 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
   const wind = windFromComponents(u10, v10);
   const modelTerrainM = profile?.modelTerrainM ?? null;
   const mapLift = pointMapLift(frame, build);
+  const resolvedFineTerrainM = mapLift.terrainM ?? fineTerrainM;
   const thermalTopM = read('thermal-top-msl');
   const thermalVelocityMps = read('thermal-velocity');
   const effectiveCloudLimitM = diagnostics?.effectiveCloudLimitM ?? null;
@@ -73,7 +73,7 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
     ? null
     : resolveNativeFallbackLiftTopM({
         mapLiftStatus: mapLift.msl?.status,
-        modelTerrainM,
+        groundTerrainM: resolvedFineTerrainM ?? modelTerrainM,
         thermalTopM,
         thermalVelocityMps,
         effectiveCloudLimitM,
@@ -83,6 +83,7 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
   return {
     validAt,
     modelTerrainM,
+    fineTerrainM: resolvedFineTerrainM,
     mapLift,
     surface: {
       temperatureC: read('sfc-temp-c'), dewPointC: read('sfc-dewpoint-c'),
@@ -116,30 +117,55 @@ function chartHour(validAt: string, frame: PointFrame | undefined, build: Pinned
 
 type ScheduledFrame = { readonly id: string; readonly validTime: string };
 
-/** Keep chart hours for the lifetime of one pinned point. */
-export function createPointForecast(build: PinnedBuild, point: GeoPoint) {
+export interface CreatePointForecastOptions {
+  readonly timeZone?: string;
+}
+
+/** Keep chart hours and resolved fine-surface elevation for the lifetime of one pinned point. */
+export function createPointForecast(build: PinnedBuild, point: GeoPoint, options?: CreatePointForecastOptions) {
   const layers = build.manifest.descriptors.layers;
   const gust = layers['wind-gust-10m'], precipitation = layers['precip-rate'];
   const { lat, lon } = point;
   const metadata: Omit<SiteForecast, 'hours'> = {
     model: build.manifest.model,
-    site: { latitude: lat, longitude: lon, timeZone: timeZoneForLongitude(lon) },
+    site: { latitude: lat, longitude: lon, timeZone: options?.timeZone ?? timeZoneForLongitude(lon) },
     semantics: {
       capeLabel: layers['cape-jkg']?.label,
       gust: gust ? gust.timeSupport === 'interval-maximum' ? 'hourMax' : 'instant' : null,
       precipitation: precipitation ? precipitation.timeSupport === 'valid-time' ? 'instantRate' : 'windowMeanRate' : null
     }
   };
-  const cache = new Map<string, { frame: PointFrame | undefined; hour: PublishedForecastHour }>();
-  return (frames: readonly ScheduledFrame[], loaded: ReadonlyMap<string, PointFrame>): SiteForecast => ({
-    ...metadata,
-    hours: frames.map(({ id, validTime }) => {
-      const frame = loaded.get(id);
-      const cached = cache.get(id);
-      if (cached && cached.frame === frame && cached.hour.validAt === validTime) return cached.hour;
-      const hour = chartHour(validTime, frame, build);
-      cache.set(id, { frame, hour });
-      return hour;
-    })
-  });
+  let siteFineTerrainM: number | null = null;
+  const cache = new Map<string, { frame: PointFrame | undefined; fineTerrainM: number | null; hour: PublishedForecastHour }>();
+  return (frames: readonly ScheduledFrame[], loaded: ReadonlyMap<string, PointFrame>): SiteForecast => {
+    if (siteFineTerrainM === null) {
+      for (const candidate of loaded.values()) {
+        const candidateTerrainM = pointMapLift(candidate, build).terrainM;
+        if (candidateTerrainM !== null && Number.isFinite(candidateTerrainM)) {
+          siteFineTerrainM = candidateTerrainM;
+          break;
+        }
+      }
+    }
+    return {
+      ...metadata,
+      hours: frames.map(({ id, validTime }) => {
+        const frame = loaded.get(id);
+        const outsideDomain = frame?.layers['usable-lift-msl']?.status === 'outside-domain';
+        const effectiveFineTerrainM = frame && !outsideDomain ? siteFineTerrainM : null;
+        const cached = cache.get(id);
+        if (
+          cached &&
+          cached.frame === frame &&
+          cached.fineTerrainM === effectiveFineTerrainM &&
+          cached.hour.validAt === validTime
+        ) {
+          return cached.hour;
+        }
+        const hour = chartHour(validTime, frame, build, effectiveFineTerrainM);
+        cache.set(id, { frame, fineTerrainM: effectiveFineTerrainM, hour });
+        return hour;
+      })
+    };
+  };
 }

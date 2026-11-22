@@ -4,7 +4,7 @@ import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
-import { buildStitchedWindgramView, buildWindgramView, createPointForecast, readWindgram } from './model.ts';
+import { buildStitchedWindgramView, buildWindgramView, createPointForecast, readWindgram, resolveCivilTimeZone, timeZoneOffsetMinutesAt } from './model.ts';
 import { findBestSoaringDayKey, formatDayWindowLabel, resolveStitchedDayWindow } from './point-view-mode.ts';
 import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
@@ -1427,5 +1427,167 @@ describe('Windgram data', () => {
       unitSystem: 'imperial',
     });
     expect(hazardEl.textContent).toBe('Shear 5.1 mph/kft');
+  });
+
+  it('captures mixed-phase ice clouds, fineTerrainM continuity, Scorer critical-level wave suppression, compound Q4 hazards, dark barb rims, civil timezones, and touch-safe callout placement', () => {
+    expect(resolveCivilTimeZone(38.9, -77.3)).toBe('America/New_York');
+    expect(resolveCivilTimeZone(33.45, -112.07)).toBe('America/Phoenix');
+    expect(resolveCivilTimeZone(45.9, 6.87)).toBe('Europe/Paris');
+    expect(resolveCivilTimeZone(40.55, 45.0)).toBe('Asia/Yerevan');
+    expect(resolveCivilTimeZone(0, -140)).toBe('Etc/GMT+9');
+    expect(timeZoneOffsetMinutesAt(Date.UTC(2026, 6, 15, 16, 0), 'America/New_York')).toBe(-240);
+    expect(timeZoneOffsetMinutesAt(Date.UTC(2026, 0, 15, 16, 0), 'America/New_York')).toBe(-300);
+    expect(timeZoneOffsetMinutesAt(Date.UTC(2026, 6, 15, 16, 0), 'America/Phoenix')).toBe(-420);
+
+    const { build, sample, profile } = fixture([14, 15, 16, 38], 3);
+    const sampleMap = new Map(sample.frames.map(f => [f.id, f]));
+    const frames = profile.frames.map(frame => {
+      const fine = sampleMap.get(frame.id);
+      return fine ? { ...frame, layers: { ...frame.layers, ...fine.layers } } : frame;
+    });
+
+    frames[0]!.layers['usable-lift-msl']!.value = 2100;
+    frames[0]!.layers['usable-lift-agl']!.value = 850;
+
+    frames[1]!.layers['usable-lift-msl']!.value = null;
+    frames[1]!.layers['usable-lift-msl']!.status = 'no-usable-lift';
+    frames[1]!.layers['usable-lift-agl']!.value = 0;
+    frames[1]!.layers['usable-lift-agl']!.status = 'no-usable-lift';
+    frames[1]!.layers['thermal-velocity']!.value = 0;
+    frames[1]!.layers['sfc-temp-c']!.value = -2.0;
+    frames[1]!.layers['precip-rate'] = { ...frames[1]!.layers['sfc-temp-c']!, value: 0.6 };
+    frames[1]!.layers['wind-10m-u'] = { ...frames[1]!.layers['sfc-temp-c']!, value: -6.0 };
+    frames[1]!.layers['wind-10m-v'] = { ...frames[1]!.layers['sfc-temp-c']!, value: 0 };
+    frames[1]!.profile.levels = [
+      { pressureHpa: 820, heightM: 1800, temperatureC: -1.5, dewPointC: -1.8, uWindMps: -8, vWindMps: 0, omegaPaS: -4 },
+      { pressureHpa: 760, heightM: 2400, temperatureC: 2.5, dewPointC: 2.2, uWindMps: 12, vWindMps: 7, omegaPaS: -14 },
+      { pressureHpa: 700, heightM: 3000, temperatureC: -1.0, dewPointC: -1.5, uWindMps: 14, vWindMps: 8, omegaPaS: -15 },
+      { pressureHpa: 430, heightM: 6600, temperatureC: -35.0, dewPointC: -38.3, uWindMps: 20, vWindMps: 5, omegaPaS: 0 },
+    ];
+
+    frames[2]!.layers['usable-lift-msl']!.value = 2300;
+    frames[2]!.layers['usable-lift-agl']!.value = 1050;
+    frames[2]!.layers['surface-lcl-msl'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 2300 };
+    frames[2]!.layers['thermal-top-msl']!.value = 5400;
+    frames[2]!.layers['thermal-velocity']!.value = 2.9;
+    frames[2]!.layers['cape-jkg'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 1350 };
+    frames[2]!.layers['wind-10m-u'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 11.5 };
+    frames[2]!.layers['wind-10m-v'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 0 };
+    frames[2]!.layers['wind-gust-10m']!.value = 14.5;
+    frames[2]!.derived.effectiveCloudLimitM = 2300;
+    frames[2]!.derived.cuPotentialM = 3100;
+    frames[2]!.derived.cloudCapped = true;
+    frames[2]!.derived.overdeveloped = true;
+    frames[2]!.profile.levels = [
+      { pressureHpa: 820, heightM: 1800, temperatureC: 14, dewPointC: 8, uWindMps: 10, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 760, heightM: 2400, temperatureC: 8, dewPointC: 7.5, uWindMps: 11, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 520, heightM: 5400, temperatureC: -24, dewPointC: -25, uWindMps: 16, vWindMps: 0, omegaPaS: 0 },
+    ];
+
+    const site = createPointForecast(build, point, { timeZone: 'America/New_York' })(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    expect(site.site.timeZone).toBe('America/New_York');
+    expect(site.hours[0]!.fineTerrainM).toBe(1250);
+    expect(site.hours[1]!.fineTerrainM).toBe(1250);
+    expect(site.hours[3]!.fineTerrainM).toBe(1250);
+
+    const fullScene = buildWindgramView(site, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: site.site.timeZone, hours: site.hours });
+    const fullSvg = renderWindgramSvg(fullScene);
+    expect(fullSvg).toContain('class="wg-barb-rim"');
+    expect(fullSvg).toContain('wg-od-glaciated');
+
+    const iceReading = readWindgram(fullScene, 1, 6600);
+    expect(iceReading.cloud).toBe('humidity');
+    expect(iceReading.relativeHumidityPercent).toBeLessThan(80);
+    const h1Clouds = analyzeHourCloudLayers(site.hours[1]!, hourSampling(site.hours[1]!), fullScene.topM);
+    expect(h1Clouds.layers.at(-1)?.glaciated).toBe(true);
+
+    const cadLowReading = readWindgram(fullScene, 1, 1400);
+    expect(cadLowReading.fineTerrainM).toBe(1250);
+    expect(cadLowReading.terrainDeltaM).toBe(-250);
+    expect(cadLowReading.heightAglM).toBe(150);
+    expect(cadLowReading.heightAglReference).toBe('terrain');
+    expect(cadLowReading.freezingRainRisk).toBe(true);
+
+    const overrunningReading = readWindgram(fullScene, 1, 2400);
+    expect(overrunningReading.waveCriticalLevel).toBe(true);
+
+    // Shallow 10 m valley rotor reversal (-6 m/s E at 10 m) beneath uniform westerly column flow (u >= +10 m/s) preserves real mountain wave aloft!
+    frames[3]!.layers['wind-10m-u'] = { ...frames[3]!.layers['sfc-temp-c']!, value: -6.0 };
+    frames[3]!.layers['wind-10m-v'] = { ...frames[3]!.layers['sfc-temp-c']!, value: 0 };
+    const rotorWaveSite = createPointForecast(build, point)(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const rotorWaveScene = buildWindgramView(rotorWaveSite, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: rotorWaveSite.site.timeZone, hours: rotorWaveSite.hours });
+    expect(readWindgram(rotorWaveScene, 3, 2400).waveCriticalLevel).toBe(false);
+
+    const day2TailReading = readWindgram(fullScene, 3, 1750);
+    expect(day2TailReading.fineTerrainM).toBe(1250);
+    expect(day2TailReading.heightAglM).toBe(500);
+    expect(day2TailReading.heightAglReference).toBe('terrain');
+
+    const back = new FakeElement('rect');
+    const windDir = new FakeElement('text');
+    const climbSub = new FakeElement('text');
+    const hazardEl = new FakeElement('text');
+    const tileMap = new Map<string, FakeElement>([
+      ['[data-cursor-back]', back],
+      ['[data-tile-wind-dir]', windDir],
+      ['[data-tile-climb-sub]', climbSub],
+      ['[data-tile-temp]', new FakeElement('text')],
+      ['[data-tile-hazard]', hazardEl],
+    ]);
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => tileMap.get(sel) ?? null,
+    } as unknown as ParentNode);
+    const dummyTel = {
+      timeChip: '11:00 AM', altChip: '', snappedToTol: false, canSnapToTol: false,
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false, chips: [],
+    };
+
+    bound.paint({ aglText: '150 m AGL', mslText: '1,400 m MSL', useTol: false, telemetry: dummyTel, reading: cadLowReading, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('❄ Frz rain 0.6 mm/h');
+    expect(back.getAttribute('class')).toContain('is-danger');
+
+    bound.paint({
+      aglText: '1,150 m AGL', mslText: '2,400 m MSL', useTol: false, telemetry: dummyTel,
+      reading: { ...overrunningReading, precipitationMmHr: 0, cloud: null, relativeHumidityPercent: 55 },
+      unitSystem: 'metric',
+    });
+    expect(climbSub.textContent).toBe('▲ Ascent');
+
+    const gustFrontSurface = readWindgram(fullScene, 2, 1510);
+    expect(gustFrontSurface.surfaceWindShift?.deltaKt).toBeGreaterThan(25);
+    bound.paint({ aglText: '260 m AGL', mslText: '1,510 m MSL', useTol: false, telemetry: dummyTel, reading: gustFrontSurface, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('⚠ Gust front');
+    expect(windDir.textContent).toContain('· G');
+
+    const odCloudSuck = readWindgram(fullScene, 2, 2600);
+    bound.paint({ aglText: '1,350 m AGL', mslText: '2,600 m MSL', useTol: false, telemetry: dummyTel, reading: odCloudSuck, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('⚠ Suck · CAPE 1350');
+
+    bound.paint({
+      aglText: '500 m AGL', mslText: '1,750 m MSL', useTol: false, telemetry: dummyTel,
+      reading: { ...gustFrontSurface, heightM: 1750, heightAglM: 500, capeJkg: 400, surfaceWindShift: null },
+      unitSystem: 'metric',
+    });
+    expect(hazardEl.textContent).toBe('Deep OD · Anvil');
+
+    bound.paint({
+      aglText: '120 m AGL', mslText: '1,370 m MSL', useTol: false, telemetry: dummyTel,
+      reading: { ...cadLowReading, freezingRainRisk: false, precipitationMmHr: 0, speedKt: 16, gustKt: 20.5, directionDeg: 270, heightAglM: 120, estimatedClimbMps: null, waveVelocityMps: -1.4, waveCriticalLevel: false },
+      unitSystem: 'metric',
+    });
+    expect(windDir.textContent).toContain('· G');
+    expect(climbSub.textContent).toBe('▼ Wave rotor');
+
+    const bounds = { left: 40, top: 20, right: 400, bottom: 300 };
+    const touchPlaced = placeWindgramCallout({
+      cursorX: 220,
+      cursorY: 220,
+      width: 204,
+      height: 74,
+      bounds,
+      ceilingSamples: [],
+      touchMode: true,
+    });
+    expect(touchPlaced.y + 74).toBeLessThanOrEqual(220 - 44);
   });
 });

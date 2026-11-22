@@ -5,7 +5,8 @@ import { buildWindgramView as buildView } from './windgram-view.ts';
 import { buildStitchedWindgramView as buildStitchedView, type StitchedWindgramOptions } from './windgram-stitched.ts';
 import { readWindgram as readView } from './windgram-inspector.ts';
 
-export { createPointForecast } from './from-av-profile.ts';
+export { createPointForecast, type CreatePointForecastOptions } from './from-av-profile.ts';
+export { resolveCivilTimeZone, timeZoneForLongitude, timeZoneOffsetMinutesAt } from './time-zone.ts';
 export type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 export type { SkyCoverageCode, WindgramCloudLayerSummary, WindgramView, WindgramOptions, WindgramReading };
 export type { StitchedWindgramOptions };

@@ -134,6 +134,7 @@ function mountWindgramInspector(
   let snappedToTol = !heightMode;
   let pinned = false;
   let hovering = false;
+  let touchActive = false;
   let preferredSide: CalloutHorizontalSide = 'right';
   let pointerStart: { x: number; y: number; id: number; moved: boolean } | null = null;
   const activeTouches = new Map<number, { x: number; y: number }>();
@@ -162,7 +163,7 @@ function mountWindgramInspector(
 
   const minInspectHeightM = (hourIndex: number): number => {
     const source = view.sourceHours[hourIndex];
-    const groundM = source?.mapLift.terrainM ?? source?.modelTerrainM ?? view.floorM;
+    const groundM = source?.fineTerrainM ?? source?.mapLift.terrainM ?? source?.modelTerrainM ?? view.floorM;
     const modelFloor10M = source?.modelTerrainM !== null && source?.modelTerrainM !== undefined
       ? source.modelTerrainM + 10
       : -Infinity;
@@ -196,6 +197,7 @@ function mountWindgramInspector(
   const clear = () => {
     pinned = false;
     hovering = false;
+    touchActive = false;
     activeHour = null;
     hideFloatingCursor();
     writeReadout(instructions);
@@ -336,6 +338,7 @@ function mountWindgramInspector(
       bounds: { left: visibleLeft, top: visibleTop, right: visibleRight, bottom: visibleBottom },
       ceilingSamples,
       preferredSide,
+      touchMode: touchActive,
     });
     preferredSide = placed.side;
     callout?.setAttribute(
@@ -388,6 +391,7 @@ function mountWindgramInspector(
 
   const endHover = () => {
     hovering = false;
+    touchActive = false;
     invalidateGeometry();
     if (heightMode || (interactiveOnly && !pinned)) {
       hideFloatingCursor();
@@ -409,6 +413,7 @@ function mountWindgramInspector(
   };
 
   const onMove = (event: PointerEvent) => {
+    touchActive = event.pointerType === 'touch';
     if (event.pointerType === 'touch' && event.pointerId !== undefined && activeTouches.has(event.pointerId)) {
       activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (activeTouches.size === 2 && pinchStartSpan !== null && options.onZoomMode) {
@@ -470,6 +475,7 @@ function mountWindgramInspector(
   };
 
   const onDown = (event: PointerEvent) => {
+    touchActive = event.pointerType === 'touch';
     if (event.pointerType === 'touch' && event.pointerId !== undefined) {
       activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (activeTouches.size === 2) {
@@ -498,6 +504,7 @@ function mountWindgramInspector(
   };
 
   const onUp = (event: PointerEvent) => {
+    touchActive = event.pointerType === 'touch';
     const dayKey = resolveDayBannerTarget(event.target);
     if (dayKey) {
       pointerStart = null;
@@ -564,6 +571,7 @@ function mountWindgramInspector(
   };
   const onBlur = () => {
     hovering = false;
+    touchActive = false;
     invalidateGeometry();
     if (!pinned) return;
     pinned = false;
@@ -583,6 +591,7 @@ function mountWindgramInspector(
     }
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', ...(freeCapable ? ['ArrowUp', 'ArrowDown'] : [])].includes(event.key)) return;
     event.preventDefault();
+    touchActive = false;
     hovering = true;
     pinned = true;
     const explicitSelected = selectedHourIndex?.();

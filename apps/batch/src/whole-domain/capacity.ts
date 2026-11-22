@@ -151,7 +151,7 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
     deriveWorkerRuntimes: 0,
     deriveWorkerColumns: 0,
     deriveSharedInputs: 0,
-    shardAssembly: largestShard + largestShardBlocks * 64,
+    shardAssembly: largestShardBlocks * 64,
     packBuffers: [layouts.native, layouts.fine, profileLayout].reduce((bytes, layout) => bytes + (layout ? samplePackWriterBufferBytes(layout) : 0), 0),
     archivesAndValidation: largestShard + 64 * 1024 * 1024,
     runtimeAndNativeReserve: 256 * 1024 * 1024

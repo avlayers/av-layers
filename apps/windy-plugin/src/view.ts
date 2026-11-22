@@ -221,7 +221,12 @@ export class PluginPanel {
         this.point.ariaBusy = String(loading);
         if (!loading) this.setPointStatus();
         this.updatePoint = renderPointWindgram(this.pointBody, payload, build, {
-          point, frameId: this.pointSeries.frameId, mapFrameId: this.mapFrameId, unitSystem: this.unitSystem, totalFrames, loading,
+          point,
+          frameId: this.pointSeries.frameId,
+          mapFrameId: this.mapFrameId,
+          unitSystem: this.unitSystem,
+          totalFrames,
+          loading,
           viewMode: this.pointViewMode,
           onViewModeChange: mode => {
             this.pointViewMode = mode;

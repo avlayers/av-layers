@@ -10,6 +10,7 @@ import type {
   WindgramHour as PublicHour,
   WindgramOptions,
 } from './scene-types.ts';
+import { timeZoneOffsetMinutesAt } from './time-zone.ts';
 import {
   analyzeHourCloudLayers,
   buildClimbDomeFieldPaths,
@@ -83,6 +84,8 @@ export interface WindgramCloud {
   depthM?: number;
   coverageCode?: SkyCoverageCode;
   coverPercent?: number;
+  topTempC?: number | null;
+  glaciated?: boolean;
   colWidth?: number;
   panelLeft?: number;
   panelRight?: number;
@@ -146,7 +149,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
   const selection = selectWindgramHours(profile, options);
   const { hours } = selection;
   const compact = options.compact ?? false;
-  const altitudeLabels = hours.flatMap(hour => [hour.modelTerrainM, hour.mapLift.terrainM, hour.mapLift.mslM, hour.nativeUsableLiftTopM ?? null,
+  const altitudeLabels = hours.flatMap(hour => [hour.modelTerrainM, hour.fineTerrainM ?? hour.mapLift.terrainM, hour.mapLift.mslM, hour.nativeUsableLiftTopM ?? null,
     ...hour.levels.map(level => level.heightM),
   ]).filter((height): height is number => typeof height === 'number' && Number.isFinite(height))
     .map(height => `${roundedElevationLabel(height, system)}${compact ? '' : system === 'metric' ? ' m' : ' ft'}`);
@@ -165,6 +168,12 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
   const sampling = hours.map(hourSampling);
   const cloudAnalyses = hours.map((h, i) => analyzeHourCloudLayers(h, sampling[i], topM));
   const labelTime = new Intl.DateTimeFormat('en-US', { timeZone: options.timeZone, hour: 'numeric', minute: '2-digit', hour12: true });
+  const refInstantMs = hours[0] ? Date.parse(hours[0].validAt) : NaN;
+  const offsetMinutes = Number.isFinite(refInstantMs)
+    ? timeZoneOffsetMinutesAt(refInstantMs, options.timeZone)
+    : Number.isFinite(profile.site.longitude)
+      ? longitudeOffsetHours(profile.site.longitude) * 60
+      : 0;
   const view: WindgramView = {
     unitSystem: system,
     fieldMode,
@@ -183,7 +192,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     capeLabel: profile.semantics.capeLabel ?? 'CAPE',
     precipitationSemantics: profile.semantics.precipitation,
     sourceHours: hours,
-    offsetMinutes: Number.isFinite(profile.site.longitude) ? longitudeOffsetHours(profile.site.longitude) * 60 : 0,
+    offsetMinutes,
     timeZone: options.timeZone,
     anchors,
     sampling,
@@ -337,6 +346,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
   });
   view.contours = temperatureContours(view, system);
 
+  const hybrid = fieldMode === 'hybrid-climb';
   hours.forEach((h, i) => {
     const sample = sampling[i], x = view.hours[i].x;
     const addBarb = (z: number, interpolated: boolean, surface: boolean) => {
@@ -367,7 +377,10 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     const freezing = crossings(sample.temperatureC, 0)[0];
     if (freezing !== undefined && freezing >= floorM && freezing <= topM) view.freezing.push({ x, y: y(freezing), hourIndex: i });
     const { left: bLeft, width } = bounds[i];
-    for (const layer of moistLayers(sample.relativeHumidityPercent)) {
+    const moistSource = hybrid
+      ? (sample.cloudHumidityPercent ?? sample.relativeHumidityPercent)
+      : sample.relativeHumidityPercent;
+    for (const layer of moistLayers(moistSource)) {
       if (layer.baseM >= topM || layer.topM <= floorM) continue;
       view.clouds.push({ ...layer, hourIndex: i, x, y: y(layer.baseM), kind: 'humidity' });
       view.cloudBands.push({ x: bLeft, width, y: y(layer.topM), height: y(layer.baseM) - y(layer.topM) });
@@ -376,7 +389,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     const activeCu = regime !== 'none';
     const convLayer = cloudAnalyses[i]?.convectiveLayer ?? null;
     const cuLimits = [h.effectiveCloudLimitM, h.surfaceLclM].filter((v): v is number => v !== null && Number.isFinite(v));
-    const base = activeCu && fieldMode === 'hybrid-climb'
+    const base = activeCu && hybrid
       ? (convLayer?.baseM ?? (cuLimits.length ? Math.min(...cuLimits) : null))
       : h.surfaceLclM;
     if (base !== null && base >= floorM && base <= topM) {
@@ -394,12 +407,17 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
         panelLeft: left,
         panelRight: left + plotWidth,
         ...(activeCu && convLayer
-          ? { depthM: convLayer.depthM, coverageCode: convLayer.coverageCode, coverPercent: convLayer.coverPercent }
+          ? {
+              depthM: convLayer.depthM,
+              coverageCode: convLayer.coverageCode,
+              coverPercent: convLayer.coverPercent,
+              topTempC: convLayer.topTempC,
+              glaciated: convLayer.glaciated,
+            }
           : {}),
       });
     }
   });
-  const hybrid = fieldMode === 'hybrid-climb';
   const convectiveOnly = (hour: ProfileHour) => !hybrid || (hour.thermalVelocityMps ?? 0) > 0;
   const seriesSpecs = [
     ['thermalTopM', 'Native thermal top (parcel)', hybrid ? '#fcd34d' : '#a56800', '6 5', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.thermalTopM : null)],
@@ -408,7 +426,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
       ? [['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
           hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const]
       : []),
-    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.mapLift.terrainM],
+    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.fineTerrainM ?? hour.mapLift.terrainM],
     ['surfaceLclM', 'Native potential cloud base (surface LCL)', hybrid ? '#f9a8d4' : '#426173', '3 4', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.surfaceLclM : null)],
     ['effectiveCloudLimitM', 'Native effective cloud limit', hybrid ? '#5eead4' : '#247e73', '5 2', (hour: ProfileHour) => {
       if (!convectiveOnly(hour)) return null;
