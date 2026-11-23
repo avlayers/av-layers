@@ -9,6 +9,7 @@ import type { WindgramReading } from './scene-types.ts';
 
 type MapLiftSummary = WindgramView['sourceHours'][number]['mapLift'];
 
+const SHORT_WEEKDAYS_UTC = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const barbSpeed = (knots: number, system: UnitSystem) => formatQuantity(knotsToMps(knots), 'wind', undefined, system);
 const degrees = (direction: number) => `${compass16(direction)} ${Math.round(direction) % 360}°`;
 const windSources = {
@@ -24,7 +25,7 @@ const cloudLabels = {
 function formatClimbRate(mps: number, system: UnitSystem): string {
   if (system === 'imperial') {
     const fpm = Math.round((mps / FEET_PER_MINUTE_TO_MPS) / 5) * 5;
-    return fpm > 0 ? `+${fpm.toLocaleString('en-US')} fpm` : '0 fpm';
+    return fpm > 0 ? `+${formatQuantity(fpm / (1 / FEET_PER_MINUTE_TO_MPS), 'lift', 0, 'imperial').replace(' ft/min', '')} fpm` : '0 fpm';
   }
   const rounded = Math.round(mps * 10) / 10;
   return rounded > 0 ? `+${rounded.toFixed(1)} m/s` : '0.0 m/s';
@@ -40,6 +41,57 @@ function hasAdjacentOffsetTransition(view: WindgramView, hourIndex: number, offs
     }
   }
   return false;
+}
+
+interface HourClockMeta {
+  readonly validAt: string;
+  readonly timeChip: string;
+  readonly compactTime: string;
+}
+
+const clockCacheByView = new WeakMap<WindgramView, (HourClockMeta | undefined)[]>();
+
+function resolveHourClockMeta(view: WindgramView, hourIndex: number, validAt: string): HourClockMeta {
+  let slots = clockCacheByView.get(view);
+  if (!slots) {
+    slots = new Array<HourClockMeta | undefined>(view.hours.length);
+    clockCacheByView.set(view, slots);
+  }
+  const existing = slots[hourIndex];
+  if (existing && existing.validAt === validAt) return existing;
+
+  const validMs = Date.parse(validAt);
+  const frameOffsetMinutes = Number.isFinite(validMs)
+    ? timeZoneOffsetMinutesAt(validMs, view.timeZone)
+    : view.offsetMinutes;
+  const isUtcFallback = Boolean(view.isUtcFallback) || view.timeZone === 'UTC' || view.timeZone === 'Etc/UTC';
+  const isTransitionHour = Number.isFinite(validMs) && hasAdjacentOffsetTransition(view, hourIndex, frameOffsetMinutes);
+  const zoneTag = isUtcFallback
+    ? 'UTC'
+    : isTransitionHour
+      ? shortTimeZoneNameAt(validMs, view.timeZone)
+      : '';
+
+  const clockRaw = formatPlaceTime(validMs, frameOffsetMinutes, 'clock');
+  const split = clockRaw.indexOf(' (');
+  const baseClock = split < 0 ? clockRaw : clockRaw.slice(0, split);
+  const timeChip = zoneTag && baseClock !== '—' ? `${baseClock} ${zoneTag}` : baseClock;
+
+  let compactTime = '';
+  if (Number.isFinite(validMs)) {
+    const shifted = new Date(validMs + frameOffsetMinutes * 60_000);
+    const h24 = shifted.getUTCHours();
+    const mins = shifted.getUTCMinutes();
+    const suffix = h24 >= 12 ? 'p' : 'a';
+    const h12 = h24 % 12 || 12;
+    const hm = mins === 0 ? `${h12}${suffix}` : `${h12}:${String(mins).padStart(2, '0')}${suffix}`;
+    const tagged = zoneTag ? `${hm} ${zoneTag}` : hm;
+    compactTime = view.dayPanels?.length ? `${SHORT_WEEKDAYS_UTC[shifted.getUTCDay()]!} ${tagged}` : tagged;
+  }
+
+  const meta: HourClockMeta = { validAt, timeChip, compactTime };
+  if (hourIndex >= 0 && hourIndex < slots.length) slots[hourIndex] = meta;
+  return meta;
 }
 
 export interface WindgramTelemetryStrip {
@@ -62,38 +114,7 @@ export function buildWindgramTelemetry(
   hasTolAtHour: boolean,
 ): WindgramTelemetryStrip {
   const system = view.unitSystem;
-  const validMs = Date.parse(reading.validAt);
-  const frameOffsetMinutes = Number.isFinite(validMs)
-    ? timeZoneOffsetMinutesAt(validMs, view.timeZone)
-    : view.offsetMinutes;
-  const isUtcFallback = Boolean(view.isUtcFallback) || view.timeZone === 'UTC' || view.timeZone === 'Etc/UTC';
-  const isTransitionHour = Number.isFinite(validMs) && hasAdjacentOffsetTransition(view, reading.hourIndex, frameOffsetMinutes);
-  const zoneTag = isUtcFallback
-    ? 'UTC'
-    : isTransitionHour
-      ? shortTimeZoneNameAt(validMs, view.timeZone)
-      : '';
-
-  const clockRaw = formatPlaceTime(validMs, frameOffsetMinutes, 'clock');
-  const split = clockRaw.indexOf(' (');
-  const baseClock = split < 0 ? clockRaw : clockRaw.slice(0, split);
-  const timeChip = zoneTag && baseClock !== '—' ? `${baseClock} ${zoneTag}` : baseClock;
-
-  const compactClock = (() => {
-    if (!Number.isFinite(validMs)) return '';
-    const shifted = new Date(validMs + frameOffsetMinutes * 60_000);
-    const h24 = shifted.getUTCHours();
-    const mins = shifted.getUTCMinutes();
-    const suffix = h24 >= 12 ? 'p' : 'a';
-    const h12 = h24 % 12 || 12;
-    const hm = mins === 0 ? `${h12}${suffix}` : `${h12}:${String(mins).padStart(2, '0')}${suffix}`;
-    const tagged = zoneTag ? `${hm} ${zoneTag}` : hm;
-    if (view.dayPanels?.length) {
-      const wk = shifted.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short' });
-      return `${wk} ${tagged}`;
-    }
-    return tagged;
-  })();
+  const { timeChip, compactTime } = resolveHourClockMeta(view, reading.hourIndex, reading.validAt);
 
   const aglSuffix = reading.heightAglReference === 'model' ? 'model AGL' : 'AGL';
   const aglDisplay = snappedToTol && hasTolAtHour
@@ -151,7 +172,7 @@ export function buildWindgramTelemetry(
 
   return {
     timeChip,
-    compactTime: compactClock,
+    compactTime,
     altChip,
     snappedToTol,
     canSnapToTol: !snappedToTol && hasTolAtHour,

@@ -1,7 +1,7 @@
 import {
-  pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
+  pointMapLift, pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
 } from '@av/client';
-import { formatSitePlaceTime } from '@av/client/timezone';
+import { formatSitePlaceTime, resolveSiteTimeZone } from '@av/client/timezone';
 import type { PointViewMode } from '@av/windgram';
 import { renderBuildDetails } from './build-details';
 
@@ -30,6 +30,7 @@ export interface PointSessionOptions {
     busy(busy: boolean): void;
     horizon(selectable: boolean, label: string): void;
     wind(text: string): void;
+    elevation?(elevationM: number | null, reference: 'terrain' | 'model' | null): void;
     changed(): void;
   };
 }
@@ -57,20 +58,46 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   let updatePointSeries: ReturnType<PointWindgram['renderPointWindgram']> | null = null;
   let lastRendered: { context: PointSeriesContext; payload: PointSeries; totalFrames: number; loading: boolean } | null = null;
   let selection: { update: ReturnType<PointWindgram['renderPointWindgram']>; frame: string | null; units: UnitSystem; mapFrame: string | null; mapOffset: number } | null = null;
+  let activeTimeZone: string | undefined;
 
   const body = (): HTMLElement | null => options.body();
   const setStatus = (message = ''): void => options.publish.status(message);
+
+  function publishSiteElevation(payload: PointSeries, build: PinnedBuild): void {
+    if (!options.publish.elevation) return;
+    if (payload.siteTerrain?.status === 'valid' && payload.siteTerrain.elevationM !== null && Number.isFinite(payload.siteTerrain.elevationM)) {
+      options.publish.elevation(payload.siteTerrain.elevationM, 'terrain');
+      return;
+    }
+    for (const frame of payload.frames) {
+      const fineM = pointMapLift(frame, build).terrainM;
+      if (fineM !== null && Number.isFinite(fineM)) {
+        options.publish.elevation(fineM, 'terrain');
+        return;
+      }
+    }
+    for (const frame of payload.frames) {
+      const modelM = frame.profile?.modelTerrainM ?? null;
+      if (modelM !== null && Number.isFinite(modelM)) {
+        options.publish.elevation(modelM, 'model');
+        return;
+      }
+    }
+    options.publish.elevation(null, null);
+  }
 
   function showPoint(context: PointSeriesContext, payload: PointSeries, totalFrames: number, loading: boolean): void {
     const host = body();
     if (!windgram || !host) return;
     lastRendered = { context, payload, totalFrames, loading };
+    publishSiteElevation(payload, context.build);
     updatePointSeries = windgram.renderPointWindgram(host, payload, context.build, {
       point: context.point,
       frameId: series.frameId,
       mapFrameId: options.getDisplayedFrame(),
       mapOffsetMinutes: options.getMapOffset(),
       unitSystem: options.getUnits(),
+      timeZone: activeTimeZone,
       totalFrames,
       loading,
       viewMode: options.getViewMode?.(),
@@ -96,6 +123,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
     if (body()) windgram?.disposePointWindgram(body()!);
     body()?.replaceChildren();
     options.onVisibleDaysChange?.(null);
+    activeTimeZone = undefined;
     updatePointSeries = selection = lastRendered = null;
   }
 
@@ -126,6 +154,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   async function open(point: GeoPoint): Promise<void> {
     const build = options.getBuild();
     if (!build || !options.ensureLive()) return;
+    activeTimeZone = resolveSiteTimeZone(point.lat, point.lon).timeZone;
     series.open(build, point);
     options.publish.open(point);
     setStatus('');
@@ -152,8 +181,8 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   return {
     open, close, suspend, loadRange, syncViewMode, updateSelection,
     followMapFrame(frameId) { series.followMapFrame(frameId); updateSelection(); },
-    formatWindTime(validMs) { return series.current ? formatSitePlaceTime(validMs, series.current.point, 'stamp') : '—'; },
-    renderBuildDetails(container, build) { renderBuildDetails(container, build, series.current?.point); },
+    formatWindTime(validMs) { return series.current ? formatSitePlaceTime(validMs, series.current.point, 'stamp', activeTimeZone) : '—'; },
+    renderBuildDetails(container, build) { renderBuildDetails(container, build, series.current?.point, activeTimeZone); },
     get current() { return series.current; },
     get pending() { return series.pending; },
     get frameId() { return series.frameId; },
@@ -161,6 +190,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
       series.close();
       if (body()) windgram?.disposePointWindgram(body()!);
       options.onVisibleDaysChange?.(null);
+      activeTimeZone = undefined;
       updatePointSeries = selection = lastRendered = null;
     }
   };

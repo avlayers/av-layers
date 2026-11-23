@@ -155,7 +155,7 @@ function mountWindgramInspector(
       vw: viewport?.innerWidth ?? Infinity,
       vh: viewport?.innerHeight ?? Infinity,
     };
-    if (pointerStart) cachedGeo = geo;
+    cachedGeo = geo;
     return geo;
   };
 
@@ -468,7 +468,8 @@ function mountWindgramInspector(
       if (wasHovering && magneticMode && !p.snapTol && p.hourIndex === activeHour && !snappedToTol && p.heightM !== undefined && p.heightM === activeHeightM) {
         return;
       }
-      update(p.hourIndex, false, p.heightM, p.snapTol);
+      const prevHour = activeHour;
+      update(p.hourIndex, false, p.heightM, p.snapTol, wasHovering && p.hourIndex === prevHour);
     } else {
       endHover();
     }

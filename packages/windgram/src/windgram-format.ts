@@ -47,6 +47,19 @@ export function convertQuantity(value: number | null | undefined, kind: Quantity
   return value * scale + offset;
 }
 
+const numberFormatters = new Map<number, Intl.NumberFormat>();
+function formatEnUsNumber(value: number, fractionDigits: number): string {
+  let formatter = numberFormatters.get(fractionDigits);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat('en-US', {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    });
+    numberFormatters.set(fractionDigits, formatter);
+  }
+  return formatter.format(value);
+}
+
 const ELEVATION_STEPS = [100, 200, 500, 1000, 2000, 5000] as const;
 const ELEVATION_LABEL_GAP = 28;
 
@@ -54,7 +67,7 @@ const ELEVATION_LABEL_GAP = 28;
 export function roundedElevationLabel(meters: number, system: UnitSystem): string {
   const value = convertQuantity(meters, 'elevation', system);
   if (value === null) return '';
-  return (Math.round(value / 100) * 100).toLocaleString('en-US');
+  return formatEnUsNumber(Math.round(value / 100) * 100, 0);
 }
 
 /** Regular height steps that fit the plot, in metres. */
@@ -80,7 +93,7 @@ export function formatQuantity(value: number | null | undefined, kind: QuantityK
   const converted = convertQuantity(value, kind, system);
   if (converted === null) return '—';
   const precision = digits ?? quantityDefinitions[kind][system][3];
-  return `${converted.toLocaleString('en-US', { maximumFractionDigits: precision, minimumFractionDigits: precision })} ${unitLabel(kind, system)}`;
+  return `${formatEnUsNumber(converted, precision)} ${unitLabel(kind, system)}`;
 }
 
 /** Noun for a surface gust reading from the document's declaration; defaults to "gust". */

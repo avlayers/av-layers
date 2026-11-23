@@ -75,3 +75,47 @@ it.each(['temperature', 'pressure', 'height'] as const)('preserves dependent int
   expect(wind).toEqual(nativeColumnWindAtHeight(input, 700));
   expect(wind.blTopWindU).toBe(gap === 'height' ? null : 13.6);
 });
+
+it('drops sub-unit quantization ties and marks non-hydrostatic pressure/height reversals as gaps instead of throwing', () => {
+  const { frame: base, coverage } = fixture();
+  const pressurePa = [
+    new Float32Array(base.activeIndices.length).fill(95000),
+    new Float32Array(base.activeIndices.length).fill(90000),
+    new Float32Array(base.activeIndices.length).fill(85000),
+  ];
+  const { pressureLevelsHpa: _unusedLevels, ...rest } = base;
+  const frame = {
+    ...rest,
+    pressurePa,
+    missing: { ...base.missing, pressure: pressurePa.map(() => new Uint8Array(base.activeIndices.length)) },
+  };
+
+  // Cell 0: strictly monotonic float heights < 0.5 m apart (quantize to 600 m twice) -> drops duplicate sub-resolution row
+  frame.hgtM[0]![0] = 600.2;
+  frame.hgtM[1]![0] = 600.4;
+  frame.hgtM[2]![0] = 1100;
+
+  // Cell 1: non-hydrostatic rotor pressure perturbation reversal (level 1 pressure > level 0 pressure) -> nulls offending pressure coordinate
+  pressurePa[0]![1] = 95000;
+  pressurePa[1]![1] = 95040;
+  pressurePa[2]![1] = 85000;
+
+  // Cell 2: geopotential height reversal -> nulls offending height coordinate
+  frame.hgtM[0]![2] = 650;
+  frame.hgtM[1]![2] = 640;
+  frame.hgtM[2]![2] = 1100;
+
+  const profiles = prepareNativeProfiles(frame, coverage);
+  const subStep = readProfileRecord(Uint8Array.from(profiles.readRecord(0)));
+  expect(subStep.status).toBe('valid');
+  expect(subStep.levels.map(l => l.heightM)).toEqual([600, 1100]);
+
+  const rotorP = readProfileRecord(Uint8Array.from(profiles.readRecord(1)));
+  expect(rotorP.status).toBe('valid');
+  expect(rotorP.levels.map(l => l.pressureHpa)).toEqual([950, null, 850]);
+
+  const revH = readProfileRecord(Uint8Array.from(profiles.readRecord(2)));
+  expect(revH.status).toBe('valid');
+  expect(revH.levels.map(l => l.heightM)).toEqual([650, null, 1100]);
+});
+

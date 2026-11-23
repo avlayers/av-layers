@@ -18,7 +18,7 @@ export const AUX_SURFACE_UNITS = auxiliaryUnits(AUX_SURFACE_IDS);
 export const AUX_LEVEL_UNITS = auxiliaryUnits(AUX_LEVEL_IDS);
 export interface AuxField { values: Float32Array; missing: Uint8Array }
 export type AuxSurface = Partial<Record<AuxSurfaceId, AuxField>>;
-export type AuxLevels = Partial<Record<AuxLevelId, readonly AuxField[]>>;
+export type AuxLevels = Partial<Record<AuxLevelId, readonly (AuxField | undefined)[]>>;
 
 /**
  * Provider-independent arrays in the declared field units, compacted to activeIndices;
@@ -196,9 +196,10 @@ export function validateNormalizedFrame(
     if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error('Normalized auxiliary fields must be a map');
     for (const [name, value] of Object.entries(fields)) {
       if (!Object.hasOwn(units, name)) throw new Error(`Unsupported normalized auxiliary field ${name}`);
-      const records = profile ? value as readonly AuxField[] : [value as AuxField];
+      const records = profile ? value as readonly (AuxField | undefined)[] : [value as AuxField];
       if (!Array.isArray(records) || (profile && records.length !== levelCount)) throw new Error('Normalized auxiliary level count mismatch');
       for (const record of records) {
+        if (profile && record === undefined) continue;
         if (!record || typeof record !== 'object') throw new Error('Normalized auxiliary field is invalid');
         allFields.push(record.values); allMissing.push(record.missing);
       }

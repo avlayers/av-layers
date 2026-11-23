@@ -38,6 +38,7 @@ export interface PointFeatureOptions {
     busy(busy: boolean): void;
     horizon(selectable: boolean, label: string): void;
     wind(text: string): void;
+    elevation?(elevationM: number | null, reference: 'terrain' | 'model' | null): void;
   };
 }
 
@@ -94,6 +95,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
           busy: options.publish.busy,
           horizon: options.publish.horizon,
           wind: options.publish.wind,
+          elevation: options.publish.elevation,
           changed: () => syncWind()
         }
       });

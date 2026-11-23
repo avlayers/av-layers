@@ -116,7 +116,33 @@ export function createPreviewApp(): PreviewApp {
   let pointFeature: PointFeature | null = null;
   let pointMarker: PointMarker | null = null;
   let activePointEase: { point: { lat: number; lon: number }; settled: boolean } | null = null;
+  let activePointCoords: { lat: number; lon: number } | null = null;
+  let activePointElevation: { metres: number | null; reference: 'terrain' | 'model' | null } = { metres: null, reference: null };
   let locationController: ReturnType<typeof createLocationController> | null = null;
+
+  const formatPointCoordsLabel = (coords: { lat: number; lon: number }): string =>
+    `${coords.lat.toFixed(3)}°, ${coords.lon.toFixed(3)}°`;
+
+  const formatPointDetailLabel = (
+    coords: { lat: number; lon: number },
+    elev: { metres: number | null; reference: 'terrain' | 'model' | null },
+    units: UnitSystem
+  ): string => {
+    const base = formatPointCoordsLabel(coords);
+    if (elev.metres === null || !Number.isFinite(elev.metres)) return base;
+    const converted = units === 'imperial' ? Math.round(elev.metres / 0.3048) : Math.round(elev.metres);
+    const unit = units === 'imperial' ? 'ft' : 'm';
+    return `${base} · ${elev.reference === 'model' ? 'model ' : ''}${converted.toLocaleString('en-US')} ${unit} MSL`;
+  };
+
+  const syncPointBarReserve = (): void => {
+    if (!appRoot) return;
+    const card = rootQuery<HTMLElement>('#point-card', appRoot);
+    const trigger = rootQuery<HTMLElement>('#point-info-trigger', appRoot);
+    if (!card || !trigger || !('offsetWidth' in trigger)) return;
+    const width = trigger.offsetWidth;
+    if (width > 0) card.style?.setProperty?.('--av-bar-reserve-right', `${Math.ceil(width + 8)}px`);
+  };
 
   let mapOffsetMinutes = initialOffset;
   let lastTimelineLat = Number.NaN, lastTimelineLng = Number.NaN;
@@ -522,6 +548,12 @@ export function createPreviewApp(): PreviewApp {
     preferences.setUnits(units);
     windControls?.setUnits(units);
     windOverlay?.setOptions({ units });
+    if (activePointCoords && view.point.value.open) {
+      writer.point({
+        location: formatPointCoordsLabel(activePointCoords),
+        detailLocation: formatPointDetailLabel(activePointCoords, activePointElevation, units)
+      });
+    }
     updateScale(); updatePointSelection();
     writeUrl('replace');
   }
@@ -834,10 +866,14 @@ export function createPreviewApp(): PreviewApp {
         open: point => {
           const easeToken = { point, settled: false };
           activePointEase = easeToken;
+          activePointCoords = point;
+          activePointElevation = { metres: null, reference: null };
           pointMarker?.show(point);
-          writer.point({ open: true, location: `${point.lat.toFixed(3)}°, ${point.lon.toFixed(3)}°` });
+          const coordsLabel = formatPointCoordsLabel(point);
+          writer.point({ open: true, location: coordsLabel, detailLocation: coordsLabel });
           const schedule = root.ownerDocument?.defaultView?.requestAnimationFrame ?? ((cb: FrameRequestCallback) => { cb(0); return 0; });
           schedule(() => {
+            syncPointBarReserve();
             if (!destroyed && activePointEase === easeToken && view.point.value.open && map && appRoot) {
               easePointIntoClearView(map, appRoot, point);
             }
@@ -845,6 +881,8 @@ export function createPreviewApp(): PreviewApp {
         },
         close: () => {
           activePointEase = null;
+          activePointCoords = null;
+          activePointElevation = { metres: null, reference: null };
           timeline?.setHighlightedDays?.(null);
           pointMarker?.clear();
           writer.point({ open: false, status: '', wind: '' });
@@ -852,11 +890,13 @@ export function createPreviewApp(): PreviewApp {
         status: text => writer.point({ status: text }),
         busy: busy => {
           writer.point({ busy });
+          syncPointBarReserve();
           const easeToken = activePointEase;
           if (easeToken && !easeToken.settled && rootQuery('#point-body .av-point-series', root)) {
             easeToken.settled = true;
             const schedule = root.ownerDocument?.defaultView?.requestAnimationFrame ?? ((cb: FrameRequestCallback) => { cb(0); return 0; });
             schedule(() => {
+              syncPointBarReserve();
               if (!destroyed && activePointEase === easeToken && view.point.value.open && map && appRoot) {
                 easePointIntoClearView(map, appRoot, easeToken.point);
               }
@@ -864,7 +904,16 @@ export function createPreviewApp(): PreviewApp {
           }
         },
         horizon: (selectable, label) => writer.point({ horizonSelectable: selectable, horizonLabel: label }),
-        wind: text => writer.point({ wind: text })
+        wind: text => writer.point({ wind: text }),
+        elevation: (metres, reference) => {
+          activePointElevation = { metres, reference };
+          if (activePointCoords && view.point.value.open) {
+            writer.point({
+              location: formatPointCoordsLabel(activePointCoords),
+              detailLocation: formatPointDetailLabel(activePointCoords, activePointElevation, intent().units)
+            });
+          }
+        }
       }
     });
 
@@ -1002,7 +1051,7 @@ export function createPreviewApp(): PreviewApp {
       void pointFeature?.open(point);
     });
     map.on('move', () => { syncMapClock(false); pointMarker?.sync(); windSession?.reconcile(); });
-    map.on('resize', () => { pointMarker?.sync(); });
+    map.on('resize', () => { pointMarker?.sync(); syncPointBarReserve(); });
     map.on('movestart', event => {
       if (!('pointCamera' in event)) activePointEase = null;
       if (intent().model === AUTO_MODEL_ID && !('previewHistory' in event) && !('pointCamera' in event)) {

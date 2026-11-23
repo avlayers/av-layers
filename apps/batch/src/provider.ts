@@ -6,12 +6,23 @@ import type { AuxField, AuxSurfaceId, AuxLevelId, AuxSurface, AuxLevels, Normali
 export type NormalizedFrameTarget = Pick<NormalizedFrame, 'terrainM' | 'surfacePressurePa' | 'temp2mK' | 'specificHumidity2mKgKg' | 'sensibleHeatFluxWm2' | 'latentHeatFluxWm2' | 'precipitationMmPerHour' | 'hgtM' | 'tempK' | 'pressurePa' | 'missing' | 'auxSurface' | 'auxLevels'>;
 
 /** Allocate only configured channels; a caller's ring slot retains shared buffers. */
-export function createAuxiliaryTargets(cells: number, levels: number, surfaceIds: readonly AuxSurfaceId[], levelIds: readonly AuxLevelId[], target?: NormalizedFrameTarget): { auxSurface: AuxSurface; auxLevels: AuxLevels } {
+export function createAuxiliaryTargets(
+  cells: number,
+  levels: number,
+  surfaceIds: readonly AuxSurfaceId[],
+  levelIds: readonly AuxLevelId[],
+  target?: NormalizedFrameTarget,
+  includeLevel?: (id: AuxLevelId, levelIndex: number) => boolean,
+): { auxSurface: AuxSurface; auxLevels: AuxLevels } {
   const field = (): AuxField => ({ values: new Float32Array(target ? new SharedArrayBuffer(cells * 4) : new ArrayBuffer(cells * 4)),
     missing: new Uint8Array(target ? new SharedArrayBuffer(cells) : new ArrayBuffer(cells)) });
   const auxSurface: AuxSurface = {}, auxLevels: AuxLevels = {};
   for (const id of surfaceIds) auxSurface[id] = target?.auxSurface?.[id] ?? field();
-  for (const id of levelIds) auxLevels[id] = target?.auxLevels?.[id] ?? Array.from({ length: levels }, field);
+  for (const id of levelIds) {
+    auxLevels[id] = target?.auxLevels?.[id] ?? Array.from({ length: levels }, (_, index) =>
+      !includeLevel || includeLevel(id, index) ? field() : undefined,
+    );
+  }
   if (target) { target.auxSurface = auxSurface; target.auxLevels = auxLevels; }
   return { auxSurface, auxLevels };
 }

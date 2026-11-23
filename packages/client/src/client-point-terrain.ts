@@ -27,25 +27,24 @@ function planFineContributors(grid: Grid, geometry: GridGeometry, lat: number, l
   return contributors.length ? contributors : null;
 }
 
-function validateFineCompanionChunk(bytes: Uint8Array, expectedBytes: number): DataView {
+function createFineCompanionView(bytes: Uint8Array, expectedBytes: number): DataView {
   if (bytes.byteLength !== expectedBytes) throw new Error('Fine terrain chunk length mismatch');
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  for (let i = 0; i < bytes.byteLength; i += WIND_FINE_CELL_BYTES) {
-    const packed = view.getUint8(i + 8);
-    const support = view.getUint8(i + 9);
-    const terrain = packed & STATUS_MASK;
-    const lift = (packed >> 2) & STATUS_MASK;
-    if (
-      (packed & 0xe0) !== 0 ||
-      (support & ~SUPPORT_MASK) !== 0 ||
-      terrain === STATUS_NO_LIFT ||
-      (terrain === STATUS_VALID && !Number.isFinite(view.getFloat32(i, true))) ||
-      (lift <= STATUS_NO_LIFT && !Number.isFinite(view.getFloat32(i + 4, true)))
-    ) {
-      throw new Error('Invalid fine terrain companion chunk');
-    }
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+}
+
+function validateFineCompanionCell(view: DataView, pos: number, packed: number, elevation: number): void {
+  const support = view.getUint8(pos + 9);
+  const terrain = packed & STATUS_MASK;
+  const lift = (packed >> 2) & STATUS_MASK;
+  if (
+    (packed & 0xe0) !== 0 ||
+    (support & ~SUPPORT_MASK) !== 0 ||
+    terrain === STATUS_NO_LIFT ||
+    (terrain === STATUS_VALID && !Number.isFinite(elevation)) ||
+    (lift <= STATUS_NO_LIFT && !Number.isFinite(view.getFloat32(pos + 4, true)))
+  ) {
+    throw new Error('Invalid fine terrain companion chunk');
   }
-  return view;
 }
 
 async function readBoundedBytes(
@@ -134,6 +133,7 @@ export function evaluateFineTerrainContributors(args: {
       const pos = ((item.row % fineTileSize) * fineTileSize + (item.column % fineTileSize)) * WIND_FINE_CELL_BYTES;
       packed = view.getUint8(pos + 8);
       elevation = view.getFloat32(pos, true);
+      validateFineCompanionCell(view, pos, packed, elevation);
     }
     elevations[i] = elevation;
     terrainStatuses[i] = packed & STATUS_MASK;
@@ -187,11 +187,85 @@ function lruSet<K, V>(map: Map<K, V>, key: K, value: V, limit: number): V {
   return value;
 }
 
+interface InFlightTask<T> {
+  promise: Promise<T>;
+  readonly controller: AbortController;
+  waiters: number;
+}
+
+function coalescedFetch<T>(
+  inFlight: Map<string, InFlightTask<T>>,
+  key: string,
+  run: (signal: AbortSignal) => Promise<T>,
+  waiterSignal?: AbortSignal,
+): Promise<T> {
+  waiterSignal?.throwIfAborted();
+  let task = inFlight.get(key);
+  if (!task) {
+    const controller = new AbortController();
+    const created: InFlightTask<T> = {
+      promise: undefined as unknown as Promise<T>,
+      controller,
+      waiters: 0,
+    };
+    created.promise = run(controller.signal).finally(() => {
+      if (inFlight.get(key) === created) inFlight.delete(key);
+    });
+    inFlight.set(key, created);
+    task = created;
+  }
+  task.waiters += 1;
+  const activeTask = task;
+  if (!waiterSignal) {
+    return activeTask.promise.finally(() => {
+      activeTask.waiters = Math.max(0, activeTask.waiters - 1);
+    });
+  }
+  return new Promise<T>((resolve, reject) => {
+    let released = false;
+    const release = (aborted: boolean) => {
+      if (released) return;
+      released = true;
+      activeTask.waiters = Math.max(0, activeTask.waiters - 1);
+      if (aborted && activeTask.waiters === 0) {
+        activeTask.controller.abort(waiterSignal.reason);
+      }
+    };
+    const onAbort = () => {
+      release(true);
+      reject(waiterSignal.reason ?? new DOMException('Aborted', 'AbortError'));
+    };
+    if (waiterSignal.aborted) {
+      onAbort();
+      return;
+    }
+    waiterSignal.addEventListener('abort', onAbort, { once: true });
+    activeTask.promise.then(
+      value => {
+        waiterSignal.removeEventListener('abort', onAbort);
+        if (!released) {
+          release(false);
+          resolve(value);
+        }
+      },
+      error => {
+        waiterSignal.removeEventListener('abort', onAbort);
+        if (!released) {
+          release(false);
+          reject(error);
+        }
+      },
+    );
+  });
+}
+
 /** Bounded cache for static fine-surface point terrain lookups across a client lifetime. */
 export class PointTerrainCache {
   private readonly points = new Map<string, PointTerrain>();
   private readonly descriptors = new Map<string, CachedDescriptor | 'unavailable'>();
   private readonly tiles = new Map<string, DataView>();
+  private readonly inFlightDescriptors = new Map<string, InFlightTask<CachedDescriptor | 'unavailable'>>();
+  private readonly inFlightTiles = new Map<string, InFlightTask<DataView | 'unavailable'>>();
 
   async read(
     baseUrl: string,
@@ -231,25 +305,31 @@ export class PointTerrainCache {
     const root = `${baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(firstFrame)}`;
     let descriptor = this.descriptors.get(build.manifest.buildId);
     if (!descriptor) {
-      const rawDesc = await readBoundedBytes(fetchImpl, root, 'application/json', WIND_FRAME_LIMIT, signal);
-      if (rawDesc === 'unavailable') {
-        lruSet(this.descriptors, build.manifest.buildId, 'unavailable', MAX_CACHED_DESCRIPTORS);
-        return null;
-      }
-      const parsed = parseWindFrame(rawDesc);
-      if (parsed.frame !== firstFrame) throw new Error('Fine terrain frame descriptor mismatch');
-      assertWindFrameLayout(parsed, { native: native.grid, fine: fine.grid });
-      const fineTotal = windLayout(fine.grid.width, fine.grid.height, parsed.fineTileSize);
-      const mask = decodeTileMask(parsed.fineMask, fineTotal.count);
-      descriptor = lruSet(
-        this.descriptors,
+      descriptor = await coalescedFetch(
+        this.inFlightDescriptors,
         build.manifest.buildId,
-        {
-          fineTileSize: parsed.fineTileSize,
-          chunkBytes: fineTotal.chunkBytes,
-          resolveSlot: mask ? logical => mask.slot(logical) : logical => logical,
+        async sharedSignal => {
+          const rawDesc = await readBoundedBytes(fetchImpl, root, 'application/json', WIND_FRAME_LIMIT, sharedSignal);
+          if (rawDesc === 'unavailable') {
+            return lruSet(this.descriptors, build.manifest.buildId, 'unavailable', MAX_CACHED_DESCRIPTORS);
+          }
+          const parsed = parseWindFrame(rawDesc);
+          if (parsed.frame !== firstFrame) throw new Error('Fine terrain frame descriptor mismatch');
+          assertWindFrameLayout(parsed, { native: native.grid, fine: fine.grid });
+          const fineTotal = windLayout(fine.grid.width, fine.grid.height, parsed.fineTileSize);
+          const mask = decodeTileMask(parsed.fineMask, fineTotal.count);
+          return lruSet(
+            this.descriptors,
+            build.manifest.buildId,
+            {
+              fineTileSize: parsed.fineTileSize,
+              chunkBytes: fineTotal.chunkBytes,
+              resolveSlot: mask ? logical => mask.slot(logical) : logical => logical,
+            },
+            MAX_CACHED_DESCRIPTORS,
+          );
         },
-        MAX_CACHED_DESCRIPTORS,
+        signal,
       );
     }
     if (descriptor === 'unavailable') return null;
@@ -267,13 +347,20 @@ export class PointTerrainCache {
     await Promise.all(
       [...neededSlots].map(async slot => {
         const tileKey = `${build.manifest.buildId}:${slot}`;
-        let view = this.tiles.get(tileKey);
+        let view: DataView | 'unavailable' | undefined = this.tiles.get(tileKey);
         if (!view) {
-          const bytes = await readBoundedBytes(fetchImpl, `${root}/fine/${slot}`, 'application/octet-stream', chunkBytes, signal);
-          if (bytes === 'unavailable') return;
-          view = lruSet(this.tiles, tileKey, validateFineCompanionChunk(bytes, chunkBytes), MAX_CACHED_FINE_TILES);
+          view = await coalescedFetch(
+            this.inFlightTiles,
+            tileKey,
+            async sharedSignal => {
+              const bytes = await readBoundedBytes(fetchImpl, `${root}/fine/${slot}`, 'application/octet-stream', chunkBytes, sharedSignal);
+              if (bytes === 'unavailable') return 'unavailable';
+              return lruSet(this.tiles, tileKey, createFineCompanionView(bytes, chunkBytes), MAX_CACHED_FINE_TILES);
+            },
+            signal,
+          );
         }
-        tileMap.set(slot, view);
+        if (view !== 'unavailable') tileMap.set(slot, view);
       }),
     );
     signal?.throwIfAborted();

@@ -6,6 +6,7 @@
 
 import {
   LENSCHOW_F_MAX,
+  LENSCHOW_PEAK_ZETA,
   lenschowNormalizedUpdraft,
   SINK_RATE_MPS,
   usableLiftDepthM,
@@ -135,10 +136,16 @@ export function climbBandRange(index: number, system: UnitSystem): string {
 
 export interface ConvectiveColumnEnvelope {
   readonly groundM: number;
+  readonly floorM: number;
   readonly usableTopM: number;
   readonly convectiveDepthM: number;
   readonly thermalVelocityMps: number;
   readonly peakClimbMps: number;
+}
+
+export interface ConvectiveEnvelopeOptions {
+  readonly modelTerrainM?: number | null;
+  readonly isNativeFallback?: boolean;
 }
 
 /** Resolves effective usable lift top (preferring fine map lift, falling back to native lift when map lift is unavailable). */
@@ -153,6 +160,18 @@ export function effectiveHourUsableLiftTopM(
   return hour.nativeUsableLiftTopM ?? null;
 }
 
+/** True when an hour's displayed ceiling comes from native-column fallback rather than fine map lift. */
+export function isHourNativeLiftFallback(
+  hour: Pick<PublishedForecastHour, 'mapLift' | 'nativeUsableLiftTopM'>,
+  viewUsableLiftTopM?: number | null,
+): boolean {
+  const mapTop = viewUsableLiftTopM !== undefined ? viewUsableLiftTopM : hour.mapLift.mslM;
+  if (mapTop !== null) return false;
+  const status = hour.mapLift.msl?.status;
+  if (status && status !== 'unavailable') return false;
+  return hour.nativeUsableLiftTopM != null;
+}
+
 /** Resolves the Lenschow convective mixed-layer envelope for one forecast hour. */
 export function resolveConvectiveEnvelope(
   groundM: number | null,
@@ -160,30 +179,46 @@ export function resolveConvectiveEnvelope(
   thermalTopM: number | null,
   cloudCapM: number | null,
   thermalVelocityMps: number | null,
+  options?: ConvectiveEnvelopeOptions,
 ): ConvectiveColumnEnvelope | null {
+  const modelTerrainM = options?.modelTerrainM ?? null;
+  const isNativeFallback = Boolean(options?.isNativeFallback);
+  const solverGroundM = isNativeFallback ? (modelTerrainM ?? groundM) : groundM;
+  const floorM = solverGroundM === null
+    ? null
+    : isNativeFallback && groundM !== null
+      ? Math.max(solverGroundM, groundM)
+      : solverGroundM;
   if (
-    groundM === null ||
+    solverGroundM === null ||
+    floorM === null ||
     usableTopM === null ||
-    usableTopM <= groundM ||
+    usableTopM <= solverGroundM ||
+    usableTopM <= floorM ||
     thermalVelocityMps === null ||
     thermalVelocityMps <= 0
   ) {
     return null;
   }
-  const peakClimbMps = thermalVelocityMps * LENSCHOW_F_MAX - SINK_RATE_MPS;
-  if (peakClimbMps <= 0) return null;
-  const usableDepthM = usableTopM - groundM;
+  if (thermalVelocityMps * LENSCHOW_F_MAX - SINK_RATE_MPS <= 0) return null;
+  const usableDepthM = usableTopM - solverGroundM;
   const cloudCapped = cloudCapM !== null && usableTopM >= cloudCapM - 2;
   let convectiveDepthM: number;
   if (!cloudCapped) {
     const unitCrit = usableLiftDepthM(1, thermalVelocityMps);
     convectiveDepthM = unitCrit !== null && unitCrit > 0 ? usableDepthM / unitCrit : usableDepthM;
   } else {
-    const nativeDepthM = thermalTopM !== null && thermalTopM > groundM ? thermalTopM - groundM : 0;
+    const nativeRefGroundM = modelTerrainM ?? solverGroundM;
+    const nativeDepthM = thermalTopM !== null && thermalTopM > nativeRefGroundM ? thermalTopM - nativeRefGroundM : 0;
     convectiveDepthM = Math.max(usableDepthM, nativeDepthM);
   }
   if (!(convectiveDepthM > 0)) return null;
-  return { groundM, usableTopM, convectiveDepthM, thermalVelocityMps, peakClimbMps };
+  const zetaMin = clamp((floorM - solverGroundM) / convectiveDepthM, 0, 1);
+  const zetaMax = clamp((usableTopM - solverGroundM) / convectiveDepthM, zetaMin, 1);
+  const peakZeta = clamp(LENSCHOW_PEAK_ZETA, zetaMin, zetaMax);
+  const peakClimbMps = thermalVelocityMps * lenschowNormalizedUpdraft(peakZeta) - SINK_RATE_MPS;
+  if (peakClimbMps <= 0) return null;
+  return { groundM: solverGroundM, floorM, usableTopM, convectiveDepthM, thermalVelocityMps, peakClimbMps };
 }
 
 /** Evaluates net paraglider climb rate (m/s) at `zM` MSL from the Lenschow updraft profile. */
@@ -194,10 +229,11 @@ export function estimateThermalClimbAtHeight(
   thermalTopM: number | null,
   cloudCapM: number | null,
   thermalVelocityMps: number | null,
+  options?: ConvectiveEnvelopeOptions,
 ): { estimatedClimbMps: number | null; peakClimbMps: number | null } {
-  const env = resolveConvectiveEnvelope(groundM, usableTopM, thermalTopM, cloudCapM, thermalVelocityMps);
+  const env = resolveConvectiveEnvelope(groundM, usableTopM, thermalTopM, cloudCapM, thermalVelocityMps, options);
   if (!env) return { estimatedClimbMps: null, peakClimbMps: null };
-  if (zM < env.groundM || zM > env.usableTopM + 0.5) {
+  if (zM < env.floorM || zM > env.usableTopM + 0.5) {
     return { estimatedClimbMps: 0, peakClimbMps: env.peakClimbMps };
   }
   const zeta = clamp((zM - env.groundM) / env.convectiveDepthM, 0, 1);
@@ -548,6 +584,10 @@ export function buildClimbDomeFieldPaths(args: {
       src.thermalTopM ?? null,
       src.effectiveCloudLimitM ?? null,
       finiteScalar(src.thermalVelocityMps),
+      {
+        modelTerrainM: src.modelTerrainM,
+        isNativeFallback: isHourNativeLiftFallback(src, vh.usableLiftTopM),
+      },
     );
   });
 
@@ -569,11 +609,10 @@ export function buildClimbDomeFieldPaths(args: {
   const plotHeight = plotBottom - plotTop;
   if (plotHeight <= 0) return [];
 
-  const rows = Math.max(4, Math.ceil(plotHeight / 2.5));
-  const zAtRow = Array.from({ length: rows + 1 }, (_, r) =>
-    yToHeight(scale, plotTop + (r / rows) * plotHeight),
-  );
-  const dzPerRow = Math.max(1, Math.abs((zAtRow[0] ?? 1) - (zAtRow[1] ?? 0)));
+  const rows = Math.max(4, Math.ceil(plotHeight / 3.5));
+  const zAtRow = new Float64Array(rows + 1);
+  for (let r = 0; r <= rows; r++) zAtRow[r] = yToHeight(scale, plotTop + (r / rows) * plotHeight);
+  const dzPerRow = Math.max(1, Math.abs(zAtRow[0]! - (zAtRow[1] ?? 0)));
   const thresholds = WINDGRAM_CLIMB_BANDS.map(b => b.minMps);
   const classNames = WINDGRAM_CLIMB_BANDS.map(b => b.className);
   const pathsByClass = new Map<string, string[]>();
@@ -583,17 +622,17 @@ export function buildClimbDomeFieldPaths(args: {
     const rampRight = endIdx < n - 1;
     const tMin = startIdx - (rampLeft ? 0.46 : 0.5);
     const tMax = endIdx + (rampRight ? 0.46 : 0.5);
-    const subCols = Math.max(8, Math.ceil((tMax - tMin) * 10));
-
-    const xs: number[] = [];
-    const colValues: number[][] = Array.from({ length: rows + 1 }, () => []);
+    const subCols = Math.max(6, Math.ceil((tMax - tMin) * 7));
+    const stride = subCols + 1;
+    const xs = new Float64Array(stride);
+    const gridValues = new Float32Array((rows + 1) * stride);
 
     for (let c = 0; c <= subCols; c++) {
       const t = tMin + ((tMax - tMin) * c) / subCols;
-      const x = clamp(hourX(viewHours, t, columnWidth), leftBound, rightBound);
-      xs.push(x);
+      xs[c] = clamp(hourX(viewHours, t, columnWidth), leftBound, rightBound);
 
-      let groundM: number;
+      let solverGroundM: number;
+      let floorM: number;
       let usableTopM: number;
       let convectiveDepthM: number;
       let wStar: number;
@@ -603,24 +642,26 @@ export function buildClimbDomeFieldPaths(args: {
         if (rampLeft) {
           const frac = clamp((t - tMin) / Math.max(1e-6, startIdx - tMin), 0, 1);
           const eased = Math.sqrt(frac);
-          groundM = env.groundM;
-          usableTopM = env.groundM + (env.usableTopM - env.groundM) * eased;
-          convectiveDepthM = Math.max(1, env.convectiveDepthM * eased);
+          solverGroundM = env.groundM;
+          floorM = env.floorM;
+          usableTopM = env.floorM + (env.usableTopM - env.floorM) * eased;
+          convectiveDepthM = Math.max(1, env.convectiveDepthM * (env.floorM === env.groundM ? eased : 0.6 + 0.4 * eased));
           wStar = env.thermalVelocityMps * (0.75 + 0.25 * frac);
         } else {
-          ({ groundM, usableTopM, convectiveDepthM, thermalVelocityMps: wStar } = env);
+          ({ groundM: solverGroundM, floorM, usableTopM, convectiveDepthM, thermalVelocityMps: wStar } = env);
         }
       } else if (t > endIdx) {
         const env = envelopes[endIdx]!;
         if (rampRight) {
           const frac = clamp((tMax - t) / Math.max(1e-6, tMax - endIdx), 0, 1);
           const eased = Math.sqrt(frac);
-          groundM = env.groundM;
-          usableTopM = env.groundM + (env.usableTopM - env.groundM) * eased;
-          convectiveDepthM = Math.max(1, env.convectiveDepthM * eased);
+          solverGroundM = env.groundM;
+          floorM = env.floorM;
+          usableTopM = env.floorM + (env.usableTopM - env.floorM) * eased;
+          convectiveDepthM = Math.max(1, env.convectiveDepthM * (env.floorM === env.groundM ? eased : 0.6 + 0.4 * eased));
           wStar = env.thermalVelocityMps * (0.75 + 0.25 * frac);
         } else {
-          ({ groundM, usableTopM, convectiveDepthM, thermalVelocityMps: wStar } = env);
+          ({ groundM: solverGroundM, floorM, usableTopM, convectiveDepthM, thermalVelocityMps: wStar } = env);
         }
       } else {
         const lo = Math.floor(t);
@@ -628,29 +669,33 @@ export function buildClimbDomeFieldPaths(args: {
         const f = t - lo;
         const a = envelopes[lo]!;
         const b = envelopes[hi]!;
-        groundM = a.groundM + (b.groundM - a.groundM) * f;
+        solverGroundM = a.groundM + (b.groundM - a.groundM) * f;
+        floorM = a.floorM + (b.floorM - a.floorM) * f;
         usableTopM = a.usableTopM + (b.usableTopM - a.usableTopM) * f;
         convectiveDepthM = a.convectiveDepthM + (b.convectiveDepthM - a.convectiveDepthM) * f;
         wStar = a.thermalVelocityMps + (b.thermalVelocityMps - a.thermalVelocityMps) * f;
       }
 
+      const invDepth = 1 / Math.max(1, convectiveDepthM);
       for (let r = 0; r <= rows; r++) {
         const z = zAtRow[r]!;
+        let v: number;
         if (z > usableTopM) {
-          colValues[r]!.push(-0.04 * ((z - usableTopM) / dzPerRow));
-        } else if (z < groundM) {
-          colValues[r]!.push(-0.04 * ((groundM - z) / dzPerRow));
+          v = -0.04 * ((z - usableTopM) / dzPerRow);
+        } else if (z < floorM) {
+          v = -0.04 * ((floorM - z) / dzPerRow);
         } else {
-          const zeta = clamp((z - groundM) / Math.max(1, convectiveDepthM), 0, 1);
+          const zeta = clamp((z - solverGroundM) * invDepth, 0, 1);
           const netClimb = Math.max(0, wStar * lenschowNormalizedUpdraft(zeta) - SINK_RATE_MPS);
-          const edgeRamp = 0.04 * Math.min(1, (usableTopM - z) / dzPerRow, (z - groundM) / dzPerRow);
-          colValues[r]!.push(Math.max(edgeRamp, netClimb));
+          const edgeRamp = 0.04 * Math.min(1, (usableTopM - z) / dzPerRow, (z - floorM) / dzPerRow);
+          v = Math.max(edgeRamp, netClimb);
         }
+        gridValues[r * stride + c] = v;
       }
     }
 
     const bandPaths = contourGridIsobands({
-      values: colValues,
+      values: gridValues,
       xs,
       rows,
       cols: subCols,
@@ -673,8 +718,8 @@ export function buildClimbDomeFieldPaths(args: {
 }
 
 function contourGridIsobands(args: {
-  values: readonly (readonly number[])[];
-  xs: readonly number[];
+  values: Float32Array;
+  xs: ArrayLike<number>;
   rows: number;
   cols: number;
   plotTop: number;
@@ -683,107 +728,99 @@ function contourGridIsobands(args: {
   classNames: readonly string[];
 }): Record<string, string> {
   const { values, xs, rows, cols, plotTop, plotBottom, thresholds, classNames } = args;
+  const stride = cols + 1;
+  const edgeStride = cols + 3;
+  const maxEdges = (rows + 3) * edgeStride * 2;
+  const nextSeg = new Int32Array(maxEdges);
   const plotHeight = plotBottom - plotTop;
   const left = xs[0]!;
   const right = xs[cols]!;
   const xOf = (c: number) => {
     if (c <= 0) return left;
     if (c >= cols) return right;
-    const lo = Math.floor(c);
-    const hi = Math.min(cols, lo + 1);
+    const lo = c | 0;
+    const hi = lo + 1 <= cols ? lo + 1 : cols;
     return xs[lo]! + (xs[hi]! - xs[lo]!) * (c - lo);
   };
   const yOf = (r: number) => plotTop + (clamp(r, 0, rows) / rows) * plotHeight;
-  const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
-  const shortNum = (v: number) => Number(v.toFixed(1));
+  const clamp01 = (v: number) => (v <= 0 ? 0 : v >= 1 ? 1 : v);
+  const shortNum = (v: number) => Math.round(v * 10) / 10;
+  const hEdge = (r: number, c: number) => ((r + 1) * edgeStride + (c + 1)) * 2;
+  const vEdge = (r: number, c: number) => ((r + 1) * edgeStride + (c + 1)) * 2 + 1;
 
-  const thresholdRings = (t: number): [number, number][][] => {
-    type Seg = { from: [number, number]; to: [number, number]; used: boolean };
-    const allSegments: Seg[] = [];
-    const byStart = new Map<string, Seg[]>();
-    const ptKey = (p: [number, number]) => `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
-    const addSeg = (from: [number, number], to: [number, number]) => {
-      const fk = ptKey(from);
-      if (fk === ptKey(to)) return;
-      const seg: Seg = { from, to, used: false };
-      allSegments.push(seg);
-      const q = byStart.get(fk);
-      if (q) q.push(seg);
-      else byStart.set(fk, [seg]);
+  const thresholdRings = (t: number): Float64Array[] => {
+    nextSeg.fill(-1);
+    const fromEdges: number[] = [];
+    const toEdges: number[] = [];
+    const segCoords: number[] = [];
+    const used: number[] = [];
+    const addSeg = (fk: number, fx: number, fy: number, tk: number, tx: number, ty: number) => {
+      const idx = fromEdges.length;
+      fromEdges.push(fk);
+      toEdges.push(tk);
+      segCoords.push(fx, fy, tx, ty);
+      used.push(0);
+      nextSeg[fk] = idx;
     };
     const valAt = (r: number, c: number) =>
-      r >= 0 && r <= rows && c >= 0 && c <= cols ? values[r]![c]! : -1;
-    const insideAt = (r: number, c: number) => valAt(r, c) >= t;
+      r >= 0 && r <= rows && c >= 0 && c <= cols ? values[r * stride + c]! : -1;
     const frac = (a: number, b: number) => (a === b ? 0.5 : clamp01((t - a) / (b - a)));
 
     for (let r = -1; r <= rows; r++) {
       for (let c = -1; c <= cols; c++) {
-        const tl = insideAt(r, c);
-        const tr = insideAt(r, c + 1);
-        const br = insideAt(r + 1, c + 1);
-        const bl = insideAt(r + 1, c);
-        const idx = (tl ? 8 : 0) | (tr ? 4 : 0) | (br ? 2 : 0) | (bl ? 1 : 0);
-        if (idx === 0 || idx === 15) continue;
         const vTL = valAt(r, c);
         const vTR = valAt(r, c + 1);
         const vBR = valAt(r + 1, c + 1);
         const vBL = valAt(r + 1, c);
-        const topPt: [number, number] = [xOf(c + frac(vTL, vTR)), yOf(r)];
-        const botPt: [number, number] = [xOf(c + frac(vBL, vBR)), yOf(r + 1)];
-        const leftPt: [number, number] = [xOf(c), yOf(r + frac(vTL, vBL))];
-        const rightPt: [number, number] = [xOf(c + 1), yOf(r + frac(vTR, vBR))];
-        const centreIn = (vTL + vTR + vBR + vBL) / 4 >= t;
+        const idx = (vTL >= t ? 8 : 0) | (vTR >= t ? 4 : 0) | (vBR >= t ? 2 : 0) | (vBL >= t ? 1 : 0);
+        if (idx === 0 || idx === 15) continue;
+        const tk = hEdge(r, c), tx = xOf(c + frac(vTL, vTR)), ty = yOf(r);
+        const bk = hEdge(r + 1, c), bx = xOf(c + frac(vBL, vBR)), by = yOf(r + 1);
+        const lk = vEdge(r, c), lx = xOf(c), ly = yOf(r + frac(vTL, vBL));
+        const rk = vEdge(r, c + 1), rx = xOf(c + 1), ry = yOf(r + frac(vTR, vBR));
+        const centreIn = (vTL + vTR + vBR + vBL) * 0.25 >= t;
         switch (idx) {
-          case 1: addSeg(leftPt, botPt); break;
-          case 2: addSeg(botPt, rightPt); break;
-          case 3: addSeg(leftPt, rightPt); break;
-          case 4: addSeg(rightPt, topPt); break;
-          case 6: addSeg(botPt, topPt); break;
-          case 7: addSeg(leftPt, topPt); break;
-          case 8: addSeg(topPt, leftPt); break;
-          case 9: addSeg(topPt, botPt); break;
-          case 11: addSeg(topPt, rightPt); break;
-          case 12: addSeg(rightPt, leftPt); break;
-          case 13: addSeg(rightPt, botPt); break;
-          case 14: addSeg(botPt, leftPt); break;
+          case 1: addSeg(lk, lx, ly, bk, bx, by); break;
+          case 2: addSeg(bk, bx, by, rk, rx, ry); break;
+          case 3: addSeg(lk, lx, ly, rk, rx, ry); break;
+          case 4: addSeg(rk, rx, ry, tk, tx, ty); break;
+          case 6: addSeg(bk, bx, by, tk, tx, ty); break;
+          case 7: addSeg(lk, lx, ly, tk, tx, ty); break;
+          case 8: addSeg(tk, tx, ty, lk, lx, ly); break;
+          case 9: addSeg(tk, tx, ty, bk, bx, by); break;
+          case 11: addSeg(tk, tx, ty, rk, rx, ry); break;
+          case 12: addSeg(rk, rx, ry, lk, lx, ly); break;
+          case 13: addSeg(rk, rx, ry, bk, bx, by); break;
+          case 14: addSeg(bk, bx, by, lk, lx, ly); break;
           case 5:
-            if (centreIn) { addSeg(leftPt, topPt); addSeg(rightPt, botPt); }
-            else { addSeg(leftPt, botPt); addSeg(rightPt, topPt); }
+            if (centreIn) { addSeg(lk, lx, ly, tk, tx, ty); addSeg(rk, rx, ry, bk, bx, by); }
+            else { addSeg(lk, lx, ly, bk, bx, by); addSeg(rk, rx, ry, tk, tx, ty); }
             break;
           case 10:
-            if (centreIn) { addSeg(topPt, rightPt); addSeg(botPt, leftPt); }
-            else { addSeg(topPt, leftPt); addSeg(botPt, rightPt); }
+            if (centreIn) { addSeg(tk, tx, ty, rk, rx, ry); addSeg(bk, bx, by, lk, lx, ly); }
+            else { addSeg(tk, tx, ty, lk, lx, ly); addSeg(bk, bx, by, rk, rx, ry); }
             break;
         }
       }
     }
 
-    const takeFrom = (k: string) => {
-      const q = byStart.get(k);
-      if (!q) return null;
-      while (q.length) {
-        const cand = q[q.length - 1]!;
-        if (!cand.used) return cand;
-        q.pop();
+    const out: Float64Array[] = [];
+    const segCount = fromEdges.length;
+    for (let s = 0; s < segCount; s++) {
+      if (used[s]) continue;
+      const coords: number[] = [segCoords[s * 4]!, segCoords[s * 4 + 1]!];
+      let cur = s;
+      while (cur >= 0 && !used[cur]) {
+        used[cur] = 1;
+        coords.push(segCoords[cur * 4 + 2]!, segCoords[cur * 4 + 3]!);
+        cur = nextSeg[toEdges[cur]!]!;
       }
-      return null;
-    };
-    const out: [number, number][][] = [];
-    for (const first of allSegments) {
-      if (first.used) continue;
-      const ring: [number, number][] = [first.from];
-      let cur: Seg | null = first;
-      while (cur) {
-        cur.used = true;
-        ring.push(cur.to);
-        cur = takeFrom(ptKey(cur.to));
-      }
-      if (ring.length >= 4) out.push(ring);
+      if (coords.length >= 8) out.push(Float64Array.from(coords));
     }
     return out;
   };
 
-  const ringCache = new Map<number, [number, number][][]>();
+  const ringCache = new Map<number, Float64Array[]>();
   const ringsAt = (t: number) => {
     let cached = ringCache.get(t);
     if (!cached) {
@@ -795,27 +832,34 @@ function contourGridIsobands(args: {
 
   const result: Record<string, string> = {};
   for (let i = 0; i < classNames.length; i++) {
-    const sets: [number, number][][][] = [ringsAt(thresholds[i]!)];
+    const sets: Float64Array[][] = [ringsAt(thresholds[i]!)];
     if (i + 1 < thresholds.length) sets.push(ringsAt(thresholds[i + 1]!));
     const parts: string[] = [];
     for (const set of sets) {
       for (const ring of set) {
-        const rounded: [number, number][] = [];
-        for (const pt of ring) {
-          const x = shortNum(pt[0]);
-          const y = shortNum(pt[1]);
-          const last = rounded[rounded.length - 1];
-          if (last && last[0] === x && last[1] === y) continue;
-          const prev = rounded[rounded.length - 2];
-          if (last && prev && Math.abs((last[0] - prev[0]) * (y - prev[1]) - (last[1] - prev[1]) * (x - prev[0])) < 0.3) {
-            last[0] = x;
-            last[1] = y;
-            continue;
+        const xsOut: number[] = [];
+        const ysOut: number[] = [];
+        for (let k = 0; k < ring.length; k += 2) {
+          const x = shortNum(ring[k]!);
+          const y = shortNum(ring[k + 1]!);
+          const len = xsOut.length;
+          if (len > 0 && xsOut[len - 1] === x && ysOut[len - 1] === y) continue;
+          if (len >= 2) {
+            const px = xsOut[len - 2]!, py = ysOut[len - 2]!;
+            const lx = xsOut[len - 1]!, ly = ysOut[len - 1]!;
+            if (Math.abs((lx - px) * (y - py) - (ly - py) * (x - px)) < 0.3) {
+              xsOut[len - 1] = x;
+              ysOut[len - 1] = y;
+              continue;
+            }
           }
-          rounded.push([x, y]);
+          xsOut.push(x);
+          ysOut.push(y);
         }
-        if (rounded.length >= 3) {
-          parts.push(rounded.map(([x, y], idx) => `${idx === 0 ? 'M' : 'L'}${x} ${y}`).join('') + 'Z');
+        if (xsOut.length >= 3) {
+          let d = `M${xsOut[0]} ${ysOut[0]}`;
+          for (let k = 1; k < xsOut.length; k++) d += `L${xsOut[k]} ${ysOut[k]}`;
+          parts.push(`${d}Z`);
         }
       }
     }
@@ -902,14 +946,16 @@ export function buildInversionAndCloudDeckPaths(args: {
   const waveMap: Record<string, string> = (() => {
     if (!hasWaveAscent || plotBottom <= plotTop) return {};
     const plotH = plotBottom - plotTop;
-    const rows = Math.max(6, Math.ceil(plotH / 3.5));
-    const zAtRow = Array.from({ length: rows + 1 }, (_, r) => yToHeight(scale, plotTop + (r / rows) * plotH));
+    const rows = Math.max(6, Math.ceil(plotH / 4));
+    const zAtRow = new Float64Array(rows + 1);
+    for (let r = 0; r <= rows; r++) zAtRow[r] = yToHeight(scale, plotTop + (r / rows) * plotH);
     const n = hours.length;
     const lBound = leftBound ?? hourX(hours, -0.5, columnWidth);
     const rBound = rightBound ?? hourX(hours, n - 0.5, columnWidth);
-    const subCols = Math.max(8, n * 8);
-    const xs: number[] = [];
-    const colValues: number[][] = Array.from({ length: rows + 1 }, () => []);
+    const subCols = Math.max(6, n * 6);
+    const stride = subCols + 1;
+    const xs = new Float64Array(stride);
+    const gridValues = new Float32Array((rows + 1) * stride);
     const sampleHourW = (idx: number, z: number) => {
       const prof = wProfilesByHour[clamp(idx, 0, n - 1)];
       if (!prof) return 0;
@@ -918,7 +964,7 @@ export function buildInversionAndCloudDeckPaths(args: {
     };
     for (let c = 0; c <= subCols; c++) {
       const t = -0.5 + (n * c) / subCols;
-      xs.push(clamp(hourX(hours, t, columnWidth), lBound, rBound));
+      xs[c] = clamp(hourX(hours, t, columnWidth), lBound, rBound);
       for (let r = 0; r <= rows; r++) {
         const z = zAtRow[r]!;
         let wVal: number;
@@ -934,11 +980,11 @@ export function buildInversionAndCloudDeckPaths(args: {
           wVal = sampleHourW(lo, z) * (1 - f) + sampleHourW(lo + 1, z) * f;
         }
         const rowEdge = Math.min(1, r / 1.5, (rows - r) / 1.5);
-        colValues[r]!.push(wVal * rowEdge);
+        gridValues[r * stride + c] = wVal * rowEdge;
       }
     }
     return contourGridIsobands({
-      values: colValues,
+      values: gridValues,
       xs,
       rows,
       cols: subCols,

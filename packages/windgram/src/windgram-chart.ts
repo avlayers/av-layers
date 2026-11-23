@@ -443,8 +443,21 @@ export function renderWindgramSvg(
       'text-anchor="end" class="wg-axis-unit"',
     ),
   );
+  const fineGroundM = view.sourceHours.reduce<number | null>(
+    (found, h) => found ?? h.fineTerrainM ?? h.mapLift.terrainM ?? null,
+    null,
+  );
+  const modelGroundM = view.sourceHours.reduce<number | null>(
+    (found, h) => found ?? h.modelTerrainM ?? null,
+    null,
+  );
+  const groundPrefix = fineGroundM !== null
+    ? `Ground ${formatQuantity(fineGroundM, 'elevation', undefined, system)} MSL${view.width >= 380 && modelGroundM !== null && Math.abs(fineGroundM - modelGroundM) >= 15 ? ` (model ${formatQuantity(modelGroundM, 'elevation', undefined, system)})` : ''} · `
+    : modelGroundM !== null
+      ? `Model ground ${formatQuantity(modelGroundM, 'elevation', undefined, system)} MSL · `
+      : '';
   parts.push(text(view.width / 2, view.bottom + 41,
-    `Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}${view.isUtcFallback ? ' · time UTC (fallback)' : ''}`,
+    `${groundPrefix}Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}${view.isUtcFallback ? ' · time UTC (fallback)' : ''}`,
     'text-anchor="middle" class="wg-axis-unit wg-footer"'));
   parts.push(
     '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true">' +

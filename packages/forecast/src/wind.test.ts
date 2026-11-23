@@ -78,8 +78,8 @@ describe('wind columns', () => {
     if (field === 'surface-v') frame.auxSurface!.v10mMps!.missing[0] = 1;
     if (field === 'terrain') frame.missing.terrain[0] = 1;
     if (field === 'ground-pressure') frame.missing.surfacePressure[0] = 1;
-    if (field === 'first-u') frame.auxLevels!.uWindMps![0].missing[0] = 1;
-    if (field === 'first-v') frame.auxLevels!.vWindMps![0].missing[0] = 1;
+    if (field === 'first-u') frame.auxLevels!.uWindMps![0]!.missing[0] = 1;
+    if (field === 'first-v') frame.auxLevels!.vWindMps![0]!.missing[0] = 1;
     if (field === 'first-height') frame.missing.hgt[0][0] = 1;
     if (field === 'first-pressure') frame.missing.pressure[0][0] = 1;
     const normalized = normalizedWindColumn(frame, 0);
@@ -89,7 +89,7 @@ describe('wind columns', () => {
 
   it('preserves missing interior intervals and native levels below 10 m', () => {
     const frame = nearSurfaceFrame();
-    frame.auxLevels!.uWindMps![1].missing[0] = 1;
+    frame.auxLevels!.uWindMps![1]!.missing[0] = 1;
     const normalized = normalizedWindColumn(frame, 0);
     expect(normalized.levels[0]?.height).toBe(1010);
     expect(normalized.levels[2]).toBeNull();

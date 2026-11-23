@@ -462,18 +462,19 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           surfaceWindKt !== null &&
           reading.gustKt - surfaceWindKt >= gustSpreadGateKt;
         const hasNearSurfaceGust = nearSurface && hasSurfaceGustExcess;
-        const gustRounded = reading.gustKt !== null && Number.isFinite(reading.gustKt)
-          ? Math.round(convertQuantity(knotsToMps(reading.gustKt), 'wind', unitSystem) ?? 0)
+        const gustKt = reading.gustKt !== null && Number.isFinite(reading.gustKt) ? reading.gustKt : null;
+        const gustRounded = gustKt !== null
+          ? Math.round(convertQuantity(knotsToMps(gustKt), 'wind', unitSystem) ?? 0)
           : 0;
         const gustTag = hasNearSurfaceGust
           ? ` · G${gustRounded}`
-          : (!nearSurface && hasSurfaceGustExcess && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt)
+          : (!nearSurface && hasSurfaceGustExcess && gustKt !== null && gustKt >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt)
             ? ` · Sfc G${gustRounded}`
             : '';
         const effectiveAlert: ParagliderWindLevel =
-          hasNearSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.yellowMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate' || pgWind === 'caution')
+          hasNearSurfaceGust && gustKt !== null && gustKt >= WIND_SPEED_KNOT_THRESHOLDS.yellowMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate' || pgWind === 'caution')
             ? 'danger'
-            : hasNearSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate')
+            : hasNearSurfaceGust && gustKt !== null && gustKt >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate')
               ? 'caution'
               : pgWind;
         const borderMod = effectiveAlert === 'pennant'

@@ -137,8 +137,10 @@ export function renderSmoothCloudRgba(
       const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
       const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
       const highOnly = Math.max(0, tot - lo);
-      // Soaring-weighted optical depth: boundary-layer clouds carry full weight, high cirrus is airy (0.42x)
-      const opticalCover = Math.min(1, lo + highOnly * 0.42);
+      // Soaring-weighted optical depth for BL modes; satellite-ir weights upper cold decks directly.
+      const opticalCover = style === 'satellite-ir'
+        ? Math.min(1, lo * 0.88 + highOnly * 0.92)
+        : Math.min(1, lo + highOnly * 0.42);
 
       if (opticalCover <= 0.12 && tot <= 0.18) {
         outData[off + 3] = 0;
@@ -171,12 +173,17 @@ export function renderSmoothCloudRgba(
       }
 
       if (style === 'satellite-ir') {
-        const lum = Math.min(255, Math.max(152, Math.round(186 + 46 * billow + 20 * sunRelief)));
-        outData[off] = lum - 6;
+        // Cold upper cloud tops (high cirrus / anvil) render bright icy-white; warm shallow low stratus renders mid-slate gray.
+        const upperShare = tot > 0.05 ? Math.min(1, highOnly / Math.max(0.20, tot * 0.75)) : 0;
+        const warmBase = 136 + 24 * billow + 12 * sunRelief;
+        const coldTop = 224 + 20 * billow + 10 * sunRelief;
+        const lum = Math.min(252, Math.max(124, Math.round(warmBase * (1 - upperShare) + coldTop * upperShare)));
+        const coolTint = Math.round(3 + 3 * upperShare);
+        outData[off] = Math.max(0, lum - coolTint);
         outData[off + 1] = lum;
-        outData[off + 2] = Math.min(255, lum + 10);
-        const alphaCap = lo < 0.22 ? 64 : 136;
-        outData[off + 3] = Math.min(alphaCap, Math.round(Math.pow(puffMask, 0.92) * 134));
+        outData[off + 2] = Math.min(255, lum + coolTint + 1);
+        const alphaCap = lo < 0.22 ? 80 : 136;
+        outData[off + 3] = Math.min(alphaCap, Math.round(Math.pow(puffMask, 0.88) * (lo < 0.22 ? 86 : 134)));
         continue;
       }
 
@@ -247,7 +254,9 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
       const u = x / (CONTOUR_GRID_W - 1);
       const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
       const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
-      const c = Math.min(1, Math.max(lo, lo + Math.max(0, tot - lo) * 0.55));
+      const c = style === 'satellite-ir'
+        ? Math.min(1, Math.max(lo, tot * 0.88))
+        : Math.min(1, Math.max(lo, lo + Math.max(0, tot - lo) * 0.55));
       grid[y * CONTOUR_GRID_W + x] = c;
       if (c > maxCover) maxCover = c;
     }

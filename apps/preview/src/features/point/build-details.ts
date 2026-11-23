@@ -2,7 +2,12 @@ import { browserTimeZone, buildDiagnosticRows, formatPlaceTime, formatViewerTime
 import { formatSitePlaceTime } from '@av/client/timezone';
 
 /** Build diagnostics are rendered on first open, outside the startup chunk. */
-export function renderBuildDetails(container: HTMLElement, build: PinnedBuild, location: GeoPoint | number | undefined): void {
+export function renderBuildDetails(
+  container: HTMLElement,
+  build: PinnedBuild,
+  location: GeoPoint | number | undefined,
+  explicitTimeZone?: string,
+): void {
   const format = (label: string, value: string): string => {
     if (label === 'Cycle' || label === 'Expires') {
       const ms = Date.parse(value);
@@ -13,7 +18,7 @@ export function renderBuildDetails(container: HTMLElement, build: PinnedBuild, l
       const a = Date.parse(start ?? ''), b = Date.parse(end ?? '');
       if (!Number.isFinite(a) || !Number.isFinite(b) || location === undefined) return value;
       if (typeof location === 'object') {
-        return `${formatSitePlaceTime(a, location, 'stamp')} → ${formatSitePlaceTime(b, location, 'stamp')}`;
+        return `${formatSitePlaceTime(a, location, 'stamp', explicitTimeZone)} → ${formatSitePlaceTime(b, location, 'stamp', explicitTimeZone)}`;
       }
       if (!Number.isFinite(location)) return value;
       const offset = longitudeOffsetHours(location) * 60;

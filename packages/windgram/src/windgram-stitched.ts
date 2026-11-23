@@ -13,6 +13,7 @@ import {
   buildSkyCoverSpans,
   DEFAULT_WINDGRAM_FIELD_MODE,
   stabilityPixelNodesForHour,
+  type HourCloudAnalysis,
   type SkyCoverSpan,
   type WindgramFieldMode,
 } from './windgram-atmosphere.ts';
@@ -44,6 +45,8 @@ import {
   resolveSceneTimeZoneMeta,
   toWindgramHour,
   windgramSeriesDefinitions,
+  type WindgramBarb,
+  type WindgramCloud,
   type WindgramDayPanel,
   type WindgramHour,
   type WindgramView,
@@ -54,6 +57,30 @@ export interface StitchedWindgramOptions extends WindgramOptions {
   readonly selectedDateKey?: string | null;
   readonly bestDateKey?: string | null;
 }
+
+interface CachedStitchedPanel {
+  readonly hours: readonly ProfileHour[];
+  readonly colW: number;
+  readonly sampling: readonly HourSampling[];
+  readonly cloudAnalyses: readonly HourCloudAnalysis[];
+  readonly localViewHours: readonly WindgramHour[];
+  readonly rawTicks: readonly { validAt: string; label: string; x: number; localHourIndex: number | null }[];
+  readonly localVisibleTickOffsets: readonly number[];
+  readonly uncoveredSpans: readonly { readonly x: number; readonly width: number }[];
+  readonly fields: readonly { className: string; path: string }[];
+  readonly cloudDeckFields: readonly { className: string; path: string }[];
+  readonly skyCoverSpans: readonly SkyCoverSpan[];
+  readonly missingMasks: readonly string[];
+  readonly contours: WindgramView['contours'];
+  readonly localBarbs: readonly WindgramBarb[];
+  readonly localClouds: readonly WindgramCloud[];
+  readonly cloudBands: WindgramView['cloudBands'];
+  readonly localFreezing: readonly { x: number; y: number; hourIndex: number }[];
+  readonly seriesSubPaths: ReadonlyMap<string, string>;
+}
+
+const MAX_STITCHED_PANEL_CACHE = 16;
+const stitchedPanelCache = new Map<string, CachedStitchedPanel>();
 
 export function buildStitchedWindgramView(
   profile: SiteForecast,
@@ -155,100 +182,265 @@ export function buildStitchedWindgramView(
   let sumColumnWidths = 0;
   let columnWidthCount = 0;
   const deferredMissingMasks: string[] = [];
+  const anchorSig = anchors.map(a => `${a.heightM.toFixed(1)}:${a.y.toFixed(1)}`).join(',');
 
   slices.forEach((slice, panelIdx) => {
     const panelLeft = left + panelIdx * (panelWidth + seamWidth);
     const panelRight = panelLeft + panelWidth;
-    const subPresentation = {
-      ...presentation,
-      left: panelLeft,
-      right: 0,
-      plotWidth: panelWidth,
-      width: panelLeft + panelWidth,
-    };
-    const subTime = buildWindgramTimeLayout(profile, slice.selection, subPresentation);
-    const colW = subTime.columnWidth;
-    if (Number.isFinite(colW) && colW > 0) {
-      sumColumnWidths += colW;
+    const panelHours = slice.selection.hours;
+    const panelKey = `${profile.model}|${profile.site.latitude}|${profile.site.longitude}|${timeZone}|${slice.dateKey}|${system}|${fieldMode}|${panelLeft}|${panelWidth}|${top}|${bottom}|${anchorSig}`;
+
+    let built = stitchedPanelCache.get(panelKey);
+    if (!built || built.hours.length !== panelHours.length || built.hours.some((h, i) => h !== panelHours[i])) {
+      const subPresentation = {
+        ...presentation,
+        left: panelLeft,
+        right: 0,
+        plotWidth: panelWidth,
+        width: panelLeft + panelWidth,
+      };
+      const subTime = buildWindgramTimeLayout(profile, slice.selection, subPresentation);
+      const colW = subTime.columnWidth;
+      const panelSampling = panelHours.map(hourSampling);
+      const panelCloudAnalyses = panelHours.map((h, idx) => analyzeHourCloudLayers(h, panelSampling[idx], topM));
+      const localViewHours: WindgramHour[] = panelHours.map((h) =>
+        toWindgramHour(h, Math.min(panelRight - 4, Math.max(panelLeft + 4, subTime.xAt(Date.parse(h.validAt)))), labelTime),
+      );
+
+      const rawTicks = [
+        ...subTime.emptyTimes.map((t) => ({
+          validAt: new Date(t).toISOString(),
+          label: formatWindgramHourLabel(t, labelTime),
+          x: subTime.xAt(t),
+          localHourIndex: null as number | null,
+        })),
+        ...localViewHours.map(({ validAt, label, x }, localIdx) => ({
+          validAt,
+          label,
+          x,
+          localHourIndex: localIdx as number | null,
+        })),
+      ]
+        .filter((tick) => tick.x >= panelLeft && tick.x <= panelRight)
+        .sort((a, b) => a.x - b.x);
+
+      const localVisibleTickOffsets = (() => {
+        if (rawTicks.length <= 2) return rawTicks.map((_, idx) => idx);
+        if (panelWidth < 135) {
+          const targets = panelWidth < 82
+            ? [panelLeft + panelWidth * 0.28, panelLeft + panelWidth * 0.72]
+            : [panelLeft + panelWidth * 0.18, panelLeft + panelWidth * 0.5, panelLeft + panelWidth * 0.82];
+          const picked: number[] = [];
+          for (const tx of targets) {
+            let bestIdx = 0;
+            let bestDist = Infinity;
+            rawTicks.forEach((t, idx) => {
+              const d = Math.abs(t.x - tx);
+              if (d < bestDist) { bestDist = d; bestIdx = idx; }
+            });
+            if (!picked.includes(bestIdx) && (picked.length === 0 || rawTicks[bestIdx]!.x - rawTicks[picked.at(-1)!]!.x >= 21)) {
+              picked.push(bestIdx);
+            }
+          }
+          return picked;
+        }
+        return visibleWindgramHourIndices(
+          {
+            hours: rawTicks.map((t) => ({ x: Math.max(panelLeft + 10, Math.min(panelRight - 10, t.x)) })),
+            compact: true,
+          },
+          38,
+        );
+      })();
+
+      const firstData = localViewHours[0];
+      const lastData = localViewHours.at(-1);
+      const uncoveredSpans =
+        firstData && lastData
+          ? [
+              { x: panelLeft, width: Math.max(0, firstData.x - colW / 2 - panelLeft) },
+              { x: Math.min(panelRight, lastData.x + colW / 2), width: Math.max(0, panelRight - (lastData.x + colW / 2)) },
+            ].filter((span) => span.width > 0.5)
+          : rawTicks.length
+            ? [{ x: panelLeft, width: panelWidth }]
+            : [];
+
+      const panelFields: { className: string; path: string }[] = [];
+      let panelCloudDecks: { className: string; path: string }[] = [];
+      let panelSkySpans: SkyCoverSpan[] = [];
+      let missingMasks: string[] = [];
+      let panelContours: WindgramView['contours'] = [];
+      const localBarbs: WindgramBarb[] = [];
+      const localClouds: WindgramCloud[] = [];
+      const localCloudBands: WindgramView['cloudBands'] = [];
+      const localFreezing: { x: number; y: number; hourIndex: number }[] = [];
+      const seriesSubPaths = new Map<string, string>();
+
+      if (panelHours.length) {
+        const bounds = localViewHours.map((_, i) => {
+          const bLeft = Math.max(panelLeft, hourX(localViewHours, i - 0.5, colW));
+          const bRight = Math.min(panelRight, hourX(localViewHours, i + 0.5, colW));
+          return { left: bLeft, width: Math.max(0, bRight - bLeft) };
+        });
+
+        const stabilityPixelNodes = panelSampling.map((s) => stabilityPixelNodesForHour(s, scale));
+
+        if (hybrid) {
+          const { inversionFields, waveFields, cloudDeckFields } = buildInversionAndCloudDeckPaths({
+            sourceHours: panelHours,
+            sampling: panelSampling,
+            hours: localViewHours,
+            scale,
+            columnWidth: colW,
+            leftBound: panelLeft,
+            rightBound: panelRight,
+          });
+          panelFields.push(...inversionFields, ...waveFields);
+          panelCloudDecks = cloudDeckFields;
+          panelFields.push(
+            ...buildClimbDomeFieldPaths({
+              sourceHours: panelHours,
+              viewHours: localViewHours,
+              scale,
+              columnWidth: colW,
+              leftBound: panelLeft,
+              rightBound: panelRight,
+            }),
+          );
+          panelSkySpans = buildSkyCoverSpans({
+            sourceHours: panelHours,
+            sampling: panelSampling,
+            viewHours: localViewHours,
+            columnWidth: colW,
+            leftBound: panelLeft,
+            rightBound: panelRight,
+            topM,
+          });
+        } else if (stabilityPixelNodes.some((nodes) => nodes.length)) {
+          const stabMap = buildStabilityFieldPaths({
+            nodesByHour: stabilityPixelNodes,
+            hours: localViewHours,
+            columnWidth: colW,
+            plotTop: top,
+            plotBottom: bottom,
+            banding: {
+              breakpoints: WINDGRAM_STABILITY.slice(0, -1).map((c) => c.maxLapse),
+              classNames: WINDGRAM_STABILITY.map((c) => `meteo-gram-stab-${c.className}`),
+            },
+          });
+          for (const [className, path] of Object.entries(stabMap)) panelFields.push({ className, path });
+        }
+
+        missingMasks = collectMissingFieldMaskPaths({
+          stabilityPixelNodes,
+          sampling: panelSampling,
+          hours: panelHours,
+          bounds,
+          scale,
+          plotHeight,
+        });
+
+        panelContours = temperatureContours(
+          {
+            ...scale,
+            plotHeight,
+            columnWidth: colW,
+            hours: localViewHours,
+            sampling: panelSampling,
+          },
+          system,
+        );
+
+        const barbInset = Math.min(8, panelWidth * 0.1);
+        const barbHourIndices = new Set(
+          visibleWindgramHourIndices(
+            { hours: localViewHours, compact: true, left: panelLeft + barbInset, plotWidth: Math.max(12, panelWidth - barbInset * 2) },
+            panelWidth < 140 ? 29 : 25,
+          ),
+        );
+
+        populateHourColumnMarks({
+          hours: panelHours,
+          sampling: panelSampling,
+          cloudAnalyses: panelCloudAnalyses,
+          viewHours: localViewHours,
+          bounds,
+          scale,
+          hybrid,
+          southernHemisphere: profile.site.latitude < 0,
+          panelLeft,
+          panelRight,
+          defaultColWidth: colW,
+          startHourIndex: 0,
+          includeBarbAt: (i) => barbHourIndices.has(i),
+          barbs: localBarbs,
+          freezing: localFreezing,
+          clouds: localClouds,
+          cloudBands: localCloudBands,
+        });
+
+        for (const [key, , , , heightFn] of seriesDefs) {
+          const pts = panelHours.map((hour, i): Point | null => {
+            const z = heightFn(hour);
+            return z === null || z < floorM || z > topM ? null : { x: localViewHours[i]!.x, y: y(z) };
+          });
+          const subPath = linearPath(pts);
+          if (subPath) seriesSubPaths.set(key, subPath);
+        }
+      }
+
+      built = {
+        hours: panelHours,
+        colW,
+        sampling: panelSampling,
+        cloudAnalyses: panelCloudAnalyses,
+        localViewHours,
+        rawTicks,
+        localVisibleTickOffsets,
+        uncoveredSpans,
+        fields: panelFields,
+        cloudDeckFields: panelCloudDecks,
+        skyCoverSpans: panelSkySpans,
+        missingMasks,
+        contours: panelContours,
+        localBarbs,
+        localClouds,
+        cloudBands: localCloudBands,
+        localFreezing,
+        seriesSubPaths,
+      };
+      if (!stitchedPanelCache.has(panelKey) && stitchedPanelCache.size >= MAX_STITCHED_PANEL_CACHE) {
+        const oldest = stitchedPanelCache.keys().next().value;
+        if (oldest !== undefined) stitchedPanelCache.delete(oldest);
+      }
+      stitchedPanelCache.delete(panelKey);
+      stitchedPanelCache.set(panelKey, built);
+    }
+
+    if (Number.isFinite(built.colW) && built.colW > 0) {
+      sumColumnWidths += built.colW;
       columnWidthCount += 1;
     }
 
     const startHourIndex = viewHours.length;
-    const panelHours = slice.selection.hours;
-    const panelSampling = panelHours.map(hourSampling);
-    const panelCloudAnalyses = panelHours.map((h, idx) => analyzeHourCloudLayers(h, panelSampling[idx], topM));
-    const localViewHours: WindgramHour[] = panelHours.map((h) =>
-      toWindgramHour(h, Math.min(panelRight - 4, Math.max(panelLeft + 4, subTime.xAt(Date.parse(h.validAt)))), labelTime),
-    );
-
     for (const h of panelHours) sourceHours.push(h);
-    for (const s of panelSampling) sampling.push(s);
-    for (const ca of panelCloudAnalyses) {
+    for (const s of built.sampling) sampling.push(s);
+    for (const ca of built.cloudAnalyses) {
       cloudLayersByHour.push(ca.layers);
       highCloudOnlyByHour.push(ca.highCloudOnly);
     }
-    for (const vh of localViewHours) viewHours.push(vh);
+    for (const vh of built.localViewHours) viewHours.push(vh);
     const endHourIndex = viewHours.length - 1;
 
-    const panelTicks: WindgramTimeTick[] = [
-      ...subTime.emptyTimes.map((t): WindgramTimeTick => ({
-        validAt: new Date(t).toISOString(),
-        label: formatWindgramHourLabel(t, labelTime),
-        x: subTime.xAt(t),
-        hourIndex: null,
-      })),
-      ...localViewHours.map(({ validAt, label, x }, localIdx): WindgramTimeTick => ({
-        validAt,
-        label,
-        x,
-        hourIndex: startHourIndex + localIdx,
-      })),
-    ]
-      .filter((tick) => tick.x >= panelLeft && tick.x <= panelRight)
-      .sort((a, b) => a.x - b.x);
-
     const firstAxisIdx = timeAxis.length;
-    for (const tick of panelTicks) timeAxis.push(tick);
-    const localVisibleTickIndices = (() => {
-      if (panelTicks.length <= 2) return panelTicks.map((_, idx) => firstAxisIdx + idx);
-      if (panelWidth < 135) {
-        const targets = panelWidth < 82
-          ? [panelLeft + panelWidth * 0.28, panelLeft + panelWidth * 0.72]
-          : [panelLeft + panelWidth * 0.18, panelLeft + panelWidth * 0.5, panelLeft + panelWidth * 0.82];
-        const picked: number[] = [];
-        for (const tx of targets) {
-          let bestIdx = 0;
-          let bestDist = Infinity;
-          panelTicks.forEach((t, idx) => {
-            const d = Math.abs(t.x - tx);
-            if (d < bestDist) { bestDist = d; bestIdx = idx; }
-          });
-          if (!picked.includes(bestIdx) && (picked.length === 0 || panelTicks[bestIdx]!.x - panelTicks[picked.at(-1)!]!.x >= 21)) {
-            picked.push(bestIdx);
-          }
-        }
-        return picked.map((idx) => firstAxisIdx + idx);
-      }
-      return visibleWindgramHourIndices(
-        {
-          hours: panelTicks.map((t) => ({ x: Math.max(panelLeft + 10, Math.min(panelRight - 10, t.x)) })),
-          compact: true,
-        },
-        38,
-      ).map((idx) => firstAxisIdx + idx);
-    })();
-
-    const firstData = localViewHours[0];
-    const lastData = localViewHours.at(-1);
-    const uncoveredSpans =
-      firstData && lastData
-        ? [
-            { x: panelLeft, width: Math.max(0, firstData.x - colW / 2 - panelLeft) },
-            { x: Math.min(panelRight, lastData.x + colW / 2), width: Math.max(0, panelRight - (lastData.x + colW / 2)) },
-          ].filter((span) => span.width > 0.5)
-        : panelTicks.length
-          ? [{ x: panelLeft, width: panelWidth }]
-          : [];
+    for (const t of built.rawTicks) {
+      timeAxis.push({
+        validAt: t.validAt,
+        label: t.label,
+        x: t.x,
+        hourIndex: t.localHourIndex === null ? null : startHourIndex + t.localHourIndex,
+      });
+    }
 
     dayPanels.push({
       dateKey: slice.dateKey,
@@ -257,135 +449,30 @@ export function buildStitchedWindgramView(
       isSelectedDay: options.selectedDateKey === slice.dateKey,
       left: panelLeft,
       width: panelWidth,
-      columnWidth: colW,
+      columnWidth: built.colW,
       startHourIndex,
       endHourIndex: panelHours.length ? endHourIndex : -1,
-      visibleAxisIndices: localVisibleTickIndices,
+      visibleAxisIndices: built.localVisibleTickOffsets.map((offset) => firstAxisIdx + offset),
       seamX: panelIdx < panelCount - 1 ? panelRight + seamWidth / 2 : null,
       seamWidth: panelIdx < panelCount - 1 ? seamWidth : 0,
-      uncoveredSpans,
+      uncoveredSpans: built.uncoveredSpans,
     });
 
     if (!panelHours.length) return;
 
-    const bounds = localViewHours.map((_, i) => {
-      const bLeft = Math.max(panelLeft, hourX(localViewHours, i - 0.5, colW));
-      const bRight = Math.min(panelRight, hourX(localViewHours, i + 0.5, colW));
-      return { left: bLeft, width: Math.max(0, bRight - bLeft) };
-    });
-
-    const stabilityPixelNodes = panelSampling.map((s) => stabilityPixelNodesForHour(s, scale));
-
-    if (hybrid) {
-      const { inversionFields, waveFields, cloudDeckFields } = buildInversionAndCloudDeckPaths({
-        sourceHours: panelHours,
-        sampling: panelSampling,
-        hours: localViewHours,
-        scale,
-        columnWidth: colW,
-        leftBound: panelLeft,
-        rightBound: panelRight,
-      });
-      for (const f of inversionFields) pushField(f.className, f.path);
-      for (const f of waveFields) pushField(f.className, f.path);
-      for (const f of cloudDeckFields) pushCloudDeck(f.className, f.path);
-      const climbFields = buildClimbDomeFieldPaths({
-        sourceHours: panelHours,
-        viewHours: localViewHours,
-        scale,
-        columnWidth: colW,
-        leftBound: panelLeft,
-        rightBound: panelRight,
-      });
-      for (const f of climbFields) pushField(f.className, f.path);
-      skyCoverSpans.push(
-        ...buildSkyCoverSpans({
-          sourceHours: panelHours,
-          sampling: panelSampling,
-          viewHours: localViewHours,
-          columnWidth: colW,
-          leftBound: panelLeft,
-          rightBound: panelRight,
-          topM,
-        }),
-      );
-    } else if (stabilityPixelNodes.some((nodes) => nodes.length)) {
-      const panelFields = buildStabilityFieldPaths({
-        nodesByHour: stabilityPixelNodes,
-        hours: localViewHours,
-        columnWidth: colW,
-        plotTop: top,
-        plotBottom: bottom,
-        banding: {
-          breakpoints: WINDGRAM_STABILITY.slice(0, -1).map((c) => c.maxLapse),
-          classNames: WINDGRAM_STABILITY.map((c) => `meteo-gram-stab-${c.className}`),
-        },
-      });
-      for (const [cls, path] of Object.entries(panelFields)) pushField(cls, path);
-    }
-
-    deferredMissingMasks.push(
-      ...collectMissingFieldMaskPaths({
-        stabilityPixelNodes,
-        sampling: panelSampling,
-        hours: panelHours,
-        bounds,
-        scale,
-        plotHeight,
-      }),
-    );
-
-    const panelContours = temperatureContours(
-      {
-        ...scale,
-        plotHeight,
-        columnWidth: colW,
-        hours: localViewHours,
-        sampling: panelSampling,
-      },
-      system,
-    );
-    contours.push(...panelContours);
-
-    const barbInset = Math.min(8, panelWidth * 0.1);
-    const barbHourIndices = new Set(
-      visibleWindgramHourIndices(
-        { hours: localViewHours, compact: true, left: panelLeft + barbInset, plotWidth: Math.max(12, panelWidth - barbInset * 2) },
-        panelWidth < 140 ? 29 : 25,
-      ),
-    );
-
-    populateHourColumnMarks({
-      hours: panelHours,
-      sampling: panelSampling,
-      cloudAnalyses: panelCloudAnalyses,
-      viewHours: localViewHours,
-      bounds,
-      scale,
-      hybrid,
-      southernHemisphere: profile.site.latitude < 0,
-      panelLeft,
-      panelRight,
-      defaultColWidth: colW,
-      startHourIndex,
-      includeBarbAt: (i) => barbHourIndices.has(i),
-      barbs,
-      freezing,
-      clouds,
-      cloudBands,
-    });
-
-    for (const [key, , , , heightFn] of seriesDefs) {
-      const pts = panelHours.map((hour, i): Point | null => {
-        const z = heightFn(hour);
-        return z === null || z < floorM || z > topM ? null : { x: localViewHours[i]!.x, y: y(z) };
-      });
-      const subPath = linearPath(pts);
-      if (subPath) {
-        const list = seriesPaths.get(key);
-        if (list) list.push(subPath);
-        else seriesPaths.set(key, [subPath]);
-      }
+    for (const f of built.fields) pushField(f.className, f.path);
+    for (const f of built.cloudDeckFields) pushCloudDeck(f.className, f.path);
+    skyCoverSpans.push(...built.skyCoverSpans);
+    deferredMissingMasks.push(...built.missingMasks);
+    contours.push(...built.contours);
+    for (const b of built.localBarbs) barbs.push(startHourIndex === 0 ? b : { ...b, hourIndex: startHourIndex + b.hourIndex });
+    for (const f of built.localFreezing) freezing.push(startHourIndex === 0 ? f : { ...f, hourIndex: startHourIndex + f.hourIndex });
+    for (const c of built.localClouds) clouds.push(startHourIndex === 0 ? c : { ...c, hourIndex: startHourIndex + c.hourIndex });
+    cloudBands.push(...built.cloudBands);
+    for (const [key, subPath] of built.seriesSubPaths) {
+      const list = seriesPaths.get(key);
+      if (list) list.push(subPath);
+      else seriesPaths.set(key, [subPath]);
     }
   });
 

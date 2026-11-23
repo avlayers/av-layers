@@ -4,6 +4,7 @@ import { windFromComponents } from '@av/soaring';
 import {
   effectiveHourUsableLiftTopM,
   estimateThermalClimbAtHeight,
+  isHourNativeLiftFallback,
   omegaToVerticalVelocityMps,
 } from './windgram-atmosphere.ts';
 import {
@@ -13,7 +14,7 @@ import {
   finiteScalar,
 } from './windgram-format.ts';
 import { sampleHeight } from './windgram-sampling.ts';
-import type { WindgramView } from './windgram-view.ts';
+import type { WindgramCloud, WindgramView } from './windgram-view.ts';
 
 import type { WindgramReading } from './scene-types.ts';
 export type { WindgramReading } from './scene-types.ts';
@@ -94,16 +95,71 @@ function hasWarmLayerAboveSubfreezing(nodes: WindgramView['sampling'][number]['t
   return false;
 }
 
+interface HourInspectorCache {
+  readonly cloudsByHour: readonly (readonly WindgramCloud[])[];
+  readonly warmLayerByHour: (boolean | undefined)[];
+  readonly windShiftByHour: (WindgramReading['surfaceWindShift'] | undefined)[];
+  readonly hasAnyLevels: boolean;
+  readonly hasAnyOmega: boolean;
+}
+
+const inspectorCacheByView = new WeakMap<WindgramView, HourInspectorCache>();
+
+function getHourInspectorMeta(view: WindgramView, index: number, gustKt: number | null) {
+  let cache = inspectorCacheByView.get(view);
+  if (!cache) {
+    const grouped: WindgramCloud[][] = Array.from({ length: view.hours.length }, () => []);
+    for (const c of view.clouds) {
+      if (c.hourIndex >= 0 && c.hourIndex < grouped.length) grouped[c.hourIndex]!.push(c);
+    }
+    let hasAnyLevels = false;
+    let hasAnyOmega = false;
+    for (const h of view.sourceHours) {
+      if (h.levels.length > 0) hasAnyLevels = true;
+      if (!hasAnyOmega && h.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))) {
+        hasAnyOmega = true;
+      }
+    }
+    cache = {
+      cloudsByHour: grouped,
+      warmLayerByHour: new Array<boolean | undefined>(view.hours.length),
+      windShiftByHour: new Array<WindgramReading['surfaceWindShift'] | undefined>(view.hours.length),
+      hasAnyLevels,
+      hasAnyOmega,
+    };
+    inspectorCacheByView.set(view, cache);
+  }
+  let warmLayerAloft = cache.warmLayerByHour[index];
+  if (warmLayerAloft === undefined) {
+    warmLayerAloft = hasWarmLayerAboveSubfreezing(view.sampling[index]?.temperatureC);
+    cache.warmLayerByHour[index] = warmLayerAloft;
+  }
+  let surfaceWindShift = cache.windShiftByHour[index];
+  if (surfaceWindShift === undefined) {
+    surfaceWindShift = detectSurfaceWindShift(view.sourceHours, index, gustKt);
+    cache.windShiftByHour[index] = surfaceWindShift;
+  }
+  return {
+    clouds: cache.cloudsByHour[index] ?? [],
+    warmLayerAloft,
+    surfaceWindShift,
+    hasAnyLevels: cache.hasAnyLevels,
+    hasAnyOmega: cache.hasAnyOmega,
+  };
+}
+
 export function readWindgram(view: WindgramView, hourIndex: number, heightM: number): WindgramReading {
   const index = clamp(Math.round(hourIndex), 0, view.hours.length - 1);
   const sample = view.sampling[index];
   const z = clamp(heightM, view.floorM, view.topM);
+  const gustKt = view.hours[index]?.gustKt ?? null;
+  const hourMeta = getHourInspectorMeta(view, index, gustKt);
   const t = sample ? sampleHeight(sample.temperatureC, z) : null;
   const dewPointC = sample ? sampleHeight(sample.dewPointC, z) : null;
   const u = sample ? sampleHeight(sample.windU, z) : null, v = sample ? sampleHeight(sample.windV, z) : null;
   const wind = windFromComponents(u, v);
-  const cloud = view.clouds.find(
-    (c) => c.hourIndex === index && (c.kind === 'potential' ? Math.abs(z - c.baseM) < 25 : z >= c.baseM && z <= c.topM),
+  const cloud = hourMeta.clouds.find(
+    (c) => c.kind === 'potential' ? Math.abs(z - c.baseM) < 25 : z >= c.baseM && z <= c.topM,
   );
   const source = view.sourceHours[index];
   const omega = sample ? sampleHeight(sample.verticalVelocityPaS, z) : null;
@@ -119,6 +175,9 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const usableTopM = source
     ? effectiveHourUsableLiftTopM(source, view.hours[index]?.usableLiftTopM)
     : (view.hours[index]?.usableLiftTopM ?? null);
+  const isNativeFallback = source
+    ? isHourNativeLiftFallback(source, view.hours[index]?.usableLiftTopM)
+    : false;
   const climb = estimateThermalClimbAtHeight(
     z,
     groundM,
@@ -126,12 +185,10 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     source?.thermalTopM ?? null,
     source?.effectiveCloudLimitM ?? null,
     finiteScalar(source?.thermalVelocityMps),
+    { modelTerrainM, isNativeFallback },
   );
 
   const precipMmHr = finiteScalar(surface?.precipitationMmHr);
-  const warmLayerAloft = hasWarmLayerAboveSubfreezing(sample?.temperatureC);
-  const gustKt = view.hours[index]?.gustKt ?? null;
-  const surfaceWindShift = detectSurfaceWindShift(view.sourceHours, index, gustKt);
 
   const cloudLayers = view.cloudLayersByHour?.[index] ?? [];
   const highCloudOnly = view.highCloudOnlyByHour?.[index] ?? false;
@@ -171,7 +228,11 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
       : modelTerrainM !== null && Math.abs(z - modelTerrainM - 10) < .00001 ? 'surface-10m' : 'model-level',
     windShear: windShearAtHeight(sample, z),
     verticalVelocitySource: omega === null ? null : sample?.verticalVelocityPaS.some(n => Math.abs(n.altitudeM - z) < .00001) ? 'model-level' : 'interpolated',
-    verticalVelocityUnavailableReason: omega === null ? 'Vertical motion unavailable at this height.' : null,
+    verticalVelocityUnavailableReason: omega === null
+      ? (hourMeta.hasAnyLevels && !hourMeta.hasAnyOmega
+          ? 'Vertical motion unavailable (not published for this model).'
+          : 'Vertical motion unavailable at this height.')
+      : null,
     surfaceWindSpeedMps: finiteScalar(surface?.windSpeedMps),
     surfaceWindDirectionDeg: finiteScalar(surface?.windDirectionDeg),
     precipitationMmHr: precipMmHr,
@@ -182,8 +243,8 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     peakClimbMps: climb.peakClimbMps,
     lapseCPer1000Ft: sample ? sampleHeight(sample.lapseCPer1000Ft, z) : null,
     waveVelocityMps,
-    warmLayerAloft,
-    surfaceWindShift,
+    warmLayerAloft: hourMeta.warmLayerAloft,
+    surfaceWindShift: hourMeta.surfaceWindShift,
     buoyancyShearRatio: finiteScalar(source?.buoyancyShearRatio),
     cloudLayers,
     activeCloudLayer,

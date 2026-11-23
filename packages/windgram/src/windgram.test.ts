@@ -1861,4 +1861,50 @@ describe('Windgram data', () => {
     expect(renderWindgramSvg(offshoreDay)).toContain('time UTC (fallback)');
     expect(renderWindgramSvg(offshoreStitched)).toContain('time UTC (fallback)');
   });
+
+  it('preserves native-column convective depth on high-ridge fallback hours and distinguishes unpublished model omega', async () => {
+    const { resolveConvectiveEnvelope, estimateThermalClimbAtHeight } = await import('./windgram-atmosphere.ts');
+    // Ridge DEM 1,450 m over 1,000 m model ground with 1,521.35 m native usable ceiling (thermal top 2,000 m, w* = 0.639445 m/s)
+    const wStar = 0.639445;
+    const env = resolveConvectiveEnvelope(1450, 1521.35, 2000, 4000, wStar, {
+      modelTerrainM: 1000,
+      isNativeFallback: true,
+    });
+    expect(env).not.toBeNull();
+    expect(env!.groundM).toBe(1000);
+    expect(env!.floorM).toBe(1450);
+    expect(env!.convectiveDepthM).toBeCloseTo(1000, 0);
+    // Below the 1,450 m ridge is underground (0 climb); at 1,480 m MSL inside [1450, 1521.35] it follows the true 1,000 m native profile
+    expect(estimateThermalClimbAtHeight(1400, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps).toBe(0);
+    const aloftClimb = estimateThermalClimbAtHeight(1480, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps!;
+    expect(aloftClimb).toBeGreaterThan(0);
+    expect(aloftClimb).toBeLessThan(0.12);
+
+    // Unpublished model omega (e.g. GFS / ICON-EU) vs missing single-level omega (e.g. RRFS / WRF)
+    const { build, profile } = fixture([1, 2], 2);
+    const noOmegaFrames = profile.frames.map(f => ({
+      ...f,
+      profile: f.profile ? { ...f.profile, levels: f.profile.levels.map(l => ({ ...l, omegaPaS: null })) } : f.profile,
+    }));
+    const noOmegaSite = createPointForecast(build, { lat: 38.85, lon: -78.41 })(
+      build.manifest.frames.slice(0, 2),
+      new Map(noOmegaFrames.slice(0, 2).map(f => [f.id, f])),
+    );
+    const noOmegaView = buildWindgramView(noOmegaSite, { unitSystem: 'metric', compact: true, timeZone: noOmegaSite.site.timeZone, hours: noOmegaSite.hours });
+    expect(readWindgram(noOmegaView, 0, 1800).verticalVelocityUnavailableReason).toBe(
+      'Vertical motion unavailable (not published for this model).',
+    );
+
+    const partialOmegaFrames = noOmegaFrames.map((f, idx) => idx === 1 && f.profile
+      ? { ...f, profile: { ...f.profile, levels: f.profile.levels.map((l, j) => (j === 1 ? { ...l, omegaPaS: -0.9 } : l)) } }
+      : f);
+    const partialSite = createPointForecast(build, { lat: 38.85, lon: -78.41 })(
+      build.manifest.frames.slice(0, 2),
+      new Map(partialOmegaFrames.slice(0, 2).map(f => [f.id, f])),
+    );
+    const partialView = buildWindgramView(partialSite, { unitSystem: 'metric', compact: true, timeZone: partialSite.site.timeZone, hours: partialSite.hours });
+    expect(readWindgram(partialView, 0, 1800).verticalVelocityUnavailableReason).toBe(
+      'Vertical motion unavailable at this height.',
+    );
+  });
 });

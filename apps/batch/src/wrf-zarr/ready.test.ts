@@ -79,8 +79,8 @@ it('serves independently pinned northern and southern domains through the same p
       expect(provider.id).toBe(`configured-${domain}`);
       expect(frame.temp2mK[0]).toBe(values.temp_2m_k);
       expect(frame.pressurePa!.map(level => level[0])).toEqual(values.pressure_pa);
-      expect(frame.auxLevels!.uWindMps!.map(level => level.values[0])).toEqual(values.u_earth_mps);
-      expect(frame.auxLevels!.omegaPaS!.map(level => level.values[0])).toEqual(values.omega_pas);
+      expect(frame.auxLevels!.uWindMps!.map(level => level!.values[0])).toEqual(values.u_earth_mps);
+      expect(frame.auxLevels!.omegaPaS!.map(level => level!.values[0])).toEqual(values.omega_pas);
     } finally { await session.close(); }
   }
   expect(pins.size).toBe(2);

@@ -76,7 +76,11 @@ function withHeightGaps<T extends { altitudeM: number }>(nodes: T[], gaps: reado
   return result;
 }
 
+const hourSamplingMemo = new WeakMap<ProfileHour, HourSampling>();
+
 export function hourSampling(hour: ProfileHour): HourSampling {
+  const cached = hourSamplingMemo.get(hour);
+  if (cached) return cached;
   const floorM = hour.modelTerrainM;
   const levels = hour.levels.filter(l => l.heightM !== null && (floorM === null || l.heightM > floorM));
   const gaps = profileHeightGaps(hour.levels);
@@ -120,7 +124,7 @@ export function hourSampling(hour: ProfileHour): HourSampling {
     const upperAlt = i < lastIdx && b.altitudeM - a.altitudeM > 0.02 ? b.altitudeM - 0.01 : b.altitudeM;
     return [{ altitudeM: a.altitudeM, value }, { altitudeM: upperAlt, value }];
   });
-  return {
+  const sampled: HourSampling = {
     validAt: hour.validAt,
     temperatureC,
     dewPointC,
@@ -130,7 +134,7 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
     })),
     cloudHumidityPercent: temperatureC.map((p, i) => {
-      const isSurfaceAnchor = floorM !== null && Math.abs(p.altitudeM - (floorM + 2)) < 0.00001;
+      const isSurfaceAnchor = floorM !== null && Math.abs(p.altitudeM - (floorM + 2)) < 0.1;
       const useModelRh = !isSurfaceAnchor && hour.upperAirDewpointReference === 'model-rh';
       return {
         altitudeM: p.altitudeM,
@@ -146,6 +150,8 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       value: l.omegaPaS ?? NaN,
     })), gaps, missingValue),
   };
+  hourSamplingMemo.set(hour, sampled);
+  return sampled;
 }
 
 /** Reconstruct the colour field from interval centres. Source lapse rates stay

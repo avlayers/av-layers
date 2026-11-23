@@ -1167,7 +1167,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* Zero-Header-Row Point Windgram Card + Compact Bottom-Right Info Tooltip */
 #point-card {
   --av-chart-max-height: min(520px, max(140px, calc(100dvh - 176px)));
-  --av-bar-reserve-right: 122px;
+  --av-bar-reserve-right: 146px;
   position: absolute;
   z-index: 6;
   top: 58px;
@@ -1191,7 +1191,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #point-status {
   flex: none;
   margin: 4px 2px 0;
-  padding-right: 122px;
+  padding-right: var(--av-bar-reserve-right, 146px);
   color: #526170;
   font-size: 11.5px;
   line-height: 1.35;
@@ -1230,6 +1230,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-weight: 600;
   line-height: 20px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   list-style: none;
   cursor: pointer;
   user-select: none;

@@ -10,7 +10,8 @@ import { assertWrfWeatherDefinitions } from '@av/forecast/direct-scalars';
 import { deriveFrame } from '@av/forecast/frame';
 import { prepareNativeProfiles, readProfileRecord } from '@av/forecast';
 import { preparePackedTerrainColumns } from '@av/forecast/refinement';
-import type { AuxField, NormalizedFrame } from '@av/forecast/inputs';
+import { validateNormalizedFrame, type AuxField, type AuxLevelId, type NormalizedFrame } from '@av/forecast/inputs';
+import { createAuxiliaryTargets } from '../provider.js';
 import { effectiveCloudHumidityPercent, gfsV16SaturationVaporPressureHpa, saturationVaporPressureHpa } from '@av/thermodynamics';
 import { decodePackedWindChunk, normalizedWindColumn, samplePackedWindColumns } from '@av/forecast/wind';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
@@ -285,6 +286,20 @@ describe('weather source selection', () => {
     expect(spfhLevels).not.toContain(875);
     expect(rhLevels).toContain(875);
     expect(rhLevels).not.toContain(450);
+    expect(createIndexedGribProvider(gfs).auxiliaryLevelFields).toBe(3);
+
+    const levelIds = Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[];
+    const scheduled = new Set(
+      specs.filter(spec => spec.auxId && spec.levelHpa !== undefined)
+        .map(spec => `${spec.auxId}:${source.pressureLevels.indexOf(spec.levelHpa!)}`),
+    );
+    const sparseTargets = createAuxiliaryTargets(4, source.pressureLevels.length, [], levelIds, undefined, (id, levelIndex) =>
+      scheduled.has(`${id}:${levelIndex}`),
+    );
+    expect(sparseTargets.auxLevels.spfhKgKg!.filter(Boolean)).toHaveLength(spfhLevels.length);
+    expect(sparseTargets.auxLevels.rhPercent!.filter(Boolean)).toHaveLength(rhLevels.length);
+    expect(sparseTargets.auxLevels.spfhKgKg![source.pressureLevels.indexOf(875)]).toBeUndefined();
+    expect(sparseTargets.auxLevels.rhPercent![source.pressureLevels.indexOf(450)]).toBeUndefined();
 
     // Two-column packed round-trip: cell 0 = Cascades negative + 875 hPa RH-only secondary; cell 1 = 400 hPa positive control
     const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 1, lon0: -121.5, lat0: 47.5, dx: 43.25, dy: -8.75, wrapLongitude: false };
@@ -310,16 +325,17 @@ describe('weather source selection', () => {
     frame.rhReference = 'gfs-v16-mixed';
     frame.auxLevels = {
       spfhKgKg: [
-        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) }, // 875 hPa secondary: SPFH absent
+        undefined, // 875 hPa secondary: SPFH unscheduled
         { values: Float32Array.of(0.0002356488985, 0.0006), missing: Uint8Array.of(0, 0) },
         { values: Float32Array.of(0.0001077765628, 0.00078861), missing: Uint8Array.of(0, 0) },
       ],
       rhPercent: [
-        { values: Float32Array.of(80, 75), missing: Uint8Array.of(0, 0) }, // 875 hPa secondary: RH present
-        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) },
-        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) },
+        { values: Float32Array.of(80, 75), missing: Uint8Array.of(0, 0) }, // 875 hPa secondary: RH scheduled
+        undefined,
+        undefined,
       ],
     };
+    validateNormalizedFrame(frame, active, grid, 3);
     const output = Uint8Array.of(0b11);
     const coverage = sparseCoverageFromDense({ ...grid, gridHash: 'b'.repeat(64), output, halo: new Uint8Array(1) });
     const reader = prepareNativeProfiles(frame, coverage);

@@ -27,7 +27,7 @@ button.wg-chip.is-alt:hover{background:#dbeafe}
 .av-windgram-key-btn{display:inline-flex;align-items:center;gap:3px;height:20px;padding:0 7px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#1e293b;font:700 10.5px/18px ui-sans-serif,system-ui,sans-serif;list-style:none;cursor:pointer;user-select:none}
 .av-windgram-key-btn::-webkit-details-marker{display:none}
 .av-windgram-key-btn:hover,.av-windgram-key-pop[open]>.av-windgram-key-btn{background:#16324f;border-color:#16324f;color:#fff}
-.av-windgram-key-pop>.av-windgram-key{position:absolute;z-index:9;right:0;bottom:30px;width:min(356px,100%);padding:10px 11px;border-radius:10px;border:1px solid #2b3a4e;background:#132030f7;backdrop-filter:blur(10px);box-shadow:0 10px 28px rgba(8,18,30,.45);color:#f1f5f9;font:11px/1.35 ui-sans-serif,system-ui,sans-serif}
+.av-windgram-key-pop>.av-windgram-key{position:absolute;z-index:9;right:0;bottom:30px;width:min(356px,100%);max-height:calc(100% - 34px);overflow-y:auto;padding:10px 11px;border-radius:10px;border:1px solid #2b3a4e;background:#132030f7;backdrop-filter:blur(10px);box-shadow:0 10px 28px rgba(8,18,30,.45);color:#f1f5f9;font:11px/1.35 ui-sans-serif,system-ui,sans-serif}
 .wg-key-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:6px}
 .wg-key-head strong{font-size:12px;color:#fff}
 .wg-key-head span{font-size:10px;color:#94a3b8}

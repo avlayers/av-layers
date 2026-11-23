@@ -3,7 +3,7 @@ import { ApiClient } from './client-api';
 import { MAX_POINT_RESPONSE_BYTES, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from '@av/contracts';
 import { WIND_FINE_CELL_BYTES, windLayout } from '@av/contracts/wind-data';
 import { pointLiftExpectation, pointSeriesSelection } from './client-point';
-import { evaluateFineTerrainContributors } from './client-point-terrain';
+import { evaluateFineTerrainContributors, PointTerrainCache } from './client-point-terrain';
 import type { PointSeries } from './client-types';
 import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedUnprefixedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
@@ -640,5 +640,34 @@ describe('weather-independent static fine-tile point terrain (Finding 2)', () =>
     slowLoader.dispose();
     await pendingSlow;
     expect(terrainSignal?.aborted).toBe(true);
+
+    // Concurrent clicks on the same build coalesce the descriptor fetch even if the first caller aborts
+    let descFetches = 0;
+    let releaseDesc!: () => void;
+    const descGate = new Promise<void>(resolve => { releaseDesc = resolve; });
+    const sharedCache = new PointTerrainCache();
+    const coalescedFetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/data/${build.manifest.frames[0]!.id}`)) {
+        descFetches++;
+        await descGate;
+        init?.signal?.throwIfAborted();
+        return new Response(JSON.stringify(descriptor), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.includes('/fine/')) {
+        return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      throw new Error('Unexpected URL');
+    });
+    const abortFirst = new AbortController();
+    const firstRead = sharedCache.read('https://api.test', coalescedFetchImpl, build, araPoint, abortFirst.signal);
+    const secondRead = sharedCache.read('https://api.test', coalescedFetchImpl, build, { lat: 40.42, lon: 44.46 });
+    await vi.waitFor(() => expect(descFetches).toBe(1));
+    abortFirst.abort(new DOMException('Aborted', 'AbortError'));
+    await expect(firstRead).rejects.toThrow();
+    releaseDesc();
+    const resolvedSecond = await secondRead;
+    expect(resolvedSecond?.status).toBe('valid');
+    expect(descFetches).toBe(1);
   });
 });

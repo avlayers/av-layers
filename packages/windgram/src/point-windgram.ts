@@ -101,6 +101,7 @@ interface Data extends Calendar {
   forecast: SiteForecast;
   siteTerrainKey: string;
   bestDayKey: string | null;
+  daylightDayCount: number;
   hasSounding: boolean;
   hasValues: boolean;
   partial: boolean;
@@ -194,6 +195,7 @@ function createPointWindgram(
   };
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
+  const manifestFrameById = new Map(build.manifest.frames.map(frame => [frame.id, frame]));
   const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
   const toForecast = createPointForecast(build, options.point, {
     timeZone: options.timeZone,
@@ -270,6 +272,7 @@ function createPointWindgram(
       forecast,
       siteTerrainKey,
       bestDayKey,
+      daylightDayCount: countDaylightDays(calendar),
       hasSounding: forecast.hours.some(hour => hour.levels.length > 0),
       hasValues: nextInput.frames.some(frame => Object.values(frame.layers).some(cell => cell.status === 'valid')),
       partial: frames.some(({ id }) => {
@@ -337,6 +340,11 @@ function createPointWindgram(
   navRow.append(scopeGroup, stepper, snapTolBtn);
 
   const keyPop = node('details', 'av-windgram-key-pop');
+  keyPop.addEventListener('toggle', () => {
+    if (!keyPop.open) return;
+    const siblingInfo = container.parentElement?.querySelector?.<HTMLDetailsElement>('#point-settings[open]');
+    if (siblingInfo) siblingInfo.open = false;
+  });
   const keySummary = node('summary', 'av-windgram-key-btn');
   keySummary.ariaLabel = 'Visual chart key';
   keySummary.append(node('span', undefined, 'Key '), node('span', undefined, 'ⓘ'));
@@ -401,7 +409,7 @@ function createPointWindgram(
   const currentPointValidTime = (): string | null => {
     if (selectedFrameId === null) return null;
     return data.loaded.get(selectedFrameId)?.validTime
-      ?? build.manifest.frames.find(f => f.id === selectedFrameId)?.validTime
+      ?? manifestFrameById.get(selectedFrameId)?.validTime
       ?? null;
   };
 
@@ -550,8 +558,8 @@ function createPointWindgram(
     incomplete.hidden = !data.partial || loading;
 
     const loadedFrame = frameId === null ? undefined : data.loaded.get(frameId);
-    const pointFrame = loadedFrame ?? build.manifest.frames.find(frame => frame.id === frameId);
-    const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
+    const pointFrame = loadedFrame ?? (frameId === null ? undefined : manifestFrameById.get(frameId));
+    const mapFrame = mapFrameId === null ? undefined : manifestFrameById.get(mapFrameId);
     const pointOffset = resolvePointOffsetMinutes(pointFrame?.validTime);
     const resolvedMapOffset = explicitMapOffset ?? resolvePointOffsetMinutes(mapFrame?.validTime);
     time.textContent = formatSplitClocks(
@@ -591,7 +599,7 @@ function createPointWindgram(
     }
 
     // Update [1-Day | 3-Day] segmented toggle state + Day/Window stepper
-    const effectiveMode: PointViewMode = supportsMultiDay && viewMode === '3d' && countDaylightDays(data) > 1 ? '3d' : '1d';
+    const effectiveMode: PointViewMode = supportsMultiDay && viewMode === '3d' && data.daylightDayCount > 1 ? '3d' : '1d';
     for (const [id, btn] of modeButtons) {
       const active = viewMode === id;
       btn.className = active ? 'wg-scope-btn is-active' : 'wg-scope-btn';

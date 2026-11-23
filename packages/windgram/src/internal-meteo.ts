@@ -82,8 +82,12 @@ export function lapseRateCPer1000Ft(
 }
 
 const dateFormats = new Map<string, Intl.DateTimeFormat>();
+const dateKeyCache = new Map<string, string>();
 /** Format an ISO timestamp as YYYY-MM-DD in the given IANA timeZone. */
 export function localDateKey(iso: string, timeZone: string): string {
+  const cacheKey = `${timeZone}|${iso}`;
+  const cached = dateKeyCache.get(cacheKey);
+  if (cached !== undefined) return cached;
   let formatter = dateFormats.get(timeZone);
   if (!formatter) {
     formatter = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -92,7 +96,10 @@ export function localDateKey(iso: string, timeZone: string): string {
   }
   const parts = formatter.formatToParts(new Date(iso));
   const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
-  return `${get('year')}-${get('month')}-${get('day')}`;
+  const result = `${get('year')}-${get('month')}-${get('day')}`;
+  if (dateKeyCache.size >= 1024) dateKeyCache.clear();
+  dateKeyCache.set(cacheKey, result);
+  return result;
 }
 
 /** Convert a local clock time to UTC milliseconds. */
