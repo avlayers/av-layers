@@ -12,6 +12,7 @@ const integration = [
 
 export default defineConfig({
   test: {
+    css: { include: [/\?inline$/] },
     testTimeout: 30_000,
     fileParallelism: true,
     maxWorkers: Math.min(8, availableParallelism()),

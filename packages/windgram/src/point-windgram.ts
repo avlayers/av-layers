@@ -28,7 +28,8 @@ import {
   type SiteForecast,
   type WindgramView,
 } from './model.ts';
-import { panelStyles } from './panel-styles.ts';
+import { adoptDocumentStyleSheet } from './style-registry.ts';
+import windgramPanelCss from './styles/windgram-panel.css?inline';
 import {
   DEFAULT_MULTI_DAY_SPAN,
   DEFAULT_POINT_VIEW_MODE,
@@ -49,11 +50,7 @@ import { daylightForDate } from './windgram-time-axis.ts';
 const STYLE_ID = 'av-windgram-document-style';
 
 function ensureDocumentStyles(owner: Document): void {
-  if (!owner.head || owner.getElementById?.(STYLE_ID)) return;
-  const style = owner.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = panelStyles;
-  owner.head.append(style);
+  adoptDocumentStyleSheet(owner, STYLE_ID, windgramPanelCss);
 }
 
 export interface PointWindgramOptions {
@@ -302,7 +299,6 @@ function createPointWindgram(
 
   const srReadout = node('p', 'windgram-readout');
   srReadout.id = `${idPrefix}-readout`;
-  srReadout.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0';
 
   // Chip-free 1-line bottom bar: [ (1-Day | 3-Day) + (‹ Day/Window ›) + conditional ↺ TOL ] ... [ Key ⓘ ]
   const bar = node('div', 'av-windgram-bar');
@@ -409,7 +405,7 @@ function createPointWindgram(
   };
 
   const chartHeight = () => {
-    const cap = browser?.getComputedStyle(chartHost).maxHeight;
+    const cap = browser?.getComputedStyle?.(chartHost).maxHeight;
     const pixels = cap?.endsWith('px') ? Number(cap.slice(0, -2)) : NaN;
     return Number.isFinite(pixels) ? Math.floor(pixels) : undefined;
   };
@@ -548,8 +544,28 @@ function createPointWindgram(
 
   const step = (delta: -1 | 1) => {
     if (disposed || !data.frames.length) return;
-    const index = data.frames.findIndex(frame => frame.id === selectedFrameId);
-    const target = data.frames[Math.max(0, Math.min(data.frames.length - 1, index + delta))];
+    const timeZone = data.forecast.site.timeZone;
+    const navigable = data.dayKeys.flatMap(dayKey => {
+      const hours = data.days.get(dayKey) ?? [];
+      const daylight = daylightForDate(data.forecast, dayKey, timeZone);
+      if (!daylight) return hours;
+      const inDaylight = hours.filter(h => {
+        const ms = Date.parse(h.validAt);
+        return ms >= daylight.sunrise && ms <= daylight.sunset;
+      });
+      return inDaylight.length >= Math.min(2, hours.length) && inDaylight.length > 0 ? inDaylight : hours;
+    });
+    const list: readonly DayHour[] = navigable.length
+      ? navigable
+      : data.frames.map(f => ({ id: f.id, validAt: f.validTime }));
+    const curMs = Date.parse(currentPointValidTime() ?? '');
+    let index = list.findIndex(frame => frame.id === selectedFrameId);
+    if (index < 0 && Number.isFinite(curMs)) {
+      index = delta > 0
+        ? list.findIndex(frame => Date.parse(frame.validAt) > curMs) - 1
+        : list.findLastIndex(frame => Date.parse(frame.validAt) < curMs) + 1;
+    }
+    const target = list[Math.max(0, Math.min(list.length - 1, index + delta))];
     if (target && target.id !== selectedFrameId) onFrame(target.id);
   };
 
@@ -620,6 +636,7 @@ function createPointWindgram(
     activeHeight = heightPx;
 
     let view: WindgramView;
+    let chartSelectedValidAt = selectedValidAt;
     if (effectiveMode === '3d') {
       const win = resolveStitchedDayWindow(data.dayKeys, {
         focusDayKey: targetDayKey,
@@ -654,8 +671,15 @@ function createPointWindgram(
       const views = dayViews(targetDayKey, dayHours, widthPx, heightPx);
       const daylightView = views.daylight;
       const visibleDayHours = daylightView.hours.filter(hour => hour.x >= daylightView.left && hour.x <= daylightView.left + daylightView.plotWidth);
-      const selectedInDaylight = selectedValidAt === null || visibleDayHours.some(hour => hour.validAt === selectedValidAt);
-      const useDaylightCrop = selectedInDaylight && visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
+      const useDaylightCrop = visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
+      if (useDaylightCrop && selectedValidAt !== null && !visibleDayHours.some(hour => hour.validAt === selectedValidAt)) {
+        const targetMs = Date.parse(selectedValidAt);
+        if (Number.isFinite(targetMs)) {
+          chartSelectedValidAt = visibleDayHours.reduce((best, cur) =>
+            Math.abs(Date.parse(cur.validAt) - targetMs) < Math.abs(Date.parse(best.validAt) - targetMs) ? cur : best,
+          ).validAt;
+        }
+      }
       view = useDaylightCrop ? daylightView : (views.full ??= buildWindgramView(data.forecast, {
         unitSystem: units, fieldMode, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours,
       }));
@@ -666,7 +690,7 @@ function createPointWindgram(
         view,
         idPrefix,
         readout: srReadout,
-        selectedValidAt,
+        selectedValidAt: chartSelectedValidAt,
         inspectionMode: 'magnetic',
         calloutVariant: options.calloutVariant,
         calloutTrigger: options.calloutTrigger ?? 'interact',
@@ -684,7 +708,7 @@ function createPointWindgram(
       });
     } else {
       if (mountedView !== view) mounted.update(view);
-      mounted.select(selectedValidAt);
+      mounted.select(chartSelectedValidAt);
     }
     mountedView = view;
   };

@@ -108,8 +108,15 @@ export function buildWindgramVerticalScale(
   );
   const heights = known(hours.flatMap(hour => hour.levels.map(level => level.heightM)));
   const referenceHeights = [...grounds, ...fineTerrain, ...heights, ...liftTops, ...nativeLiftTops];
-  // Add room around an isolated ceiling so its marker fits inside the plot.
-  const floorM = referenceHeights.length ? Math.min(...referenceHeights, ...liftTops.map(height => height - 50)) : 0;
+  // Anchor chart floor at real site ground when known (clipping underground air below site ground);
+  // otherwise anchor at native model ground, adding 50 m room only for sub-ground or isolated ceilings.
+  const floorM = fineTerrain.length
+    ? Math.min(...fineTerrain, ...liftTops.filter(h => h < Math.min(...fineTerrain)).map(h => h - 25))
+    : grounds.length
+      ? Math.min(...grounds, ...liftTops.filter(h => h < Math.min(...grounds) + 50).map(h => h - 50))
+      : referenceHeights.length
+        ? Math.min(...referenceHeights, ...liftTops.map(height => height - 50))
+        : 0;
   const focused = options.heightRange === 'soaring' || (compact && options.heightRange !== 'full');
   const grouped = new Map<number, number[]>();
   const pushGroup = (p: number, z: number) => {
@@ -172,13 +179,14 @@ export function buildWindgramVerticalScale(
   const topM = focused && (soaringTops.length || waveTops.length || calmDay) ? Math.min(fullTopM, focusedTopM) : fullTopM;
 
   const modelGround = grounds.length ? Math.min(...grounds) : null;
+  const anchorFloorM = Math.max(floorM, modelGround ?? floorM);
   const spanM = Math.max(1, topM - floorM);
   const yAt = (heightM: number) => bottom - ((heightM - floorM) / spanM) * plotHeight;
   const anchors: HeightAnchor[] = [
     { pressureHpa: null, heightM: floorM, y: bottom },
     ...(modelGround !== null && modelGround > floorM && modelGround < topM ? [{ pressureHpa: null, heightM: modelGround, y: yAt(modelGround) }] : []),
     ...levelAnchors
-      .filter(anchor => anchor.heightM > (modelGround ?? floorM) + 5 && anchor.heightM < topM)
+      .filter(anchor => anchor.heightM > anchorFloorM + 5 && anchor.heightM < topM)
       .map(anchor => ({ ...anchor, y: yAt(anchor.heightM) })),
     { pressureHpa: null, heightM: topM, y: top },
   ];

@@ -1,6 +1,7 @@
 import { DEFAULT_OPACITY, PointSeriesController, populateModelOptions, pointSeriesSelection, type ApiClient, type PinnedBuild, type GeoPoint, type UnitSystem } from '@av/client';
-import { DEFAULT_POINT_VIEW_MODE, disposePointWindgram, renderPointWindgram, type PointViewMode } from '@av/windgram';
+import { adoptDocumentStyleSheet, DEFAULT_POINT_VIEW_MODE, disposePointWindgram, renderPointWindgram, type PointViewMode } from '@av/windgram';
 import type { ControllerState } from './controller';
+import panelCss from './panel.css?inline';
 import config from './pluginConfig';
 
 export interface PanelCallbacks {
@@ -12,32 +13,9 @@ export interface PanelCallbacks {
 }
 
 const STYLE_ID = 'av-windy-plugin-style';
-const CSS = `
-.av-panel,.av-panel *{box-sizing:border-box}
-.av-panel{color:#e6edf0;font:13px/1.4 ui-sans-serif,system-ui,sans-serif}
-.av-panel[hidden],.av-mobile-header[hidden]{display:none}
-.av-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
-.av-header h1{margin:0;font-size:15px}
-.av-back{padding:5px 8px;border:0;border-radius:4px;background:#1c6b8a;color:#fff;cursor:pointer;font-size:12px}
-.av-muted{color:#8fa4ad;font-size:11px;margin:6px 0}
-.av-controls{display:grid;grid-template-columns:62px 1fr auto;gap:6px 8px;align-items:center;margin:8px 0;font-size:12px}
-.av-controls select,.av-controls input{width:100%;min-width:0;background:#0e1113;color:#e6edf0;border:1px solid #36464d;border-radius:4px;padding:4px}
-.av-readout{min-width:36px;text-align:right;font-variant-numeric:tabular-nums;color:#e6edf0}
-.av-notice{margin:6px 0;padding:6px 8px;background:#14202a;border:1px solid #2f4a5c;color:#d5e7ef;border-radius:4px;font-size:11px}
-.av-error{margin:6px 0;padding:6px 8px;background:#2a1414;border:1px solid #7e2f2f;color:#ffb4b4;border-radius:4px;font-size:11px}
-.av-warning{margin:6px 0;padding:6px 8px;background:#302613;border:1px solid #79622f;color:#ffdc91;border-radius:4px;font-size:11px}
-.av-point-settings{margin-top:5px;font-size:11px}
-.av-point-settings summary{cursor:pointer}
-.av-point-location{margin:5px 0 0}
-.av-point-settings label{display:inline-block;margin:5px 5px 0 0}
-.av-point-settings select{margin:5px 9px 0 0}
-`;
 
 function ensureStyles(): void {
-  const style = document.getElementById(STYLE_ID) ?? document.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = CSS;
-  document.head.append(style);
+  adoptDocumentStyleSheet(typeof document !== 'undefined' ? document : undefined, STYLE_ID, panelCss);
 }
 
 function node<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -120,7 +98,6 @@ export class PluginPanel {
     this.pointHorizon.addEventListener('change', () => { void this.loadPointRange(); });
     this.point.hidden = true;
     this.point.ariaLabel = 'Point forecast';
-    this.point.style.cssText = 'margin-top:12px;border-top:1px solid #36464d;padding-top:8px';
     this.pointStatus.role = 'status';
     this.pointSettings.append(node('summary', undefined, 'Settings'), this.pointCoordinates, unitsLabel, this.units, this.pointHorizonLabel, this.pointHorizon);
     this.point.append(this.pointBody, this.pointStatus, this.pointSettings);

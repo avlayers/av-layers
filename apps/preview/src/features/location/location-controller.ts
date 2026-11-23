@@ -24,8 +24,7 @@ export function createLocationController(options: LocationControllerOptions): Lo
   const positionMarker = (): void => {
     if (!marker || !point) return;
     const projected = map.project(point);
-    marker.style.left = `${projected.x}px`;
-    marker.style.top = `${projected.y}px`;
+    marker.style.transform = `translate3d(${projected.x}px, ${projected.y}px, 0) translate(-50%, -50%)`;
   };
   const clearMarker = (): void => {
     if (timer !== null) clearTimeout(timer);

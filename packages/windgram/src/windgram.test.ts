@@ -869,10 +869,11 @@ describe('Windgram data', () => {
     });
     const svg = renderWindgramSvg(scene);
 
-    // Chart SVG renders patterned SCT/BKN & solid OVC stratiform decks, vertical Cu depth tower, and HI OVC cirrus badge!
+    // Chart SVG renders patterned SCT/BKN & solid OVC stratiform decks, Cu base glyph (no vertical tower boxes), and HI OVC cirrus badge!
     expect(svg).toContain('class="wg-cloud-deck-sct"');
     expect(svg).toContain('class="wg-cloud-deck-ovc"');
-    expect(svg).toContain('data-cu-tower="cu"');
+    expect(svg).toContain('data-cumulus="cu"');
+    expect(svg).not.toContain('data-cu-tower=');
     expect(svg).toContain('data-sky-high="true"');
     expect(svg).toContain('>HI OVC<');
 
@@ -1349,8 +1350,11 @@ describe('Windgram data', () => {
     expect(stitchedSvg).toContain('data-cumulus="od"');
     expect(stitchedSvg).not.toContain('data-cumulus="cb"');
     expect(stitchedSvg).not.toContain('wg-cloud-cb-bolt');
-    expect(stitchedSvg).toContain('style="color:#fca5a5"');
-    expect(stitchedSvg).toContain('style="color:#e879f9"');
+    expect(stitchedSvg).toContain('wg-barb-danger');
+    expect(stitchedSvg).toContain('wg-barb-pennant');
+    expect(stitchedSvg).toContain('--wg-wind-danger: #fca5a5');
+    expect(stitchedSvg).toContain('--wg-wind-pennant: #e879f9');
+    expect(stitchedSvg).not.toContain('style="color:');
     expect(stitchedSvg).toContain('data-native-lift-ceiling=""');
     expect(stitchedSvg).toContain('class="wg-wave-lift"');
 
@@ -1666,7 +1670,8 @@ describe('Windgram data', () => {
     const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: site.site.timeZone, hours: site.hours });
     const fullSvg = renderWindgramSvg(scene);
     expect(fullSvg).toContain('class="wg-barb-rim"');
-    expect(fullSvg).toContain('wg-od-glaciated');
+    expect(fullSvg).toContain('wg-cloud-od-glaciated');
+    expect(fullSvg).not.toContain('data-cu-tower=');
     expect(fullSvg).not.toContain('IMC whiteout');
     expect(fullSvg).not.toContain('Deep glaciated OD anvil');
 
@@ -2333,5 +2338,101 @@ describe('Windgram data', () => {
     expect(ticksA).toEqual(['9a', '12p', '3p']);
     expect(ticksBAfterA).toEqual(['8a', '11a', '2p']);
     expect(ticksBAfterA).toEqual(ticksBFresh);
+  });
+
+  it('keeps 1-Day cropped to solar daylight on nocturnal frameIds, anchors chart floor at site ground without sub-model hatching, and omits vertical tower bars', () => {
+    const head = new FakeElement('head');
+    const owner = {
+      head,
+      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
+      createElement: (tag: string) => new FakeElement(tag, owner as unknown as Document),
+      defaultView: new EventTarget(),
+    };
+
+    // Armenia point (Asia/Yerevan UTC+4) across 01Z..19Z (5a..11p local)
+    const armPoint = { lat: 40.0096, lon: 44.6283 };
+    const hours = Array.from({ length: 19 }, (_, i) => i + 1);
+    const { build, sample, profile } = fixture(hours, hours.length);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+    for (const f of frames) {
+      f.profile.modelTerrainM = 1495;
+      f.layers['usable-lift-msl']!.value = 2400;
+      f.layers['usable-lift-agl']!.value = 920;
+    }
+
+    const container = owner.createElement('div') as unknown as HTMLElement;
+    const siteTerrainValley = {
+      elevationM: 1480,
+      status: 'valid' as const,
+      interpolated: true,
+      surfaceId: 'gfs-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    };
+    renderPointWindgram(container, { frames, siteTerrain: siteTerrainValley }, build, {
+      point: armPoint,
+      frameId: 'f001', // 01:00 UTC = 05:00 local (pre-sunrise)
+      unitSystem: 'imperial',
+      viewMode: '1d',
+      onFrame: vi.fn(),
+    });
+    const host = visit(container as unknown as FakeElement).find(el => el.className === 'av-windgram-host')!;
+    expect(host.innerHTML).not.toContain('>5a<');
+    expect(host.innerHTML).not.toContain('>11p<');
+    expect(host.innerHTML).toContain('data-height-series="modelTerrainM"');
+    expect(host.innerHTML).not.toContain('class="windgram-missing"');
+    disposePointWindgram(container);
+
+    // Ridge case (Ground 1,450 m > model 1,248 m): floorM anchors at 1,450 m, clipping underground air
+    for (const f of frames) f.profile.modelTerrainM = 1248;
+    const ridgeSite = createPointForecast(build, armPoint, {
+      siteTerrain: { ...siteTerrainValley, elevationM: 1450 },
+    })(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const ridgeDay = buildWindgramView(ridgeSite, {
+      unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: ridgeSite.site.timeZone,
+      hours: { timeZone: ridgeSite.site.timeZone, dateKey: ridgeSite.hours[0]!.validAt.slice(0, 10) },
+    });
+    expect(ridgeDay.floorM).toBe(1450);
+  });
+
+  it('adopts shared Constructable Stylesheets without DOM <style> nodes when supported, emits zero inline style attributes in keys/barbs, and keeps CSS band colors in sync', async () => {
+    const { adoptDocumentStyleSheet } = await import('./style-registry.ts');
+    const chartCss = (await import('./styles/windgram-chart.css?inline')).default;
+    const panelCss = (await import('./styles/windgram-panel.css?inline')).default;
+    const { WINDGRAM_CLIMB_BANDS } = await import('./windgram-atmosphere.ts');
+    const { WINDGRAM_STABILITY } = await import('./windgram-stability.ts');
+
+    // 1) Shared CSSStyleSheet adoption across multiple documents in the same realm
+    let constructed = 0;
+    class MockCSSStyleSheet {
+      text = '';
+      constructor() { constructed++; }
+      replaceSync(css: string) { this.text = css; }
+    }
+    const win = { CSSStyleSheet: MockCSSStyleSheet };
+    const docA = { defaultView: win, adoptedStyleSheets: [] as MockCSSStyleSheet[], head: new FakeElement('head') };
+    const docB = { defaultView: win, adoptedStyleSheets: [] as MockCSSStyleSheet[], head: new FakeElement('head') };
+    adoptDocumentStyleSheet(docA as unknown as Document, 'test-sheet', '.x{color:red}');
+    adoptDocumentStyleSheet(docA as unknown as Document, 'test-sheet', '.x{color:red}');
+    adoptDocumentStyleSheet(docB as unknown as Document, 'test-sheet', '.x{color:red}');
+    expect(constructed).toBe(1);
+    expect(docA.adoptedStyleSheets).toHaveLength(1);
+    expect(docB.adoptedStyleSheets[0]).toBe(docA.adoptedStyleSheets[0]);
+    expect(docA.head.children).toHaveLength(0);
+
+    // 2) Zero inline style="..." attributes in rendered keys across modes, and no host #app selector leak in windgram-panel.css
+    expect(renderWindgramKey('metric', true, 'hybrid-climb')).not.toContain('style=');
+    expect(renderWindgramKey('imperial', false, 'lapse')).not.toContain('style=');
+    expect(panelCss).not.toContain('#app');
+
+    // 3) 1:1 color sync between TS band definitions and CSS stylesheets
+    for (const band of WINDGRAM_CLIMB_BANDS) {
+      expect(chartCss).toContain(`.${band.className} { fill: ${band.color.toLowerCase()}; }`);
+      expect(panelCss).toContain(`.wg-key-seg.${band.className} { background: ${band.color.toLowerCase()}; }`);
+    }
+    for (const stab of WINDGRAM_STABILITY) {
+      expect(chartCss).toContain(`.meteo-gram-stab-${stab.className} { fill: ${stab.color.toLowerCase()}; }`);
+      expect(panelCss).toContain(`.wg-key-seg.meteo-gram-stab-${stab.className} { background: ${stab.color.toLowerCase()}; }`);
+    }
   });
 });

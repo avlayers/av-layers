@@ -779,7 +779,6 @@ export class RainAnimator {
       const el = document.createElement('canvas');
       el.className = 'av-rain-canvas';
       el.setAttribute('aria-hidden', 'true');
-      el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;';
       host.appendChild(el);
       this.canvas = el;
       this.ctx = el.getContext('2d');

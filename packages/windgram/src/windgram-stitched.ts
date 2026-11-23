@@ -394,6 +394,7 @@ export function buildStitchedWindgramView(
           bounds,
           scale,
           plotHeight,
+          hybrid,
         });
 
         panelContours = temperatureContours(
@@ -439,7 +440,7 @@ export function buildStitchedWindgramView(
 
         for (const [key, , , , heightFn] of seriesDefs) {
           const pts = panelHours.map((hour, i): Point | null => {
-            const z = heightFn(hour);
+            const z = heightFn(hour, floorM);
             return z === null || z < floorM || z > topM ? null : { x: localViewHours[i]!.x, y: y(z) };
           });
           const subPath = clipPolylineToBounds(pts, panelLeft, panelRight);

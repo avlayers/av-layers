@@ -6,6 +6,8 @@
 
 import { FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
 import { MPH_PER_MPS } from '@av/contracts/units';
+import classicStylesheet from './styles/windgram-callout-classic.css?inline';
+import tile2x2Stylesheet from './styles/windgram-callout-tile.css?inline';
 import {
   HIGH_INSTABILITY_CAPE_JKG,
   skyCoverageCode,
@@ -250,75 +252,6 @@ const TILE_WIDTH = 204;
 const TILE_HEIGHT = 74;
 const TILE_DIVIDER_X = 103;
 const TILE_VARIO_MAX_PX = 18;
-
-const tile2x2Stylesheet = `
-.windgram .wg-tile-back { fill: #0f172a; fill-opacity: .88; stroke: #475569; stroke-opacity: .72; stroke-width: .85; }
-.windgram .wg-tile-back.is-caution { stroke: #f59e0b; stroke-opacity: .85; }
-.windgram .wg-tile-back.is-danger { stroke: #ef4444; stroke-opacity: .9; }
-.windgram .wg-tile-back.is-pennant { stroke: #e879f9; stroke-opacity: .92; }
-.windgram .wg-tile-divider { stroke: #1e293b; stroke-opacity: .9; stroke-width: .9; stroke-dasharray: none; }
-.windgram .wg-tile-pill { fill: #f59e0b; fill-opacity: .2; stroke: #fbbf24; stroke-opacity: .55; stroke-width: .7; }
-.windgram .wg-tile-pill.is-free { fill: #38bdf8; fill-opacity: .16; stroke: #7dd3fc; stroke-opacity: .45; }
-.windgram .wg-tile-badge { fill: #fbbf24; font-size: 8px; font-weight: 800; letter-spacing: .03em; }
-.windgram .wg-tile-badge.is-free { fill: #93c5fd; font-weight: 700; }
-.windgram .wg-tile-time { fill: #bae6fd; font-size: 9px; font-weight: 750; }
-.windgram .wg-tile-agl { fill: #f8fafc; font-size: 10px; font-weight: 750; }
-.windgram .wg-tile-msl { fill: #94a3b8; font-size: 8.6px; font-weight: 600; }
-.windgram .wg-tile-cell-tint { fill: transparent; }
-.windgram .wg-tile-cell-tint.is-caution { fill: #f59e0b; fill-opacity: .14; }
-.windgram .wg-tile-cell-tint.is-danger { fill: #ef4444; fill-opacity: .19; }
-.windgram .wg-tile-cell-tint.is-pennant { fill: #d946ef; fill-opacity: .19; }
-.windgram .wg-tile-cell-tint.is-cloud { fill: #0ea5e9; fill-opacity: .18; }
-.windgram .wg-tile-cell-tint.is-rain { fill: #0284c7; fill-opacity: .18; }
-.windgram .wg-tile-dial { fill: #0b1324; stroke: #4ade80; stroke-width: 1.15; }
-.windgram .wg-tile-dial.is-calm { stroke: #86efac; }
-.windgram .wg-tile-dial.is-missing { stroke: #64748b; }
-.windgram .wg-tile-dial.is-moderate { stroke: #e2e8f0; }
-.windgram .wg-tile-dial.is-caution { stroke: #fbbf24; }
-.windgram .wg-tile-dial.is-danger { stroke: #f87171; }
-.windgram .wg-tile-dial.is-pennant { stroke: #e879f9; }
-.windgram .wg-tile-dial-tick { stroke: #64748b; stroke-width: .9; stroke-dasharray: none; }
-.windgram .wg-tile-arrow { fill: #4ade80; stroke: none; }
-.windgram .wg-tile-arrow.is-moderate { fill: #f8fafc; }
-.windgram .wg-tile-arrow.is-caution { fill: #fbbf24; }
-.windgram .wg-tile-arrow.is-danger { fill: #f87171; }
-.windgram .wg-tile-arrow.is-pennant { fill: #e879f9; }
-.windgram .wg-tile-calm-dot { fill: none; stroke: #86efac; stroke-width: 1.15; }
-.windgram .wg-tile-val { fill: #f1f5f9; font-size: 10.2px; font-weight: 750; }
-.windgram .wg-tile-val.is-ok { fill: #4ade80; }
-.windgram .wg-tile-val.is-moderate { fill: #f8fafc; }
-.windgram .wg-tile-val.is-caution { fill: #fbbf24; }
-.windgram .wg-tile-val.is-danger { fill: #f87171; }
-.windgram .wg-tile-val.is-pennant { fill: #f0abfc; }
-.windgram .wg-tile-val.is-mild { fill: #86efac; }
-.windgram .wg-tile-val.is-good { fill: #4ade80; }
-.windgram .wg-tile-val.is-strong { fill: #fbbf24; }
-.windgram .wg-tile-val.is-wave { fill: #67e8f9; }
-.windgram .wg-tile-val.is-sink { fill: #fda4af; }
-.windgram .wg-tile-val.is-muted { fill: #94a3b8; font-weight: 650; }
-.windgram .wg-tile-val.is-freeze { fill: #67e8f9; }
-.windgram .wg-tile-td { fill: #94a3b8; font-size: 7.9px; font-weight: 650; }
-.windgram .wg-tile-sky-code { fill: #cbd5e1; font-size: 7.5px; font-weight: 750; letter-spacing: .02em; }
-.windgram .wg-tile-sky-code.is-cloud { fill: #7dd3fc; font-weight: 800; }
-.windgram .wg-tile-sky-code.is-muted { fill: #94a3b8; font-weight: 650; }
-.windgram .wg-tile-sub { fill: #94a3b8; font-size: 8.0px; font-weight: 650; }
-.windgram .wg-tile-sub.is-caution { fill: #fcd34d; }
-.windgram .wg-tile-sub.is-danger { fill: #fca5a5; }
-.windgram .wg-tile-sub.is-pennant { fill: #f0abfc; }
-.windgram .wg-tile-sub.is-wave { fill: #67e8f9; font-weight: 700; }
-.windgram .wg-tile-sub.is-cloud { fill: #7dd3fc; font-weight: 750; }
-.windgram .wg-tile-sub.is-rain { fill: #38bdf8; font-weight: 750; }
-.windgram .wg-tile-vario-track { fill: #1e293b; }
-.windgram .wg-tile-vario-tick { stroke: #475569; stroke-width: .75; stroke-dasharray: none; }
-.windgram .wg-tile-vario-fill { fill: #4ade80; }
-.windgram .wg-tile-vario-fill.is-strong { fill: #fbbf24; }
-.windgram .wg-tile-vario-fill.is-wave { fill: #22d3ee; }
-.windgram .wg-tile-okta { fill: #1e293b; stroke: #334155; stroke-width: .55; }
-.windgram .wg-tile-okta.is-lit { fill: #e2e8f0; stroke: #cbd5e1; }
-.windgram .wg-tile-okta.is-high { fill: #64748b; stroke: #94a3b8; fill-opacity: .65; }
-.windgram .wg-tile-okta.is-cloud { fill: #38bdf8; stroke: #7dd3fc; }
-.windgram .wg-tile-drop { fill: #38bdf8; stroke: none; }
-`;
 
 const tile2x2Renderer: WindgramCalloutRenderer = {
   id: 'tile-2x2',
@@ -856,17 +789,6 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
 // Variant 2: Classic 4-Row Text Callout ('classic')
 // Kept registered so callers can switch or A/B compare with one option change.
 // ---------------------------------------------------------------------------
-
-const classicStylesheet = `
-.windgram .wg-inspector-back { fill: #122033; fill-opacity: .92; stroke: #ffffff; stroke-opacity: .55; stroke-width: .75; }
-.windgram .wg-inspector-badge { fill: #fbbf24; font-size: 9px; font-weight: 750; letter-spacing: .04em; }
-.windgram .wg-inspector-badge.is-free { fill: #93c5fd; font-weight: 700; }
-.windgram .wg-inspector-agl { fill: #fff; font-size: 12px; font-weight: 750; }
-.windgram .wg-inspector-msl { fill: #94a3b8; font-size: 10.5px; font-weight: 600; }
-.windgram .wg-inspector-meteo { fill: #e2e8f0; font-size: 10.5px; font-weight: 600; }
-.windgram .wg-inspector-soar { fill: #86efac; font-size: 10.5px; font-weight: 650; }
-.windgram .wg-inspector-soar.is-muted { fill: #cbd5e1; font-weight: 600; }
-`;
 
 const classicRenderer: WindgramCalloutRenderer = {
   id: 'classic',

@@ -1,5 +1,14 @@
 import { formatPlaceTime, formatPointMapTimes, placeDateKey, pointFrameView, seriesTable, type GeoPoint, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/client';
 import { formatSitePlaceTime, pointOffsetMinutesAt } from '@av/client/timezone';
+import { adoptDocumentStyleSheet } from './style-registry.ts';
+import windgramPanelCss from './styles/windgram-panel.css?inline';
+
+const STYLE_ID = 'av-windgram-document-style';
+
+function setCssVar(element: HTMLElement, name: string, value: string): void {
+  if (typeof element.style.setProperty === 'function') element.style.setProperty(name, value);
+  else (element.style as unknown as Record<string, string>)[name] = value;
+}
 
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(
@@ -7,8 +16,10 @@ export function renderPointSeries(
   options: { point: GeoPoint; frameId: string | null; mapFrameId?: string | null; mapOffsetMinutes?: number; unitSystem: UnitSystem; totalFrames?: number; loading?: boolean; onFrame(id: string): void }
 ): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean, mapOffsetMinutes?: number) => void {
   const owner = container.ownerDocument;
-  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string): HTMLElementTagNameMap[K] => {
+  adoptDocumentStyleSheet(owner, STYLE_ID, windgramPanelCss);
+  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
     const element = owner.createElement(tag);
+    if (className) element.className = className;
     if (text !== undefined) element.textContent = text;
     return element;
   };
@@ -19,30 +30,31 @@ export function renderPointSeries(
     (previousSelected.offsetLeft >= previousScroll && previousSelected.offsetLeft + previousSelected.offsetWidth <= previousScroll + previous.clientWidth);
   const focused = previous?.contains(owner.activeElement) ? owner.activeElement as HTMLButtonElement : null;
   const wasOpen = container.querySelector?.<HTMLDetailsElement>('details')?.open ?? false;
-  const section = node('section'), summary = node('p'), time = node('p'), incomplete = node('p', 'Forecast incomplete. Some hours could not be loaded.'), chart = node('div'), legend = node('p'), details = node('details'), table = node('div');
-  section.className = 'av-point-series'; summary.className = 'av-point-values'; chart.className = 'av-point-chart';
-  chart.role = 'group'; chart.ariaLabel = 'Point forecast times; heights MSL';
-  summary.style.cssText = 'font-size:12px;line-height:1.6;margin:4px 0 12px';
-  time.className = 'av-point-time'; time.style.cssText = 'font-size:11px;line-height:1.5;margin:4px 0';
-  incomplete.className = 'av-point-incomplete'; incomplete.role = 'status';
-  incomplete.style.cssText = 'font-size:12px;font-weight:600;margin:4px 0';
-  chart.style.cssText = 'position:relative;display:flex;gap:3px;overflow-x:auto;align-items:stretch;min-height:132px;padding:3px';
-  legend.style.cssText = 'font-size:11px;opacity:.75;margin:8px 0';
-  legend.className = 'av-point-legend';
-  const heading = node('summary', 'Values and source surfaces');
-  heading.style.cssText = 'font-size:11px;cursor:pointer;margin:8px 0'; details.append(heading, table);
+  const section = node('section', 'av-point-series');
+  const summary = node('p', 'av-point-values');
+  const time = node('p', 'av-point-time');
+  const incomplete = node('p', 'av-point-incomplete', 'Forecast incomplete. Some hours could not be loaded.');
+  incomplete.role = 'status';
+  const chart = node('div', 'av-point-chart');
+  chart.role = 'group';
+  chart.ariaLabel = 'Point forecast times; heights MSL';
+  const legend = node('p', 'av-point-legend');
+  const details = node('details', 'av-point-details');
+  const table = node('div');
+  const heading = node('summary', undefined, 'Values and source surfaces');
+  details.append(heading, table);
   details.addEventListener('toggle', () => {
     if (!details.open || table.children.length) return;
     const { manifest } = build;
     const layers = Object.keys(payload.frames[0]?.layers ?? {});
     const model = seriesTable(payload, layers, manifest.descriptors.layers);
     const values = node('table'), head = node('tr');
-    head.append(...model.headings.map(label => node('th', label)));
+    head.append(...model.headings.map(label => node('th', undefined, label)));
     values.append(head);
     const validColumn = model.headings.indexOf('Valid');
     for (const cells of model.rows) {
       const row = node('tr');
-      row.append(...cells.map((text, cell) => node('td', cell === validColumn ? formatSitePlaceTime(Date.parse(text), options.point, 'stamp') : text)));
+      row.append(...cells.map((text, cell) => node('td', undefined, cell === validColumn ? formatSitePlaceTime(Date.parse(text), options.point, 'stamp') : text)));
       values.append(row);
     }
     table.replaceChildren(values);
@@ -73,49 +85,58 @@ export function renderPointSeries(
     const previousDate = prevFrame ? placeDateKey(Date.parse(prevFrame.validTime), offsetAt(prevFrame.validTime)) : '';
     const firstOfDay = index === 0 || localDate !== previousDate;
     const localHour = new Date(frameMs + frameOffset * 60_000).getUTCHours();
-    const width = firstOfDay ? 54 : 20;
     const gapText = elapsed[index] > 1 ? `+${elapsed[index]} h` : '', gapWidth = gapText ? Math.max(24, gapText.length * 6) : 0;
-    const button = node('button'), plot = node('span'), hour = node('span', `${firstOfDay && localDate ? `${localDate.slice(5)} ` : ''}${String(localHour).padStart(2, '0')}`);
-    button.type = 'button'; button.value = frame.id;
-    button.style.cssText = `position:relative;flex:1 0 ${width}px;min-width:${width}px;margin-left:${gapWidth}px;padding:2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;cursor:pointer`;
-    plot.style.cssText = 'display:block;position:relative;height:100px;border-bottom:1px solid #89959e';
-    hour.style.cssText = 'display:block;font-size:10px;line-height:20px;white-space:nowrap';
+    const button = node('button', firstOfDay ? 'av-point-bar is-day-start' : 'av-point-bar');
+    const plot = node('span', 'av-point-plot');
+    const hour = node('span', 'av-point-hour', `${firstOfDay && localDate ? `${localDate.slice(5)} ` : ''}${String(localHour).padStart(2, '0')}`);
+    button.type = 'button';
+    button.value = frame.id;
+    if (gapWidth > 0) setCssVar(button, '--gap-width', `${gapWidth}px`);
     const view = views[index];
     if (view.terrainM !== null) {
-      const floor = node('span'); floor.className = 'av-point-terrain'; floor.style.cssText = `position:absolute;display:block;bottom:0;width:100%;height:${percent(view.terrainM)}%;background:#89959e55`;
+      const floor = node('span', 'av-point-terrain');
+      setCssVar(floor, '--bar-height', `${percent(view.terrainM)}%`);
       plot.append(floor);
     }
     if (view.mslM !== null) {
-      const lift = node('span');
-      lift.className = view.terrainM === null ? 'av-point-ceiling-marker' : 'av-point-lift-bar';
-      lift.style.cssText = view.terrainM === null
-        ? `position:absolute;display:block;bottom:${percent(view.mslM)}%;width:100%;height:3px;background:#229ec6`
-        : `position:absolute;display:block;bottom:${percent(view.terrainM)}%;width:100%;height:${Math.max(0, percent(view.mslM) - percent(view.terrainM))}%;background:#229ec6`;
+      const lift = node('span', view.terrainM === null ? 'av-point-ceiling-marker' : 'av-point-lift-bar');
+      if (view.terrainM === null) {
+        setCssVar(lift, '--bar-bottom', `${percent(view.mslM)}%`);
+      } else {
+        setCssVar(lift, '--bar-bottom', `${percent(view.terrainM)}%`);
+        setCssVar(lift, '--bar-height', `${Math.max(0, percent(view.mslM) - percent(view.terrainM))}%`);
+      }
       plot.append(lift);
     }
     if (view.lclM !== null) {
-      const lcl = node('span'); lcl.style.cssText = `position:absolute;display:block;bottom:${percent(view.lclM)}%;width:100%;height:2px;background:#b8860b`;
+      const lcl = node('span', 'av-point-lcl');
+      setCssVar(lcl, '--bar-bottom', `${percent(view.lclM)}%`);
       plot.append(lcl);
     }
     if (view.thermalTopM !== null) {
-      const top = node('span'); top.className = 'av-point-native-top';
-      top.style.cssText = `position:absolute;display:block;bottom:${percent(view.thermalTopM)}%;width:100%;height:2px;background:#ae78d6`;
+      const top = node('span', 'av-point-native-top');
+      setCssVar(top, '--bar-bottom', `${percent(view.thermalTopM)}%`);
       plot.append(top);
     }
-    button.append(plot, hour); button.addEventListener('click', () => options.onFrame(frame.id));
+    button.append(plot, hour);
+    button.addEventListener('click', () => options.onFrame(frame.id));
     if (gapText) {
-      const gap = node('span', gapText); gap.className = 'av-point-gap'; gap.ariaHidden = 'true';
-      gap.style.cssText = `position:absolute;left:-${gapWidth + 2}px;bottom:2px;width:${gapWidth}px;text-align:center;font-size:9px;line-height:20px;white-space:nowrap;opacity:.75`;
+      const gap = node('span', 'av-point-gap', gapText);
+      gap.ariaHidden = 'true';
       button.append(gap);
     }
     button.addEventListener('keydown', event => {
       const target = event.key === 'ArrowRight' ? index + 1 : event.key === 'ArrowLeft' ? index - 1 : event.key === 'Home' ? 0 : event.key === 'End' ? payload.frames.length - 1 : -1;
       if (target < 0 || target >= payload.frames.length) return;
-      event.preventDefault(); bars[target].focus(); options.onFrame(payload.frames[target].id);
+      event.preventDefault();
+      bars[target].focus();
+      options.onFrame(payload.frames[target].id);
     });
-    chart.append(button); return button;
+    chart.append(button);
+    return button;
   });
-  section.append(chart, time, incomplete, summary, legend, details); container.replaceChildren(section);
+  section.append(chart, time, incomplete, summary, legend, details);
+  container.replaceChildren(section);
   chart.scrollLeft = previousScroll;
   details.open = wasOpen;
   let units = options.unitSystem;
@@ -148,8 +169,8 @@ export function renderPointSeries(
     summary.textContent = frame ? currentViews[selectedIndex].summary : loading ? 'Loading selected point hour…' : 'Selected point hour unavailable.';
     bars.forEach((bar, index) => {
       const frame = payload.frames[index], selected = frame.id === frameId;
-      bar.ariaPressed = String(selected); bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
-      bar.style.borderColor = selected ? '#229ec6' : 'transparent';
+      bar.ariaPressed = String(selected);
+      bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
       if (labelledUnits !== units) {
         bar.ariaLabel = `${formatPlaceTime(Date.parse(frame.validTime), offsetAt(frame.validTime), 'stamp')}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${currentViews[index].summary}`;
         bar.title = bar.ariaLabel;

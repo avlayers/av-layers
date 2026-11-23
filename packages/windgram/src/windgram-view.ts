@@ -152,7 +152,7 @@ export type WindgramSeriesSpec = readonly [
   label: string,
   color: string,
   dash: string | null,
-  heightFn: (hour: ProfileHour) => number | null,
+  heightFn: (hour: ProfileHour, floorM: number) => number | null,
 ];
 
 export function formatAltitudeAxisLabels(
@@ -215,8 +215,9 @@ export function collectMissingFieldMaskPaths(args: {
   bounds: readonly { left: number; width: number }[];
   scale: WindgramScale;
   plotHeight: number;
+  hybrid?: boolean;
 }): string[] {
-  const { stabilityPixelNodes, sampling, hours, bounds, scale, plotHeight } = args;
+  const { stabilityPixelNodes, sampling, hours, bounds, scale, plotHeight, hybrid = false } = args;
   const { floorM, top, bottom } = scale;
   const y = (z: number) => heightToY(scale, z);
   const paths: string[] = [];
@@ -250,7 +251,7 @@ export function collectMissingFieldMaskPaths(args: {
       paths.push(`M${bLeft},${top}h${bWidth}v${missingHeight}h-${bWidth}Z`);
     }
     const modelTerrainM = hours[i]!.modelTerrainM;
-    if (validNodes.length && modelTerrainM !== null && modelTerrainM > floorM) {
+    if (!hybrid && validNodes.length && modelTerrainM !== null && modelTerrainM > floorM) {
       const groundY = y(modelTerrainM);
       paths.push(`M${bLeft},${groundY}h${bWidth}v${bottom - groundY}h-${bWidth}Z`);
     }
@@ -389,10 +390,17 @@ export function windgramSeriesDefinitions(hybrid: boolean): readonly WindgramSer
     ['thermalTopM', 'Native thermal top (parcel)', hybrid ? '#fcd34d' : '#a56800', '6 5', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.thermalTopM : null)],
     ['usableLiftTopM', 'Map usable lift', '#134ac4', null, (hour: ProfileHour) => hour.mapLift.mslM],
     ...(hybrid
-      ? [['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
-          hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const]
+      ? [
+          ['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
+            hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const,
+          ['modelTerrainM', 'Model ground elevation', '#94a3b8', '4 4', (hour: ProfileHour, floorM: number) =>
+            hour.modelTerrainM !== null && hour.modelTerrainM > floorM + 5 ? hour.modelTerrainM : null] as const,
+        ]
       : []),
-    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.fineTerrainM ?? null],
+    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour, floorM: number) => {
+      const fineM = hour.fineTerrainM ?? null;
+      return fineM !== null && fineM > floorM + 2 ? fineM : null;
+    }],
     ['surfaceLclM', 'Native potential cloud base (surface LCL)', hybrid ? '#f9a8d4' : '#426173', '3 4', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.surfaceLclM : null)],
     [
       'effectiveCloudLimitM',
@@ -540,7 +548,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     view.fields = Object.entries(fields).map(([className, path]) => ({ className, path }));
   }
 
-  for (const path of collectMissingFieldMaskPaths({ stabilityPixelNodes, sampling, hours, bounds, scale: view, plotHeight })) {
+  for (const path of collectMissingFieldMaskPaths({ stabilityPixelNodes, sampling, hours, bounds, scale: view, plotHeight, hybrid })) {
     view.fields.push({ className: 'windgram-missing', path });
   }
   view.contours = temperatureContours(view, system);
@@ -565,7 +573,7 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
 
   for (const [key, label, color, dash, height] of windgramSeriesDefinitions(hybrid)) {
     const points = hours.map((hour, i): Point | null => {
-      const z = height(hour);
+      const z = height(hour, floorM);
       return z === null || z < floorM || z > topM ? null : { x: view.hours[i].x, y: y(z) };
     });
     view.series.push({ key, label, color, dash, path: linearPath(points) });
