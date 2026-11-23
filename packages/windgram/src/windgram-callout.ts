@@ -28,7 +28,7 @@ import {
 } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import type { WindgramReading } from './scene-types.ts';
-import type { WindgramTelemetryStrip } from './windgram-readout.ts';
+import { isTolCappedBelowThermalTop, type WindgramTelemetryStrip } from './windgram-readout.ts';
 
 export const WINDGRAM_CALLOUT_VARIANTS = ['tile-2x2', 'classic'] as const;
 export type WindgramCalloutVariant = (typeof WINDGRAM_CALLOUT_VARIANTS)[number];
@@ -474,8 +474,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         let climbSubClass = 'wg-tile-sub';
         let waveMode: 'none' | 'up' | 'down' = 'none';
         if (useTol) {
-          const cappedBelowTop = Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
-          if (cappedBelowTop && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
+          if (isTolCappedBelowThermalTop(reading) && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
             displayClimbMps = reading.estimatedClimbMps;
             climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ At ceiling';
           } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {

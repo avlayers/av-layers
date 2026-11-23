@@ -143,6 +143,12 @@ export interface WindgramTelemetryStrip {
   readonly hasPositiveClimb: boolean;
 }
 
+export function isTolCappedBelowThermalTop(
+  reading: Pick<WindgramReading, 'cloudCapped' | 'nativeThermalTopM' | 'heightM'>,
+): boolean {
+  return Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
+}
+
 export function buildWindgramTelemetry(
   view: WindgramView,
   reading: WindgramReading,
@@ -179,8 +185,7 @@ export function buildWindgramTelemetry(
   let climbPart: string | null = null;
   let hasPositiveClimb = false;
   if (snappedToTol) {
-    const cappedBelowTop = Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
-    if (cappedBelowTop && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
+    if (isTolCappedBelowThermalTop(reading) && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
       climbPart = `Climb ${formatClimbRate(reading.estimatedClimbMps, system)}`;
       hasPositiveClimb = true;
     } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {

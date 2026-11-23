@@ -40,8 +40,9 @@ async function harness(initialFrames?: PinnedBuild['manifest']['frames']) {
   const publish = {
     open: vi.fn(), close: vi.fn(), status: vi.fn(), busy: vi.fn(), horizon: vi.fn(), wind: vi.fn()
   };
+  let rootElement: HTMLElement | null = null;
   const feature = createPointFeature({
-    root: () => null,
+    root: () => rootElement,
     series: {} as never,
     getBuild: () => build,
     getSelectedFrame: () => selectedFrame,
@@ -57,6 +58,7 @@ async function harness(initialFrames?: PinnedBuild['manifest']['frames']) {
   });
   return {
     build, sample, publish, feature, session,
+    setRoot(next: HTMLElement | null) { rootElement = next; },
     setWind(next: PointWind | null) { wind = next; },
     setFrame(frameId: string) {
       selectedFrame = frameId;
@@ -90,12 +92,20 @@ describe('point map wind readout', () => {
     test.feature.dispose();
   });
 
-  it('dismisses a pending lazy open outside the map before requests can start', async () => {
+  it('dismisses a pending lazy open outside the map before requests can start, while keeping #model-picker open', async () => {
     class NodeStub { contains(node: unknown) { return node === this; } }
     vi.stubGlobal('Node', NodeStub);
-    const test = await harness(), map = new NodeStub() as unknown as Element, outside = new NodeStub() as unknown as Node;
+    const test = await harness();
+    const map = new NodeStub() as unknown as Element;
+    const modelPicker = new NodeStub() as unknown as Element;
+    const outside = new NodeStub() as unknown as Node;
+    test.setRoot({
+      querySelector: (selector: string) => (selector === '#model-picker' ? modelPicker : null)
+    } as unknown as HTMLElement);
     const pending = test.feature.open(point);
     test.feature.dismiss(map, map);
+    expect(test.feature.pending).toBe(true);
+    test.feature.dismiss(modelPicker, map);
     expect(test.feature.pending).toBe(true);
     test.feature.dismiss(outside, map);
     expect(test.feature.pending).toBe(false);

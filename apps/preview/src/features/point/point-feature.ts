@@ -161,7 +161,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     },
     dismiss(target, mapContainer) {
       if ((!options.isOpen?.() && !session?.current && !this.pending) || !(target instanceof Node) || mapContainer.contains(target)) return;
-      const controls = ['#point-card', '#map-dock', '#theme-bar', '#weather-dock', '#legend', '#locate', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
+      const controls = ['#point-card', '#map-dock', '#model-picker', '#theme-bar', '#weather-dock', '#legend', '#locate', '#ref-agl', '#ref-msl', '#layer-picker', '#time', '#wind-controls', '#compact-timeline', '#display-units'];
       if (controls.some(selector => options.root()?.querySelector(selector)?.contains(target))) return;
       this.close();
     }

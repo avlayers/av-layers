@@ -118,7 +118,7 @@ function renderTemperatureLabelsSvg(labels: readonly PlacedTemperatureLabel[]): 
 function heightAxisHeader(view: WindgramView, system: UnitSystem) {
   const x = view.left - 8;
   return text(x, 15, `${unitLabel('elevation', system)} MSL`, 'text-anchor="end" class="wg-axis-unit"') +
-    text(x, 29.5, 'Lift w*', 'text-anchor="end" class="wg-lift"') +
+    `<text x="${fmt(x)}" y="29.5" text-anchor="end" class="wg-lift">Lift w*<title>Deardorff convective velocity scale w* (mean thermal strength before glider sink)</title></text>` +
     text(x, 41.5, unitLabel('lift', system), 'text-anchor="end" class="wg-axis-unit"');
 }
 
