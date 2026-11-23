@@ -1,3 +1,4 @@
+import { locateSampleCell, prepareGridGeometry } from '@av/contracts/geometry';
 import type { LayerId } from '@av/contracts/layers';
 import {
   pointMapLift,
@@ -11,7 +12,9 @@ import {
   LENSCHOW_F_MAX,
   LENSCHOW_PEAK_ZETA,
   lenschowNormalizedUpdraft,
+  resolveUpperAirMoistureReference,
   SINK_RATE_MPS,
+  type UpperAirMoistureReference,
   usableLiftDepthM,
   windFromComponents,
 } from '@av/soaring';
@@ -93,18 +96,26 @@ function computeMaxDepartureFromSurfaceMps(args: {
   if (layerTopM === null || layerTopM < modelTerrainM) return null;
   if (layerTopM === modelTerrainM) return 0;
 
-  const sorted = levels
-    .filter(l => l.heightM !== null && Number.isFinite(l.heightM) && l.heightM > modelTerrainM + 2)
-    .sort((a, b) => a.heightM! - b.heightM!);
   let z = modelTerrainM;
   let u = windU10;
   let v = windV10;
   let maxDeparture = 0;
-  for (const level of sorted) {
-    const upperZ = level.heightM!;
+  for (const level of levels) {
+    if (level.heightM !== null && Number.isFinite(level.heightM) && level.heightM <= modelTerrainM + 20) {
+      continue;
+    }
+    const upperZ = level.heightM;
     const upperU = level.uWindMps;
     const upperV = level.vWindMps;
-    if (upperZ <= z || upperU === null || upperV === null || !Number.isFinite(upperU) || !Number.isFinite(upperV)) {
+    if (
+      upperZ === null ||
+      !Number.isFinite(upperZ) ||
+      upperZ <= z ||
+      upperU === null ||
+      upperV === null ||
+      !Number.isFinite(upperU) ||
+      !Number.isFinite(upperV)
+    ) {
       return null;
     }
     const nextZ = Math.min(layerTopM, upperZ);
@@ -125,7 +136,8 @@ function chartHour(
   frame: PointFrame | undefined,
   build: PinnedBuild,
   fineTerrainM: number | null,
-  upperAirDewpointReference: 'liquid-vapor-pressure' | 'model-rh',
+  finePointInterpolated: boolean,
+  upperAirDewpointReference: UpperAirMoistureReference,
 ): PublishedForecastHour {
   const read = (layer: LayerId) => {
     const cell = frame?.layers[layer];
@@ -137,7 +149,6 @@ function chartHour(
   const wind = windFromComponents(u10, v10);
   const modelTerrainM = profile?.modelTerrainM ?? null;
   const mapLift = pointMapLift(frame, build);
-  const resolvedFineTerrainM = fineTerrainM !== null ? fineTerrainM : mapLift.terrainM;
   const thermalTopM = read('thermal-top-msl');
   const thermalVelocityMps = read('thermal-velocity');
   const pblHeightM = read('pbl-height-agl');
@@ -168,7 +179,8 @@ function chartHour(
   return {
     validAt,
     modelTerrainM,
-    fineTerrainM: resolvedFineTerrainM,
+    fineTerrainM,
+    finePointInterpolated,
     upperAirDewpointReference,
     mapLift,
     surface: {
@@ -228,10 +240,17 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
         isUtcFallback: options.timeZone === 'UTC' || options.timeZone === 'Etc/UTC',
       }
     : resolveSiteTimeZone(lat, lon);
-  const upperAirDewpointReference: 'liquid-vapor-pressure' | 'model-rh' =
-    build.manifest.model === 'gfs' && build.manifest.tool.profileDewpointReference !== 'liquid-vapor-pressure'
-      ? 'model-rh'
-      : 'liquid-vapor-pressure';
+  const upperAirDewpointReference = resolveUpperAirMoistureReference(
+    build.manifest.model,
+    build.manifest.tool.profileDewpointReference,
+  );
+  const fineSurface = build.manifest.surfaces.find(surface => surface.kind === 'fine');
+  const fineLocated = fineSurface
+    ? locateSampleCell(fineSurface.grid, lat, lon, prepareGridGeometry(fineSurface.grid))
+    : null;
+  const finePointInterpolated = Boolean(
+    fineLocated && (fineLocated.fractionX !== 0 || fineLocated.fractionY !== 0),
+  );
   const metadata: Omit<SiteForecast, 'hours'> = {
     model: build.manifest.model,
     site: {
@@ -246,7 +265,6 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
       precipitation: precipitation ? precipitation.timeSupport === 'valid-time' ? 'instantRate' : 'windowMeanRate' : null,
     },
   };
-  let fallbackFineTerrainM: number | null = null;
   let pinnedSiteTerrain: PointTerrain | null | undefined = options?.siteTerrain;
   const cache = new Map<string, { frame: PointFrame | undefined; fineTerrainM: number | null; hour: PublishedForecastHour }>();
   return (
@@ -255,23 +273,12 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
     siteTerrain?: PointTerrain | null,
   ): SiteForecast => {
     if (siteTerrain !== undefined) pinnedSiteTerrain = siteTerrain;
-    if (fallbackFineTerrainM === null) {
-      for (const candidate of loaded.values()) {
-        const candidateTerrainM = pointMapLift(candidate, build).terrainM;
-        if (candidateTerrainM !== null && Number.isFinite(candidateTerrainM)) {
-          fallbackFineTerrainM = candidateTerrainM;
-          break;
-        }
-      }
-    }
     const staticSiteElevationM =
       pinnedSiteTerrain?.status === 'valid' &&
       pinnedSiteTerrain.elevationM !== null &&
       Number.isFinite(pinnedSiteTerrain.elevationM)
         ? pinnedSiteTerrain.elevationM
-        : pinnedSiteTerrain?.status === 'outside-domain'
-          ? null
-          : fallbackFineTerrainM;
+        : null;
     return {
       ...metadata,
       hours: frames.map(({ id, validTime }) => {
@@ -289,7 +296,14 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
         ) {
           return cached.hour;
         }
-        const hour = chartHour(validTime, frame, build, effectiveFineTerrainM, upperAirDewpointReference);
+        const hour = chartHour(
+          validTime,
+          frame,
+          build,
+          effectiveFineTerrainM,
+          finePointInterpolated,
+          upperAirDewpointReference,
+        );
         cache.set(id, { frame, fineTerrainM: effectiveFineTerrainM, hour });
         return hour;
       }),

@@ -1,3 +1,4 @@
+import { SINK_RATE_MPS } from '@av/soaring';
 import {
   climbBandRange,
   CLOUD_BKN_RH_PERCENT,
@@ -24,7 +25,7 @@ import {
   type UnitSystem,
 } from './windgram-format.ts';
 import { CALM_RADIUS, CLOUD_PATH, SNOWFLAKE_PATH, windBarbGlyph, windgramCloudScale } from './windgram-glyphs.ts';
-import { displayedBarbSpeed } from './wind-barb.ts';
+import { barbGeometry, displayedBarbSpeed } from './wind-barb.ts';
 import { displayedBarbs, layoutWindgramMarks, type PlacedTemperatureLabel } from './windgram-label-layout.ts';
 import { WINDGRAM_STABILITY, WINDGRAM_STABLE_COLOR, stabilityRange } from './windgram-stability.ts';
 import { heightToY, visibleHeightAnchors } from './windgram-scale.ts';
@@ -248,10 +249,10 @@ export function renderWindgramSvg(
           ? ` fill="url(#${id}-cloud-bkn)"`
           : '';
       const deckTitle = deck.className === 'wg-cloud-deck-ovc'
-        ? `Solid overcast cloud layer (inferred RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}%)`
+        ? `Inferred saturated moisture band (RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}%)`
         : deck.className === 'wg-cloud-deck-bkn'
-          ? `Broken cloud layer (RH ${CLOUD_BKN_RH_PERCENT}–${CLOUD_RH_THRESHOLD_PERCENT}%)`
-          : `Scattered cloud layer (RH ${CLOUD_SCT_RH_PERCENT}–${CLOUD_BKN_RH_PERCENT}%)`;
+          ? `Inferred moisture band (RH ${CLOUD_BKN_RH_PERCENT}–<${CLOUD_RH_THRESHOLD_PERCENT}%)`
+          : `Inferred moisture band (RH ${CLOUD_SCT_RH_PERCENT}–<${CLOUD_BKN_RH_PERCENT}%)`;
       parts.push(
         `<path d="${escape(deck.path)}" class="${escape(deck.className)}" fill-rule="evenodd"${fillAttr}${ovcAttr}><title>${escape(deckTitle)}</title></path>`,
       );
@@ -293,18 +294,25 @@ export function renderWindgramSvg(
     }
     if (series.key === 'usableLiftTopM') {
       const nodeRadius = stitched ? '2.8' : '3.4';
-      for (const hour of view.hours) {
+      view.hours.forEach((hour, i) => {
         const z = hour.usableLiftTopM;
-        if (z !== null) {
-          parts.push(
-            `<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="${nodeRadius}" class="wg-tol-node" fill="${hybrid ? '#0284c7' : series.color}" stroke="#ffffff" stroke-width="1.4" data-map-lift-ceiling=""/>`,
-          );
+        if (z === null) return;
+        if (stitched) {
+          const panel = dayPanels!.find(p => p.endHourIndex >= p.startHourIndex && i >= p.startHourIndex && i <= p.endHourIndex);
+          if (!panel || hour.x < panel.left - 0.5 || hour.x > panel.left + panel.width + 0.5) return;
         }
-      }
+        parts.push(
+          `<circle cx="${fmt(hour.x)}" cy="${fmt(heightToY(view, z))}" r="${nodeRadius}" class="wg-tol-node" fill="${hybrid ? '#0284c7' : series.color}" stroke="#ffffff" stroke-width="1.4" data-map-lift-ceiling=""/>`,
+        );
+      });
     } else if (series.key === 'nativeUsableLiftTopM') {
       const nodeRadius = stitched ? '2.5' : '3.0';
       view.hours.forEach((hour, i) => {
         if (hour.usableLiftTopM !== null) return;
+        if (stitched) {
+          const panel = dayPanels!.find(p => p.endHourIndex >= p.startHourIndex && i >= p.startHourIndex && i <= p.endHourIndex);
+          if (!panel || hour.x < panel.left - 0.5 || hour.x > panel.left + panel.width + 0.5) return;
+        }
         const z = view.sourceHours[i]?.nativeUsableLiftTopM ?? null;
         if (z !== null && z >= view.floorM && z <= view.topM) {
           parts.push(
@@ -444,7 +452,7 @@ export function renderWindgramSvg(
     ),
   );
   const fineGroundM = view.sourceHours.reduce<number | null>(
-    (found, h) => found ?? h.fineTerrainM ?? h.mapLift.terrainM ?? null,
+    (found, h) => found ?? h.fineTerrainM ?? null,
     null,
   );
   const modelGroundM = view.sourceHours.reduce<number | null>(
@@ -473,9 +481,62 @@ export function renderWindgramSvg(
   const first = view.timeAxis[0], last = view.timeAxis.at(-1)!;
   const dayDesc = stitched ? ` (${dayPanels!.map(p => p.label).join(', ')})` : '';
   const coverage = uncovered.length && firstData && lastData ? ` Forecast available ${firstData.label}–${lastData.label}; hatched hours unavailable.` : !view.hours.length ? ' Daylight forecast unavailable in this run.' : '';
-  const description = `Windgram${dayDesc}${first ? ` ${first.label}–${last.label}` : ''}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Dashed cloud decks mark scattered/broken moisture (RH ${CLOUD_SCT_RH_PERCENT}–${CLOUD_RH_THRESHOLD_PERCENT}%); solid frosted decks mark overcast cloud (RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}%); vertical plumes above Cu base show convective cloud depth; top strip marks overcast or high cirrus shade. Dark hatching marks unavailable atmosphere. The haloed curve shows map usable lift.`;
+  const description = `Windgram${dayDesc}${first ? ` ${first.label}–${last.label}` : ''}.${coverage} Height ${unitLabel('elevation', system)} MSL. Wind feathers kt (${unitLabel('wind', system)} readout). Temperature ${unitLabel('temperature', system)}. Lift ${unitLabel('lift', system)}. Dashed moisture bands mark inferred RH ${CLOUD_SCT_RH_PERCENT}–<${CLOUD_RH_THRESHOLD_PERCENT}%; solid frosted bands mark RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}%; vertical plumes above Cu base show convective cloud depth; top strip marks model sky-cover shade. Dark hatching marks unavailable hours or vertical heights. The haloed curve shows map usable lift.`;
   return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-label="Wind, temperature and clouds by hour and altitude" aria-describedby="${id}-description" class="windgram${hybrid ? ' windgram-hybrid' : ''}${view.compact ? ' windgram-compact' : ''}${stitched ? ' windgram-stitched' : ''}"><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
 }
+
+function renderKeyWindStrip(fieldMode: WindgramFieldMode): string {
+  const hybrid = fieldMode === 'hybrid-climb';
+  const colorFor = (kt: number) => (hybrid ? windBarbSpeedColor(kt) : kt < 9 ? '#78ff78' : '#ffffff');
+  const samples = [
+    { kt: 0, x: 14, label: '0' },
+    { kt: 5, x: 38, label: '5' },
+    { kt: 10, x: 64, label: '10' },
+    { kt: 15, x: 92, label: '15' },
+    { kt: 50, x: 122, label: '50 kt' },
+  ] as const;
+  const glyphs = samples
+    .map(({ kt, x, label }) => {
+      const geo = barbGeometry(kt, 0, 14, false);
+      const color = colorFor(kt);
+      const body = geo.calm
+        ? `<circle r="${CALM_RADIUS}" fill="none" stroke="${color}" stroke-width="1.35"/>`
+        : `<path d="${geo.staff}" fill="none" stroke="${color}" stroke-width="1.35" stroke-linecap="round"/>` +
+          geo.flags
+            .map(flag =>
+              flag.endsWith('Z')
+                ? `<path d="${flag}" fill="${color}" stroke="${color}" stroke-width="1.1" stroke-linejoin="round"/>`
+                : `<path d="${flag}" fill="none" stroke="${color}" stroke-width="1.35" stroke-linecap="round"/>`,
+            )
+            .join('');
+      return (
+        `<g transform="translate(${x} 18)" data-key-barb="${kt}">${body}</g>` +
+        `<text x="${x}" y="29" text-anchor="middle" fill="#cbd5e1" font-size="8.5" font-family="ui-sans-serif,system-ui,sans-serif">${label}</text>`
+      );
+    })
+    .join('');
+  // Downwind hover-dial arrow sample (wind from N = 0°: barb points up toward N source, hover arrow points down S downwind)
+  const dialSample =
+    '<g transform="translate(162 12)" data-key-hover-dial="">' +
+    '<circle cx="0" cy="0" r="7.5" fill="#0f1b2d" stroke="#64748b" stroke-width="1"/>' +
+    '<path d="M0 -4.4L2.9 3.6L0 1.8L-2.9 3.6Z" transform="rotate(180)" fill="#f8fafc"/>' +
+    '</g>' +
+    '<text x="162" y="29" text-anchor="middle" fill="#cbd5e1" font-size="8.5" font-family="ui-sans-serif,system-ui,sans-serif">hover</text>';
+  return `<svg xmlns="${SVG_NS}" viewBox="0 0 184 32" width="184" height="32" class="wg-key-wind-svg" aria-hidden="true">${glyphs}${dialSample}</svg>`;
+}
+
+const LAPSE_SHORT_LABELS = [
+  'Strong',
+  'Good',
+  'Unstable',
+  'Weak',
+  'Marginal',
+  'Stable',
+  'Very stbl',
+  'Inversion',
+] as const;
+
+const CLIMB_SHORT_LABELS = ['Marginal', 'Light', 'Moderate', 'Good', 'Strong', 'Booming'] as const;
 
 export function renderWindgramKey(
   system: UnitSystem,
@@ -492,12 +553,9 @@ export function renderWindgramKey(
     '<rect x="2" y="2" width="28" height="18" rx="3" fill="#a7a4c0"/>' +
     '<path d="M4 19L19 4M12 19L27 4M4 11L11 4M20 19L27 12" stroke="#5b5875" stroke-width="1.2"/>',
   );
+  const windStrip = renderKeyWindStrip(fieldMode);
 
   if (fieldMode === 'lapse') {
-    const wind = icon(
-      '<path d="M8 19L8 3M8 3L18 6.5M8 7.5L13.5 9.5" fill="none" stroke="#78ff78" stroke-width="1.35" stroke-linecap="round"/>' +
-      '<path d="M21 19L21 3M21 3L30 6.5M21 7.5L30 11" fill="none" stroke="#f8fafc" stroke-width="1.35" stroke-linecap="round"/>',
-    );
     const humidity = icon(
       `<rect x="2" y="2" width="28" height="18" rx="3" fill="${WINDGRAM_STABLE_COLOR}"/><path d="M4 4L20 19M12 4L28 19M4 19L20 4M12 19L28 4" stroke="#fff" stroke-width="1"/>`,
     );
@@ -508,52 +566,68 @@ export function renderWindgramKey(
       '<circle cx="23" cy="11" r="3" fill="#2563eb" stroke="#fff" stroke-width="1.2"/>',
     );
     const lapseUnit = unitLabel('lapseRate', system);
-    const segments = WINDGRAM_STABILITY.map(
-      ({ color }, i) => `<span class="wg-key-seg" style="background:${color}" title="${escape(`${stabilityRange(i, system)} ${lapseUnit}`)}"></span>`,
-    ).join('');
+    const lapseCells = WINDGRAM_STABILITY.map(({ color }, i) => {
+      const range = stabilityRange(i, system);
+      const shortName = LAPSE_SHORT_LABELS[i] ?? `Band ${i + 1}`;
+      return (
+        `<div class="wg-key-band" role="listitem" tabindex="0" aria-label="${escape(`${shortName}: ${range} ${lapseUnit}`)}">` +
+        `<span class="wg-key-band-lbl">${escape(shortName)}</span>` +
+        `<span class="wg-key-seg" style="background:${color}"></span>` +
+        `<span class="wg-key-band-rng">${escape(range)}</span>` +
+        `</div>`
+      );
+    }).join('');
     return (
       `<div class="windgram-legend">` +
       `<div class="wg-key-head"><strong>Visual Chart Key</strong><span>Lapse rate · ${escape(lapseUnit)}</span></div>` +
       `<div class="wg-key-spectrum">` +
-      `<div class="wg-key-zones"><span>Strong Thermal</span><span>Unstable</span><span>Marginal</span><span>Stable</span><span>Inversion</span></div>` +
-      `<div class="wg-key-bar">${segments}</div>` +
-      `<div class="wg-key-ticks"><span>${escape(stabilityRange(0, system))}</span><span>${escape(stabilityRange(2, system))}</span><span>${escape(stabilityRange(4, system))}</span><span>${escape(stabilityRange(5, system))}</span><span>${escape(stabilityRange(7, system))}</span></div>` +
+      `<div class="wg-key-bands wg-key-bands-4" role="list" aria-label="Environmental lapse rate bands">${lapseCells}</div>` +
+      `</div>` +
+      `<div class="wg-key-wind-box">` +
+      `<div class="wg-key-wind-copy"><strong>Wind · ${feathers} (15 = 10 + 5 kt)</strong><span>Green wind is below ${escape(lapseGreenLimit)}; white ≥${escape(lapseGreenLimit)}. Barb points to wind source; hover arrow points downwind.</span></div>` +
+      windStrip +
       `</div>` +
       `<div class="wg-key-grid">` +
       `<div class="wg-key-item">${lift}<div><strong>Map usable lift</strong><span>Magnetic Top-of-Lift curve</span></div></div>` +
-      `<div class="wg-key-item">${wind}<div><strong>Wind · ${feathers}</strong><span>Green wind is below ${escape(lapseGreenLimit)}</span></div></div>` +
       `<div class="wg-key-item">${potential}<div><strong>Cloud base (LCL)</strong><span>Potential cumulus base</span></div></div>` +
-      `<div class="wg-key-item">${humidity}<div><strong>Cloud layer</strong><span>RH ≥${CLOUD_RH_THRESHOLD_PERCENT}% moisture</span></div></div>` +
+      `<div class="wg-key-item">${humidity}<div><strong>Moisture layer</strong><span>Inferred RH ≥${CLOUD_RH_THRESHOLD_PERCENT}%</span></div></div>` +
       `<div class="wg-key-item">${freezing}<div><strong>${escape(formatQuantity(0, 'temperature', undefined, system))} freezing</strong><span>Cyan isotherm &amp; freeze mark</span></div></div>` +
-      `<div class="wg-key-item">${missing}<div><strong>No forecast data</strong><span>Unavailable hours in run</span></div></div>` +
+      `<div class="wg-key-item">${missing}<div><strong>Missing data</strong><span>Unavailable hours or heights</span></div></div>` +
       `</div>` +
-      `<p class="wg-key-foot">Faint barbs are interpolated. Dashed amber marks native parcel top; dashed teal marks effective cloud limit; dashed gray marks surface terrain.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p>` +
+      `<details class="wg-key-more"><summary>More chart details</summary>` +
+      `<p class="wg-key-foot">Faint barbs are interpolated between native model levels. Dashed amber marks native parcel top; dashed teal marks effective cloud limit; dashed gray marks fine terrain.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p>` +
+      `</details>` +
       `</div>`
     );
   }
 
-  const wind = icon(
-    '<path d="M4 19L4 3M4 3L11 5.8" fill="none" stroke="#78ff78" stroke-width="1.35" stroke-linecap="round"/>' +
-    '<path d="M13 19L13 3M13 3L19.5 5.8M13 7.5L17 9.2" fill="none" stroke="#f8fafc" stroke-width="1.35" stroke-linecap="round"/>' +
-    '<path d="M22 19L22 3M22 3L28.5 5.6M22 7.2L28.5 9.8" fill="none" stroke="#fde047" stroke-width="1.35" stroke-linecap="round"/>',
-  );
   const greenLimit = formatQuantity(knotsToMps(WIND_SPEED_KNOT_THRESHOLDS.greenMaxKt), 'wind', undefined, system);
   const yellowLimit = formatQuantity(knotsToMps(WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt), 'wind', 0, system);
   const redLimit = formatQuantity(knotsToMps(WIND_SPEED_KNOT_THRESHOLDS.yellowMaxKt), 'wind', 0, system);
   const pennantLimit = formatQuantity(knotsToMps(WIND_SPEED_KNOT_THRESHOLDS.redMaxKt), 'wind', 0, system);
   const liftUnit = unitLabel('lift', system);
-  const climbSegments = WINDGRAM_CLIMB_BANDS.map(
-    ({ color, label }, i) =>
-      `<span class="wg-key-seg" style="background:${color}" title="${escape(`${label}: ${climbBandRange(i, system)} ${liftUnit}`)}"></span>`,
-  ).join('') +
-    `<span class="wg-key-seg" style="background:${WINDGRAM_HYBRID_SKY_COLOR}" title="Neutral / stable atmosphere outside lift"></span>` +
-    `<span class="wg-key-seg" style="background:${WINDGRAM_INVERSION_BANDS[1].color}" title="Temperature inversion lid (dT/dz &gt; 0)"></span>`;
+  const sinkLabel = formatQuantity(SINK_RATE_MPS, 'lift', system === 'metric' ? 1 : 0, system);
+  const climbCells = WINDGRAM_CLIMB_BANDS.map(({ color, label }, i) => {
+    const range = climbBandRange(i, system);
+    const shortName = CLIMB_SHORT_LABELS[i] ?? label;
+    return (
+      `<div class="wg-key-band" role="listitem" tabindex="0" aria-label="${escape(`${label}: ${range} ${liftUnit}`)}">` +
+      `<span class="wg-key-band-lbl">${escape(shortName)}</span>` +
+      `<span class="wg-key-seg" style="background:${color}"></span>` +
+      `<span class="wg-key-band-rng">${escape(range)}</span>` +
+      `</div>`
+    );
+  }).join('');
 
   const lift = icon(
     '<path d="M1 12H31" stroke="#f8fafc" stroke-width="3.6" stroke-linecap="round"/>' +
     '<path d="M1 12H31" stroke="#0f3a6d" stroke-width="1.9" stroke-linecap="round"/>' +
     '<circle cx="9" cy="12" r="3" fill="#0284c7" stroke="#fff" stroke-width="1.3"/>' +
     '<circle cx="23" cy="12" r="3" fill="#0284c7" stroke="#fff" stroke-width="1.3"/>',
+  );
+  const nativeLift = icon(
+    '<path d="M1 12H31" stroke="#7dd3fc" stroke-width="1.8" stroke-dasharray="5 3" stroke-linecap="round"/>' +
+    '<circle cx="16" cy="12" r="2.8" fill="#0f172a" stroke="#7dd3fc" stroke-width="1.4"/>',
   );
   const cumulus = icon(
     '<rect x="6" y="5" width="9" height="13" rx="4.5" fill="#f8fafc" fill-opacity=".28" stroke="#e2e8f0" stroke-opacity=".55" stroke-width=".8" stroke-dasharray="2 1.5"/>' +
@@ -568,7 +642,7 @@ export function renderWindgramKey(
     '<rect x="16" y="8.2" width="10" height="2" rx="1" fill="#e2e8f0" fill-opacity=".52"/>' +
     '<path d="M2 15C8 13.5 15 13 30 14.2L30 20L2 20Z" fill="#f8fafc" fill-opacity=".68"/>',
   );
-  const inversionWaveIcon = icon(
+  const ascentIcon = icon(
     `<rect x="2" y="2" width="28" height="18" rx="3" fill="${WINDGRAM_HYBRID_SKY_COLOR}"/>` +
     `<rect x="2" y="12" width="28" height="6" fill="${WINDGRAM_INVERSION_BANDS[1].color}" fill-opacity=".75"/>` +
     '<ellipse cx="16" cy="6.5" rx="10" ry="3.2" fill="#38bdf8" fill-opacity=".42" stroke="none"/>',
@@ -576,22 +650,30 @@ export function renderWindgramKey(
 
   return (
     `<div class="windgram-legend">` +
-    `<div class="wg-key-head"><strong>Visual Chart Key</strong><span>Net climb · ${escape(liftUnit)}</span></div>` +
+    `<div class="wg-key-head"><strong>Visual Chart Key</strong><span>Net climb · ${escape(liftUnit)} (includes ${escape(sinkLabel)} sink)</span></div>` +
     `<div class="wg-key-spectrum">` +
-    `<div class="wg-key-zones"><span>Marginal</span><span>Light</span><span>Moderate</span><span>Good</span><span>Strong Thermal</span><span>Booming</span><span>Sky / Inv</span></div>` +
-    `<div class="wg-key-bar">${climbSegments}</div>` +
-    `<div class="wg-key-ticks"><span>${escape(climbBandRange(0, system))}</span><span>${escape(climbBandRange(1, system))}</span><span>${escape(climbBandRange(2, system))}</span><span>${escape(climbBandRange(3, system))}</span><span>${escape(climbBandRange(4, system))}</span><span>${escape(climbBandRange(5, system))}</span><span>Sky / Inv</span></div>` +
+    `<div class="wg-key-bands wg-key-bands-6" role="list" aria-label="Net thermal climb bands">${climbCells}</div>` +
+    `<div class="wg-key-backdrops">` +
+    `<span class="wg-key-chip"><i style="background:${WINDGRAM_HYBRID_SKY_COLOR}"></i>Neutral sky</span>` +
+    `<span class="wg-key-chip"><i style="background:${WINDGRAM_INVERSION_BANDS[1].color}"></i>Inversion lid (dT/dz &gt; 0)</span>` +
+    `</div>` +
+    `</div>` +
+    `<div class="wg-key-wind-box">` +
+    `<div class="wg-key-wind-copy"><strong>Wind · ${feathers} (15 = 10 + 5 kt)</strong><span>Green wind is below ${escape(greenLimit)} · yellow ≥${escape(yellowLimit)} · red ≥${escape(redLimit)} · magenta ≥${escape(pennantLimit)}. Barb points to wind source; hover arrow points downwind.</span></div>` +
+    windStrip +
     `</div>` +
     `<div class="wg-key-grid">` +
-    `<div class="wg-key-item">${lift}<div><strong>Map usable lift</strong><span>Haloed TOL (dashed = native tail)</span></div></div>` +
-    `<div class="wg-key-item">${wind}<div><strong>Wind · ${feathers}</strong><span>Green wind is below ${escape(greenLimit)} · yellow ≥${escape(yellowLimit)} · red ≥${escape(redLimit)} · magenta ≥${escape(pennantLimit)}</span></div></div>` +
+    `<div class="wg-key-item">${lift}<div><strong>Map usable lift</strong><span>Magnetic Top-of-Lift curve</span></div></div>` +
+    `<div class="wg-key-item">${nativeLift}<div><strong>Native lift estimate</strong><span>Dashed ceiling beyond map hours</span></div></div>` +
     `<div class="wg-key-item">${cumulus}<div><strong>Cu &amp; OD</strong><span>Base icon, tower depth &amp; spreadout</span></div></div>` +
-    `<div class="wg-key-item">${cloudDeck}<div><strong>Cloud layers</strong><span>Dashed SCT/BKN vs solid OVC &amp; HI cirrus</span></div></div>` +
-    `<div class="wg-key-item">${inversionWaveIcon}<div><strong>Inversion &amp; Wave</strong><span>Dark indigo lid; cyan stable wave</span></div></div>` +
+    `<div class="wg-key-item">${cloudDeck}<div><strong>Inferred moisture</strong><span>RH ${CLOUD_SCT_RH_PERCENT}–&lt;${CLOUD_BKN_RH_PERCENT}%, ${CLOUD_BKN_RH_PERCENT}–&lt;${CLOUD_RH_THRESHOLD_PERCENT}%, ≥${CLOUD_RH_THRESHOLD_PERCENT}%</span></div></div>` +
+    `<div class="wg-key-item">${ascentIcon}<div><strong>Modeled ascent aloft</strong><span>Cyan ascent; indigo inversion lid</span></div></div>` +
     `<div class="wg-key-item">${freezing}<div><strong>${escape(formatQuantity(0, 'temperature', undefined, system))} freezing</strong><span>Cyan isotherm &amp; freeze mark</span></div></div>` +
-    `<div class="wg-key-item">${missing}<div><strong>No forecast data</strong><span>Unavailable hours in run</span></div></div>` +
+    `<div class="wg-key-item">${missing}<div><strong>Missing data</strong><span>Unavailable hours or heights</span></div></div>` +
     `</div>` +
-    `<p class="wg-key-foot">Dome colors show Lenschow net climb inside usable lift. Faint barbs are interpolated; dashed pink marks convective LCL; dashed amber marks parcel top.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p>` +
+    `<details class="wg-key-more"><summary>More chart details</summary>` +
+    `<p class="wg-key-foot">Dome colors show Lenschow net thermal climb (already subtracting ${escape(sinkLabel)} glider sink). Top cap strip marks model sky cover. Faint barbs are interpolated; dashed pink marks surface LCL; dashed amber marks parcel top; dashed teal marks cloud limit; dashed gray marks fine terrain.${usesDsm ? ' The digital surface model (DSM) includes vegetation and buildings.' : ''}</p>` +
+    `</details>` +
     `</div>`
   );
 }

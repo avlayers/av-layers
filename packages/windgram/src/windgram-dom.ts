@@ -1,4 +1,4 @@
-import { formatMapLiftCell, formatPlaceTime, formatPointMapLift } from '@av/client';
+import { formatMapLiftCell, formatPointMapLift } from '@av/client';
 import {
   getWindgramCalloutRenderer,
   placeWindgramCallout,
@@ -7,7 +7,13 @@ import {
 } from './windgram-callout.ts';
 import { renderWindgramSvg } from './windgram-chart.ts';
 import { clamp, formatQuantity, svgNumber as fmt } from './windgram-format.ts';
-import { buildWindgramTelemetry, formatWindgramReading, type WindgramTelemetryStrip } from './windgram-readout.ts';
+import {
+  buildWindgramTelemetry,
+  formatSnappedMapLiftAgl,
+  formatWindgramHourStamp,
+  formatWindgramReading,
+  type WindgramTelemetryStrip,
+} from './windgram-readout.ts';
 import { heightToY, yToHeight } from './windgram-scale.ts';
 import { readWindgram } from './windgram-inspector.ts';
 import { hourX, visibleWindgramHourIndices } from './windgram-time-axis.ts';
@@ -82,7 +88,17 @@ function mountWindgramInspector(
 ): WindgramInspector {
   const system = view.unitSystem;
   const svg = host.querySelector?.<SVGSVGElement>('svg.windgram') ?? null;
-  const visibleHours = visibleWindgramHourIndices(view, 0);
+  const visibleHours = view.dayPanels?.length
+    ? view.dayPanels.flatMap(panel => {
+        if (panel.endHourIndex < panel.startHourIndex) return [];
+        const inPanel: number[] = [];
+        for (let idx = panel.startHourIndex; idx <= panel.endHourIndex; idx++) {
+          const hx = view.hours[idx]!.x;
+          if (hx >= panel.left - 0.5 && hx <= panel.left + panel.width + 0.5) inPanel.push(idx);
+        }
+        return inPanel;
+      })
+    : visibleWindgramHourIndices(view, 0);
   if (!visibleHours.length) {
     return Object.assign(() => {}, { select: (_index: number | null) => {}, snapToTol: () => {} });
   }
@@ -140,14 +156,29 @@ function mountWindgramInspector(
   const activeTouches = new Map<number, { x: number; y: number }>();
   let pinchStartSpan: number | null = null;
   let cachedGeo: CachedSvgGeometry | null = null;
+  let geoClearScheduled = false;
+  let pendingReadout: { text: string; title?: string } | null = null;
+  let readoutFlushTimer: ReturnType<typeof setTimeout> | null = null;
   let lastText = readout?.textContent ?? '';
   let disposed = false;
 
+  const invalidateGeometry = () => {
+    cachedGeo = null;
+  };
+
   const readGeometry = (): CachedSvgGeometry | null => {
-    if (cachedGeo) return cachedGeo;
     const matrix = svg?.getScreenCTM?.() ?? null;
-    if (!matrix) return null;
+    if (!matrix || typeof host.getBoundingClientRect !== 'function') return null;
     const bounds = host.getBoundingClientRect();
+    if (
+      cachedGeo &&
+      cachedGeo.bounds.left === bounds.left &&
+      cachedGeo.bounds.top === bounds.top &&
+      cachedGeo.bounds.right === bounds.right &&
+      cachedGeo.bounds.bottom === bounds.bottom
+    ) {
+      return cachedGeo;
+    }
     const viewport = ownerDocument?.defaultView;
     const geo: CachedSvgGeometry = {
       inverse: matrix.inverse(),
@@ -156,14 +187,19 @@ function mountWindgramInspector(
       vh: viewport?.innerHeight ?? Infinity,
     };
     cachedGeo = geo;
+    if (!geoClearScheduled) {
+      geoClearScheduled = true;
+      queueMicrotask(() => {
+        geoClearScheduled = false;
+        cachedGeo = null;
+      });
+    }
     return geo;
   };
 
-  const invalidateGeometry = () => { cachedGeo = null; };
-
   const minInspectHeightM = (hourIndex: number): number => {
     const source = view.sourceHours[hourIndex];
-    const groundM = source?.fineTerrainM ?? source?.mapLift.terrainM ?? source?.modelTerrainM ?? view.floorM;
+    const groundM = source?.fineTerrainM ?? source?.modelTerrainM ?? view.floorM;
     const modelFloor10M = source?.modelTerrainM !== null && source?.modelTerrainM !== undefined
       ? source.modelTerrainM + 10
       : -Infinity;
@@ -189,12 +225,43 @@ function mountWindgramInspector(
     lastText = text;
   };
 
+  const cancelPendingReadout = () => {
+    pendingReadout = null;
+    if (readoutFlushTimer !== null) {
+      clearTimeout(readoutFlushTimer);
+      readoutFlushTimer = null;
+    }
+  };
+
+  const flushPendingReadout = () => {
+    if (readoutFlushTimer !== null) {
+      clearTimeout(readoutFlushTimer);
+      readoutFlushTimer = null;
+    }
+    if (pendingReadout && !disposed) {
+      const { text, title } = pendingReadout;
+      pendingReadout = null;
+      writeReadout(text, title);
+    }
+  };
+
+  const publishReadout = (text: string, title: string | undefined, defer: boolean) => {
+    if (!defer) {
+      cancelPendingReadout();
+      writeReadout(text, title);
+      return;
+    }
+    pendingReadout = { text, title };
+    readoutFlushTimer ??= setTimeout(flushPendingReadout, 60);
+  };
+
   const hideFloatingCursor = () => {
     cursor?.setAttribute('visibility', 'hidden');
     tolRing?.setAttribute('visibility', 'hidden');
   };
 
   const clear = () => {
+    cancelPendingReadout();
     pinned = false;
     hovering = false;
     touchActive = false;
@@ -212,7 +279,8 @@ function mountWindgramInspector(
     deferAriaReadout = false,
   ) => {
     const hour = view.hours[hourIndex];
-    const lift = view.sourceHours[hourIndex].mapLift;
+    const sourceHour = view.sourceHours[hourIndex];
+    const lift = sourceHour.mapLift;
     const tolM = hasValidTol(hourIndex);
     activeHour = hourIndex;
     const x = hour.x;
@@ -236,20 +304,27 @@ function mountWindgramInspector(
       snappedToTol = !heightMode;
     }
 
-    const useTol = magneticMode ? snappedToTol : !heightMode;
     const minFloorM = minInspectHeightM(hourIndex);
-    const when = formatPlaceTime(Date.parse(hour.validAt), view.offsetMinutes, 'stamp');
+    const rawNativeTolM = sourceHour?.nativeUsableLiftTopM ?? null;
+    const nativeTolM = rawNativeTolM !== null && rawNativeTolM >= view.floorM && rawNativeTolM <= view.topM
+      ? rawNativeTolM
+      : null;
+    const keyboardMagneticFallback = keyboard && magneticMode && snappedToTol && tolM === null;
+    const useTol = (magneticMode ? snappedToTol : !heightMode) && !keyboardMagneticFallback;
+    const when = formatWindgramHourStamp(view, hourIndex, hour.validAt);
     const heightM = useTol
       ? hour.usableLiftTopM
-      : clamp(inspectedHeightM ?? activeHeightM ?? tolM ?? minFloorM + 90, minFloorM, view.topM);
+      : clamp(inspectedHeightM ?? (keyboardMagneticFallback ? nativeTolM : null) ?? activeHeightM ?? tolM ?? nativeTolM ?? minFloorM + 90, minFloorM, view.topM);
     if (heightM !== null) activeHeightM = heightM;
 
     if (heightM === null || heightM < view.floorM || heightM > view.topM) {
       hideFloatingCursor();
       const reading = readWindgram(view, hourIndex, minFloorM);
-      if (!deferAriaReadout) {
-        writeReadout(`${when} · ${formatPointMapLift(lift, system)} · ${formatWindgramReading(view, reading, 'surface').join(' · ')}`);
-      }
+      publishReadout(
+        `${when} · ${formatPointMapLift(lift, system)} · ${formatWindgramReading(view, reading, 'surface').join(' · ')}`,
+        undefined,
+        deferAriaReadout,
+      );
       options.onTelemetry?.(buildWindgramTelemetry(view, reading, lift, true, false));
       return;
     }
@@ -259,17 +334,22 @@ function mountWindgramInspector(
     options.onTelemetry?.(telemetry);
 
     const hasAgl = useTol || reading.heightAglM !== null;
+    const freeAglSuffix = reading.heightAglReference === 'model' ? 'model AGL' : 'AGL';
     const aglText = !useTol
-      ? (hasAgl ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} AGL` : '')
-      : `${formatMapLiftCell(lift.agl, system)} AGL`;
+      ? (hasAgl ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} ${freeAglSuffix}` : '')
+      : formatSnappedMapLiftAgl(lift, reading, system, { finePointInterpolated: sourceHour?.finePointInterpolated });
+    const srAglText = !useTol
+      ? aglText
+      : formatSnappedMapLiftAgl(lift, reading, system, {
+          finePointInterpolated: sourceHour?.finePointInterpolated,
+          includeSiteClearance: true,
+        });
     const mslText = `${!useTol ? formatQuantity(reading.heightM, 'elevation', undefined, system) : formatMapLiftCell(lift.msl, system)} MSL`;
 
-    if (!deferAriaReadout) {
-      const altHeadline = aglText ? `${aglText} · ${mslText}` : mslText;
-      const title = `${when} · ${!useTol ? 'Inspected height' : 'Map usable lift'} · ${altHeadline}`;
-      const values = formatWindgramReading(view, reading, 'height');
-      writeReadout(`${title} · ${values.join(' · ')}`, title);
-    }
+    const altHeadline = srAglText ? `${srAglText} · ${mslText}` : mslText;
+    const title = `${when} · ${!useTol ? 'Inspected height' : 'Map usable lift'} · ${altHeadline}`;
+    const values = formatWindgramReading(view, reading, 'height');
+    publishReadout(`${title} · ${values.join(' · ')}`, title, deferAriaReadout);
 
     // In 'interact' mode, keep the floating callout & crosshairs hidden at rest until pointer/keyboard interaction.
     if (interactiveOnly && !hovering && !pinned) {
@@ -360,12 +440,24 @@ function mountWindgramInspector(
     if (!geo) return null;
     const position = new DOMPoint(event.clientX, event.clientY).matrixTransform(geo.inverse);
     if (position.x < view.left || position.x > view.left + view.plotWidth) return null;
-    if (!view.dayPanels?.length) {
+    let candidateHours = visibleHours;
+    if (view.dayPanels?.length) {
+      const panel = panelContainingX(view.dayPanels, position.x);
+      if (!panel || panel.endHourIndex < panel.startHourIndex) return null;
+      if (panel.uncoveredSpans.some(span => position.x >= span.x && position.x <= span.x + span.width)) {
+        return null;
+      }
+      candidateHours = visibleHours.filter(idx => idx >= panel.startHourIndex && idx <= panel.endHourIndex);
+      if (!candidateHours.length) return null;
+      const dataLeft = view.hours[candidateHours[0]!].x - panel.columnWidth / 2;
+      const dataRight = view.hours[candidateHours.at(-1)!].x + panel.columnWidth / 2;
+      if (position.x < dataLeft || position.x > dataRight) return null;
+    } else {
       const dataLeft = view.hours[0].x - view.columnWidth / 2;
       const dataRight = view.hours.at(-1)!.x + view.columnWidth / 2;
       if (position.x < dataLeft || position.x > dataRight) return null;
     }
-    const hourIndex = visibleHours.reduce((best, index) =>
+    const hourIndex = candidateHours.reduce((best, index) =>
       Math.abs(view.hours[index].x - position.x) < Math.abs(view.hours[best].x - position.x) ? index : best);
     if (position.y < view.top || position.y > view.bottom) {
       if (magneticMode && position.y >= 0 && position.y <= view.height) {
@@ -390,6 +482,7 @@ function mountWindgramInspector(
   };
 
   const endHover = () => {
+    flushPendingReadout();
     hovering = false;
     touchActive = false;
     invalidateGeometry();
@@ -413,6 +506,7 @@ function mountWindgramInspector(
   };
 
   const onMove = (event: PointerEvent) => {
+    invalidateGeometry();
     touchActive = event.pointerType === 'touch';
     if (event.pointerType === 'touch' && event.pointerId !== undefined && activeTouches.has(event.pointerId)) {
       activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -562,15 +656,18 @@ function mountWindgramInspector(
   };
 
   const onCancel = (event: PointerEvent) => {
+    flushPendingReadout();
     pointerStart = null;
     invalidateGeometry();
     releaseCapture(event.pointerId);
   };
   const onLeave = () => {
+    flushPendingReadout();
     if (!pinned) endHover();
     else { hovering = false; invalidateGeometry(); }
   };
   const onBlur = () => {
+    flushPendingReadout();
     hovering = false;
     touchActive = false;
     invalidateGeometry();
@@ -631,6 +728,8 @@ function mountWindgramInspector(
     }
     update(hourIndex, true, magneticMode && !snappedToTol ? activeHeightM ?? undefined : undefined, magneticMode ? snappedToTol : undefined);
   };
+  const docTarget = ownerDocument as (Document & Partial<EventTarget>) | undefined;
+  const winTarget = ownerDocument?.defaultView as (Window & Partial<EventTarget>) | undefined;
   host.addEventListener('pointermove', onMove);
   host.addEventListener('pointerdown', onDown);
   host.addEventListener('pointerup', onUp);
@@ -639,11 +738,14 @@ function mountWindgramInspector(
   host.addEventListener('dblclick', onDblClick);
   host.addEventListener('wheel', onWheel, { passive: false });
   host.addEventListener('scroll', invalidateGeometry);
+  docTarget?.addEventListener?.('scroll', invalidateGeometry, { capture: true, passive: true });
+  winTarget?.addEventListener?.('resize', invalidateGeometry);
   host.addEventListener('keydown', onKey);
   host.addEventListener('blur', onBlur);
   return Object.assign(() => {
     if (disposed) return;
     disposed = true;
+    cancelPendingReadout();
     activeTouches.clear();
     invalidateGeometry();
     host.removeEventListener?.('pointermove', onMove);
@@ -654,6 +756,8 @@ function mountWindgramInspector(
     host.removeEventListener?.('dblclick', onDblClick);
     host.removeEventListener?.('wheel', onWheel);
     host.removeEventListener?.('scroll', invalidateGeometry);
+    docTarget?.removeEventListener?.('scroll', invalidateGeometry, true);
+    winTarget?.removeEventListener?.('resize', invalidateGeometry);
     host.removeEventListener?.('keydown', onKey);
     host.removeEventListener?.('blur', onBlur);
     for (const [name, value] of originalAttributes) {

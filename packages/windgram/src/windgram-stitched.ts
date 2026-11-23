@@ -34,6 +34,7 @@ import {
   buildWindgramTimeLayout,
   formatWindgramHourLabel,
   hourX,
+  median,
   selectWindgramHours,
   visibleWindgramHourIndices,
   type WindgramTimeTick,
@@ -81,6 +82,44 @@ interface CachedStitchedPanel {
 
 const MAX_STITCHED_PANEL_CACHE = 16;
 const stitchedPanelCache = new Map<string, CachedStitchedPanel>();
+
+function clipPolylineToBounds(points: readonly (Point | null)[], left: number, right: number): string {
+  const clipped: (Point | null)[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const cur = points[i]!;
+    if (!cur) {
+      clipped.push(null);
+      continue;
+    }
+    const prev = i > 0 ? points[i - 1]! : null;
+    if (prev) {
+      let ax = prev.x, ay = prev.y, bx = cur.x, by = cur.y;
+      if (Math.max(ax, bx) < left || Math.min(ax, bx) > right) {
+        clipped.push(null);
+        continue;
+      }
+      const dx = bx - ax;
+      if (dx !== 0) {
+        if (ax < left) { ay += ((left - ax) / dx) * (by - ay); ax = left; }
+        else if (ax > right) { ay += ((right - ax) / dx) * (by - ay); ax = right; }
+        const dx2 = bx - ax;
+        if (dx2 !== 0) {
+          if (bx < left) { by = ay + ((left - ax) / dx2) * (by - ay); bx = left; }
+          else if (bx > right) { by = ay + ((right - ax) / dx2) * (by - ay); bx = right; }
+        }
+      }
+      const last = clipped.at(-1);
+      if (!last || Math.abs(last.x - ax) > 0.01 || Math.abs(last.y - ay) > 0.01) {
+        if (last) clipped.push(null);
+        clipped.push({ x: ax, y: ay });
+      }
+      clipped.push({ x: bx, y: by });
+    } else if (cur.x >= left && cur.x <= right) {
+      clipped.push(cur);
+    }
+  }
+  return linearPath(clipped);
+}
 
 export function buildStitchedWindgramView(
   profile: SiteForecast,
@@ -188,7 +227,20 @@ export function buildStitchedWindgramView(
     const panelLeft = left + panelIdx * (panelWidth + seamWidth);
     const panelRight = panelLeft + panelWidth;
     const panelHours = slice.selection.hours;
-    const panelKey = `${profile.model}|${profile.site.latitude}|${profile.site.longitude}|${timeZone}|${slice.dateKey}|${system}|${fieldMode}|${panelLeft}|${panelWidth}|${top}|${bottom}|${anchorSig}`;
+    const stepSource = panelHours.length > 1
+      ? panelHours
+      : slice.selection.daySource && slice.selection.daySource.length > 1
+        ? slice.selection.daySource
+        : profile.hours;
+    const steps = stepSource
+      .slice(1)
+      .map((h, i) => Date.parse(h.validAt) - Date.parse(stepSource[i]!.validAt))
+      .filter(s => s > 0);
+    const effCadence = steps.length ? median(steps) : 3_600_000;
+    const rawAlign = Date.parse(profile.hours[0]?.validAt ?? '');
+    const effAlign = Number.isFinite(rawAlign) ? ((rawAlign % effCadence) + effCadence) % effCadence : -1;
+    const moistureRef = profile.hours[0]?.upperAirDewpointReference ?? '';
+    const panelKey = `${profile.model}|${profile.site.latitude}|${profile.site.longitude}|${timeZone}|${slice.dateKey}|${system}|${fieldMode}|${panelLeft}|${panelWidth}|${top}|${bottom}|${anchorSig}|${effCadence}|${effAlign}|${moistureRef}`;
 
     let built = stitchedPanelCache.get(panelKey);
     if (!built || built.hours.length !== panelHours.length || built.hours.some((h, i) => h !== panelHours[i])) {
@@ -204,7 +256,7 @@ export function buildStitchedWindgramView(
       const panelSampling = panelHours.map(hourSampling);
       const panelCloudAnalyses = panelHours.map((h, idx) => analyzeHourCloudLayers(h, panelSampling[idx], topM));
       const localViewHours: WindgramHour[] = panelHours.map((h) =>
-        toWindgramHour(h, Math.min(panelRight - 4, Math.max(panelLeft + 4, subTime.xAt(Date.parse(h.validAt)))), labelTime),
+        toWindgramHour(h, subTime.xAt(Date.parse(h.validAt)), labelTime),
       );
 
       const rawTicks = [
@@ -255,11 +307,13 @@ export function buildStitchedWindgramView(
 
       const firstData = localViewHours[0];
       const lastData = localViewHours.at(-1);
+      const covLeft = firstData ? Math.max(panelLeft, Math.min(panelRight, firstData.x - colW / 2)) : panelRight;
+      const covRight = lastData ? Math.max(panelLeft, Math.min(panelRight, lastData.x + colW / 2)) : panelLeft;
       const uncoveredSpans =
-        firstData && lastData
+        firstData && lastData && covRight > covLeft
           ? [
-              { x: panelLeft, width: Math.max(0, firstData.x - colW / 2 - panelLeft) },
-              { x: Math.min(panelRight, lastData.x + colW / 2), width: Math.max(0, panelRight - (lastData.x + colW / 2)) },
+              { x: panelLeft, width: Math.max(0, covLeft - panelLeft) },
+              { x: covRight, width: Math.max(0, panelRight - covRight) },
             ].filter((span) => span.width > 0.5)
           : rawTicks.length
             ? [{ x: panelLeft, width: panelWidth }]
@@ -323,6 +377,8 @@ export function buildStitchedWindgramView(
             columnWidth: colW,
             plotTop: top,
             plotBottom: bottom,
+            leftBound: panelLeft,
+            rightBound: panelRight,
             banding: {
               breakpoints: WINDGRAM_STABILITY.slice(0, -1).map((c) => c.maxLapse),
               classNames: WINDGRAM_STABILITY.map((c) => `meteo-gram-stab-${c.className}`),
@@ -347,6 +403,8 @@ export function buildStitchedWindgramView(
             columnWidth: colW,
             hours: localViewHours,
             sampling: panelSampling,
+            leftBound: panelLeft,
+            rightBound: panelRight,
           },
           system,
         );
@@ -384,7 +442,7 @@ export function buildStitchedWindgramView(
             const z = heightFn(hour);
             return z === null || z < floorM || z > topM ? null : { x: localViewHours[i]!.x, y: y(z) };
           });
-          const subPath = linearPath(pts);
+          const subPath = clipPolylineToBounds(pts, panelLeft, panelRight);
           if (subPath) seriesSubPaths.set(key, subPath);
         }
       }
@@ -491,7 +549,15 @@ export function buildStitchedWindgramView(
   }
 
   const avgColumnWidth = columnWidthCount > 0 ? sumColumnWidths / columnWidthCount : plotWidth / Math.max(1, viewHours.length);
-  const visibleHours = visibleWindgramHourIndices({ hours: viewHours, compact, left, plotWidth }, 0);
+  const visibleHours = dayPanels.flatMap(panel => {
+    if (panel.endHourIndex < panel.startHourIndex) return [];
+    const inPanel: number[] = [];
+    for (let idx = panel.startHourIndex; idx <= panel.endHourIndex; idx++) {
+      const hx = viewHours[idx]!.x;
+      if (hx >= panel.left - 0.5 && hx <= panel.left + panel.width + 0.5) inPanel.push(idx);
+    }
+    return inPanel;
+  });
   const selectedHourIndex = visibleHours.reduce(
     (best, index) =>
       (viewHours[index]!.thermalVelocityMps ?? -1) > (viewHours[best]!.thermalVelocityMps ?? -1) ? index : best,
@@ -500,6 +566,8 @@ export function buildStitchedWindgramView(
   const { isUtcFallback, offsetMinutes } = resolveSceneTimeZoneMeta(profile, timeZone, sourceHours[0]);
 
   return {
+    model: profile.model,
+    modelHasAnyOmega: profile.hours.some(h => h.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))),
     unitSystem: system,
     fieldMode,
     presentation,

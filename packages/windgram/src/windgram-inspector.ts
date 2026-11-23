@@ -80,27 +80,38 @@ function detectSurfaceWindShift(
   return { deltaKt: Math.round(deltaKt), shiftDeg: Math.round(shiftDeg) };
 }
 
-function hasWarmLayerAboveSubfreezing(nodes: WindgramView['sampling'][number]['temperatureC'] | undefined): boolean {
+function hasWarmLayerAboveSubfreezing(
+  sample: WindgramView['sampling'][number] | undefined,
+  precipMmHr: number | null,
+): boolean {
+  const nodes = sample?.temperatureC;
   if (!nodes?.length) return false;
+  const activePrecip = precipMmHr !== null && Number.isFinite(precipMmHr) && precipMmHr > 0.04;
+  const rhNodes = sample?.cloudHumidityPercent ?? sample?.relativeHumidityPercent;
   let lowestSubfreezingM: number | null = null;
-  for (const node of nodes) {
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]!;
     if (!Number.isFinite(node.value)) continue;
     if (node.value <= -0.5 && (lowestSubfreezingM === null || node.altitudeM < lowestSubfreezingM)) {
       lowestSubfreezingM = node.altitudeM;
     }
     if (lowestSubfreezingM !== null && node.altitudeM > lowestSubfreezingM && node.altitudeM <= lowestSubfreezingM + 3500 && node.value > 0.5) {
-      return true;
+      const rhVal = rhNodes?.[i]?.value ?? sampleHeight(rhNodes ?? [], node.altitudeM);
+      if (activePrecip || (rhVal !== null && Number.isFinite(rhVal) && rhVal >= 80) || (rhVal === null && precipMmHr === null)) {
+        return true;
+      }
     }
   }
   return false;
 }
 
+const NON_OMEGA_MODELS = new Set(['gfs', 'icon-eu']);
+
 interface HourInspectorCache {
   readonly cloudsByHour: readonly (readonly WindgramCloud[])[];
   readonly warmLayerByHour: (boolean | undefined)[];
   readonly windShiftByHour: (WindgramReading['surfaceWindShift'] | undefined)[];
-  readonly hasAnyLevels: boolean;
-  readonly hasAnyOmega: boolean;
+  readonly modelOmitsOmega: boolean;
 }
 
 const inspectorCacheByView = new WeakMap<WindgramView, HourInspectorCache>();
@@ -112,26 +123,26 @@ function getHourInspectorMeta(view: WindgramView, index: number, gustKt: number 
     for (const c of view.clouds) {
       if (c.hourIndex >= 0 && c.hourIndex < grouped.length) grouped[c.hourIndex]!.push(c);
     }
-    let hasAnyLevels = false;
-    let hasAnyOmega = false;
-    for (const h of view.sourceHours) {
-      if (h.levels.length > 0) hasAnyLevels = true;
-      if (!hasAnyOmega && h.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))) {
-        hasAnyOmega = true;
-      }
-    }
+    const hasViewOmega = view.modelHasAnyOmega ?? view.sourceHours.some(
+      h => h.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS)),
+    );
+    const modelOmitsOmega =
+      !hasViewOmega &&
+      (view.model !== undefined
+        ? NON_OMEGA_MODELS.has(view.model)
+        : view.sourceHours.some(h => h.levels.length > 0));
     cache = {
       cloudsByHour: grouped,
       warmLayerByHour: new Array<boolean | undefined>(view.hours.length),
       windShiftByHour: new Array<WindgramReading['surfaceWindShift'] | undefined>(view.hours.length),
-      hasAnyLevels,
-      hasAnyOmega,
+      modelOmitsOmega,
     };
     inspectorCacheByView.set(view, cache);
   }
   let warmLayerAloft = cache.warmLayerByHour[index];
   if (warmLayerAloft === undefined) {
-    warmLayerAloft = hasWarmLayerAboveSubfreezing(view.sampling[index]?.temperatureC);
+    const precip = finiteScalar(view.sourceHours[index]?.surface.precipitationMmHr);
+    warmLayerAloft = hasWarmLayerAboveSubfreezing(view.sampling[index], precip);
     cache.warmLayerByHour[index] = warmLayerAloft;
   }
   let surfaceWindShift = cache.windShiftByHour[index];
@@ -143,8 +154,7 @@ function getHourInspectorMeta(view: WindgramView, index: number, gustKt: number 
     clouds: cache.cloudsByHour[index] ?? [],
     warmLayerAloft,
     surfaceWindShift,
-    hasAnyLevels: cache.hasAnyLevels,
-    hasAnyOmega: cache.hasAnyOmega,
+    modelOmitsOmega: cache.modelOmitsOmega,
   };
 }
 
@@ -169,7 +179,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const surface = source?.surface;
   const pblDepthM = surface?.pblHeightM ?? null;
   const modelTerrainM = source?.modelTerrainM ?? null;
-  const fineTerrainM = source?.fineTerrainM ?? source?.mapLift.terrainM ?? null;
+  const fineTerrainM = source?.fineTerrainM ?? null;
   const terrainDeltaM = fineTerrainM !== null && modelTerrainM !== null ? fineTerrainM - modelTerrainM : null;
   const groundM = fineTerrainM ?? modelTerrainM;
   const usableTopM = source
@@ -229,9 +239,11 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     windShear: windShearAtHeight(sample, z),
     verticalVelocitySource: omega === null ? null : sample?.verticalVelocityPaS.some(n => Math.abs(n.altitudeM - z) < .00001) ? 'model-level' : 'interpolated',
     verticalVelocityUnavailableReason: omega === null
-      ? (hourMeta.hasAnyLevels && !hourMeta.hasAnyOmega
+      ? (hourMeta.modelOmitsOmega
           ? 'Vertical motion unavailable (not published for this model).'
-          : 'Vertical motion unavailable at this height.')
+          : source?.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))
+            ? 'Vertical motion unavailable at this height.'
+            : 'Vertical motion unavailable for the selected frame and height.')
       : null,
     surfaceWindSpeedMps: finiteScalar(surface?.windSpeedMps),
     surfaceWindDirectionDeg: finiteScalar(surface?.windDirectionDeg),

@@ -669,5 +669,107 @@ describe('weather-independent static fine-tile point terrain (Finding 2)', () =>
     const resolvedSecond = await secondRead;
     expect(resolvedSecond?.status).toBe('valid');
     expect(descFetches).toBe(1);
+
+    // 1) Bounded terrain deadline: unresponsive terrain settles within 30 ms deadline so weather completes well under 180 ms
+    const deadlineBuild = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 1 });
+    deadlineBuild.manifest.model = 'icon-eu';
+    deadlineBuild.manifest.surfaces = structuredClone(build.manifest.surfaces);
+    deadlineBuild.manifest.descriptors.bounds = build.manifest.descriptors.bounds;
+    deadlineBuild.manifest.mapData = { sha256: 'f'.repeat(64), bytes: 512 };
+    const apiDeadline = new ApiClient({
+      baseUrl: 'https://api.test',
+      requestTimeoutMs: 30,
+      fetchImpl: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.includes('/data/')) {
+          return new Promise<Response>(() => {}); // completely unresponsive terrain endpoint
+        }
+        return new Response(JSON.stringify(fixturePointFetch(deadlineBuild, String(input))));
+      },
+      now: () => Date.parse(deadlineBuild.manifest.createdAt),
+    });
+    const progressLoadingStates: boolean[] = [];
+    const t0 = performance.now();
+    const completedWeather = await apiDeadline.pointSeries(deadlineBuild, araPoint).load('day', undefined, {
+      onProgress(_payload, _total, isLoading) {
+        progressLoadingStates.push(isLoading);
+      },
+    });
+    expect(performance.now() - t0).toBeLessThan(180);
+    expect(completedWeather.frames).toHaveLength(1);
+    expect(progressLoadingStates.at(-1)).toBe(false);
+
+    // 2) Transient 503 retries on forecast load and recovers Mount Ara terrain (unlike authoritative 404)
+    let terrainAttempts503 = 0;
+    const retryBuild = structuredClone(deadlineBuild);
+    retryBuild.manifest.buildId = '20261123T000000Z-retry-503';
+    const api503 = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/data/${retryBuild.manifest.frames[0]!.id}`)) {
+          terrainAttempts503++;
+          if (terrainAttempts503 === 1) return new Response(null, { status: 503 });
+          return new Response(JSON.stringify({ ...descriptor, frame: retryBuild.manifest.frames[0]!.id }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.pathname.includes('/fine/')) {
+          return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+        }
+        return new Response(JSON.stringify(fixturePointFetch(retryBuild, String(input))));
+      },
+      now: () => Date.parse(retryBuild.manifest.createdAt),
+    });
+    const retryLoader = api503.pointSeries(retryBuild, araPoint);
+    const after503Day = await retryLoader.load('day');
+    expect(after503Day.siteTerrain).toBeUndefined();
+    expect(terrainAttempts503).toBe(1);
+    const after503Forecast = await retryLoader.load('forecast');
+    expect(terrainAttempts503).toBe(2);
+    expect(after503Forecast.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+
+    // 3) Zero-overlapping-waiter point switch: cancel A while descriptor is loading, then open B before A settles
+    let switchDescCalls = 0;
+    const switchGates: (() => void)[] = [];
+    const switchBuild = structuredClone(deadlineBuild);
+    switchBuild.manifest.buildId = '20261123T000000Z-switch-ab';
+    const apiSwitch = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/data/${switchBuild.manifest.frames[0]!.id}`)) {
+          const callNum = ++switchDescCalls;
+          if (callNum === 1) {
+            await new Promise<void>(resolve => { switchGates.push(resolve); });
+            init?.signal?.throwIfAborted();
+          }
+          return new Response(JSON.stringify({ ...descriptor, frame: switchBuild.manifest.frames[0]!.id }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.pathname.includes('/fine/')) {
+          return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+        }
+        return new Response(JSON.stringify(fixturePointFetch(switchBuild, String(input))));
+      },
+      now: () => Date.parse(switchBuild.manifest.createdAt),
+    });
+    const pointALoader = apiSwitch.pointSeries(switchBuild, { lat: 40.42, lon: 44.46 });
+    const pendingA = pointALoader.load('day');
+    await vi.waitFor(() => expect(switchDescCalls).toBe(1));
+    pointALoader.dispose();
+    await expect(pendingA).rejects.toThrow();
+
+    // Point A's underlying fetch has NOT settled yet (switchGates[0] still pending), and Point B opens immediately
+    const pointBLoader = apiSwitch.pointSeries(switchBuild, araPoint);
+    const bDay = await pointBLoader.load('day');
+    expect(switchDescCalls).toBe(2);
+    expect(bDay.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+    const bForecast = await pointBLoader.load('forecast');
+    expect(bForecast.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+    switchGates.forEach(release => release());
   });
 });

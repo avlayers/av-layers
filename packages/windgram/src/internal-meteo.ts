@@ -1,5 +1,6 @@
 import type { PointFrame, pointMapLift } from '@av/client';
 import { timeZoneOffsetMinutesAt } from '@av/client/timezone';
+import type { UpperAirMoistureReference } from '@av/thermodynamics';
 import type { WindgramReading } from './scene-types.ts';
 import { METRES_PER_THOUSAND_FEET } from './windgram-format.ts';
 
@@ -24,7 +25,8 @@ export interface PublishedForecastHour {
   readonly validAt: string;
   readonly modelTerrainM: number | null;
   readonly fineTerrainM?: number | null;
-  readonly upperAirDewpointReference?: 'liquid-vapor-pressure' | 'model-rh';
+  readonly finePointInterpolated?: boolean;
+  readonly upperAirDewpointReference?: UpperAirMoistureReference;
   readonly mapLift: ReturnType<typeof pointMapLift>;
   readonly surface: {
     readonly temperatureC: number | null;

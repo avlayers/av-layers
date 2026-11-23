@@ -87,7 +87,7 @@ export function buildWindgramVerticalScale(
   const { compact, top, bottom, plotHeight } = options;
   const known = (values: (number | null)[]) => values.filter((value): value is number => value !== null);
   const grounds = known(hours.map(hour => hour.modelTerrainM));
-  const fineTerrain = known(hours.map(hour => hour.fineTerrainM ?? hour.mapLift.terrainM));
+  const fineTerrain = known(hours.map(hour => hour.fineTerrainM ?? null));
   const liftTops = known(hours.map(hour => hour.mapLift.mslM));
   const nativeLiftTops = known(hours.map(hour => hour.nativeUsableLiftTopM ?? null));
   const waveTops = known(

@@ -1,8 +1,9 @@
 // Format inspector readings; DOM interaction lives in windgram-dom.ts.
 import { formatMapLiftCell, formatPlaceTime } from '@av/client';
+import { MPH_PER_MPS } from '@av/contracts/units';
 import { shortTimeZoneNameAt, timeZoneOffsetMinutesAt } from '@av/client/timezone';
 import { FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
-import { clamp, compass16, fahrenheitToCelsius, formatQuantity, knotsToMps, type UnitSystem } from './windgram-format.ts';
+import { clamp, compass16, fahrenheitToCelsius, formatQuantity, knotsToMps, METRES_PER_THOUSAND_FEET, type UnitSystem } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import type { WindgramView } from './windgram-view.ts';
 import type { WindgramReading } from './scene-types.ts';
@@ -47,6 +48,7 @@ interface HourClockMeta {
   readonly validAt: string;
   readonly timeChip: string;
   readonly compactTime: string;
+  readonly accessibleStamp: string;
 }
 
 const clockCacheByView = new WeakMap<WindgramView, (HourClockMeta | undefined)[]>();
@@ -77,6 +79,12 @@ function resolveHourClockMeta(view: WindgramView, hourIndex: number, validAt: st
   const baseClock = split < 0 ? clockRaw : clockRaw.slice(0, split);
   const timeChip = zoneTag && baseClock !== '—' ? `${baseClock} ${zoneTag}` : baseClock;
 
+  const stampRaw = formatPlaceTime(validMs, frameOffsetMinutes, 'stamp');
+  const stampSplit = stampRaw.indexOf(' (');
+  const accessibleStamp = zoneTag && stampSplit > 0
+    ? `${stampRaw.slice(0, stampSplit)} ${zoneTag}${stampRaw.slice(stampSplit)}`
+    : stampRaw;
+
   let compactTime = '';
   if (Number.isFinite(validMs)) {
     const shifted = new Date(validMs + frameOffsetMinutes * 60_000);
@@ -89,9 +97,38 @@ function resolveHourClockMeta(view: WindgramView, hourIndex: number, validAt: st
     compactTime = view.dayPanels?.length ? `${SHORT_WEEKDAYS_UTC[shifted.getUTCDay()]!} ${tagged}` : tagged;
   }
 
-  const meta: HourClockMeta = { validAt, timeChip, compactTime };
+  const meta: HourClockMeta = { validAt, timeChip, compactTime, accessibleStamp };
   if (hourIndex >= 0 && hourIndex < slots.length) slots[hourIndex] = meta;
   return meta;
+}
+
+export function formatWindgramHourStamp(view: WindgramView, hourIndex: number, validAt: string): string {
+  return resolveHourClockMeta(view, hourIndex, validAt).accessibleStamp;
+}
+
+export function isMapLiftDonorReference(
+  lift: MapLiftSummary,
+  reading: WindgramReading,
+): boolean {
+  if (lift.agl?.status !== 'valid' || lift.agl.value === null) return false;
+  return reading.fineTerrainM != null && lift.mslM !== null && Math.abs((lift.mslM - lift.agl.value) - reading.fineTerrainM) >= 1;
+}
+
+export function formatSnappedMapLiftAgl(
+  lift: MapLiftSummary,
+  reading: WindgramReading,
+  system: UnitSystem,
+  options?: { finePointInterpolated?: boolean; includeSiteClearance?: boolean },
+): string {
+  const base = formatMapLiftCell(lift.agl, system);
+  if (!isMapLiftDonorReference(lift, reading)) {
+    return `${base} AGL`;
+  }
+  if (options?.includeSiteClearance && reading.heightAglM !== null) {
+    const refLabel = reading.heightAglReference === 'model' ? 'model AGL' : 'site AGL';
+    return `${base} donor AGL (${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} ${refLabel})`;
+  }
+  return `${base} donor AGL`;
 }
 
 export interface WindgramTelemetryStrip {
@@ -116,9 +153,10 @@ export function buildWindgramTelemetry(
   const system = view.unitSystem;
   const { timeChip, compactTime } = resolveHourClockMeta(view, reading.hourIndex, reading.validAt);
 
+  const finePointInterpolated = view.sourceHours[reading.hourIndex]?.finePointInterpolated;
   const aglSuffix = reading.heightAglReference === 'model' ? 'model AGL' : 'AGL';
   const aglDisplay = snappedToTol && hasTolAtHour
-    ? `${formatMapLiftCell(lift.agl, system)} AGL`
+    ? formatSnappedMapLiftAgl(lift, reading, system, { finePointInterpolated, includeSiteClearance: true })
     : reading.heightAglM !== null
       ? `${formatQuantity(reading.heightAglM, 'elevation', undefined, system)} ${aglSuffix}`
       : `${formatQuantity(reading.heightM, 'elevation', undefined, system)} MSL`;
@@ -141,7 +179,8 @@ export function buildWindgramTelemetry(
   let climbPart: string | null = null;
   let hasPositiveClimb = false;
   if (snappedToTol) {
-    if (reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
+    const cappedBelowTop = Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
+    if (cappedBelowTop && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
       climbPart = `Climb ${formatClimbRate(reading.estimatedClimbMps, system)}`;
       hasPositiveClimb = true;
     } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {
@@ -235,10 +274,18 @@ export function formatWindgramReading(view: WindgramView, reading: WindgramReadi
         ? 'Calm'
         : `${barbSpeed(reading.speedKt, system)}${reading.directionDeg == null ? '' : ` from ${degrees(reading.directionDeg)}`}`,
     reading.windSource === null ? null : windSources[reading.windSource],
-    reading.windShear === null ? 'Layer wind shear unavailable' : `Layer wind shear ${reading.windShear.perKmMps.toFixed(1)} m/s per km (${formatQuantity(reading.windShear.lowerM, 'elevation', undefined, system)}–${formatQuantity(reading.windShear.upperM, 'elevation', undefined, system)} MSL)`,
+    reading.windShear === null
+      ? 'Layer wind shear unavailable'
+      : system === 'imperial'
+        ? `Layer wind shear ${((reading.windShear.perKmMps * MPH_PER_MPS * METRES_PER_THOUSAND_FEET) / 1000).toFixed(1)} mph/1,000 ft (${formatQuantity(reading.windShear.lowerM, 'elevation', undefined, system)}–${formatQuantity(reading.windShear.upperM, 'elevation', undefined, system)} MSL)`
+        : `Layer wind shear ${reading.windShear.perKmMps.toFixed(1)} m/s per km (${formatQuantity(reading.windShear.lowerM, 'elevation', undefined, system)}–${formatQuantity(reading.windShear.upperM, 'elevation', undefined, system)} MSL)`,
     reading.dewPointC === null ? 'Dew point unavailable' : `Dew point ${formatQuantity(reading.dewPointC, 'temperature', 1, system)}`,
-    reading.relativeHumidityPercent === null ? 'RH unavailable' : `RH ${Math.round(reading.relativeHumidityPercent)}%`,
-    reading.verticalVelocityPaS === null ? reading.verticalVelocityUnavailableReason : `Vertical motion ${reading.verticalVelocityPaS.toFixed(2)} Pa/s (${reading.verticalVelocityPaS < 0 ? 'ascent' : reading.verticalVelocityPaS > 0 ? 'descent' : 'neutral'}; ${reading.verticalVelocitySource === 'model-level' ? 'model level' : 'interpolated'})`,
+    reading.relativeHumidityPercent === null
+      ? (reading.cloudHumidityPercent != null ? `Model RH ${Math.round(reading.cloudHumidityPercent)}% (liquid RH unavailable)` : 'RH unavailable')
+      : `RH ${Math.round(reading.relativeHumidityPercent)}%`,
+    reading.verticalVelocityPaS === null
+      ? reading.verticalVelocityUnavailableReason
+      : `Vertical motion ${reading.verticalVelocityPaS.toFixed(2)} Pa/s (${reading.verticalVelocityPaS < 0 ? 'ascent' : reading.verticalVelocityPaS > 0 ? 'descent' : 'neutral'}${reading.waveVelocityMps != null && Number.isFinite(reading.waveVelocityMps) ? `, ~${formatClimbRate(Math.abs(reading.waveVelocityMps), system).replace(/^\+/, '')}` : ''}; ${reading.verticalVelocitySource === 'model-level' ? 'model level' : 'interpolated'})`,
     reading.cloud === null ? null : cloudLabels[reading.cloud],
     ...surfaceDetails(view, reading),
   ].filter((value): value is string => value !== null);

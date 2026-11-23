@@ -99,6 +99,17 @@ describe('wind columns', () => {
     expect(low.levels[0]).toBeNull();
     expect(low.levels[1]?.height).toBe(1005);
     expect(() => encodeWindColumns([low])).not.toThrow();
+
+    // Non-hydrostatic height reversal becomes a missing interior interval instead of crashing encodeWindColumns
+    const reversed = nearSurfaceFrame();
+    reversed.hgtM[0][0] = 1120;
+    reversed.hgtM[1][0] = 1100;
+    reversed.hgtM[2][0] = 1300;
+    const normalizedRev = normalizedWindColumn(reversed, 0);
+    expect(normalizedRev.levels[1]?.height).toBe(1120);
+    expect(normalizedRev.levels[2]).toBeNull();
+    expect(normalizedRev.levels[3]?.height).toBe(1300);
+    expect(() => encodeWindColumns([normalizedRev])).not.toThrow();
   });
 
   it('round trips paired values, missing levels and outside cells', () => {

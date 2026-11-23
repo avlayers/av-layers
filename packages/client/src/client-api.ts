@@ -309,7 +309,10 @@ export class ApiClient {
   async pointTerrain(build: PinnedBuild, point: GeoPoint, options: RequestOptions = {}): Promise<PointTerrain | null> {
     assertNotExpired(build.manifest.expiresAt, this.now());
     validatePoint(point);
-    const result = await this.terrainCache.read(this.baseUrl, this.fetchImpl, build, point, options.signal);
+    const result = await this.terrainCache.read(this.baseUrl, this.fetchImpl, build, point, {
+      signal: options.signal,
+      timeoutMs: Math.min(this.requestTimeoutMs, 2_500),
+    });
     assertNotExpired(build.manifest.expiresAt, this.now());
     return result;
   }

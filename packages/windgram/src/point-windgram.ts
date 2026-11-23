@@ -255,7 +255,7 @@ function createPointWindgram(
         h.validAt,
         {
           usableLiftTopM: h.mapLift.mslM,
-          terrainM: h.fineTerrainM ?? h.mapLift.terrainM ?? h.modelTerrainM,
+          terrainM: h.fineTerrainM ?? h.modelTerrainM,
           thermalVelocityMps: h.thermalVelocityMps,
           surfaceWindMps: h.surface.windSpeedMps,
         },
@@ -347,7 +347,15 @@ function createPointWindgram(
   });
   const keySummary = node('summary', 'av-windgram-key-btn');
   keySummary.ariaLabel = 'Visual chart key';
-  keySummary.append(node('span', undefined, 'Key '), node('span', undefined, 'ⓘ'));
+  const keyIcon = node('span', 'av-windgram-key-glyph');
+  keyIcon.setAttribute?.('aria-hidden', 'true');
+  keyIcon.innerHTML =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">' +
+    '<rect x="1" y="1.5" width="10" height="2.2" rx="1" fill="#38bdf8"/>' +
+    '<rect x="1" y="4.9" width="10" height="2.2" rx="1" fill="#facc15"/>' +
+    '<rect x="1" y="8.3" width="10" height="2.2" rx="1" fill="#f97316"/>' +
+    '</svg>';
+  keySummary.append(keyIcon, node('span', undefined, 'Key'));
   const keyCard = node('div', 'av-windgram-key');
   keyPop.append(keySummary, keyCard);
   bar.append(navRow, keyPop);

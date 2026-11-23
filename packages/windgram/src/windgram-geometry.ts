@@ -121,6 +121,8 @@ export function buildStabilityFieldPaths(args: {
   columnWidth: number;
   plotTop: number;
   plotBottom: number;
+  leftBound?: number;
+  rightBound?: number;
   banding: { breakpoints: readonly number[]; classNames: readonly string[] };
 }): Record<string, string> {
   const hourCount = args.nodesByHour.length;
@@ -156,7 +158,9 @@ export function buildStabilityFieldPaths(args: {
   }
 
   const xOf = (column: number) => hourX(args.hours, column / columns * hourCount - 0.5, args.columnWidth);
-  const left = xOf(0), right = xOf(columns);
+  const left = Math.max(args.leftBound ?? -Infinity, xOf(0));
+  const right = Math.min(args.rightBound ?? Infinity, xOf(columns));
+  if (right <= left) return {};
   const yOf = (row: number) => args.plotTop + (row / rows) * plotHeight;
   const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
   const shortNum = (v: number) => Number(v.toFixed(1));
@@ -341,6 +345,8 @@ export function temperatureContours(
     columnWidth: number;
     hours: readonly { validAt: string; x: number }[];
     sampling: readonly HourSampling[];
+    leftBound?: number;
+    rightBound?: number;
   },
   system: UnitSystem,
 ): TemperatureContour[] {
@@ -410,6 +416,8 @@ export function temperatureContours(
   });
   const edgeX = new Float64Array(4);
   const edgeY = new Float64Array(4);
+  const xMin = view.leftBound ?? -Infinity;
+  const xMax = view.rightBound ?? Infinity;
   const contours: TemperatureContour[] = [];
   for (let value = low; value <= high; value += step) {
     // Preserve operation order at exact-threshold corners: /1.8 can round to
@@ -418,8 +426,21 @@ export function temperatureContours(
     const f = metric ? celsiusToFahrenheit(target) : value;
     const segments: ContourSegment[] = [];
     const pathParts: string[] = [];
-    const addLineCoords = (ax: number, ay: number, bx: number, by: number) => {
+    const addLineCoords = (rawAx: number, rawAy: number, rawBx: number, rawBy: number) => {
+      let ax = rawAx, ay = rawAy, bx = rawBx, by = rawBy;
+      if (Math.max(ax, bx) < xMin || Math.min(ax, bx) > xMax) return;
+      const dx = bx - ax;
+      if (dx !== 0) {
+        if (ax < xMin) { ay += ((xMin - ax) / dx) * (by - ay); ax = xMin; }
+        else if (ax > xMax) { ay += ((xMax - ax) / dx) * (by - ay); ax = xMax; }
+        const dx2 = bx - ax;
+        if (dx2 !== 0) {
+          if (bx < xMin) { by = ay + ((xMin - ax) / dx2) * (by - ay); bx = xMin; }
+          else if (bx > xMax) { by = ay + ((xMax - ax) / dx2) * (by - ay); bx = xMax; }
+        }
+      }
       const x1 = round(ax), y1 = round(ay), x2 = round(bx), y2 = round(by);
+      if (x1 === x2 && y1 === y2) return;
       segments.push({ x1, y1, x2, y2 });
       pathParts.push(`M${x1},${y1}L${x2},${y2}`);
     };
@@ -472,7 +493,7 @@ export function temperatureContours(
       }
     }
     const labels = view.hours.flatMap((h, i) =>
-      labelHours.has(i)
+      labelHours.has(i) && h.x >= xMin && h.x <= xMax
         ? crossings(view.sampling[i]!.temperatureC, target)
             .filter(z => z >= view.floorM && z <= view.topM)
             .map((z) => ({ x: h.x, y: heightToY(view, z) }))

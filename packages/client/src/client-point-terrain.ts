@@ -176,6 +176,12 @@ interface CachedDescriptor {
 const MAX_POINT_TERRAIN_ENTRIES = 64;
 const MAX_CACHED_DESCRIPTORS = 16;
 const MAX_CACHED_FINE_TILES = 16;
+const DEFAULT_TERRAIN_DEADLINE_MS = 2_500;
+
+export interface PointTerrainReadOptions {
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}
 
 function lruSet<K, V>(map: Map<K, V>, key: K, value: V, limit: number): V {
   if (!map.has(key) && map.size >= limit) {
@@ -201,7 +207,7 @@ function coalescedFetch<T>(
 ): Promise<T> {
   waiterSignal?.throwIfAborted();
   let task = inFlight.get(key);
-  if (!task) {
+  if (!task || task.controller.signal.aborted) {
     const controller = new AbortController();
     const created: InFlightTask<T> = {
       promise: undefined as unknown as Promise<T>,
@@ -211,6 +217,7 @@ function coalescedFetch<T>(
     created.promise = run(controller.signal).finally(() => {
       if (inFlight.get(key) === created) inFlight.delete(key);
     });
+    void created.promise.catch(() => {});
     inFlight.set(key, created);
     task = created;
   }
@@ -228,6 +235,7 @@ function coalescedFetch<T>(
       released = true;
       activeTask.waiters = Math.max(0, activeTask.waiters - 1);
       if (aborted && activeTask.waiters === 0) {
+        if (inFlight.get(key) === activeTask) inFlight.delete(key);
         activeTask.controller.abort(waiterSignal.reason);
       }
     };
@@ -272,9 +280,14 @@ export class PointTerrainCache {
     fetchImpl: typeof fetch,
     build: PinnedBuild,
     point: GeoPoint,
-    signal?: AbortSignal,
+    signalOrOptions?: AbortSignal | PointTerrainReadOptions,
   ): Promise<PointTerrain | null> {
-    signal?.throwIfAborted();
+    const callerSignal = signalOrOptions instanceof AbortSignal ? signalOrOptions : signalOrOptions?.signal;
+    const rawTimeoutMs = signalOrOptions instanceof AbortSignal ? undefined : signalOrOptions?.timeoutMs;
+    const deadlineMs = rawTimeoutMs !== undefined && Number.isFinite(rawTimeoutMs) && rawTimeoutMs > 0
+      ? rawTimeoutMs
+      : DEFAULT_TERRAIN_DEADLINE_MS;
+    callerSignal?.throwIfAborted();
     const fine = build.manifest.surfaces.find(s => s.kind === 'fine');
     const native = build.manifest.surfaces.find(s => s.kind === 'native');
     const firstFrame = build.manifest.frames[0]?.id;
@@ -302,73 +315,81 @@ export class PointTerrainCache {
     const contributors = planFineContributors(fine.grid, prepareGridGeometry(fine.grid), point.lat, point.lon);
     if (!contributors) return lruSet(this.points, pointKey, outside, MAX_POINT_TERRAIN_ENTRIES);
 
-    const root = `${baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(firstFrame)}`;
-    let descriptor = this.descriptors.get(build.manifest.buildId);
-    if (!descriptor) {
-      descriptor = await coalescedFetch(
-        this.inFlightDescriptors,
-        build.manifest.buildId,
-        async sharedSignal => {
-          const rawDesc = await readBoundedBytes(fetchImpl, root, 'application/json', WIND_FRAME_LIMIT, sharedSignal);
-          if (rawDesc === 'unavailable') {
-            return lruSet(this.descriptors, build.manifest.buildId, 'unavailable', MAX_CACHED_DESCRIPTORS);
-          }
-          const parsed = parseWindFrame(rawDesc);
-          if (parsed.frame !== firstFrame) throw new Error('Fine terrain frame descriptor mismatch');
-          assertWindFrameLayout(parsed, { native: native.grid, fine: fine.grid });
-          const fineTotal = windLayout(fine.grid.width, fine.grid.height, parsed.fineTileSize);
-          const mask = decodeTileMask(parsed.fineMask, fineTotal.count);
-          return lruSet(
-            this.descriptors,
-            build.manifest.buildId,
-            {
-              fineTileSize: parsed.fineTileSize,
-              chunkBytes: fineTotal.chunkBytes,
-              resolveSlot: mask ? logical => mask.slot(logical) : logical => logical,
-            },
-            MAX_CACHED_DESCRIPTORS,
-          );
-        },
-        signal,
-      );
-    }
-    if (descriptor === 'unavailable') return null;
-
-    const { fineTileSize, chunkBytes, resolveSlot } = descriptor;
-    const tilesAcross = Math.ceil(fine.grid.width / fineTileSize);
-    const neededSlots = new Set<number>();
-    for (const item of contributors) {
-      const logical = Math.floor(item.row / fineTileSize) * tilesAcross + Math.floor(item.column / fineTileSize);
-      const slot = resolveSlot(logical);
-      if (slot >= 0) neededSlots.add(slot);
-    }
-
-    const tileMap = new Map<number, DataView>();
-    await Promise.all(
-      [...neededSlots].map(async slot => {
-        const tileKey = `${build.manifest.buildId}:${slot}`;
-        let view: DataView | 'unavailable' | undefined = this.tiles.get(tileKey);
-        if (!view) {
-          view = await coalescedFetch(
-            this.inFlightTiles,
-            tileKey,
-            async sharedSignal => {
-              const bytes = await readBoundedBytes(fetchImpl, `${root}/fine/${slot}`, 'application/octet-stream', chunkBytes, sharedSignal);
-              if (bytes === 'unavailable') return 'unavailable';
-              return lruSet(this.tiles, tileKey, createFineCompanionView(bytes, chunkBytes), MAX_CACHED_FINE_TILES);
-            },
-            signal,
-          );
-        }
-        if (view !== 'unavailable') tileMap.set(slot, view);
-      }),
+    const deadlineController = new AbortController();
+    const forwardAbort = () => deadlineController.abort(callerSignal?.reason);
+    callerSignal?.addEventListener('abort', forwardAbort, { once: true });
+    if (callerSignal?.aborted) forwardAbort();
+    const timer = setTimeout(
+      () => deadlineController.abort(new DOMException('Fine terrain deadline exceeded', 'TimeoutError')),
+      deadlineMs,
     );
-    signal?.throwIfAborted();
+    const signal = deadlineController.signal;
 
-    return lruSet(
-      this.points,
-      pointKey,
-      evaluateFineTerrainContributors({
+    try {
+      const root = `${baseUrl.replace(/\/+$/, '')}/v1/models/${encodeURIComponent(build.manifest.model)}/runs/${encodeURIComponent(build.manifest.buildId)}/data/${encodeURIComponent(firstFrame)}`;
+      let descriptor = this.descriptors.get(build.manifest.buildId);
+      if (!descriptor) {
+        descriptor = await coalescedFetch(
+          this.inFlightDescriptors,
+          build.manifest.buildId,
+          async sharedSignal => {
+            const rawDesc = await readBoundedBytes(fetchImpl, root, 'application/json', WIND_FRAME_LIMIT, sharedSignal);
+            if (rawDesc === 'unavailable') {
+              return lruSet(this.descriptors, build.manifest.buildId, 'unavailable', MAX_CACHED_DESCRIPTORS);
+            }
+            const parsed = parseWindFrame(rawDesc);
+            if (parsed.frame !== firstFrame) throw new Error('Fine terrain frame descriptor mismatch');
+            assertWindFrameLayout(parsed, { native: native.grid, fine: fine.grid });
+            const fineTotal = windLayout(fine.grid.width, fine.grid.height, parsed.fineTileSize);
+            const mask = decodeTileMask(parsed.fineMask, fineTotal.count);
+            return lruSet(
+              this.descriptors,
+              build.manifest.buildId,
+              {
+                fineTileSize: parsed.fineTileSize,
+                chunkBytes: fineTotal.chunkBytes,
+                resolveSlot: mask ? logical => mask.slot(logical) : logical => logical,
+              },
+              MAX_CACHED_DESCRIPTORS,
+            );
+          },
+          signal,
+        );
+      }
+      if (descriptor === 'unavailable') return null;
+
+      const { fineTileSize, chunkBytes, resolveSlot } = descriptor;
+      const tilesAcross = Math.ceil(fine.grid.width / fineTileSize);
+      const neededSlots = new Set<number>();
+      for (const item of contributors) {
+        const logical = Math.floor(item.row / fineTileSize) * tilesAcross + Math.floor(item.column / fineTileSize);
+        const slot = resolveSlot(logical);
+        if (slot >= 0) neededSlots.add(slot);
+      }
+
+      const tileMap = new Map<number, DataView>();
+      await Promise.all(
+        [...neededSlots].map(async slot => {
+          const tileKey = `${build.manifest.buildId}:${slot}`;
+          let view: DataView | 'unavailable' | undefined = this.tiles.get(tileKey);
+          if (!view) {
+            view = await coalescedFetch(
+              this.inFlightTiles,
+              tileKey,
+              async sharedSignal => {
+                const bytes = await readBoundedBytes(fetchImpl, `${root}/fine/${slot}`, 'application/octet-stream', chunkBytes, sharedSignal);
+                if (bytes === 'unavailable') return 'unavailable';
+                return lruSet(this.tiles, tileKey, createFineCompanionView(bytes, chunkBytes), MAX_CACHED_FINE_TILES);
+              },
+              signal,
+            );
+          }
+          if (view !== 'unavailable') tileMap.set(slot, view);
+        }),
+      );
+      signal.throwIfAborted();
+
+      const evaluated = evaluateFineTerrainContributors({
         contributors,
         fineGridWidth: fine.grid.width,
         fineTileSize,
@@ -377,8 +398,14 @@ export class PointTerrainCache {
         surfaceId: fine.id,
         surface,
         verticalDatum,
-      }),
-      MAX_POINT_TERRAIN_ENTRIES,
-    );
+      });
+      if (evaluated.status === 'valid' || evaluated.status === 'outside-domain') {
+        return lruSet(this.points, pointKey, evaluated, MAX_POINT_TERRAIN_ENTRIES);
+      }
+      return evaluated;
+    } finally {
+      clearTimeout(timer);
+      callerSignal?.removeEventListener('abort', forwardAbort);
+    }
   }
 }

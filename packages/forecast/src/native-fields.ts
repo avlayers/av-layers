@@ -141,7 +141,7 @@ export function prepareNativeProfiles(frame: NormalizedFrame, coverage: SparseCo
           const qH = h === null ? null : Math.round(h);
           const subStepH = h !== null && h > prevRawH && qH! <= prevQuantH;
           const subStepP = p !== null && p < prevRawP && qP! >= prevQuantP;
-          if ((subStepH && (p === null || p < prevRawP)) || (subStepP && (h === null || h > prevRawH))) {
+          if ((subStepH && (p === null || p < prevRawP)) || (subStepP && h === null)) {
             continue;
           }
           if (h !== null && (h <= prevRawH || qH! <= prevQuantH)) h = null;

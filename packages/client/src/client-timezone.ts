@@ -1,4 +1,5 @@
 import tzLookup from '@photostructure/tz-lookup';
+import { normalizeLon } from '@av/contracts/geometry';
 import { formatPlaceTime, longitudeOffsetHours, type PlaceTimeStyle } from './client-time.ts';
 import type { GeoPoint } from './client-types.ts';
 
@@ -20,11 +21,11 @@ export function timeZoneForLongitude(lon: number): string {
  * returning `{ timeZone: 'UTC', isUtcFallback: true }` over international waters.
  */
 export function resolveSiteTimeZone(lat: number, lon: number): SiteTimeZoneResolution {
-  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90) {
     return { timeZone: 'UTC', isUtcFallback: true };
   }
   try {
-    const timeZone = tzLookup(lat, lon);
+    const timeZone = tzLookup(lat, normalizeLon(lon));
     if (!timeZone || timeZone.startsWith('Etc/')) return { timeZone: 'UTC', isUtcFallback: true };
     return { timeZone, isUtcFallback: false };
   } catch {
@@ -74,7 +75,7 @@ export function timeZoneOffsetMinutesAt(validMs: number, timeZone: string): numb
   const parts = formatter.formatToParts(new Date(validMs));
   const get = (type: string) => Number(parts.find(p => p.type === type)?.value ?? 0);
   const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
-  return Math.round((localAsUtcMs - validMs) / 60_000);
+  return Math.round((localAsUtcMs - validMs) / 60_000) || 0;
 }
 
 const shortZoneFormatters = new Map<string, Intl.DateTimeFormat>();

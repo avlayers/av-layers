@@ -338,8 +338,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
       `<rect x="1" y="20" width="${TILE_DIVIDER_X - 1.5}" height="26" data-tile-wind-bg="" class="wg-tile-cell-tint"/>` +
       `<rect x="1" y="47" width="${TILE_DIVIDER_X - 1.5}" height="26" rx="3" data-tile-cloud-bg="" class="wg-tile-cell-tint"/>` +
       `<rect x="${TILE_DIVIDER_X + 0.5}" y="47" width="${TILE_WIDTH - TILE_DIVIDER_X - 1.5}" height="26" rx="3" data-tile-rain-bg="" class="wg-tile-cell-tint"/>` +
-      `<line x1="0" y1="19.5" x2="${TILE_WIDTH}" y2="19.5" class="wg-tile-divider"/>` +
-      `<line x1="0" y1="46.5" x2="${TILE_WIDTH}" y2="46.5" class="wg-tile-divider"/>` +
+      `<line x1="0" y1="19.5" x2="${TILE_WIDTH}" y2="19.5" data-tile-div-top="" class="wg-tile-divider"/>` +
+      `<line x1="0" y1="46.5" x2="${TILE_WIDTH}" y2="46.5" data-tile-div-mid="" class="wg-tile-divider"/>` +
       `<line x1="${TILE_DIVIDER_X}" y1="19.5" x2="${TILE_DIVIDER_X}" y2="${TILE_HEIGHT}" class="wg-tile-divider"/>` +
       `<rect x="4.5" y="3.8" width="31" height="12" rx="3.8" data-tile-badge-pill="" class="wg-tile-pill"/>` +
       `<text x="20" y="12.5" text-anchor="middle" data-cursor-badge="" class="wg-tile-badge"/>` +
@@ -392,6 +392,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
     const dewpointEl = q<SVGTextElement>('[data-tile-dewpoint]');
     const rainIcon = q<SVGPathElement>('[data-tile-rain-icon]');
     const hazardEl = q<SVGTextElement>('[data-tile-hazard]');
+    const divTop = q<SVGLineElement>('[data-tile-div-top]');
+    const divMid = q<SVGLineElement>('[data-tile-div-mid]');
     const legacyMeteo = q<SVGTextElement>('[data-cursor-meteo]');
     const legacySoar = q<SVGTextElement>('[data-cursor-soar]');
     const hasTileDom = Boolean(windSpeed || climbVal || cloudText || tempEl);
@@ -539,12 +541,13 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         let climbSubClass = 'wg-tile-sub';
         let waveMode: 'none' | 'up' | 'down' = 'none';
         if (useTol) {
-          if (reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
+          const cappedBelowTop = Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
+          if (cappedBelowTop && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
             displayClimbMps = reading.estimatedClimbMps;
-            climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ At TOL';
+            climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ At ceiling';
           } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {
             displayClimbMps = reading.peakClimbMps;
-            climbCaption = '▲ Peak lift';
+            climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ Peak lift';
           }
         } else if (reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.05) {
           displayClimbMps = reading.estimatedClimbMps;
@@ -635,6 +638,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(oktas[i], 'class', oktaCls);
         }
 
+        const localCloudKnown = liquidRhVal !== null || cloudRhVal !== null || layers.length > 0;
         let skyCode = '—';
         let skyCodeClass = 'wg-tile-sky-code';
         if (inSaturatedCloud) {
@@ -651,6 +655,9 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           skyCodeClass = 'wg-tile-sky-code is-muted';
         } else if (layers.length >= 2) {
           skyCode = `${layers.length} LYR`;
+        } else if (!localCloudKnown && cloudPct !== null) {
+          skyCode = cloudPct < 5 ? 'CLR' : `SKY ${cloudPct}%`;
+          if (cloudPct < 5) skyCodeClass = 'wg-tile-sky-code is-muted';
         } else if (effectiveCoverPct !== null) {
           const code = skyCoverageCode(effectiveCoverPct);
           skyCode = code === 'CLR' ? 'CLR' : `${code} ${effectiveCoverPct}%`;
@@ -699,8 +706,11 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         } else if (liquidRhVal !== null) {
           setText(cloudText, `Clear · RH ${liquidRhVal}%`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
+        } else if (cloudRhVal !== null) {
+          setText(cloudText, `Model RH ${cloudRhVal}%`);
+          setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (cloudPct !== null) {
-          setText(cloudText, `Clear · Sky ${cloudPct}%`);
+          setText(cloudText, cloudPct < 5 ? `Sky ${cloudPct}%` : `Local RH — · Sky ${cloudPct}%`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else {
           setText(cloudText, 'Sky —');
@@ -750,13 +760,13 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(hazardEl, 'x', '118.5');
           const rateLabel = formatQuantity(precipMm, 'rainRate', undefined, unitSystem);
           if (cloudSuckRisk) {
-            setText(hazardEl, 'Rain · ⚠ Suck');
+            setText(hazardEl, `${rateLabel} · ⚠ Suck`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highCape && highShear) {
-            setText(hazardEl, `Rain · CAPE ${capeRounded} · Shr`);
+            setText(hazardEl, `${rateLabel} · CAPE ${capeRounded} · Shr`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highCape) {
-            setText(hazardEl, `Rain · CAPE ${capeRounded}`);
+            setText(hazardEl, `${rateLabel} · CAPE ${capeRounded}`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highShear) {
             setText(hazardEl, `${rateLabel} · Shear`);
@@ -769,6 +779,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
             setAttr(hazardEl, 'class', 'wg-tile-sub is-rain');
           }
         } else {
+          const precipKnownZero = precipMm !== null && Number.isFinite(precipMm) && precipMm <= 0.04;
           setAttr(rainBg, 'class', 'wg-tile-cell-tint');
           setAttr(rainIcon, 'visibility', 'hidden');
           setAttr(hazardEl, 'x', '110');
@@ -814,10 +825,10 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
             setText(hazardEl, 'Inversion');
             setAttr(hazardEl, 'class', 'wg-tile-sub');
           } else if (layers.length >= 2) {
-            setText(hazardEl, `Dry · ${layers.length} layers`);
+            setText(hazardEl, precipKnownZero ? `Dry · ${layers.length} layers` : `${layers.length} cloud layers`);
             setAttr(hazardEl, 'class', 'wg-tile-sub');
           } else {
-            setText(hazardEl, 'Dry');
+            setText(hazardEl, precipKnownZero ? 'Dry' : 'Precip —');
             setAttr(hazardEl, 'class', 'wg-tile-sub');
           }
         }
@@ -825,9 +836,14 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         const neededHeaderWidth = compactTime
           ? aglX + aglText.length * 6.4 + mslText.length * 5.4 + 18
           : aglText.length * 6.0 + mslText.length * 5.2 + 52;
-        const dynamicWidth = Math.max(TILE_WIDTH, Math.min(228, Math.ceil(neededHeaderWidth)));
+        const hazardLen = (hazardEl?.textContent ?? '').length;
+        const neededHazardWidth = hasRain ? 118.5 + hazardLen * 5.1 + 8 : 110 + hazardLen * 5.1 + 8;
+        const dynamicWidth = Math.max(TILE_WIDTH, Math.min(244, Math.ceil(Math.max(neededHeaderWidth, neededHazardWidth))));
         setAttr(msl, 'x', String(fmt(dynamicWidth - 5.5)));
         setAttr(dewpointEl, 'x', String(fmt(dynamicWidth - 6)));
+        setAttr(divTop, 'x2', String(dynamicWidth));
+        setAttr(divMid, 'x2', String(dynamicWidth));
+        setAttr(rainBg, 'width', String(fmt(dynamicWidth - TILE_DIVIDER_X - 1.5)));
         setAttr(back, 'width', String(dynamicWidth));
         setAttr(back, 'height', String(TILE_HEIGHT));
         return { width: dynamicWidth, height: TILE_HEIGHT };

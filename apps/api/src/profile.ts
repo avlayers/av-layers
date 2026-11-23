@@ -8,7 +8,10 @@ import {
   prepareShardedSamplePackLayout, readProfileRecord, sampleCells, samplingCovered, type NativeProfile,
   type SamplePlan
 } from '@av/forecast';
-import { nativeColumnHumidityAtHeight, nativeColumnCloudDiagnostics, nativeColumnWindAtHeight, deriveSoaringViews } from '@av/soaring';
+import {
+  deriveSoaringViews, interpretUpperAirMoisture, nativeColumnCloudDiagnostics,
+  nativeColumnHumidityAtHeight, nativeColumnWindAtHeight, resolveUpperAirMoistureReference
+} from '@av/soaring';
 import { resolveSparseCoverage, sha256 } from './coverage';
 import { reserveAllocation, waitFor, type WaitContext } from './resources';
 import { cached, fail, response } from './http';
@@ -86,6 +89,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
         }
       }
       await readPackedRanges(bucket, ctx, request.signal, m.expiresAt, 'profile', jobs, (job, bytes) => job.apply(bytes));
+      const moistureRef = resolveUpperAirMoistureReference(m.model, m.tool.profileDewpointReference);
       const result = { version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle, createdAt: m.createdAt, expiresAt: m.expiresAt,
         lat, lon, cell, method: m.method, source: servedSource(m, url.origin), frames: frames.map(frame => {
           const column = columns.get(frame.id)!, fields = values.get(frame.id)!, fullFields = allValues.get(frame.id)!;
@@ -97,6 +101,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             surfaceDewPointC: value('sfc-dewpoint-c'), pblHeightM: value('pbl-height-agl'),
             wind10mU: value('wind-10m-u'), wind10mV: value('wind-10m-v'),
             levels: column.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN, temperatureC: level.temperatureC ?? NaN,
+              dewPointC: interpretUpperAirMoisture(level.temperatureC, level.dewPointC, moistureRef).dewPointC,
               uMps: level.uWindMps, vMps: level.vWindMps })) };
           const storedTopM = value('thermal-top-msl'), terrainM = column.modelTerrainM, thermalVelocityMps = value('thermal-velocity');
           // V1 stores whole-metre terrain alongside the Float32 scalar top.
@@ -119,5 +124,5 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       if (encoded.byteLength > MAX_POINT_RESPONSE_BYTES) fail(429, 'sample-limit', 'Profile response exceeds the byte budget');
       return response(encoded, 'application/json; charset=utf-8', m.expiresAt, await waitFor(sha256(encoded), request.signal));
     } finally { for (const release of releases) release(); }
-  }, 'profile-v3');
+  }, 'profile-v4');
 }

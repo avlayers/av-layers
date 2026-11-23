@@ -149,10 +149,11 @@ export function createPointSeriesLoader(
               try {
                 const resolved = await readTerrain(controller.signal);
                 assertActive();
-                siteTerrain = resolved;
+                // Keep transient unavailable tile outcomes retryable while latching authoritative null/valid/outside-domain.
+                siteTerrain = resolved?.status === 'unavailable' ? undefined : resolved;
               } catch {
                 assertActive();
-                siteTerrain = null;
+                // Transient failure: leave siteTerrain undefined so a subsequent load retries.
               }
               if (--outstanding > 0 && !selectedLiftPending && cache.size > 0) progress(true);
             })()

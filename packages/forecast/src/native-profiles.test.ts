@@ -117,5 +117,17 @@ it('drops sub-unit quantization ties and marks non-hydrostatic pressure/height r
   const revH = readProfileRecord(Uint8Array.from(profiles.readRecord(2)));
   expect(revH.status).toBe('valid');
   expect(revH.levels.map(l => l.heightM)).toEqual([650, null, 1100]);
+
+  // Cell 3: quantized 0.1 hPa pressure tie at distinct ascending heights keeps the level with null pressure
+  pressurePa[0]![3] = 95002;
+  pressurePa[1]![3] = 94998; // both quantize to 950.0 hPa
+  pressurePa[2]![3] = 85000;
+  frame.hgtM[0]![3] = 600;
+  frame.hgtM[1]![3] = 635;
+  frame.hgtM[2]![3] = 1100;
+  const subStepP = readProfileRecord(Uint8Array.from(profiles.readRecord(3)));
+  expect(subStepP.levels).toHaveLength(3);
+  expect(subStepP.levels.map(l => l.heightM)).toEqual([600, 635, 1100]);
+  expect(subStepP.levels.map(l => l.pressureHpa)).toEqual([950, null, 850]);
 });
 

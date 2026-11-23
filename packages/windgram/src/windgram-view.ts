@@ -119,6 +119,8 @@ export interface WindgramHour extends PublicHour {
   gustKt: number | null;
 }
 export interface WindgramView extends WindgramLayout {
+  model?: string;
+  modelHasAnyOmega?: boolean;
   fieldMode: WindgramFieldMode;
   gustLabel: string;
   capeLabel: string;
@@ -162,7 +164,7 @@ export function formatAltitudeAxisLabels(
   return hours
     .flatMap(hour => [
       hour.modelTerrainM,
-      hour.fineTerrainM ?? hour.mapLift.terrainM,
+      hour.fineTerrainM ?? null,
       hour.mapLift.mslM,
       hour.nativeUsableLiftTopM ?? null,
       ...hour.levels.map(level => level.heightM),
@@ -390,7 +392,7 @@ export function windgramSeriesDefinitions(hybrid: boolean): readonly WindgramSer
       ? [['nativeUsableLiftTopM', 'Native usable lift (beyond map horizon)', '#7dd3fc', '5 3', (hour: ProfileHour) =>
           hour.mapLift.mslM === null ? (hour.nativeUsableLiftTopM ?? null) : null] as const]
       : []),
-    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.fineTerrainM ?? hour.mapLift.terrainM],
+    ['terrainM', 'Fine surface elevation', hybrid ? '#cbd5e1' : '#514b62', '3 4', (hour: ProfileHour) => hour.fineTerrainM ?? null],
     ['surfaceLclM', 'Native potential cloud base (surface LCL)', hybrid ? '#f9a8d4' : '#426173', '3 4', (hour: ProfileHour) => (convectiveOnly(hour) ? hour.surfaceLclM : null)],
     [
       'effectiveCloudLimitM',
@@ -433,6 +435,8 @@ export function buildWindgramView(profile: SiteForecast, options: WindgramOption
     unitSystem: system,
     fieldMode,
     presentation,
+    model: profile.model,
+    modelHasAnyOmega: profile.hours.some(h => h.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))),
     width: left + plotWidth + right,
     height: presentation.height,
     left,

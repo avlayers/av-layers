@@ -19,7 +19,13 @@ import type { FieldNode, HourSampling, PublishedForecastHour } from './internal-
 import type { SkyCoverageCode, WindgramCloudLayerSummary } from './scene-types.ts';
 import { clamp, convertQuantity, finiteScalar, mpsToKnots, type UnitSystem } from './windgram-format.ts';
 import { buildStabilityFieldPaths } from './windgram-geometry.ts';
-import { CLOUD_RH_THRESHOLD_PERCENT, sampleHeight, stabilityDisplayNodes } from './windgram-sampling.ts';
+import {
+  CLOUD_RH_THRESHOLD_PERCENT,
+  profileHeightGaps,
+  sampleHeight,
+  stabilityDisplayNodes,
+  withHeightGaps,
+} from './windgram-sampling.ts';
 import { heightToY, yToHeight, type WindgramScale } from './windgram-scale.ts';
 import { hourX } from './windgram-time-axis.ts';
 
@@ -118,9 +124,9 @@ export function omegaToVerticalVelocityMps(
 
 /** Resolves effective surface terrain elevation from persistent fine DEM or model ground. */
 export function effectiveHourGroundM(
-  hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'mapLift' | 'modelTerrainM'>,
+  hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'modelTerrainM'>,
 ): number | null {
-  return hour.fineTerrainM ?? hour.mapLift.terrainM ?? hour.modelTerrainM ?? null;
+  return hour.fineTerrainM ?? hour.modelTerrainM ?? null;
 }
 
 export function climbBandRange(index: number, system: UnitSystem): string {
@@ -764,7 +770,8 @@ function contourGridIsobands(args: {
     };
     const valAt = (r: number, c: number) =>
       r >= 0 && r <= rows && c >= 0 && c <= cols ? values[r * stride + c]! : -1;
-    const frac = (a: number, b: number) => (a === b ? 0.5 : clamp01((t - a) / (b - a)));
+    const frac = (a: number, b: number) =>
+      !Number.isFinite(a) ? 0.999 : !Number.isFinite(b) ? 0.001 : a === b ? 0.5 : clamp01((t - a) / (b - a));
 
     for (let r = -1; r <= rows; r++) {
       for (let c = -1; c <= cols; c++) {
@@ -778,7 +785,17 @@ function contourGridIsobands(args: {
         const bk = hEdge(r + 1, c), bx = xOf(c + frac(vBL, vBR)), by = yOf(r + 1);
         const lk = vEdge(r, c), lx = xOf(c), ly = yOf(r + frac(vTL, vBL));
         const rk = vEdge(r, c + 1), rx = xOf(c + 1), ry = yOf(r + frac(vTR, vBR));
-        const centreIn = (vTL + vTR + vBR + vBL) * 0.25 >= t;
+        const finiteSum =
+          (Number.isFinite(vTL) ? vTL : 0) +
+          (Number.isFinite(vTR) ? vTR : 0) +
+          (Number.isFinite(vBR) ? vBR : 0) +
+          (Number.isFinite(vBL) ? vBL : 0);
+        const finiteCount =
+          Number(Number.isFinite(vTL)) +
+          Number(Number.isFinite(vTR)) +
+          Number(Number.isFinite(vBR)) +
+          Number(Number.isFinite(vBL));
+        const centreIn = finiteCount === 4 && finiteSum * 0.25 >= t;
         switch (idx) {
           case 1: addSeg(lk, lx, ly, bk, bx, by); break;
           case 2: addSeg(bk, bx, by, rk, rx, ry); break;
@@ -899,6 +916,8 @@ export function buildInversionAndCloudDeckPaths(args: {
         columnWidth,
         plotTop,
         plotBottom,
+        leftBound,
+        rightBound,
         banding: {
           breakpoints: [0, 0.5],
           classNames: ['', 'wg-inversion-weak', 'wg-inversion-strong'],
@@ -906,7 +925,7 @@ export function buildInversionAndCloudDeckPaths(args: {
       })
     : {};
 
-  // Resolved statically stable model vertical velocity w_ω aloft
+  // Resolved statically stable model vertical velocity w_ω aloft (preserving missing-height gaps)
   const wProfilesByHour = hours.map((vh, i) => {
     const src = sourceHours?.[i];
     if (!src?.levels.length) return null;
@@ -915,11 +934,15 @@ export function buildInversionAndCloudDeckPaths(args: {
     if (precip !== null && precip >= 0.08) return null;
     const lapseNodes = sampling[i]?.lapseCPer1000Ft ?? [];
     const thermalCeilingM = effectiveHourUsableLiftTopM(src, vh.usableLiftTopM) ?? effectiveHourGroundM(src) ?? floorM;
-    const nodes = src.levels
+    const gaps = profileHeightGaps(src.levels);
+    const rawNodes = src.levels
       .filter((l): l is typeof l & { heightM: number } => l.heightM !== null && Number.isFinite(l.heightM))
       .sort((a, b) => a.heightM - b.heightM)
       .map(l => {
-        if (l.omegaPaS === null || !Number.isFinite(l.omegaPaS) || l.heightM <= thermalCeilingM + 20) {
+        if (l.omegaPaS === null || !Number.isFinite(l.omegaPaS)) {
+          return { altitudeM: l.heightM, value: NaN };
+        }
+        if (l.heightM <= thermalCeilingM + 20) {
           return { altitudeM: l.heightM, value: 0 };
         }
         const localLapse = lapseNodes.length ? sampleHeight(lapseNodes, l.heightM) : null;
@@ -934,14 +957,15 @@ export function buildInversionAndCloudDeckPaths(args: {
         const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
         return {
           altitudeM: l.heightM,
-          value: w === null ? 0 : w,
+          value: w === null ? NaN : w,
         };
       });
-    return nodes.length ? nodes : null;
+    const nodes = withHeightGaps(rawNodes, gaps, altitudeM => ({ altitudeM, value: NaN }));
+    return nodes.length ? { nodes, gaps } : null;
   });
 
   const hasWaveAscent = wProfilesByHour.some(
-    nodes => nodes !== null && nodes.some(n => Number.isFinite(n.value) && n.value >= WAVE_ASCENT_MIN_MPS),
+    prof => prof !== null && prof.nodes.some(n => Number.isFinite(n.value) && n.value >= WAVE_ASCENT_MIN_MPS),
   );
   const waveMap: Record<string, string> = (() => {
     if (!hasWaveAscent || plotBottom <= plotTop) return {};
@@ -959,8 +983,13 @@ export function buildInversionAndCloudDeckPaths(args: {
     const sampleHourW = (idx: number, z: number) => {
       const prof = wProfilesByHour[clamp(idx, 0, n - 1)];
       if (!prof) return 0;
-      if (z < prof[0]!.altitudeM || z > prof.at(-1)!.altitudeM) return 0;
-      return sampleHeight(prof, z) ?? 0;
+      const { nodes, gaps } = prof;
+      if (z < nodes[0]!.altitudeM || z > nodes.at(-1)!.altitudeM) return 0;
+      for (let g = 0; g < gaps.length; g++) {
+        if (z > gaps[g]![0] && z < gaps[g]![1]) return NaN;
+      }
+      const sampled = sampleHeight(nodes, z);
+      return sampled === null ? NaN : sampled;
     };
     for (let c = 0; c <= subCols; c++) {
       const t = -0.5 + (n * c) / subCols;
@@ -977,7 +1006,15 @@ export function buildInversionAndCloudDeckPaths(args: {
         } else {
           const lo = Math.floor(t);
           const f = t - lo;
-          wVal = sampleHourW(lo, z) * (1 - f) + sampleHourW(lo + 1, z) * f;
+          const a = sampleHourW(lo, z);
+          const b = sampleHourW(lo + 1, z);
+          wVal = !Number.isFinite(a) && !Number.isFinite(b)
+            ? NaN
+            : !Number.isFinite(a)
+              ? (f >= 0.5 ? b : NaN)
+              : !Number.isFinite(b)
+                ? (f <= 0.5 ? a : NaN)
+                : a * (1 - f) + b * f;
         }
         const rowEdge = Math.min(1, r / 1.5, (rows - r) / 1.5);
         gridValues[r * stride + c] = wVal * rowEdge;
@@ -1007,6 +1044,8 @@ export function buildInversionAndCloudDeckPaths(args: {
         columnWidth,
         plotTop,
         plotBottom,
+        leftBound,
+        rightBound,
         banding: {
           breakpoints: [CLOUD_SCT_RH_PERCENT, CLOUD_BKN_RH_PERCENT, CLOUD_RH_THRESHOLD_PERCENT],
           classNames: ['', 'wg-cloud-deck-sct', 'wg-cloud-deck-bkn', 'wg-cloud-deck-ovc'],

@@ -1,5 +1,5 @@
 import {
-  pointMapLift, pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
+  pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
 } from '@av/client';
 import { formatSitePlaceTime, resolveSiteTimeZone } from '@av/client/timezone';
 import type { PointViewMode } from '@av/windgram';
@@ -63,18 +63,15 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   const body = (): HTMLElement | null => options.body();
   const setStatus = (message = ''): void => options.publish.status(message);
 
-  function publishSiteElevation(payload: PointSeries, build: PinnedBuild): void {
+  function publishSiteElevation(payload: PointSeries): void {
     if (!options.publish.elevation) return;
+    if (payload.siteTerrain?.status === 'outside-domain') {
+      options.publish.elevation(null, null);
+      return;
+    }
     if (payload.siteTerrain?.status === 'valid' && payload.siteTerrain.elevationM !== null && Number.isFinite(payload.siteTerrain.elevationM)) {
       options.publish.elevation(payload.siteTerrain.elevationM, 'terrain');
       return;
-    }
-    for (const frame of payload.frames) {
-      const fineM = pointMapLift(frame, build).terrainM;
-      if (fineM !== null && Number.isFinite(fineM)) {
-        options.publish.elevation(fineM, 'terrain');
-        return;
-      }
     }
     for (const frame of payload.frames) {
       const modelM = frame.profile?.modelTerrainM ?? null;
@@ -90,7 +87,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
     const host = body();
     if (!windgram || !host) return;
     lastRendered = { context, payload, totalFrames, loading };
-    publishSiteElevation(payload, context.build);
+    publishSiteElevation(payload);
     updatePointSeries = windgram.renderPointWindgram(host, payload, context.build, {
       point: context.point,
       frameId: series.frameId,
