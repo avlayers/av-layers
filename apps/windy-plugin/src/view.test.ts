@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { FIXTURE_BUILD_ID, fixtureBuild } from '../../../tests/forecast-fixture';
 import { fixturePointBuild, fixtureProfileBuild, retainedPointBuild, retainedProfileBuild, retainedUnprefixedPointBuild, fixturePointFetch } from '../../../tests/client-point-fixture';
 import { disposePointWindgram, renderPointWindgram } from '@av/windgram';
-import { ApiClient, formatPlaceTime, formatPointMapTimes, longitudeOffsetHours, pointSeriesSelection } from '@av/client';
+import { ApiClient, formatPointMapTimes, pointSeriesSelection } from '@av/client';
+import { formatSitePlaceTime, pointOffsetMinutesAt } from '@av/client/timezone';
 import { PluginPanel } from './view';
 import type { ControllerState } from './controller';
 
@@ -248,9 +249,8 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   const chosenFrame = m.frames.find(f => f.id === chosenId)!;
   panel.renderState({ ...state, opacity: 0.75 });
   const time = nodes.find(element => element.className === 'av-point-time')!;
-  const clicked = longitudeOffsetHours(point.lon) * 60;
-  expect(time.textContent).toContain(`Point: ${formatPlaceTime(Date.parse(chosenFrame.validTime), clicked, 'stamp')}`);
-  expect(time.textContent).toContain(`Map: ${formatPlaceTime(Date.parse(m.frames[m.mapFrameCount! - 1].validTime), clicked, 'stamp')}`);
+  expect(time.textContent).toContain(`Point: ${formatSitePlaceTime(Date.parse(chosenFrame.validTime), point, 'stamp')}`);
+  expect(time.textContent).toContain(`Map: ${formatSitePlaceTime(Date.parse(m.frames[m.mapFrameCount! - 1].validTime), point, 'stamp')}`);
   const units = nodes.find(element => element.id === 'av-units')!;
   units.value = 'imperial'; units.dispatchEvent(new Event('change'));
   const summary = nodes.find(element => element.className === 'av-windgram-lift-summary')!.textContent;
@@ -258,7 +258,7 @@ it('inspects the full point forecast independently of an unchanged Windy map fra
   expect(nodes.find(element => element.className === 'av-windgram-profile-status')?.hidden).toBe(true);
   expect(nodes.find(element => element.className === 'av-windgram-key')!.innerHTML).toContain('windgram-legend');
   panel.renderState({ ...state, frameId: null, displayedFrameId: null });
-  expect(time.textContent).toContain(`Point: ${formatPlaceTime(Date.parse(chosenFrame.validTime), clicked, 'stamp')}`);
+  expect(time.textContent).toContain(`Point: ${formatSitePlaceTime(Date.parse(chosenFrame.validTime), point, 'stamp')}`);
   expect(time.textContent).toContain('Map: unavailable');
   horizon.dispatchEvent(new Event('change'));
   await vi.waitFor(() => expect(pointPanel.ariaBusy).toBe('false'));
@@ -283,7 +283,7 @@ it('navigates forecast hours via windgram keyboard controls', async () => {
   host.dispatchEvent(key('ArrowLeft'));
   expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f001', build);
   host.dispatchEvent(key('End'));
-  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f007', build);
+  expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f004', build);
   host.dispatchEvent(key('Home'));
   expect(handlers.onPointFrame).toHaveBeenLastCalledWith('f001', build);
   for (let count = 0; count < 4; count++) host.dispatchEvent(key('ArrowRight'));
@@ -418,7 +418,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     expect(nodes.find(node => node.className === 'av-windgram-lift-summary')?.textContent).toContain('MSL 2000 m · AGL 500 m');
     expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
     expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(' · Map: ');
-    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[39].validTime), longitudeOffsetHours(point.lon) * 60, 'stamp'));
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatSitePlaceTime(Date.parse(m.frames[39].validTime), point, 'stamp'));
     expect(nodes.find(node => node.id === 'av-point-horizon')?.children[0].textContent).toBe('Map forecast');
     if (!keepKnown) {
       panel.renderState({ ...ready, buildId: m.buildId, frameId: 'f069', displayedFrameId: m.frames[0].id });
@@ -436,7 +436,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
     const incomplete = nodes.find(node => node.className === 'av-point-incomplete')!;
     expect(incomplete.hidden).toBe(false); expect(incomplete.role).toBe('status');
     expect(incomplete.textContent).toBe('Forecast incomplete. Some hours could not be loaded.');
-    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[keepKnown ? 39 : 38].validTime), longitudeOffsetHours(point.lon) * 60, 'stamp'));
+    expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatSitePlaceTime(Date.parse(m.frames[keepKnown ? 39 : 38].validTime), point, 'stamp'));
     const units = nodes.find(node => node.id === 'av-units')!;
     units.value = 'imperial'; units.dispatchEvent(new Event('change'));
     expect(summary.textContent).toContain('MSL 6562 ft · AGL 1640 ft');
@@ -450,7 +450,7 @@ it.each([[false, false], [true, false], [true, true]])('preserves Windy progress
   expect(nodes.find(node => node.className === 'av-point')?.ariaBusy).toBe('false');
   expect(nodes.find(node => node.className === 'av-windgram-host')?.innerHTML).toContain('class="windgram');
   expect(nodes.find(node => node.className === 'av-point-incomplete')?.hidden).toBe(true);
-  expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatPlaceTime(Date.parse(m.frames[38].validTime), longitudeOffsetHours(-117.25) * 60, 'stamp'));
+  expect(nodes.find(node => node.className === 'av-point-time')?.textContent).toContain(formatSitePlaceTime(Date.parse(m.frames[38].validTime), point, 'stamp'));
   expect(pages).toHaveLength(3);
 });
 
@@ -463,10 +463,10 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   panel.renderState(state);
   await panel.openPoint(build, { lat: 32.9, lon: -117.25 });
   const time = visit(panel.root as unknown as FakeElement).find(element => element.className === 'av-point-time')!;
-  const offset = longitudeOffsetHours(-117.25) * 60;
+  const site = { lat: 32.9, lon: -117.25 };
   const clocks = (pointTime: string, mapTime: string | null) => formatPointMapTimes(
-    { validTime: pointTime, offsetMinutes: offset },
-    mapTime ? { validTime: mapTime, offsetMinutes: offset } : null
+    { validTime: pointTime, offsetMinutes: pointOffsetMinutesAt(site, Date.parse(pointTime)).offsetMinutes },
+    mapTime ? { validTime: mapTime, offsetMinutes: pointOffsetMinutesAt(site, Date.parse(mapTime)).offsetMinutes } : null
   );
   expect(time.textContent).toBe(clocks(second.validTime, null));
   panel.renderState({ ...state, displayedFrameId: first.id, notice: 'Loading selected forecast.' });
@@ -478,6 +478,46 @@ it('keeps selected point time separate from pending and failed Windy raster repl
   expect(time.textContent).toBe(clocks(second.validTime, second.validTime));
   panel.renderState(state);
   expect(time.textContent).toContain('Map: unavailable');
+});
+
+it('formats civil time, DST fall-back and spring jump, half-hour zones, point switches, and labeled UTC fallback in the Windy panel', async () => {
+  installDom();
+  const base = fixtureProfileBuild({ frameHours: [1, 2, 3, 4, 5], mapFrameCount: 5 });
+  const customFrames = [
+    { id: 'f001', validTime: '2026-07-15T12:00:00.000Z', intervalStart: '2026-07-15T11:00:00.000Z', intervalEnd: '2026-07-15T12:00:00.000Z' },
+    { id: 'f002', validTime: '2026-11-01T05:00:00.000Z', intervalStart: '2026-11-01T04:00:00.000Z', intervalEnd: '2026-11-01T05:00:00.000Z' },
+    { id: 'f003', validTime: '2026-11-01T06:00:00.000Z', intervalStart: '2026-11-01T05:00:00.000Z', intervalEnd: '2026-11-01T06:00:00.000Z' },
+    { id: 'f004', validTime: '2026-03-08T06:00:00.000Z', intervalStart: '2026-03-08T05:00:00.000Z', intervalEnd: '2026-03-08T06:00:00.000Z' },
+    { id: 'f005', validTime: '2026-03-08T07:00:00.000Z', intervalStart: '2026-03-08T06:00:00.000Z', intervalEnd: '2026-03-08T07:00:00.000Z' },
+  ];
+  base.manifest.frames = customFrames;
+  const api = new ApiClient({
+    baseUrl: 'https://api.test',
+    fetchImpl: async input => new Response(JSON.stringify(fixturePointFetch(base, String(input)))),
+    now: () => Date.parse(base.manifest.createdAt),
+  });
+  const panel = new PluginPanel(api, callbacks());
+  const checkSite = async (site: { lat: number; lon: number }, frameId: string, expectedPointClock: string) => {
+    panel.renderState({ ...ready, buildId: base.manifest.buildId, frameId, displayedFrameId: null });
+    await panel.openPoint(base, site);
+    const time = visit(panel.root as unknown as FakeElement).find(el => el.className === 'av-point-time')!;
+    expect(time.textContent).toBe(`Point: ${expectedPointClock} · Map: unavailable`);
+  };
+  await checkSite({ lat: 40.179, lon: 44.499 }, 'f001', 'Jul 15, 16:00 (12:00 UTC)');
+  await checkSite({ lat: 38.8473, lon: -78.4121 }, 'f001', 'Jul 15, 08:00 (12:00 UTC)');
+  await checkSite({ lat: 40.4168, lon: -3.7038 }, 'f001', 'Jul 15, 14:00 (12:00 UTC)');
+  await checkSite({ lat: 43.615, lon: -116.202 }, 'f001', 'Jul 15, 06:00 (12:00 UTC)');
+  await checkSite({ lat: 47.56, lon: -52.71 }, 'f001', 'Jul 15, 09:30 (12:00 UTC)');
+  await checkSite({ lat: 30.0, lon: -40.0 }, 'f001', 'Jul 15, 12:00 UTC (UTC fallback)');
+  const offshoreHost = visit(panel.root as unknown as FakeElement).find(el => el.className === 'av-windgram-host')!;
+  expect(offshoreHost.innerHTML).toContain('time UTC (fallback)');
+
+  await checkSite({ lat: 40.7128, lon: -74.006 }, 'f002', 'Nov 1, 01:00 (05:00 UTC)');
+  panel.renderState({ ...ready, buildId: base.manifest.buildId, frameId: 'f003', displayedFrameId: 'f002' });
+  const splitTime = visit(panel.root as unknown as FakeElement).find(el => el.className === 'av-point-time')!;
+  expect(splitTime.textContent).toBe('Point: Nov 1, 01:00 (06:00 UTC) · Map: Nov 1, 01:00 (05:00 UTC)');
+  panel.renderState({ ...ready, buildId: base.manifest.buildId, frameId: 'f005', displayedFrameId: 'f004' });
+  expect(splitTime.textContent).toBe('Point: Mar 8, 03:00 (07:00 UTC) · Map: Mar 8, 01:00 (06:00 UTC)');
 });
 
 it('requests a point hour in the planned horizon when the unprefixed map time lies beyond it', async () => {

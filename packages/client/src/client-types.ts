@@ -24,10 +24,20 @@ export interface GeoPoint {
 
 export type PointHorizon = 'day' | 'forecast';
 
+export interface PointTerrain {
+  readonly elevationM: number | null;
+  readonly status: 'valid' | 'unavailable' | 'outside-domain';
+  readonly interpolated: boolean;
+  readonly surfaceId: string;
+  readonly surface: string | null;
+  readonly verticalDatum: string | null;
+}
+
 /** A bounded cached view whose frames can gain scalar or profile data on later progress. */
 export interface PointSeries {
   layers: readonly LayerId[];
   frames: readonly PointFrame[];
+  siteTerrain?: PointTerrain | null;
 }
 
 /** Create per build/location; later loads supersede pending work, and close calls dispose. */

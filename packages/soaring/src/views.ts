@@ -16,7 +16,6 @@ export interface SoaringViewInput {
   blMeanWindV?: number | null;
   blTopWindU?: number | null;
   blTopWindV?: number | null;
-  blMaxWindShearMps?: number | null;
 }
 
 const finite = (value: number | null | undefined): value is number => typeof value === 'number' && Number.isFinite(value);
@@ -61,9 +60,8 @@ export function deriveCloudRegime(input: SoaringViewInput) {
 export function deriveSoaringViews(input: SoaringViewInput) {
   const w10 = windFromComponents(input.wind10mU, input.wind10mV);
   const mean = windFromComponents(input.blMeanWindU, input.blMeanWindV), top = windFromComponents(input.blTopWindU, input.blTopWindV);
-  const topShear = finite(input.blTopWindU) && finite(input.blTopWindV) && finite(input.wind10mU) && finite(input.wind10mV)
+  const shear = finite(input.blTopWindU) && finite(input.blTopWindV) && finite(input.wind10mU) && finite(input.wind10mV)
     ? Math.hypot(input.blTopWindU - input.wind10mU, input.blTopWindV - input.wind10mV) : null;
-  const shear = topShear !== null && finite(input.blMaxWindShearMps) ? Math.max(topShear, input.blMaxWindShearMps) : topShear;
   const dryHcritM = ceiling(input, 1, false), usableLiftTopV2M = ceiling(input, 1, true);
   return {
     usableLiftTopV2M, hcritWxtoflyM: ceiling(input, WXTOFLY_SINK_MPS, true), dryHcritM,

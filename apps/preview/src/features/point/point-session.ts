@@ -1,6 +1,7 @@
 import {
   pointSeriesSelection, type GeoPoint, type PointSeriesController, type PinnedBuild, type PointHorizon, type PointSeries, type PointSeriesContext, type UnitSystem
 } from '@av/client';
+import { formatSitePlaceTime } from '@av/client/timezone';
 import type { PointViewMode } from '@av/windgram';
 import { renderBuildDetails } from './build-details';
 
@@ -41,6 +42,7 @@ export interface PointSession {
   syncViewMode?(): void;
   updateSelection(): void;
   followMapFrame(frameId: string | null): void;
+  formatWindTime(validMs: number): string;
   renderBuildDetails(container: HTMLElement, build: PinnedBuild): void;
   readonly current: PointSeriesContext | null;
   readonly pending: boolean;
@@ -150,7 +152,8 @@ export function createPointSession(options: PointSessionOptions): PointSession {
   return {
     open, close, suspend, loadRange, syncViewMode, updateSelection,
     followMapFrame(frameId) { series.followMapFrame(frameId); updateSelection(); },
-    renderBuildDetails(container, build) { renderBuildDetails(container, build, series.current?.point.lon); },
+    formatWindTime(validMs) { return series.current ? formatSitePlaceTime(validMs, series.current.point, 'stamp') : '—'; },
+    renderBuildDetails(container, build) { renderBuildDetails(container, build, series.current?.point); },
     get current() { return series.current; },
     get pending() { return series.pending; },
     get frameId() { return series.frameId; },

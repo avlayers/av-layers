@@ -118,18 +118,38 @@ export const saturationMixingRatioGPerKg = (pressureHpa: number, tempC: number):
 };
 
 /**
- * Dewpoint temperature (°C) from ambient temperature (°C) and relative humidity (%).
+ * GFS v16 isobaric relative-humidity reference saturation vapor pressure (hPa):
+ * pure liquid water at T >= 0 °C, pure ice at T <= -20 °C, and a linear ramp across -20 °C < T < 0 °C.
  */
-export const dewpointFromTempAndRhC = (tempC: number, rhPercent: number): number => {
-  if (!Number.isFinite(tempC) || !Number.isFinite(rhPercent) || rhPercent <= 0) {
-    return NaN;
-  }
-  const clampedRh = Math.min(100, Math.max(0.1, rhPercent));
-  const es = saturationVaporPressureHpa(tempC);
-  const e = (es * clampedRh) / 100;
-  const lnRatio = Math.log(e / SATURATION_SCALE_HPA);
+export const gfsV16SaturationVaporPressureHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  if (tempC <= -20) return saturationVaporPressureIceHpa(tempC);
+  const liquidWeight = (tempC + 20) / 20;
+  return (
+    liquidWeight * saturationVaporPressureHpa(tempC) +
+    (1 - liquidWeight) * saturationVaporPressureIceHpa(tempC)
+  );
+};
+
+const boltonDewpointFromVaporPressureC = (vaporPressureHpa: number): number => {
+  if (!Number.isFinite(vaporPressureHpa) || vaporPressureHpa <= 0) return NaN;
+  const lnRatio = Math.log(vaporPressureHpa / SATURATION_SCALE_HPA);
   return (SATURATION_OFFSET_C * lnRatio) / (SATURATION_EXPONENT - lnRatio);
 };
+
+const boltonDewpointFromEsAndRhC = (esHpa: number, rhPercent: number): number =>
+  !Number.isFinite(esHpa) || esHpa <= 0 || !Number.isFinite(rhPercent) || rhPercent <= 0
+    ? NaN
+    : boltonDewpointFromVaporPressureC((esHpa * Math.min(100, Math.max(0.1, rhPercent))) / 100);
+
+/** Dewpoint temperature (°C) over liquid water from ambient temperature (°C) and liquid-reference RH (%). */
+export const dewpointFromTempAndRhC = (tempC: number, rhPercent: number): number =>
+  boltonDewpointFromEsAndRhC(saturationVaporPressureHpa(tempC), rhPercent);
+
+/** Liquid-vapor-pressure Bolton dewpoint (°C) from ambient temperature (°C) and GFS v16 mixed-phase RH (%). */
+export const dewpointFromGfsV16RhC = (tempC: number, rhPercent: number): number =>
+  boltonDewpointFromEsAndRhC(gfsV16SaturationVaporPressureHpa(tempC), rhPercent);
 
 /**
  * Espy / dry-adiabatic lifted condensation level (LCL) height AGL in meters.
@@ -160,9 +180,7 @@ export function mixingRatioFromDewPointKgKg(dewPointC: number, pressureHpa: numb
 
 export function dewPointFromMixingRatioC(mixingRatioKgKg: number, pressureHpa: number): number {
   if (!Number.isFinite(mixingRatioKgKg) || mixingRatioKgKg <= 0 || !Number.isFinite(pressureHpa) || pressureHpa <= 0) return NaN;
-  const e = mixingRatioKgKg * pressureHpa / (WATER_DRY_AIR_MOLAR_MASS_RATIO + mixingRatioKgKg);
-  const log = Math.log(e / SATURATION_SCALE_HPA);
-  return SATURATION_OFFSET_C * log / (SATURATION_EXPONENT - log);
+  return boltonDewpointFromVaporPressureC(mixingRatioKgKg * pressureHpa / (WATER_DRY_AIR_MOLAR_MASS_RATIO + mixingRatioKgKg));
 }
 
 export function dewPointFromSpecificHumidityC(specificHumidityKgKg: number, pressureHpa: number): number {

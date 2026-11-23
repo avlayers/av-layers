@@ -8,8 +8,10 @@ import { canonicalGridJson, planWholeDomainGrid, setBit, sourceIntervalHours, sp
 import { intervalMeanAmountMm, recoverTrailingWindow } from '@av/forecast/intervals';
 import { assertWrfWeatherDefinitions } from '@av/forecast/direct-scalars';
 import { deriveFrame } from '@av/forecast/frame';
+import { prepareNativeProfiles, readProfileRecord } from '@av/forecast';
 import { preparePackedTerrainColumns } from '@av/forecast/refinement';
 import type { AuxField, NormalizedFrame } from '@av/forecast/inputs';
+import { effectiveCloudHumidityPercent, gfsV16SaturationVaporPressureHpa, saturationVaporPressureHpa } from '@av/thermodynamics';
 import { decodePackedWindChunk, normalizedWindColumn, samplePackedWindColumns } from '@av/forecast/wind';
 import { normalizedFixtureFrame } from '../../../../scripts/fixtures/normalized-provider.js';
 import { createWindDataWriter } from '../wind-data.js';
@@ -271,6 +273,70 @@ describe('weather source selection', () => {
     });
     expect(packed.values[0]).toBe(0);
     expect(packed.missing[1]).toBe(1);
+  });
+
+  it('scopes GFS SPFH to primary levels, GFS v16 RH to secondary levels, and preserves moisture across packed profiles', () => {
+    const source = indexedSource(gfs);
+    const specs = indexedGribCurrentSpecs(source, 3);
+    const spfhLevels = specs.filter(spec => spec.auxId === 'spfhKgKg').map(spec => spec.levelHpa);
+    const rhLevels = specs.filter(spec => spec.auxId === 'rhPercent').map(spec => spec.levelHpa);
+    expect(spfhLevels).toContain(450);
+    expect(spfhLevels).toContain(400);
+    expect(spfhLevels).not.toContain(875);
+    expect(rhLevels).toContain(875);
+    expect(rhLevels).not.toContain(450);
+
+    // Two-column packed round-trip: cell 0 = Cascades negative + 875 hPa RH-only secondary; cell 1 = 400 hPa positive control
+    const grid: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 2, height: 1, lon0: -121.5, lat0: 47.5, dx: 43.25, dy: -8.75, wrapLongitude: false };
+    const active = Uint32Array.of(0, 1);
+    const frame = normalizedFixtureFrame(grid, active, '2026-11-20T00:00:00Z', 3, 1);
+    frame.terrainM = Float32Array.of(400, 300);
+    frame.surfacePressurePa = Float32Array.of(96500, 98000);
+    frame.temp2mK = Float32Array.of(276.15, 278.15);
+    frame.specificHumidity2mKgKg = Float32Array.of(0.004, 0.0045);
+    frame.pressureLevelsHpa = [875, 450, 400];
+    frame.hgtM = [
+      Float32Array.of(1220, 1250),
+      Float32Array.of(6150, 6280),
+      Float32Array.of(7020, 7180),
+    ];
+    frame.tempK = [
+      Float32Array.of(-12 + 273.15, -6 + 273.15),
+      Float32Array.of(-34.406195 + 273.15, -21.0 + 273.15),
+      Float32Array.of(-41.870703 + 273.15, -27.19 + 273.15),
+    ];
+    frame.missing.hgt = frame.hgtM.map(() => new Uint8Array(2));
+    frame.missing.temp = frame.tempK.map(() => new Uint8Array(2));
+    frame.rhReference = 'gfs-v16-mixed';
+    frame.auxLevels = {
+      spfhKgKg: [
+        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) }, // 875 hPa secondary: SPFH absent
+        { values: Float32Array.of(0.0002356488985, 0.0006), missing: Uint8Array.of(0, 0) },
+        { values: Float32Array.of(0.0001077765628, 0.00078861), missing: Uint8Array.of(0, 0) },
+      ],
+      rhPercent: [
+        { values: Float32Array.of(80, 75), missing: Uint8Array.of(0, 0) }, // 875 hPa secondary: RH present
+        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) },
+        { values: Float32Array.of(NaN, NaN), missing: Uint8Array.of(1, 1) },
+      ],
+    };
+    const output = Uint8Array.of(0b11);
+    const coverage = sparseCoverageFromDense({ ...grid, gridHash: 'b'.repeat(64), output, halo: new Uint8Array(1) });
+    const reader = prepareNativeProfiles(frame, coverage);
+    const cascades = readProfileRecord(reader.readRecord(0));
+    expect(cascades.levels).toHaveLength(3);
+    // 875 hPa secondary RH-only level preserves true vapor pressure from GFS v16 RH
+    expect(saturationVaporPressureHpa(cascades.levels[0]!.dewPointC!)).toBeCloseTo(
+      0.8 * gfsV16SaturationVaporPressureHpa(-12),
+      2,
+    );
+    // 450 hPa & 400 hPa Cascades negative control within +-0.1% across packed boundary
+    expect(Math.abs(effectiveCloudHumidityPercent(cascades.levels[1]!.temperatureC!, cascades.levels[1]!.dewPointC!) - 71.53)).toBeLessThanOrEqual(0.1);
+    expect(Math.abs(effectiveCloudHumidityPercent(cascades.levels[2]!.temperatureC!, cascades.levels[2]!.dewPointC!) - 66.79)).toBeLessThanOrEqual(0.1);
+
+    // Positive control (38.75°N, 78.25°W, 400 hPa): cold cloud evidence preserved across packed boundary
+    const positive = readProfileRecord(reader.readRecord(1));
+    expect(effectiveCloudHumidityPercent(positive.levels[2]!.temperatureC!, positive.levels[2]!.dewPointC!)).toBeGreaterThanOrEqual(99.5);
   });
 
   it('binds WRF definitions to the v3 contract strings', () => {

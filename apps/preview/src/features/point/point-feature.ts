@@ -1,10 +1,9 @@
 import {
-  formatPlaceTime, longitudeOffsetHours, pointSeriesSelection,
+  pointSeriesSelection,
   type GeoPoint, type PinnedBuild, type PointHorizon, type PointSeriesContext, type PointSeriesController, type UnitSystem
 } from '@av/client';
 import type { PointViewMode } from '@av/windgram';
 import { displayedWindSpeed, windSpeedUnitLabel } from '@av/contracts/units';
-import { renderBuildDetails } from './build-details';
 import type { PointSession } from './point-session';
 
 export interface PointWind {
@@ -106,8 +105,8 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
 
   function syncWind(): void {
     if (disposed) return;
-    const wind = options.getWind(), context = session?.current;
-    if (!wind || !context || context.build !== wind.build || session?.frameId !== wind.frame) { options.publish.wind(''); return; }
+    const wind = options.getWind(), activeSession = session, context = activeSession?.current;
+    if (!wind || !activeSession || !context || context.build !== wind.build || activeSession.frameId !== wind.frame) { options.publish.wind(''); return; }
     const validTime = wind.build.manifest.frames.find(frame => frame.id === wind.frame)?.validTime;
     if (!validTime) { options.publish.wind(''); return; }
     const sample = wind.sample(context.point.lat, context.point.lon), units = options.getUnits();
@@ -115,7 +114,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     const value = speed !== null ? `${speed} ${windSpeedUnitLabel(units)}`
       : sample.status === 'outside' ? 'Outside forecast area' : sample.status === 'no-lift' ? 'No usable lift' : 'Wind unavailable';
     const label = wind.overview ? 'Map wind overview' : 'Map wind';
-    options.publish.wind(`${label} · ${formatPlaceTime(Date.parse(validTime), longitudeOffsetHours(context.point.lon) * 60, 'stamp')} · ${value}`);
+    options.publish.wind(`${label} · ${activeSession.formatWindTime(Date.parse(validTime))} · ${value}`);
   }
 
   return {
@@ -156,7 +155,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
     get frameId() { return session?.frameId ?? null; },
     refreshDiagnostics() {
       const container = meta(), build = options.getBuild();
-      if (container && build && session?.current && !container.children.length) renderBuildDetails(container, build, session.current.point.lon);
+      if (container && build && session?.current && !container.children.length) session.renderBuildDetails(container, build);
     },
     dismiss(target, mapContainer) {
       if ((!options.isOpen?.() && !session?.current && !this.pending) || !(target instanceof Node) || mapContainer.contains(target)) return;

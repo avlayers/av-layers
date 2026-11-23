@@ -12,6 +12,7 @@ import {
 } from './windgram-atmosphere.ts';
 import {
   clamp,
+  compass16,
   convertQuantity,
   fahrenheitToCelsius,
   formatQuantity,
@@ -41,8 +42,7 @@ const text = (x: number, y: number, value: string, attrs = '') =>
 const altitude = (m: number, system: UnitSystem) => Math.round(convertQuantity(m, 'elevation', system)!).toLocaleString('en-US');
 const temperature = (f: number, system: UnitSystem) => convertQuantity(fahrenheitToCelsius(f), 'temperature', system)!;
 const barbSpeed = (knots: number, system: UnitSystem) => `${displayedBarbSpeed(knotsToMps(knots), system)} ${unitLabel('wind', system)}`;
-const degrees = (direction: number) =>
-  `${['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'][Math.round(direction / 22.5) % 16]} ${Math.round(direction) % 360}°`;
+const degrees = (direction: number) => `${compass16(direction)} ${Math.round(direction) % 360}°`;
 
 const styleTag = (stylesheet?: string) => stylesheet ? `<style>${stylesheet}</style>` : '';
 
@@ -72,7 +72,7 @@ function renderConvectiveTowerSvg(cloud: WindgramCloud, view: WindgramView, syst
   const depthStr = `${altitude(cloud.depthM ?? (cloud.topM - cloud.baseM), system)} ${elevUnit}`;
   const covStr = cloud.coverPercent != null ? `${cov} ${cloud.coverPercent}%` : cov;
   const topTempStr = cloud.topTempC != null ? ` · top ${formatQuantity(cloud.topTempC, 'temperature', 0, system)}` : '';
-  const prefix = glaciatedOd ? 'Deep glaciated OD anvil' : isOd ? 'Overdeveloped spreadout' : 'Cumulus tower';
+  const prefix = glaciatedOd ? 'Overdeveloped cloud · cold top' : isOd ? 'Overdeveloped spreadout' : 'Cumulus tower';
   const label = `${prefix} (${covStr}) · ${altitude(cloud.baseM, system)}–${altitude(cloud.topM, system)} ${elevUnit} MSL (${depthStr} deep${topTempStr})`;
   const d = `M${fmt(x0)} ${fmt(yBase)}V${fmt(yTop + Number(domeRx))}Q${fmt(x0)} ${fmt(yTop)} ${fmt(x0 + Number(domeRx))} ${fmt(yTop)}H${fmt(x1 - Number(domeRx))}Q${fmt(x1)} ${fmt(yTop)} ${fmt(x1)} ${fmt(yTop + Number(domeRx))}V${fmt(yBase)}Z`;
   const cls = glaciatedOd ? 'wg-od-tower wg-od-glaciated' : isOd ? 'wg-od-tower' : 'wg-cu-tower';
@@ -217,7 +217,7 @@ export function renderWindgramSvg(
     const fieldTitle = field.className.startsWith('wg-inversion-')
       ? '<title>Temperature inversion (dT/dz &gt; 0) · stable lid resisting vertical mixing</title>'
       : field.className.startsWith('wg-wave-')
-        ? '<title>Resolved statically stable mountain wave ascent</title>'
+        ? '<title>Resolved statically stable model ascent</title>'
         : '';
     parts.push(
       `<path d="${escape(field.path)}" class="${escape(field.className)}" fill-rule="evenodd"${field.className === 'windgram-missing' ? ` fill="url(#${id}-missing)"` : ''}>${fieldTitle}</path>`,
@@ -248,7 +248,7 @@ export function renderWindgramSvg(
           ? ` fill="url(#${id}-cloud-bkn)"`
           : '';
       const deckTitle = deck.className === 'wg-cloud-deck-ovc'
-        ? `Solid overcast cloud layer (RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}% · IMC whiteout)`
+        ? `Solid overcast cloud layer (inferred RH ≥ ${CLOUD_RH_THRESHOLD_PERCENT}%)`
         : deck.className === 'wg-cloud-deck-bkn'
           ? `Broken cloud layer (RH ${CLOUD_BKN_RH_PERCENT}–${CLOUD_RH_THRESHOLD_PERCENT}%)`
           : `Scattered cloud layer (RH ${CLOUD_SCT_RH_PERCENT}–${CLOUD_BKN_RH_PERCENT}%)`;
@@ -444,7 +444,7 @@ export function renderWindgramSvg(
     ),
   );
   parts.push(text(view.width / 2, view.bottom + 41,
-    `Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}`,
+    `Wind ${unitLabel('wind', system)} · temperature ${unitLabel('temperature', system)}${view.isUtcFallback ? ' · time UTC (fallback)' : ''}`,
     'text-anchor="middle" class="wg-axis-unit wg-footer"'));
   parts.push(
     '<g class="wg-inspector" data-windgram-cursor="" visibility="hidden" aria-hidden="true">' +

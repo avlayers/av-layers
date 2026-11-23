@@ -1,7 +1,8 @@
-import { browserTimeZone, buildDiagnosticRows, formatPlaceTime, formatViewerTime, longitudeOffsetHours, type PinnedBuild } from '@av/client';
+import { browserTimeZone, buildDiagnosticRows, formatPlaceTime, formatViewerTime, longitudeOffsetHours, type GeoPoint, type PinnedBuild } from '@av/client';
+import { formatSitePlaceTime } from '@av/client/timezone';
 
 /** Build diagnostics are rendered on first open, outside the startup chunk. */
-export function renderBuildDetails(container: HTMLElement, build: PinnedBuild, longitude: number | undefined): void {
+export function renderBuildDetails(container: HTMLElement, build: PinnedBuild, location: GeoPoint | number | undefined): void {
   const format = (label: string, value: string): string => {
     if (label === 'Cycle' || label === 'Expires') {
       const ms = Date.parse(value);
@@ -10,8 +11,12 @@ export function renderBuildDetails(container: HTMLElement, build: PinnedBuild, l
     if (label === 'Horizon') {
       const [start, end] = value.split(' → ');
       const a = Date.parse(start ?? ''), b = Date.parse(end ?? '');
-      if (!Number.isFinite(a) || !Number.isFinite(b) || longitude === undefined || !Number.isFinite(longitude)) return value;
-      const offset = longitudeOffsetHours(longitude) * 60;
+      if (!Number.isFinite(a) || !Number.isFinite(b) || location === undefined) return value;
+      if (typeof location === 'object') {
+        return `${formatSitePlaceTime(a, location, 'stamp')} → ${formatSitePlaceTime(b, location, 'stamp')}`;
+      }
+      if (!Number.isFinite(location)) return value;
+      const offset = longitudeOffsetHours(location) * 60;
       return `${formatPlaceTime(a, offset, 'stamp')} → ${formatPlaceTime(b, offset, 'stamp')}`;
     }
     return value;

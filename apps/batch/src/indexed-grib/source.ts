@@ -11,7 +11,11 @@ const auxiliary = z.object({ variable: z.string().min(1), unit: z.string().min(1
 const auxSurfaceSchema = z.partialRecord(z.enum(Object.keys(AUX_SURFACE_UNITS) as [keyof typeof AUX_SURFACE_UNITS, ...Array<keyof typeof AUX_SURFACE_UNITS>]),
   auxiliary.extend({ level: z.string().min(1), product: z.string().min(1).optional(), surface: z.tuple([z.number().int(), z.number().nullable()]).optional() }));
 const auxLevelsSchema = z.partialRecord(z.enum(Object.keys(AUX_LEVEL_UNITS) as [keyof typeof AUX_LEVEL_UNITS, ...Array<keyof typeof AUX_LEVEL_UNITS>]),
-  auxiliary.extend({ conversion: z.literal('geometric-w-to-omega').optional() }));
+  auxiliary.extend({
+    conversion: z.literal('geometric-w-to-omega').optional(),
+    products: z.array(z.string().min(1)).min(1).optional(),
+    reference: z.enum(['liquid', 'gfs-v16-mixed']).optional()
+  }));
 const upstreamSchema = z.object({
   protocol: z.literal('indexed-grib2'), provider: z.string().min(1), centre: z.number().int().nonnegative(),
   subCentre: z.number().int().min(0).max(65535).optional(),
@@ -66,6 +70,14 @@ export function indexedSource(model: ModelDefinition, requirements?: AuxiliaryRe
       if (!upstream.parameters[spec.variable] || spec.unit !== units[name as keyof typeof units]) throw new Error(`Invalid auxiliary GRIB units or parameter ${name}`);
       if ('conversion' in spec && spec.conversion !== undefined && (name !== 'omegaPaS' || upstream.parameters[spec.variable]![2] !== 'm/s')) throw new Error('Geometric vertical velocity conversion requires an omega output and m/s input');
       if ('product' in spec && spec.product !== undefined && !Object.hasOwn(upstream.products, spec.product as string)) throw new Error(`Unknown auxiliary GRIB product ${String(spec.product)}`);
+      if ('products' in spec && spec.products !== undefined) {
+        for (const product of spec.products) {
+          if (!Object.hasOwn(upstream.products, product)) throw new Error(`Unknown auxiliary GRIB product ${product}`);
+        }
+      }
+      if ('reference' in spec && spec.reference !== undefined && name !== 'rhPercent') {
+        throw new Error('Relative-humidity reference applies only to rhPercent');
+      }
     }
   }
   for (const [fields, u, v] of [[upstream.auxSurface, 'u10mMps', 'v10mMps'], [upstream.auxLevels, 'uWindMps', 'vWindMps']] as const) {

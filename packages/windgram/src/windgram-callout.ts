@@ -9,12 +9,11 @@ import { MPH_PER_MPS } from '@av/contracts/units';
 import {
   HIGH_INSTABILITY_CAPE_JKG,
   skyCoverageCode,
-  WAVE_MIN_LAPSE_C_PER_1000FT,
-  WAVE_MIN_WIND_KT,
   WIND_SPEED_KNOT_THRESHOLDS,
 } from './windgram-atmosphere.ts';
 import {
   clamp,
+  compass16,
   convertQuantity,
   fahrenheitToCelsius,
   formatQuantity,
@@ -183,9 +182,6 @@ export function placeWindgramCallout(input: CalloutPlacementInput): CalloutPlace
   return best;
 }
 
-const COMPASS_16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'] as const;
-const compass16 = (deg: number) => COMPASS_16[Math.round(deg / 22.5) % 16]!;
-
 /** Aviation WMO 5-knot rounding tiers matching Windgram barb colors across all altitudes (<2.5 calm, <12.5 green, <17.5 white, <27.5 yellow, <47.5 coral, >=47.5 pennant). */
 export function classifyParagliderWind(speedMps: number | null): ParagliderWindLevel {
   if (speedMps === null || !Number.isFinite(speedMps)) return 'missing';
@@ -246,8 +242,8 @@ const setText = (el: Element | null, value: string) => {
 // ---------------------------------------------------------------------------
 // Variant 1: Option B — Compact 2x2 Instrument Tile ('tile-2x2', default)
 // Light-footprint 204x74 translucent glass tile:
-//   Wind Vector + WMO Thresholds       | Vario Climb Gauge + B/S & Cu Context
-//   5-Segment Oktas + METAR + Clear/In | Temp + Dewpoint (Td) + Hazards
+//   Wind Vector + WMO Thresholds       | Vario Climb Gauge + Vertical Motion
+//   5-Segment Oktas + METAR + Clear/In | Temp + Dewpoint (Td) + Cues
 // ---------------------------------------------------------------------------
 
 const TILE_WIDTH = 204;
@@ -339,38 +335,31 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
       .join('');
     return (
       `<rect data-cursor-back="" width="${TILE_WIDTH}" height="${TILE_HEIGHT}" rx="7.5" class="wg-tile-back"/>` +
-      // Quadrant background tints
       `<rect x="1" y="20" width="${TILE_DIVIDER_X - 1.5}" height="26" data-tile-wind-bg="" class="wg-tile-cell-tint"/>` +
       `<rect x="1" y="47" width="${TILE_DIVIDER_X - 1.5}" height="26" rx="3" data-tile-cloud-bg="" class="wg-tile-cell-tint"/>` +
       `<rect x="${TILE_DIVIDER_X + 0.5}" y="47" width="${TILE_WIDTH - TILE_DIVIDER_X - 1.5}" height="26" rx="3" data-tile-rain-bg="" class="wg-tile-cell-tint"/>` +
-      // Structural grid hairlines
       `<line x1="0" y1="19.5" x2="${TILE_WIDTH}" y2="19.5" class="wg-tile-divider"/>` +
       `<line x1="0" y1="46.5" x2="${TILE_WIDTH}" y2="46.5" class="wg-tile-divider"/>` +
       `<line x1="${TILE_DIVIDER_X}" y1="19.5" x2="${TILE_DIVIDER_X}" y2="${TILE_HEIGHT}" class="wg-tile-divider"/>` +
-      // Header bar: TOL/ALT pill + compact timestamp + AGL + right-aligned MSL
       `<rect x="4.5" y="3.8" width="31" height="12" rx="3.8" data-tile-badge-pill="" class="wg-tile-pill"/>` +
       `<text x="20" y="12.5" text-anchor="middle" data-cursor-badge="" class="wg-tile-badge"/>` +
       `<text x="39" y="13.2" data-tile-time="" class="wg-tile-time"/>` +
       `<text x="40" y="13.3" data-cursor-agl="" class="wg-tile-agl"/>` +
       `<text x="${TILE_WIDTH - 5.5}" y="13.2" text-anchor="end" data-cursor-msl="" class="wg-tile-msl"/>` +
-      // Top-Left: Rotating Wind-Vector Compass + Speed/Direction
       `<circle cx="16.5" cy="33" r="8.5" data-tile-dial="" class="wg-tile-dial"/>` +
       `<line x1="16.5" y1="23.4" x2="16.5" y2="25.3" class="wg-tile-dial-tick"/>` +
       `<path d="M0 -5L3.3 4.1L0 2L-3.3 4.1Z" transform="translate(16.5 33)" data-tile-wind-arrow="" class="wg-tile-arrow"/>` +
       `<circle cx="16.5" cy="33" r="2.7" visibility="hidden" data-tile-wind-calm="" class="wg-tile-calm-dot"/>` +
       `<text x="29.5" y="31.5" data-tile-wind-speed="" class="wg-tile-val"/>` +
       `<text x="29.5" y="42" data-tile-wind-dir="" class="wg-tile-sub"/>` +
-      // Top-Right: Variometer Climb Bar + Rate
       varioTicks +
       `<rect x="109.5" y="24.5" width="3.8" height="${TILE_VARIO_MAX_PX}" rx="1.9" class="wg-tile-vario-track"/>` +
       `<rect x="109.5" y="42.5" width="3.8" height="0" rx="1.9" data-tile-climb-fill="" class="wg-tile-vario-fill"/>` +
       `<text x="117" y="31.5" data-tile-climb-val="" class="wg-tile-val"/>` +
       `<text x="117" y="42" data-tile-climb-sub="" class="wg-tile-sub"/>` +
-      // Bottom-Left: 5-Segment Sky Oktas + Aviation Sky Code + Clear vs In-Cloud State
       oktas +
       `<text x="56" y="56.1" data-tile-sky-code="" class="wg-tile-sky-code"/>` +
       `<text x="7" y="67.6" data-tile-cloud-text="" class="wg-tile-sub"/>` +
-      // Bottom-Right: Temperature + Dewpoint (Td) + Conditional Precipitation / Hazards
       `<text x="110" y="57.5" data-tile-temp="" class="wg-tile-val"/>` +
       `<text x="${TILE_WIDTH - 6}" y="57.2" text-anchor="end" data-tile-dewpoint="" class="wg-tile-td"/>` +
       `<path d="M113 61.6C113 61.6 110.3 64.9 110.3 66.5C110.3 68 111.5 69.2 113 69.2C114.5 69.2 115.7 68 115.7 66.5C115.7 64.9 113 61.6 113 61.6Z" visibility="hidden" data-tile-rain-icon="" class="wg-tile-drop"/>` +
@@ -429,10 +418,15 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         const aglX = compactTime ? Math.round(39 + compactTime.length * 5.3 + 6) : 40;
         setAttr(agl, 'x', String(aglX));
 
-        const rhVal = reading.relativeHumidityPercent !== null && Number.isFinite(reading.relativeHumidityPercent)
+        const liquidRhVal = reading.relativeHumidityPercent !== null && Number.isFinite(reading.relativeHumidityPercent)
           ? Math.round(clamp(reading.relativeHumidityPercent, 0, 100))
           : null;
-        const inSaturatedCloud = reading.cloud === 'humidity' || (rhVal !== null && rhVal >= CLOUD_RH_THRESHOLD_PERCENT);
+        const rawCloudRh = reading.cloudHumidityPercent ?? reading.relativeHumidityPercent;
+        const cloudRhVal = rawCloudRh !== null && Number.isFinite(rawCloudRh)
+          ? Math.round(clamp(rawCloudRh, 0, 100))
+          : null;
+        const inLiquidSaturatedCloud = liquidRhVal !== null && liquidRhVal >= CLOUD_RH_THRESHOLD_PERCENT;
+        const inSaturatedCloud = reading.cloud === 'humidity' || (cloudRhVal !== null && cloudRhVal >= CLOUD_RH_THRESHOLD_PERCENT);
         const activeLayer = reading.activeCloudLayer ?? null;
         const inStratiformDeck = activeLayer?.kind === 'stratiform';
         const inConvectiveTower =
@@ -449,28 +443,37 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           Number.isFinite(reading.buoyancyShearRatio) &&
           reading.buoyancyShearRatio <= 0.35;
 
-        // Quadrant 1: Wind vector + speed + compass direction + launch/surface 10m gust
+        // Quadrant 1: Wind vector + speed + compass direction + 10 m surface gust
         const speedMps = reading.speedKt === null ? null : knotsToMps(reading.speedKt);
         const pgWind = classifyParagliderWind(speedMps);
         const modelAglM = reading.modelTerrainM !== null && reading.heightM >= reading.modelTerrainM
           ? reading.heightM - reading.modelTerrainM
           : null;
-        const nearSurface =
-          (reading.heightAglM !== null && reading.heightAglM <= 150) ||
-          (modelAglM !== null && modelAglM <= 150);
+        const nearSurface = reading.heightAglM !== null
+          ? reading.heightAglM <= 150
+          : (modelAglM !== null && modelAglM <= 150);
+        const surfaceWindKt = reading.surfaceWindSpeedMps !== null && Number.isFinite(reading.surfaceWindSpeedMps)
+          ? mpsToKnots(reading.surfaceWindSpeedMps)
+          : null;
         const gustSpreadGateKt = reading.gustKt !== null && reading.gustKt >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt ? 4 : 5;
-        const hasSurfaceGust = nearSurface
-          && reading.gustKt !== null
-          && Number.isFinite(reading.gustKt)
-          && reading.speedKt !== null
-          && reading.gustKt - reading.speedKt >= gustSpreadGateKt;
-        const gustTag = hasSurfaceGust
-          ? ` · G${Math.round(convertQuantity(knotsToMps(reading.gustKt!), 'wind', unitSystem) ?? 0)}`
-          : '';
+        const hasSurfaceGustExcess =
+          reading.gustKt !== null &&
+          Number.isFinite(reading.gustKt) &&
+          surfaceWindKt !== null &&
+          reading.gustKt - surfaceWindKt >= gustSpreadGateKt;
+        const hasNearSurfaceGust = nearSurface && hasSurfaceGustExcess;
+        const gustRounded = reading.gustKt !== null && Number.isFinite(reading.gustKt)
+          ? Math.round(convertQuantity(knotsToMps(reading.gustKt), 'wind', unitSystem) ?? 0)
+          : 0;
+        const gustTag = hasNearSurfaceGust
+          ? ` · G${gustRounded}`
+          : (!nearSurface && hasSurfaceGustExcess && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt)
+            ? ` · Sfc G${gustRounded}`
+            : '';
         const effectiveAlert: ParagliderWindLevel =
-          hasSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.yellowMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate' || pgWind === 'caution')
+          hasNearSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.yellowMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate' || pgWind === 'caution')
             ? 'danger'
-            : hasSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate')
+            : hasNearSurfaceGust && reading.gustKt! >= WIND_SPEED_KNOT_THRESHOLDS.whiteMaxKt && (pgWind === 'calm' || pgWind === 'ok' || pgWind === 'moderate')
               ? 'caution'
               : pgWind;
         const borderMod = effectiveAlert === 'pennant'
@@ -489,7 +492,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(windCalm, 'visibility', 'hidden');
           setText(windSpeed, '—');
           setAttr(windSpeed, 'class', 'wg-tile-val is-muted');
-          setText(windDir, '—');
+          setText(windDir, gustTag ? gustTag.slice(3) : '—');
           setAttr(windDir, 'class', 'wg-tile-sub');
         } else if (pgWind === 'calm') {
           const dispSpeed = Math.round(convertQuantity(speedMps, 'wind', unitSystem) ?? 0);
@@ -529,7 +532,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(windDir, 'class', borderMod ? `wg-tile-sub${borderMod}` : 'wg-tile-sub');
         }
 
-        // Quadrant 2: Variometer Climb Rate (Thermal, Sheared Lift, Cu-Base TOL, Cu Tower, Wave vs Ascent, Rotor, or Inversion Lid)
+        // Quadrant 2: Variometer Climb Rate & Neutral Model Vertical Motion
         let displayClimbMps: number | null = null;
         let climbCaption = inInversion && !useTol ? 'Inversion lid' : 'No thermal';
         let climbSubClass = 'wg-tile-sub';
@@ -550,23 +553,15 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           } else {
             climbCaption = '▲ Thermal';
           }
-        } else if (!hasRain && !inSaturatedCloud && reading.waveVelocityMps != null && reading.waveVelocityMps >= 0.5) {
-          const isStableWave =
-            !reading.waveCriticalLevel
-            && (reading.lapseCPer1000Ft == null || reading.lapseCPer1000Ft > WAVE_MIN_LAPSE_C_PER_1000FT)
-            && (reading.speedKt == null || reading.speedKt >= WAVE_MIN_WIND_KT);
+        } else if (!hasRain && reading.waveVelocityMps != null && reading.waveVelocityMps >= 0.5) {
           displayClimbMps = reading.waveVelocityMps;
-          climbCaption = isStableWave ? '▲ Wave' : '▲ Ascent';
+          climbCaption = '▲ Model ascent';
           climbSubClass = 'wg-tile-sub is-wave';
           waveMode = 'up';
         } else if (!hasRain && reading.waveVelocityMps != null && reading.waveVelocityMps <= -0.6) {
-          const lowRotor =
-            reading.heightAglM !== null &&
-            reading.heightAglM <= 500 &&
-            Math.max(reading.speedKt ?? 0, nearSurface ? (reading.gustKt ?? 0) : 0) >= 18;
           displayClimbMps = reading.waveVelocityMps;
-          climbCaption = lowRotor ? '▼ Wave rotor' : '▼ Wave sink';
-          climbSubClass = 'wg-tile-sub is-danger';
+          climbCaption = '▼ Model descent';
+          climbSubClass = 'wg-tile-sub is-caution';
           waveMode = 'down';
         } else if (inConvectiveTower) {
           displayClimbMps = 0;
@@ -609,7 +604,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(climbSub, 'class', climbSubClass);
         }
 
-        // Quadrant 3: 5-Segment Sky Oktas + Aviation METAR Code + Explicit Point State (Clear vs Whiteout / Cu Tower)
+        // Quadrant 3: 5-Segment Sky Oktas + Aviation Sky Cover + Inferred Cloud State
+        const tempC = reading.temperatureF == null ? null : fahrenheitToCelsius(reading.temperatureF);
         const cloudPct = reading.cloudCoverTotalPercent === null
           ? null
           : Math.round(clamp(reading.cloudCoverTotalPercent, 0, 100));
@@ -641,7 +637,7 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         let skyCode = '—';
         let skyCodeClass = 'wg-tile-sky-code';
         if (inSaturatedCloud) {
-          skyCode = 'IMC';
+          skyCode = activeLayer ? `${activeLayer.coverageCode} ${activeLayer.coverPercent}%` : 'OVC';
           skyCodeClass = 'wg-tile-sky-code is-cloud';
         } else if (inStratiformDeck && activeLayer) {
           skyCode = `${activeLayer.coverageCode} ${activeLayer.coverPercent}%`;
@@ -665,11 +661,12 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         const cuLayer = layers.find(l => l.kind !== 'stratiform') ?? (activeLayer?.kind !== 'stratiform' ? activeLayer : null);
         if (inSaturatedCloud) {
           const satDepth = activeLayer?.depthM ?? null;
+          const cloudPrefix = !inLiquidSaturatedCloud && tempC !== null && tempC < 0 ? '☁ Cold cloud' : '☁ In cloud';
           const label = satDepth !== null && satDepth >= 40
-            ? `☁ Whiteout · ${formatCompactSpan(satDepth, unitSystem)}`
-            : rhVal !== null
-              ? `☁ Whiteout · RH ${rhVal}%`
-              : '☁ Whiteout (IMC)';
+            ? `${cloudPrefix} · ${formatCompactSpan(satDepth, unitSystem)}`
+            : cloudRhVal !== null
+              ? `${cloudPrefix} · RH ${cloudRhVal}%`
+              : cloudPrefix;
           setText(cloudText, label);
           setAttr(cloudText, 'class', 'wg-tile-sub is-cloud');
         } else if (inStratiformDeck && activeLayer) {
@@ -682,8 +679,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         } else if (useTol && reading.cloudCapped) {
           const label = cuLayer && cuLayer.depthM >= 50
             ? `Cu base · ${formatCompactSpan(cuLayer.depthM, unitSystem)} deep`
-            : rhVal !== null
-              ? `At Cu base · RH ${rhVal}%`
+            : liquidRhVal !== null
+              ? `At Cu base · RH ${liquidRhVal}%`
               : 'At Cu base';
           setText(cloudText, label);
           setAttr(cloudText, 'class', 'wg-tile-sub is-cloud');
@@ -698,8 +695,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           const aboveM = reading.heightM - reading.nearestCloudTopBelowM;
           setText(cloudText, `Clear · Top -${formatCompactSpan(aboveM, unitSystem)}`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
-        } else if (rhVal !== null) {
-          setText(cloudText, `Clear · RH ${rhVal}%`);
+        } else if (liquidRhVal !== null) {
+          setText(cloudText, `Clear · RH ${liquidRhVal}%`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (cloudPct !== null) {
           setText(cloudText, `Clear · Sky ${cloudPct}%`);
@@ -709,16 +706,13 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(cloudText, 'class', 'wg-tile-sub');
         }
 
-        // Quadrant 4: Temperature + Dewpoint (Td) + Compound Hazard De-Multiplexing
-        let tempC: number | null = null;
-        let freezing = false;
-        if (reading.temperatureF == null) {
+        // Quadrant 4: Temperature + Dewpoint (Td) + Input-Supported Weather Cues
+        if (tempC === null) {
           setText(tempEl, '—');
           setAttr(tempEl, 'class', 'wg-tile-val is-muted');
         } else {
-          tempC = fahrenheitToCelsius(reading.temperatureF);
           const dispTemp = Math.round(convertQuantity(tempC, 'temperature', unitSystem) ?? 0);
-          freezing = tempC <= 0;
+          const freezing = tempC <= 0;
           setText(tempEl, `${freezing ? '❄ ' : ''}${dispTemp}${unitLabel('temperature', unitSystem)}`);
           setAttr(tempEl, 'class', freezing ? 'wg-tile-val is-freeze' : 'wg-tile-val');
         }
@@ -730,7 +724,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setText(dewpointEl, '');
         }
 
-        const icingRisk = inSaturatedCloud && tempC !== null && tempC <= 0 && tempC >= -20;
+        // Supercooled liquid icing requires liquid-water saturation (liquid RH >= 94%) in -20..0 °C
+        const icingRisk = inLiquidSaturatedCloud && tempC !== null && tempC <= 0 && tempC >= -20;
         const cuDepthM = cuLayer?.depthM ?? 0;
         const inCuColumn =
           !useTol &&
@@ -743,28 +738,33 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           (reading.peakClimbMps ?? 0) >= 1.8;
         const highCape = reading.capeJkg !== null && reading.capeJkg >= HIGH_INSTABILITY_CAPE_JKG;
         const capeRounded = highCape ? Math.round(reading.capeJkg!) : 0;
-        if (
-          effectiveAlert !== 'pennant' &&
-          (reading.freezingRainRisk || cloudSuckRisk || (nearSurface && Boolean(reading.surfaceWindShift)))
-        ) {
+        const highShear = reading.windShear !== null && reading.windShear.perKmMps >= 6;
+        if (effectiveAlert !== 'pennant' && cloudSuckRisk) {
           setAttr(back, 'class', 'wg-tile-back is-danger');
         }
 
         if (hasRain) {
-          setAttr(rainBg, 'class', reading.freezingRainRisk || cloudSuckRisk ? 'wg-tile-cell-tint is-danger' : 'wg-tile-cell-tint is-rain');
+          setAttr(rainBg, 'class', cloudSuckRisk || highCape ? 'wg-tile-cell-tint is-danger' : 'wg-tile-cell-tint is-rain');
           setAttr(rainIcon, 'visibility', 'visible');
           setAttr(hazardEl, 'x', '118.5');
-          if (reading.freezingRainRisk) {
-            setText(hazardEl, `❄ Frz rain ${formatQuantity(precipMm, 'rainRate', undefined, unitSystem)}`);
-            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
-          } else if (cloudSuckRisk) {
+          const rateLabel = formatQuantity(precipMm, 'rainRate', undefined, unitSystem);
+          if (cloudSuckRisk) {
             setText(hazardEl, 'Rain · ⚠ Suck');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (highCape && highShear) {
+            setText(hazardEl, `Rain · CAPE ${capeRounded} · Shr`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highCape) {
             setText(hazardEl, `Rain · CAPE ${capeRounded}`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (highShear) {
+            setText(hazardEl, `${rateLabel} · Shear`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
+          } else if (reading.warmLayerAloft) {
+            setText(hazardEl, `${rateLabel} · Warm aloft`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
           } else {
-            setText(hazardEl, `Rain ${formatQuantity(precipMm, 'rainRate', undefined, unitSystem)}`);
+            setText(hazardEl, `Precip ${rateLabel}`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-rain');
           }
         } else {
@@ -784,21 +784,27 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
             setText(hazardEl, '⚠ Cloud suck');
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (nearSurface && reading.surfaceWindShift) {
-            setText(hazardEl, '⚠ Gust front');
+            setText(hazardEl, 'Wind shift');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
+          } else if (highCape && highShear) {
+            setText(hazardEl, `CAPE ${capeRounded} · Shear`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highCape) {
             setText(hazardEl, `CAPE ${capeRounded}`);
             setAttr(hazardEl, 'class', capeRounded >= 1800 ? 'wg-tile-sub is-danger' : 'wg-tile-sub is-caution');
-          } else if (reading.windShear !== null && reading.windShear.perKmMps >= 6) {
+          } else if (highShear && reading.windShear !== null) {
             const shearLabel = unitSystem === 'imperial'
               ? `Shear ${((reading.windShear.perKmMps * MPH_PER_MPS * METRES_PER_THOUSAND_FEET) / 1000).toFixed(1)} mph/kft`
               : `Shear ${reading.windShear.perKmMps.toFixed(1)}/km`;
             setText(hazardEl, shearLabel);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
           } else if (reading.overdeveloped) {
-            const glaciatedAnvil = Boolean(cuLayer?.glaciated && cuDepthM >= 1500);
-            setText(hazardEl, glaciatedAnvil ? 'Deep OD · Anvil' : 'OD spreadout');
-            setAttr(hazardEl, 'class', glaciatedAnvil ? 'wg-tile-sub is-danger' : 'wg-tile-sub is-caution');
+            const coldResolvedTop = Boolean(cuLayer?.topTempC != null && cuLayer.topTempC <= -20 && cuDepthM >= 1500);
+            setText(hazardEl, coldResolvedTop ? 'OD · Cold top' : 'OD spreadout');
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-caution');
+          } else if (reading.warmLayerAloft) {
+            setText(hazardEl, 'Warm aloft');
+            setAttr(hazardEl, 'class', 'wg-tile-sub');
           } else if (!inSaturatedCloud && displayClimbMps !== null && displayClimbMps >= 0.2 && shearedLift) {
             const raspBs = Math.max(1, Math.round(reading.buoyancyShearRatio! * 10));
             setText(hazardEl, `B/S ${raspBs} · Sheared`);

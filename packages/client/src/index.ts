@@ -4,6 +4,7 @@ export * from './client-auto.ts';
 export { hasNativeProfiles, pointLiftExpectation, fieldSeriesPages } from './client-point.ts';
 export { PointSeriesController, type PointSeriesContext } from './point-series-controller.ts';
 export * from './client-time.ts';
+export { evaluateFineTerrainContributors, PointTerrainCache } from './client-point-terrain.ts';
 export * from './client-view.ts';
 export * from './client-raster.ts';
 export * from './client-seam.ts';

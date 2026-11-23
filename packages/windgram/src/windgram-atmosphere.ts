@@ -1,8 +1,8 @@
 // Atmospheric visualization physics for Windgram Concept 1 ('hybrid-climb'):
 // 1. Lenschow & Stephens (1980) net thermal climb-rate dome inside usable lift (ground -> TOL / native fallback).
 // 2. Environmental temperature inversion layers (dT/dz > 0) rendered as dark stratified lids.
-// 3. Hydrostatic vertical velocity w = -ω R_d T / (p g) for statically stable VFR mountain wave aloft.
-// 4. Multi-layer mixed-phase cloud segmentation: 3-tier RH decks (83% SCT / 89% BKN / 94% OVC), Cu/OD tower depth, glaciation, and high-cirrus separation.
+// 3. Hydrostatic vertical velocity w = -ω R_d T / (p g) for resolved model ascent aloft.
+// 4. Multi-layer mixed-phase cloud segmentation: 3-tier RH decks (83% SCT / 89% BKN / 94% OVC), Cu/OD tower depth, resolved cloud-top temperature, and high-cirrus separation.
 
 import {
   LENSCHOW_F_MAX,
@@ -12,10 +12,9 @@ import {
   windFromComponents,
 } from '@av/soaring';
 import {
-  effectiveCloudHumidityPercent,
   geometricWFromOmegaMps,
 } from '@av/thermodynamics';
-import type { HourSampling, PublishedForecastHour } from './internal-meteo.ts';
+import type { FieldNode, HourSampling, PublishedForecastHour } from './internal-meteo.ts';
 import type { SkyCoverageCode, WindgramCloudLayerSummary } from './scene-types.ts';
 import { clamp, convertQuantity, finiteScalar, mpsToKnots, type UnitSystem } from './windgram-format.ts';
 import { buildStabilityFieldPaths } from './windgram-geometry.ts';
@@ -30,14 +29,12 @@ export const DEFAULT_WINDGRAM_FIELD_MODE: WindgramFieldMode = 'hybrid-climb';
 /** Calm desaturated slate-blue backdrop for non-convective air in hybrid-climb mode. */
 export const WINDGRAM_HYBRID_SKY_COLOR = '#4f5c87';
 
-/** Minimum resolved VFR statically stable upward vertical velocity (m/s, ~120 / ~295 ft/min) contoured as mountain wave lift. */
+/** Minimum resolved statically stable upward vertical velocity (m/s, ~120 / ~295 ft/min) contoured as model ascent aloft. */
 export const WAVE_ASCENT_MIN_MPS = 0.6;
 export const WAVE_ASCENT_STRONG_MPS = 1.5;
-/** Scorer mountain-wave criteria: filter near-adiabatic convective chimneys (<= -2.45 °C/1kft), <12 kt plumes, and >95° critical-level reversals. */
+/** Filter near-adiabatic convective chimneys (<= -2.45 °C/1kft) and light-wind (<12 kt) plumes on background ascent contours. */
 export const WAVE_MIN_LAPSE_C_PER_1000FT = -2.45;
 export const WAVE_MIN_WIND_KT = 12;
-export const WAVE_CRITICAL_TURN_DEG = 95;
-const WAVE_CRITICAL_COS_LIMIT = Math.cos((WAVE_CRITICAL_TURN_DEG * Math.PI) / 180);
 
 /**
  * 6-band soaring net-climb scale (modeled Lenschow updraft − 1.2 m/s sink), in m/s:
@@ -118,50 +115,11 @@ export function omegaToVerticalVelocityMps(
   return Number.isFinite(w) ? w : null;
 }
 
-/** Resolves effective surface terrain elevation (preferring persistent fine DEM over coarse model ground). */
+/** Resolves effective surface terrain elevation from persistent fine DEM or model ground. */
 export function effectiveHourGroundM(
   hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'mapLift' | 'modelTerrainM'>,
 ): number | null {
   return hour.fineTerrainM ?? hour.mapLift.terrainM ?? hour.modelTerrainM ?? null;
-}
-
-/**
- * Lowest column altitude (MSL) where active free-air/ridge flow (`>= 5 m/s` on resolved model levels
- * above ground, ignoring shallow 10 m rotor/drainage skin winds) reverses by `> 95°` relative to
- * an underlying active column level — forming a Scorer directional critical level ($U_\parallel \le 0$).
- */
-export function firstWaveCriticalLevelM(
-  hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'mapLift' | 'modelTerrainM' | 'levels'>,
-): number | null {
-  const groundM = effectiveHourGroundM(hour) ?? 0;
-  const vectors: Array<{ z: number; u: number; v: number; speed: number }> = [];
-  for (const level of hour.levels) {
-    const z = finiteScalar(level.heightM);
-    const u = finiteScalar(level.uWindMps), v = finiteScalar(level.vWindMps);
-    if (z === null || z <= groundM || u === null || v === null) continue;
-    const speed = Math.hypot(u, v);
-    if (speed >= 5.0) vectors.push({ z, u, v, speed });
-  }
-  if (vectors.length < 2) return null;
-  vectors.sort((a, b) => a.z - b.z);
-  for (let i = 1; i < vectors.length; i++) {
-    const cur = vectors[i]!;
-    for (let j = 0; j < i; j++) {
-      const low = vectors[j]!;
-      const cosTheta = (low.u * cur.u + low.v * cur.v) / (low.speed * cur.speed);
-      if (cosTheta < WAVE_CRITICAL_COS_LIMIT) return cur.z;
-    }
-  }
-  return null;
-}
-
-/** True when a Scorer directional critical level occurs at or below `altitudeM` MSL. */
-export function hasWaveCriticalLevelBelow(
-  hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'mapLift' | 'modelTerrainM' | 'levels'>,
-  altitudeM: number,
-): boolean {
-  const critM = firstWaveCriticalLevelM(hour);
-  return critM !== null && critM <= altitudeM + 5;
 }
 
 export function climbBandRange(index: number, system: UnitSystem): string {
@@ -278,8 +236,30 @@ export function classifyConvectiveCloudRegime(hour: PublishedForecastHour): Conv
   return 'cu';
 }
 
-export function isActiveCumulusHour(hour: PublishedForecastHour): boolean {
-  return classifyConvectiveCloudRegime(hour) !== 'none';
+/** Clips an ordered altitude field to `scale` bounds and projects heights into pixel offsets from plot bottom. */
+export function clipFieldNodesToScale(
+  source: readonly FieldNode[],
+  scale: WindgramScale,
+): { distanceFromBottomPx: number; value: number }[] {
+  if (!source.length) return [];
+  const { floorM, topM, bottom: plotBottom } = scale;
+  const nodes = source.filter(n => n.altitudeM >= floorM && n.altitudeM <= topM);
+  if (source[0]!.altitudeM < floorM && source.at(-1)!.altitudeM >= floorM && nodes[0]?.altitudeM !== floorM) {
+    nodes.unshift({ altitudeM: floorM, value: sampleHeight(source, floorM) ?? NaN });
+  }
+  if (nodes.length && nodes.at(-1)!.altitudeM < topM && source.at(-1)!.altitudeM > topM) {
+    nodes.push({ altitudeM: topM, value: sampleHeight(source, topM) ?? NaN });
+  }
+  return nodes.map(n => ({ distanceFromBottomPx: plotBottom - heightToY(scale, n.altitudeM), value: n.value }));
+}
+
+/** Projects one hour's interval lapse-rate nodes onto `scale` pixel coordinates. */
+export function stabilityPixelNodesForHour(
+  sample: HourSampling,
+  scale: WindgramScale,
+): { distanceFromBottomPx: number; value: number }[] {
+  if (!sample.lapseCPer1000Ft.some(n => Number.isFinite(n.value))) return [];
+  return clipFieldNodesToScale(stabilityDisplayNodes(sample.lapseCPer1000Ft), scale);
 }
 
 export interface HourCloudAnalysis {
@@ -401,7 +381,7 @@ export function analyzeHourCloudLayers(
       } else {
         coverPercent = clamp(Math.round(22 + depthM / 32), 20, 50);
       }
-      const topTempC = tempAt(topM) ?? (tempAt(baseM) !== null ? tempAt(baseM)! - 0.006 * depthM : null);
+      const topTempC = tempAt(topM);
       convectiveLayer = {
         kind: regime === 'od' ? 'overdeveloped' : 'cumulus',
         altitudeBand: bandFor(baseM, topM),
@@ -845,9 +825,9 @@ function contourGridIsobands(args: {
 }
 
 /**
- * Builds dark stratified inversion-lid paths (dT/dz > 0), VFR statically stable mountain-wave
- * ascent paths (w_ω >= 0.6 m/s outside thermals, rain, saturated IMC cloud, adiabatic plumes,
- * and directional critical levels), and contoured 3-tier mixed-phase RH cloud-deck paths.
+ * Builds dark stratified inversion-lid paths (dT/dz > 0), statically stable model
+ * ascent paths aloft (w_ω >= 0.6 m/s above thermal ceiling in dry, >= 12 kt flow),
+ * and contoured 3-tier mixed-phase RH cloud-deck paths.
  */
 export function buildInversionAndCloudDeckPaths(args: {
   sourceHours?: readonly PublishedForecastHour[];
@@ -864,21 +844,9 @@ export function buildInversionAndCloudDeckPaths(args: {
 } {
   const { sourceHours, sampling, hours, scale, columnWidth, leftBound, rightBound } = args;
   if (!hours.length) return { inversionFields: [], waveFields: [], cloudDeckFields: [] };
-  const { floorM, topM, top: plotTop, bottom: plotBottom } = scale;
-  const y = (z: number) => heightToY(scale, z);
+  const { floorM, top: plotTop, bottom: plotBottom } = scale;
 
-  const stabilityPixelNodes = sampling.map(s => {
-    if (!s.lapseCPer1000Ft.some(n => Number.isFinite(n.value))) return [];
-    const displayNodes = stabilityDisplayNodes(s.lapseCPer1000Ft);
-    const nodes = displayNodes.filter(n => n.altitudeM >= floorM && n.altitudeM <= topM);
-    if (displayNodes[0]!.altitudeM < floorM && displayNodes.at(-1)!.altitudeM >= floorM && nodes[0]?.altitudeM !== floorM) {
-      nodes.unshift({ altitudeM: floorM, value: sampleHeight(displayNodes, floorM) ?? NaN });
-    }
-    if (nodes.length && nodes.at(-1)!.altitudeM < topM && displayNodes.at(-1)!.altitudeM > topM) {
-      nodes.push({ altitudeM: topM, value: sampleHeight(displayNodes, topM) ?? NaN });
-    }
-    return nodes.map(n => ({ distanceFromBottomPx: plotBottom - y(n.altitudeM), value: n.value }));
-  });
+  const stabilityPixelNodes = sampling.map(s => stabilityPixelNodesForHour(s, scale));
 
   const inversionMap = stabilityPixelNodes.some(n => n.length)
     ? buildStabilityFieldPaths({
@@ -894,26 +862,20 @@ export function buildInversionAndCloudDeckPaths(args: {
       })
     : {};
 
-  // Resolved VFR statically stable mountain-wave vertical velocity w_ω
+  // Resolved statically stable model vertical velocity w_ω aloft
   const wProfilesByHour = hours.map((vh, i) => {
     const src = sourceHours?.[i];
     if (!src?.levels.length) return null;
+    if (!src.levels.some(l => l.omegaPaS !== null && Number.isFinite(l.omegaPaS))) return null;
     const precip = finiteScalar(src.surface.precipitationMmHr);
     if (precip !== null && precip >= 0.08) return null;
     const lapseNodes = sampling[i]?.lapseCPer1000Ft ?? [];
     const thermalCeilingM = effectiveHourUsableLiftTopM(src, vh.usableLiftTopM) ?? effectiveHourGroundM(src) ?? floorM;
-    const criticalLevelM = firstWaveCriticalLevelM(src);
     const nodes = src.levels
       .filter((l): l is typeof l & { heightM: number } => l.heightM !== null && Number.isFinite(l.heightM))
       .sort((a, b) => a.heightM - b.heightM)
       .map(l => {
-        if (criticalLevelM !== null && l.heightM >= criticalLevelM - 5) {
-          return { altitudeM: l.heightM, value: 0 };
-        }
-        const rh = l.temperatureC !== null && l.dewPointC !== null
-          ? effectiveCloudHumidityPercent(l.temperatureC, l.dewPointC)
-          : null;
-        if (rh !== null && Number.isFinite(rh) && rh >= CLOUD_RH_THRESHOLD_PERCENT) {
+        if (l.omegaPaS === null || !Number.isFinite(l.omegaPaS) || l.heightM <= thermalCeilingM + 20) {
           return { altitudeM: l.heightM, value: 0 };
         }
         const localLapse = lapseNodes.length ? sampleHeight(lapseNodes, l.heightM) : null;
@@ -928,7 +890,7 @@ export function buildInversionAndCloudDeckPaths(args: {
         const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
         return {
           altitudeM: l.heightM,
-          value: w === null ? 0 : l.heightM <= thermalCeilingM + 20 ? 0 : w,
+          value: w === null ? 0 : w,
         };
       });
     return nodes.length ? nodes : null;
@@ -989,15 +951,7 @@ export function buildInversionAndCloudDeckPaths(args: {
 
   const rhPixelNodes = sampling.map(s => {
     const rh = s.cloudHumidityPercent ?? s.relativeHumidityPercent;
-    if (!rh.some(n => Number.isFinite(n.value))) return [];
-    const nodes = rh.filter(n => n.altitudeM >= floorM && n.altitudeM <= topM);
-    if (rh[0]!.altitudeM < floorM && rh.at(-1)!.altitudeM >= floorM && nodes[0]?.altitudeM !== floorM) {
-      nodes.unshift({ altitudeM: floorM, value: sampleHeight(rh, floorM) ?? NaN });
-    }
-    if (nodes.length && nodes.at(-1)!.altitudeM < topM && rh.at(-1)!.altitudeM > topM) {
-      nodes.push({ altitudeM: topM, value: sampleHeight(rh, topM) ?? NaN });
-    }
-    return nodes.map(n => ({ distanceFromBottomPx: plotBottom - y(n.altitudeM), value: n.value }));
+    return rh.some(n => Number.isFinite(n.value)) ? clipFieldNodesToScale(rh, scale) : [];
   });
 
   const cloudDeckMap = rhPixelNodes.some(n => n.length)

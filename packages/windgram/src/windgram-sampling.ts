@@ -129,10 +129,16 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       altitudeM: p.altitudeM,
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
     })),
-    cloudHumidityPercent: temperatureC.map((p, i) => ({
-      altitudeM: p.altitudeM,
-      value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
-    })),
+    cloudHumidityPercent: temperatureC.map((p, i) => {
+      const isSurfaceAnchor = floorM !== null && Math.abs(p.altitudeM - (floorM + 2)) < 0.00001;
+      const useModelRh = !isSurfaceAnchor && hour.upperAirDewpointReference === 'model-rh';
+      return {
+        altitudeM: p.altitudeM,
+        value: useModelRh
+          ? relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value)
+          : effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
+      };
+    }),
     windU: winds.map(p => ({ altitudeM: p.altitudeM, value: p.uMps })),
     windV: winds.map(p => ({ altitudeM: p.altitudeM, value: p.vMps })),
     verticalVelocityPaS: withHeightGaps(levels.map((l) => ({

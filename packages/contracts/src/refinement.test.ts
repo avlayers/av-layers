@@ -232,37 +232,28 @@ describe('configured refinement geometry', () => {
     }
     const excessive = config(feature('zone-001', [rectangle(-10, 20, 10, 40)]));
     expect(() => planRefinements(excessive, options)).toThrow('cell budget');
-  });
 
-  it('plans refinements on Lambert-conformal source grids and supports configurable spacingM', () => {
-    const lambertSource = {
+    const rrfsLambert = {
       kind: 'lambert-conformal' as const,
-      width: 120,
-      height: 120,
+      width: 1799,
+      height: 1059,
       earthRadiusM: 6_371_229,
-      centralMeridianDeg: 45,
-      latitudeOfOriginDeg: 40,
+      centralMeridianDeg: -97.5,
+      latitudeOfOriginDeg: 38.5,
       standardParallel1Deg: 38.5,
-      standardParallel2Deg: 41.5,
-      x0M: -180_000,
-      y0M: 180_000,
+      standardParallel2Deg: 38.5,
+      x0M: -2_697_520.1425219304,
+      y0M: -1_587_306.1525566643,
       dxM: 3_000,
-      dyM: -3_000,
+      dyM: 3_000,
       wrapLongitude: false as const,
     };
-    const zone = config(feature('zone-caucasus', [rectangle(44.2, 39.6, 45.4, 40.6)]));
-    const [plan1km] = planRefinements(zone, { sourceGrid: lambertSource, bounds: [42, 38, 48, 42], haloCells: 2 });
-    const [plan500m] = planRefinements(zone, { sourceGrid: lambertSource, bounds: [42, 38, 48, 42], haloCells: 2, spacingM: 500 });
-    expect(plan1km.bounds).toEqual([44.2, 39.6, 45.4, 40.6]);
-    expect(plan1km.grid.dxM).toBe(1000);
-    expect(plan500m.grid.dxM).toBe(500);
-    expect(plan500m.grid.dyM).toBe(-500);
-    expect(plan500m.grid.width).toBeGreaterThan(plan1km.grid.width);
-    expect(containsRefinement(plan500m, 40.1, 44.8)).toBe(true);
-
-    expect(() => planRefinements(zone, { sourceGrid: { ...lambertSource, width: 1 }, bounds: [42, 38, 48, 42], haloCells: 1 })).toThrow('2x2');
-    for (const spacingM of [0, 50, 60_000, NaN]) {
-      expect(() => planRefinements(zone, { ...options, spacingM })).toThrow('spacing');
+    const bellingham = config(feature('zone-bellingham', [rectangle(-122.48, 48.75, -122.43, 48.80)]));
+    const mtWashington = config(feature('zone-mt-washington', [rectangle(-71.30, 44.27, -71.25, 44.32)]));
+    for (const candidate of [bellingham, mtWashington]) {
+      expect(() =>
+        planRefinements(candidate, { sourceGrid: rrfsLambert, bounds: [-134.12, 21.12, -60.89, 52.63], haloCells: 1 }),
+      ).toThrow('Refinement planning currently requires a regular-latlon source grid');
     }
   });
 });

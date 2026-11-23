@@ -5,7 +5,7 @@ import {
   type CoverageMask, type LayerId, type SparseCoverage
 } from '@av/contracts';
 import { deriveNativeColumnDiagnostics, type NativeDiagnosticInput, type NativeDiagnosticLevel } from '@av/soaring';
-import { dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
+import { dewpointFromGfsV16RhC, dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
 import { directSurfaceBinding } from './direct-scalars.js';
 import type { AuxField, AuxSurfaceId, NormalizedFrame } from './inputs.js';
 import type { GridField } from './sampler.js';
@@ -42,7 +42,11 @@ function columnReader(frame: NormalizedFrame, includeLevels = true) {
       if ((Number.isFinite(p) && p >= pressure) || (Number.isFinite(height) && height <= terrain)) continue;
       const t = read(frame.tempK[j]!, frame.missing.temp[j]!, i) - 273.15;
       const q = at(frame.auxLevels?.spfhKgKg?.[j], i), relativeHumidity = at(frame.auxLevels?.rhPercent?.[j], i);
-      const td = q !== null ? dewPointFromSpecificHumidityC(q, p) : relativeHumidity !== null ? dewpointFromTempAndRhC(t, relativeHumidity) : NaN;
+      const td = q !== null
+        ? dewPointFromSpecificHumidityC(q, p)
+        : relativeHumidity !== null
+          ? (frame.rhReference === 'gfs-v16-mixed' ? dewpointFromGfsV16RhC(t, relativeHumidity) : dewpointFromTempAndRhC(t, relativeHumidity))
+          : NaN;
       const u = at(frame.auxLevels?.uWindMps?.[j], i), v = at(frame.auxLevels?.vWindMps?.[j], i);
       const level = levels[count++]!;
       level.heightM = height; level.temperatureC = t; level.pressureHpa = p; level.dewPointC = number(td);

@@ -1,5 +1,5 @@
 export { disposePointWindgram, renderPointWindgram, type PointWindgramOptions } from './point-windgram.ts';
-export { resolveCivilTimeZone, timeZoneForLongitude, timeZoneOffsetMinutesAt } from './time-zone.ts';
+export { resolveCivilTimeZone, timeZoneForLongitude, timeZoneOffsetMinutesAt } from '@av/client/timezone';
 export {
   DEFAULT_POINT_VIEW_MODE,
   formatDayWindowLabel,
@@ -18,7 +18,6 @@ export {
   CLOUD_BKN_RH_PERCENT,
   CLOUD_SCT_RH_PERCENT,
   DEFAULT_WINDGRAM_FIELD_MODE,
-  hasWaveCriticalLevelBelow,
   omegaToVerticalVelocityMps,
   skyCoverageCode,
   windBarbSpeedColor,

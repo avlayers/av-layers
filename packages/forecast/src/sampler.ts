@@ -1,7 +1,8 @@
 import { CELL_BYTES } from '@av/contracts/format';
 import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type LayerId, type LayerSpec } from '@av/contracts/layers';
 type ReductionSpec = Pick<LayerSpec, 'supportsNoLift' | 'supportsLiftFlags' | 'noLiftSampleValue' | 'zeroOnNoLiftInterpolation'>;
-import { isValidGridGeometry, LAMBERT_GRID_FIELDS, locateSampleCell, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
+import { isValidGridGeometry, LAMBERT_GRID_FIELDS, locateSampleCell, nearerContributor, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
+export { nearerContributor } from '@av/contracts/geometry';
 import { getBit, isCovered, type CoverageMask } from '@av/contracts/coverage-query';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
 
@@ -13,10 +14,6 @@ export interface Cell { value: number; flags: number }
 export interface Contributor { index: number; row: number; column: number; weight: number }
 export interface SamplePlan { contributors: Contributor[]; byteRange: { offset: number; length: number } }
 export interface Sample { value: number | null; status: number; support: number; interpolated: boolean }
-
-export function nearerContributor(weight: number, row: number, column: number, bestWeight: number, bestRow: number, bestColumn: number): boolean {
-  return weight > bestWeight || (weight === bestWeight && (row < bestRow || (row === bestRow && column < bestColumn)));
-}
 
 export function validateSamplingField(grid: Grid, field: GridField, mask?: SamplingMask): void {
   if (!(field.values instanceof Float32Array) || !(field.flags instanceof Uint8Array)) throw new RangeError('Invalid field arrays');

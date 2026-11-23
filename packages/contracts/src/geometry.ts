@@ -37,6 +37,10 @@ export function locateSampleCell(grid: Grid, lat: number, lon: number, geometry?
   return { column, row, fractionX: x - column, fractionY: y - row };
 }
 
+export function nearerContributor(weight: number, row: number, column: number, bestWeight: number, bestRow: number, bestColumn: number): boolean {
+  return weight > bestWeight || (weight === bestWeight && (row < bestRow || (row === bestRow && column < bestColumn)));
+}
+
 function sampleGeometry(grid: Grid): GridGeometry | null {
   try { return prepareGridGeometry(grid); } catch { return null; }
 }

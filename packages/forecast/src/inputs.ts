@@ -51,6 +51,7 @@ interface FrameFields {
   /** Canonical units are keyed by AUX_SURFACE_UNITS/AUX_LEVEL_UNITS; winds are Earth-relative. */
   auxSurface?: AuxSurface;
   auxLevels?: AuxLevels;
+  rhReference?: 'liquid' | 'gfs-v16-mixed';
   missing: {
     terrain: Uint8Array;
     surfacePressure: Uint8Array;
@@ -185,6 +186,9 @@ export function validateNormalizedFrame(
     ...frame.missing.temp
   ];
 
+  if (frame.rhReference !== undefined && frame.rhReference !== 'liquid' && frame.rhReference !== 'gfs-v16-mixed') {
+    throw new Error('Unsupported relative-humidity reference');
+  }
   for (const [fields, units, profile] of [
     [frame.auxSurface, AUX_SURFACE_UNITS, false], [frame.auxLevels, AUX_LEVEL_UNITS, true]
   ] as const) {

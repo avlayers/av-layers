@@ -6,9 +6,12 @@ import {
   GRAVITY_MPS2,
   ZERO_CELSIUS_K,
   celsiusToKelvin,
+  dewpointFromGfsV16RhC,
+  dewPointFromSpecificHumidityC,
   dewpointFromTempAndRhC,
   dryParcelTemperatureK,
   effectiveCloudHumidityPercent,
+  gfsV16SaturationVaporPressureHpa,
   kelvinToCelsius,
   lclHeightMetersAgl,
   mixedPhaseSaturationVaporPressureHpa,
@@ -64,6 +67,27 @@ describe('@av/thermodynamics', () => {
     expect(relativeHumidityFromTempAndDewpointPercent(-35, -38.4)).toBeLessThan(72);
     expect(effectiveCloudHumidityPercent(-35, -38.4)).toBeGreaterThan(98);
     expect(Number.isNaN(effectiveCloudHumidityPercent(NaN, -10))).toBe(true);
+  });
+
+  it('converts GFS v16 mixed-phase RH and specific humidity into liquid-vapor-pressure dewpoints', () => {
+    expect(gfsV16SaturationVaporPressureHpa(8)).toBe(saturationVaporPressureHpa(8));
+    expect(gfsV16SaturationVaporPressureHpa(-25)).toBe(saturationVaporPressureIceHpa(-25));
+    expect(dewpointFromGfsV16RhC(10, 80)).toBeCloseTo(dewpointFromTempAndRhC(10, 80), 6);
+
+    // Cascade negative fixture (47.50°N, 121.50°W, GFS 2026-11-20 00Z f003)
+    const td450 = dewPointFromSpecificHumidityC(0.0002356488985, 450);
+    expect(Math.abs(effectiveCloudHumidityPercent(-34.406195, td450) - 71.53)).toBeLessThanOrEqual(0.1);
+    const td400 = dewPointFromSpecificHumidityC(0.0001077765628, 400);
+    expect(Math.abs(effectiveCloudHumidityPercent(-41.870703, td400) - 66.79)).toBeLessThanOrEqual(0.1);
+
+    // Secondary-level RH-only GFS conversion (-12 °C, 80% GFS v16 RH)
+    const td875 = dewpointFromGfsV16RhC(-12, 80);
+    expect(saturationVaporPressureHpa(td875)).toBeCloseTo(0.8 * gfsV16SaturationVaporPressureHpa(-12), 5);
+
+    // Positive control (38.75°N, 78.25°W, 400 hPa): cold ice-saturated cloud preserved
+    const tdPos = dewPointFromSpecificHumidityC(0.00078861, 400);
+    expect(relativeHumidityFromTempAndDewpointPercent(-27.19, tdPos)).toBeCloseTo(76.45, 1);
+    expect(effectiveCloudHumidityPercent(-27.19, tdPos)).toBeGreaterThanOrEqual(99.5);
   });
 
   it('computes surface kinematic sensible heat flux in K*m/s', () => {

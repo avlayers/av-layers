@@ -87,7 +87,9 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
         frameCount: result.frames.length, provenanceKey, provenanceSha256: sha256(provenanceBytes),
         terrain: { dataId: surfaces.find(surface => surface.terrain)?.terrain?.dataId ?? '', key: prepared.terrain.key, sha256: prepared.terrain.sha256, arrayBytes: prepared.terrain.arrayBytes } },
       tool: { components: options.identity.components, node: process.version, tileFormat: 'webp', liftRenderStyle: liftRenderStyle(PALETTES.lift.interpolation),
-        terrainMethod: refinementMethod.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id, ...RASTER_SAMPLING },
+        terrainMethod: refinementMethod.id, terrainClearance: TERRAIN_CLEARANCE_METHOD.id,
+        ...(surfaces.some(surface => surface.profiles) ? { profileDewpointReference: 'liquid-vapor-pressure' as const } : {}),
+        ...RASTER_SAMPLING },
       palettes: descriptors.palettes.map(palette => palette.id), metrics: {}
     };
     const tValidate = Date.now();

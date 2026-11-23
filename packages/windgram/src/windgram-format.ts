@@ -19,6 +19,9 @@ export const mpsToKnots = (mps: number): number => mps * KNOTS_PER_MPS;
 export const celsiusToFahrenheit = (celsius: number): number => (celsius * 9) / 5 + 32;
 export const fahrenheitToCelsius = (fahrenheit: number): number => (fahrenheit - 32) / 1.8;
 
+const COMPASS_16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'] as const;
+export const compass16 = (directionDeg: number): string => COMPASS_16[((Math.round(directionDeg / 22.5) % 16) + 16) % 16]!;
+
 export function finiteScalar(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }

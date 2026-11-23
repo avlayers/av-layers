@@ -2,16 +2,14 @@
 // for Windgram charts.
 
 import { windFromComponents } from '@av/soaring';
-import { effectiveCloudHumidityPercent } from '@av/thermodynamics';
 import type { SiteForecast } from './internal-meteo.ts';
 import {
-  hasWaveCriticalLevelBelow,
+  classifyConvectiveCloudRegime,
   omegaToVerticalVelocityMps,
   WAVE_ASCENT_MIN_MPS,
   WAVE_MIN_WIND_KT,
 } from './windgram-atmosphere.ts';
 import { finiteScalar, mpsToKnots } from './windgram-format.ts';
-import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import { median } from './windgram-time-axis.ts';
 
 export interface HeightAnchor {
@@ -97,17 +95,14 @@ export function buildWindgramVerticalScale(
       const precip = finiteScalar(hour.surface.precipitationMmHr);
       if (precip !== null && precip >= 0.08) return [];
       return hour.levels.map(l => {
+        if (l.omegaPaS === null || !Number.isFinite(l.omegaPaS)) return null;
         if (l.heightM === null || !Number.isFinite(l.heightM) || l.heightM > 7500) return null;
-        const rh = l.temperatureC !== null && l.dewPointC !== null
-          ? effectiveCloudHumidityPercent(l.temperatureC, l.dewPointC)
-          : null;
-        if (rh !== null && Number.isFinite(rh) && rh >= CLOUD_RH_THRESHOLD_PERCENT) return null;
+        const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
+        if (w === null || w < WAVE_ASCENT_MIN_MPS) return null;
         const wind = windFromComponents(finiteScalar(l.uWindMps), finiteScalar(l.vWindMps));
         const speedKt = wind.speedMps === null ? null : mpsToKnots(wind.speedMps);
         if (speedKt !== null && speedKt < WAVE_MIN_WIND_KT) return null;
-        if (hasWaveCriticalLevelBelow(hour, l.heightM)) return null;
-        const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);
-        return w !== null && w >= WAVE_ASCENT_MIN_MPS ? l.heightM : null;
+        return l.heightM;
       });
     }),
   );
@@ -117,6 +112,11 @@ export function buildWindgramVerticalScale(
   const floorM = referenceHeights.length ? Math.min(...referenceHeights, ...liftTops.map(height => height - 50)) : 0;
   const focused = options.heightRange === 'soaring' || (compact && options.heightRange !== 'full');
   const grouped = new Map<number, number[]>();
+  const pushGroup = (p: number, z: number) => {
+    const zs = grouped.get(p);
+    if (zs) zs.push(z);
+    else grouped.set(p, [z]);
+  };
 
   if (profile.model === 'icon-eu') {
     // Native hybrid pressures change with each forecast hour. Fixed isobar ticks
@@ -132,7 +132,7 @@ export function buildWindgramVerticalScale(
           if (a.p <= b.p || p > a.p || p < b.p) continue;
           const fraction = (Math.log(p) - Math.log(a.p)) / (Math.log(b.p) - Math.log(a.p));
           const z = a.z + fraction * (b.z - a.z);
-          if (z > (hour.modelTerrainM ?? floorM) + 5) grouped.set(p, [...(grouped.get(p) ?? []), z]);
+          if (z > (hour.modelTerrainM ?? floorM) + 5) pushGroup(p, z);
           break;
         }
       }
@@ -141,7 +141,7 @@ export function buildWindgramVerticalScale(
     for (const h of hours) {
       for (const l of h.levels) {
         const p = finiteScalar(l.pressureHpa), z = finiteScalar(l.heightM);
-        if (p !== null && z !== null && z > (h.modelTerrainM ?? floorM) + 5) grouped.set(p, [...(grouped.get(p) ?? []), z]);
+        if (p !== null && z !== null && z > (h.modelTerrainM ?? floorM) + 5) pushGroup(p, z);
       }
     }
   }
@@ -157,16 +157,13 @@ export function buildWindgramVerticalScale(
   const soaringTops = liftTops.length ? liftTops : nativeLiftTops;
   const activeCuTops = known(
     hours.map(hour => {
-      if ((hour.thermalVelocityMps ?? 0) <= 0) return null;
+      if (classifyConvectiveCloudRegime(hour) === 'none') return null;
       const limits = [hour.effectiveCloudLimitM, hour.surfaceLclM].filter((v): v is number => v !== null && Number.isFinite(v));
       if (!limits.length) return null;
       const baseM = Math.min(...limits);
       const liftTop = hour.mapLift.mslM ?? hour.nativeUsableLiftTopM ?? null;
       const top = Math.max(hour.thermalTopM ?? -Infinity, liftTop ?? -Infinity);
-      if (!(Number.isFinite(top) && (hour.cloudCapped === true || hour.overdeveloped === true || top >= baseM - 25))) {
-        return null;
-      }
-      return Math.min(Math.max(baseM + 200, top), baseM + 1000, floorM + 4500);
+      return Number.isFinite(top) ? Math.min(Math.max(baseM + 200, top), baseM + 1000, floorM + 4500) : null;
     }),
   );
   const peakM = Math.max(floorM, ...grounds, ...fineTerrain, ...soaringTops, ...activeCuTops, ...waveTops);

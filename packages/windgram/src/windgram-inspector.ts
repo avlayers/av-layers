@@ -4,7 +4,6 @@ import { windFromComponents } from '@av/soaring';
 import {
   effectiveHourUsableLiftTopM,
   estimateThermalClimbAtHeight,
-  hasWaveCriticalLevelBelow,
   omegaToVerticalVelocityMps,
 } from './windgram-atmosphere.ts';
 import {
@@ -13,7 +12,7 @@ import {
   mpsToKnots,
   finiteScalar,
 } from './windgram-format.ts';
-import { sampleField, sampleHeight } from './windgram-sampling.ts';
+import { sampleHeight } from './windgram-sampling.ts';
 import type { WindgramView } from './windgram-view.ts';
 
 import type { WindgramReading } from './scene-types.ts';
@@ -31,15 +30,16 @@ function windShearAtHeight(sample: WindgramView['sampling'][number] | undefined,
 
 function samplePressureHpaAtHeight(levels: WindgramView['sourceHours'][number]['levels'] | undefined, zM: number): number | null {
   if (!levels?.length) return null;
-  const nodes = levels
-    .filter((l): l is typeof l & { heightM: number; pressureHpa: number } =>
-      l.heightM !== null && Number.isFinite(l.heightM) && l.pressureHpa !== null && Number.isFinite(l.pressureHpa) && l.pressureHpa > 0,
-    )
-    .sort((a, b) => a.heightM - b.heightM)
-    .map(l => ({ altitudeM: l.heightM, value: Math.log(l.pressureHpa) }));
-  if (!nodes.length) return null;
-  const lnP = sampleField(nodes, zM, 'altitudeM');
-  return lnP === null ? null : Math.exp(lnP);
+  let loZ = -Infinity, loP = 0, hiZ = Infinity, hiP = 0;
+  for (const l of levels) {
+    const z = l.heightM, p = l.pressureHpa;
+    if (z === null || !Number.isFinite(z) || p === null || !Number.isFinite(p) || p <= 0) continue;
+    if (Math.abs(z - zM) < 0.00001) return p;
+    if (z <= zM && z > loZ) { loZ = z; loP = p; }
+    if (z >= zM && z < hiZ) { hiZ = z; hiP = p; }
+  }
+  if (!Number.isFinite(loZ) || !Number.isFinite(hiZ)) return null;
+  return loZ === hiZ ? loP : loP * Math.pow(hiP / loP, (zM - loZ) / (hiZ - loZ));
 }
 
 function clampCloudPercent(value: number | null | undefined): number | null {
@@ -79,6 +79,21 @@ function detectSurfaceWindShift(
   return { deltaKt: Math.round(deltaKt), shiftDeg: Math.round(shiftDeg) };
 }
 
+function hasWarmLayerAboveSubfreezing(nodes: WindgramView['sampling'][number]['temperatureC'] | undefined): boolean {
+  if (!nodes?.length) return false;
+  let lowestSubfreezingM: number | null = null;
+  for (const node of nodes) {
+    if (!Number.isFinite(node.value)) continue;
+    if (node.value <= -0.5 && (lowestSubfreezingM === null || node.altitudeM < lowestSubfreezingM)) {
+      lowestSubfreezingM = node.altitudeM;
+    }
+    if (lowestSubfreezingM !== null && node.altitudeM > lowestSubfreezingM && node.altitudeM <= lowestSubfreezingM + 3500 && node.value > 0.5) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function readWindgram(view: WindgramView, hourIndex: number, heightM: number): WindgramReading {
   const index = clamp(Math.round(hourIndex), 0, view.hours.length - 1);
   const sample = view.sampling[index];
@@ -94,7 +109,6 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const omega = sample ? sampleHeight(sample.verticalVelocityPaS, z) : null;
   const pressureHpa = samplePressureHpaAtHeight(source?.levels, z);
   const waveVelocityMps = omegaToVerticalVelocityMps(omega, t, pressureHpa, z);
-  const waveCriticalLevel = source ? hasWaveCriticalLevelBelow(source, z) : false;
   const nativeWind = wind.speedMps !== null && sample?.windU.some(n => Math.abs(n.altitudeM - z) < .00001 && Number.isFinite(n.value));
   const surface = source?.surface;
   const pblDepthM = surface?.pblHeightM ?? null;
@@ -115,16 +129,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   );
 
   const precipMmHr = finiteScalar(surface?.precipitationMmHr);
-  const freezeTempC = t ?? (groundM !== null && z >= groundM ? finiteScalar(surface?.temperatureC) : null);
-  const freezingRainRisk = Boolean(
-    precipMmHr !== null &&
-    precipMmHr > 0.04 &&
-    freezeTempC !== null &&
-    freezeTempC <= -0.5 &&
-    sample?.temperatureC.some(
-      node => node.altitudeM > z && node.altitudeM <= z + 3500 && Number.isFinite(node.value) && node.value > 1.0,
-    ),
-  );
+  const warmLayerAloft = hasWarmLayerAboveSubfreezing(sample?.temperatureC);
   const gustKt = view.hours[index]?.gustKt ?? null;
   const surfaceWindShift = detectSurfaceWindShift(view.sourceHours, index, gustKt);
 
@@ -135,10 +140,17 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     cloudLayers.find(l => l.kind === 'stratiform' && z >= l.baseM - 5 && z <= l.topM + 5) ??
     cloudLayers.find(l => l.kind !== 'stratiform' && z >= l.baseM - 15 && z <= l.topM + 10) ??
     null;
-  const basesAbove = cloudLayers.filter(l => l.baseM > z + 15).map(l => l.baseM);
-  const topsBelow = cloudLayers.filter(l => l.topM < z - 15).map(l => l.topM);
-  const nearestCloudBaseAboveM = basesAbove.length ? Math.min(...basesAbove) : null;
-  const nearestCloudTopBelowM = topsBelow.length ? Math.max(...topsBelow) : null;
+  let nearestCloudBaseAboveM: number | null = null;
+  let nearestCloudTopBelowM: number | null = null;
+  for (const l of cloudLayers) {
+    if (l.baseM > z + 15 && (nearestCloudBaseAboveM === null || l.baseM < nearestCloudBaseAboveM)) nearestCloudBaseAboveM = l.baseM;
+    if (l.topM < z - 15 && (nearestCloudTopBelowM === null || l.topM > nearestCloudTopBelowM)) nearestCloudTopBelowM = l.topM;
+  }
+
+  const liquidRhPercent = sample ? sampleHeight(sample.relativeHumidityPercent, z) : null;
+  const cloudHumidityPercent = sample
+    ? sampleHeight(sample.cloudHumidityPercent ?? sample.relativeHumidityPercent, z)
+    : null;
 
   return {
     hourIndex: index,
@@ -152,7 +164,8 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     gustKt,
     cloud: cloud?.kind ?? null,
     dewPointC,
-    relativeHumidityPercent: sample ? sampleHeight(sample.relativeHumidityPercent, z) : null,
+    relativeHumidityPercent: liquidRhPercent,
+    cloudHumidityPercent,
     verticalVelocityPaS: omega,
     windSource: wind.speedMps === null ? null : !nativeWind ? 'interpolated'
       : modelTerrainM !== null && Math.abs(z - modelTerrainM - 10) < .00001 ? 'surface-10m' : 'model-level',
@@ -169,8 +182,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
     peakClimbMps: climb.peakClimbMps,
     lapseCPer1000Ft: sample ? sampleHeight(sample.lapseCPer1000Ft, z) : null,
     waveVelocityMps,
-    waveCriticalLevel,
-    freezingRainRisk,
+    warmLayerAloft,
     surfaceWindShift,
     buoyancyShearRatio: finiteScalar(source?.buoyancyShearRatio),
     cloudLayers,

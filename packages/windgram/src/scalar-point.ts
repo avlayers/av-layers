@@ -1,4 +1,5 @@
-import { formatPlaceTime, formatPointMapTimes, longitudeOffsetHours, placeDateKey, pointFrameView, seriesTable, type GeoPoint, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/client';
+import { formatPlaceTime, formatPointMapTimes, placeDateKey, pointFrameView, seriesTable, type GeoPoint, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/client';
+import { formatSitePlaceTime, pointOffsetMinutesAt } from '@av/client/timezone';
 
 /** Mount one bounded series; frame/unit updates reuse its bars and cached values. */
 export function renderPointSeries(
@@ -39,10 +40,9 @@ export function renderPointSeries(
     head.append(...model.headings.map(label => node('th', label)));
     values.append(head);
     const validColumn = model.headings.indexOf('Valid');
-    const pointOffset = longitudeOffsetHours(options.point.lon) * 60;
     for (const cells of model.rows) {
       const row = node('tr');
-      row.append(...cells.map((text, cell) => node('td', cell === validColumn ? formatPlaceTime(Date.parse(text), pointOffset, 'stamp') : text)));
+      row.append(...cells.map((text, cell) => node('td', cell === validColumn ? formatSitePlaceTime(Date.parse(text), options.point, 'stamp') : text)));
       values.append(row);
     }
     table.replaceChildren(values);
@@ -61,12 +61,18 @@ export function renderPointSeries(
   const positions = new Map(build.manifest.frames.map((frame, index) => [frame.id, index]));
   const elapsed = payload.frames.map((frame, index) => index && positions.get(frame.id) === positions.get(payload.frames[index - 1].id)! + 1
     ? (Date.parse(frame.validTime) - Date.parse(payload.frames[index - 1].validTime)) / 3600000 : 0);
-  const pointOffset = longitudeOffsetHours(options.point.lon) * 60;
+  const offsetAt = (iso: string | undefined) => {
+    const ms = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(ms) ? pointOffsetMinutesAt(options.point, ms).offsetMinutes : 0;
+  };
   const bars = payload.frames.map((frame, index) => {
-    const localDate = placeDateKey(Date.parse(frame.validTime), pointOffset);
-    const previousDate = index === 0 ? '' : placeDateKey(Date.parse(payload.frames[index - 1]!.validTime), pointOffset);
+    const frameMs = Date.parse(frame.validTime);
+    const frameOffset = offsetAt(frame.validTime);
+    const prevFrame = index === 0 ? undefined : payload.frames[index - 1]!;
+    const localDate = placeDateKey(frameMs, frameOffset);
+    const previousDate = prevFrame ? placeDateKey(Date.parse(prevFrame.validTime), offsetAt(prevFrame.validTime)) : '';
     const firstOfDay = index === 0 || localDate !== previousDate;
-    const localHour = new Date(Date.parse(frame.validTime) + pointOffset * 60_000).getUTCHours();
+    const localHour = new Date(frameMs + frameOffset * 60_000).getUTCHours();
     const width = firstOfDay ? 54 : 20;
     const gapText = elapsed[index] > 1 ? `+${elapsed[index]} h` : '', gapWidth = gapText ? Math.max(24, gapText.length * 6) : 0;
     const button = node('button'), plot = node('span'), hour = node('span', `${firstOfDay && localDate ? `${localDate.slice(5)} ` : ''}${String(localHour).padStart(2, '0')}`);
@@ -117,11 +123,11 @@ export function renderPointSeries(
   let loading = options.loading ?? partial;
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
-  let mapOffsetMinutes = options.mapOffsetMinutes ?? pointOffset;
+  let explicitMapOffset = options.mapOffsetMinutes;
   let labelledUnits: UnitSystem | undefined;
-  const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = mapOffsetMinutes) => {
+  const update = (frameId: string | null, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = explicitMapOffset) => {
     units = nextUnits;
-    if (typeof nextMapOffset === 'number') mapOffsetMinutes = nextMapOffset;
+    if (typeof nextMapOffset === 'number') explicitMapOffset = nextMapOffset;
     loading = nextLoading;
     followSelection ||= frameId !== selectedFrameId;
     selectedFrameId = frameId;
@@ -131,9 +137,11 @@ export function renderPointSeries(
     const selectedIndex = payload.frames.findIndex(frame => frame.id === frameId), frame = payload.frames[selectedIndex];
     const pointFrame = frame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
+    const pointOffset = offsetAt(pointFrame?.validTime);
+    const resolvedMapOffset = explicitMapOffset ?? offsetAt(mapFrame?.validTime);
     time.textContent = formatPointMapTimes(
       pointFrame ? { validTime: pointFrame.validTime, offsetMinutes: pointOffset } : null,
-      mapFrame ? { validTime: mapFrame.validTime, offsetMinutes: mapOffsetMinutes } : null
+      mapFrame ? { validTime: mapFrame.validTime, offsetMinutes: resolvedMapOffset } : null
     );
     time.hidden = !pointFrame || pointFrame.id === mapFrameId;
     const hasSelection = frame !== undefined;
@@ -143,7 +151,7 @@ export function renderPointSeries(
       bar.ariaPressed = String(selected); bar.tabIndex = selected || (!hasSelection && index === 0) ? 0 : -1;
       bar.style.borderColor = selected ? '#229ec6' : 'transparent';
       if (labelledUnits !== units) {
-        bar.ariaLabel = `${formatPlaceTime(Date.parse(frame.validTime), pointOffset, 'stamp')}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${currentViews[index].summary}`;
+        bar.ariaLabel = `${formatPlaceTime(Date.parse(frame.validTime), offsetAt(frame.validTime), 'stamp')}${elapsed[index] > 1 ? ` · ${elapsed[index]} h after previous shown time` : ''} · ${currentViews[index].summary}`;
         bar.title = bar.ariaLabel;
       }
     });

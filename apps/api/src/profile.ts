@@ -111,8 +111,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           const derived = deriveSoaringViews({ terrainM, thermalTopM, thermalVelocityMps,
             thermalTopRhPercent, surfaceLclM: value('surface-lcl-msl'), mixedLayerLclM: cloud.mixedLayerLclM,
             effectiveCloudLimitM: cloud.effectiveCloudLimitM, wind10mU: native.wind10mU, wind10mV: native.wind10mV,
-            blMeanWindU: value('bl-mean-wind-u'), blMeanWindV: value('bl-mean-wind-v'),
-            blTopWindU: wind.blTopWindU, blTopWindV: wind.blTopWindV, blMaxWindShearMps: wind.blMaxWindShearMps });
+            blMeanWindU: value('bl-mean-wind-u'), blMeanWindV: value('bl-mean-wind-v'), blTopWindU: wind.blTopWindU, blTopWindV: wind.blTopWindV });
           return { ...frame, layers: fields, profile: column,
             derived: { ...derived, mixedLayerLclM: cloud.mixedLayerLclM, effectiveCloudLimitM: cloud.effectiveCloudLimitM } };
         }) };

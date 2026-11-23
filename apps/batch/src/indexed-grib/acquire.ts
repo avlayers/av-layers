@@ -334,6 +334,19 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
     }
 
     const auxiliarySpecs = specs.filter(spec => spec.auxId);
+    const scheduledAuxLevels = new Set(
+      auxiliarySpecs.filter(spec => spec.kind === 'aux-level').map(spec => `${spec.auxId}.${spec.levelHpa}`),
+    );
+    for (const [id, fields] of Object.entries(auxLevels)) {
+      if (!fields) continue;
+      for (let levelIdx = 0; levelIdx < source.pressureLevels.length; levelIdx++) {
+        const levelHpa = source.pressureLevels[levelIdx]!;
+        if (!scheduledAuxLevels.has(`${id}.${levelHpa}`)) {
+          fields[levelIdx]!.values.fill(NaN);
+          fields[levelIdx]!.missing.fill(1);
+        }
+      }
+    }
     const auxiliaryReceipts = new Map<string, DecodedFieldReceipt>();
     let auxiliaryIndex = 0;
     for await (const loaded of prefetch(auxiliarySpecs, sourceGrid.gridKey)) {
@@ -430,6 +443,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       tempK,
       ...(Object.keys(auxSurface).length ? { auxSurface } : {}),
       ...(Object.keys(auxLevels).length ? { auxLevels } : {}),
+      ...(source.upstream.auxLevels?.rhPercent?.reference ? { rhReference: source.upstream.auxLevels.rhPercent.reference } : {}),
       missing: {
         terrain: terrain.missing,
         surfacePressure: surfacePressure.missing,

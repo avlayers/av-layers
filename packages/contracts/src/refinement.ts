@@ -208,7 +208,7 @@ function clippedBounds(geometry: RefinementGeometry, bounds: GeographicBounds): 
   }
   return west < east && south < north ? [west, south, east, north] : null;
 }
-function targetGrid(bounds: GeographicBounds, earthRadiusM: number, haloCells: number, spacing: number): LambertConformalGrid {
+function targetGrid(bounds: GeographicBounds, earthRadiusM: number, haloCells: number): LambertConformalGrid {
   const [west, south, east, north] = bounds, centerLat = (south + north) / 2, centerLon = (west + east) / 2;
   // A tangent cone at zero latitude is singular; a nearby cone also covers equatorial zones.
   const parallel = Math.abs(centerLat) < 1 ? (centerLat < 0 ? -1 : 1) : centerLat;
@@ -218,6 +218,7 @@ function targetGrid(bounds: GeographicBounds, earthRadiusM: number, haloCells: n
   const geometry = prepareGridGeometry(seed);
   // For the admitted local longitude span, extrema occur at corners or the central meridian.
   const points = [south, north].flatMap(lat => [west, centerLon, east].map(lon => geometry.geographicToGrid(lat, lon)!));
+  const spacing = REFINEMENT_SPACING_M;
   const minX = Math.floor(Math.min(...points.map(p => p.x)) / spacing) - haloCells;
   const maxX = Math.ceil(Math.max(...points.map(p => p.x)) / spacing) + haloCells;
   const minY = Math.floor(Math.min(...points.map(p => p.y)) / spacing) - haloCells;
@@ -225,92 +226,31 @@ function targetGrid(bounds: GeographicBounds, earthRadiusM: number, haloCells: n
   return gridSchema.parse({ ...seed, width: maxX - minX + 1, height: maxY - minY + 1, x0M: minX * spacing, y0M: maxY * spacing, dxM: spacing, dyM: -spacing }) as LambertConformalGrid;
 }
 
-function resolveSourceSupportBounds(source: Grid): GeographicBounds {
-  if (source.kind === 'regular-latlon') {
-    const finalLon = source.lon0 + (source.width - 1) * source.dx;
-    const finalLat = source.lat0 + (source.height - 1) * source.dy;
-    if (
-      Math.min(source.lat0, finalLat) < -90 ||
-      Math.max(source.lat0, finalLat) > 90 ||
-      (source.wrapLongitude
-        ? Math.abs(Math.abs(source.width * source.dx) - 360) > 1e-8
-        : Math.min(source.lon0, finalLon) < -180 || Math.max(source.lon0, finalLon) > 180)
-    ) {
-      throw new Error('Refinement source grid requires valid latitudes and either a complete longitude wrap or a noncrossing longitude extent');
-    }
-    return [
-      source.wrapLongitude ? -180 : Math.min(source.lon0, finalLon),
-      Math.min(source.lat0, finalLat),
-      source.wrapLongitude ? 180 : Math.max(source.lon0, finalLon),
-      Math.max(source.lat0, finalLat),
-    ];
-  }
-  if (source.width < 2 || source.height < 2) {
-    throw new Error('Lambert refinement source grid requires at least a 2x2 extent');
-  }
-  const geometry = prepareGridGeometry(source);
-  const westCol = source.dxM >= 0 ? 0 : source.width - 1;
-  const eastCol = source.dxM >= 0 ? source.width - 1 : 0;
-  const southRow = source.dyM >= 0 ? 0 : source.height - 1;
-  const northRow = source.dyM >= 0 ? source.height - 1 : 0;
-  let west = -Infinity, east = Infinity, south = -Infinity, north = Infinity;
-  let minLon = Infinity, maxLon = -Infinity;
-  for (let row = 0; row < source.height; row++) {
-    const leftPt = geometry.gridToGeographic(westCol, row);
-    const rightPt = geometry.gridToGeographic(eastCol, row);
-    if (!leftPt || !rightPt) throw new Error('Lambert refinement source grid has invalid perimeter coordinates');
-    west = Math.max(west, leftPt.lon);
-    east = Math.min(east, rightPt.lon);
-    minLon = Math.min(minLon, leftPt.lon, rightPt.lon);
-    maxLon = Math.max(maxLon, leftPt.lon, rightPt.lon);
-  }
-  for (let col = 0; col < source.width; col++) {
-    const southPt = geometry.gridToGeographic(col, southRow);
-    const northPt = geometry.gridToGeographic(col, northRow);
-    if (!southPt || !northPt) throw new Error('Lambert refinement source grid has invalid perimeter coordinates');
-    south = Math.max(south, southPt.lat);
-    north = Math.min(north, northPt.lat);
-    minLon = Math.min(minLon, southPt.lon, northPt.lon);
-    maxLon = Math.max(maxLon, southPt.lon, northPt.lon);
-  }
-  if (south < -90 || north > 90 || maxLon - minLon > 180 || !(west < east && south < north)) {
-    throw new Error('Lambert refinement source grid requires a noncrossing interior geographic extent');
-  }
-  return [west, south, east, north];
-}
-
-/** Plan bounded targets; polygons wholly outside admitted source support are omitted. */
-export function planRefinements(
-  raw: unknown,
-  options: { sourceGrid: Grid; bounds: GeographicBounds; haloCells: number; maxCells?: number; spacingM?: number }
-): RefinementPlan[] {
+/** Plan bounded targets without allocating weather or mask arrays. Omit polygons wholly outside the source. */
+export function planRefinements(raw: unknown, options: { sourceGrid: Grid; bounds: GeographicBounds; haloCells: number; maxCells?: number }): RefinementPlan[] {
   const config = parseRefinementConfig(raw);
-  const source = gridSchema.parse(options.sourceGrid);
-  const { haloCells } = options;
-  const maxCells = options.maxCells ?? MAX_GRID_CELLS;
-  const spacingM = options.spacingM ?? REFINEMENT_SPACING_M;
-  if (!Number.isSafeInteger(haloCells) || haloCells < 1 || haloCells > 64 || !Number.isSafeInteger(maxCells) || maxCells < 1 || maxCells > MAX_GRID_CELLS) {
-    throw new Error('Invalid refinement halo or cell budget');
-  }
-  if (!Number.isFinite(spacingM) || spacingM < 100 || spacingM > 50_000) {
-    throw new Error('Invalid refinement grid spacing');
-  }
+  const source = gridSchema.parse(options.sourceGrid), { haloCells } = options, maxCells = options.maxCells ?? MAX_GRID_CELLS;
+  if (source.kind !== 'regular-latlon') throw new Error('Refinement planning currently requires a regular-latlon source grid');
+  if (!Number.isSafeInteger(haloCells) || haloCells < 1 || haloCells > 64 || !Number.isSafeInteger(maxCells) || maxCells < 1 || maxCells > MAX_GRID_CELLS) throw new Error('Invalid refinement halo or cell budget');
   const bounds = options.bounds;
-  if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[0] < -180 || bounds[2] > 180 || bounds[0] >= bounds[2] || bounds[1] < -90 || bounds[3] > 90 || bounds[1] >= bounds[3]) {
-    throw new Error('Refinement source bounds must be nonwrapping geographic bounds');
+  if (bounds.length !== 4 || !bounds.every(Number.isFinite) || bounds[0] < -180 || bounds[2] > 180 || bounds[0] >= bounds[2] || bounds[1] < -90 || bounds[3] > 90 || bounds[1] >= bounds[3]) throw new Error('Refinement source bounds must be nonwrapping geographic bounds');
+  const finalLon = source.lon0 + (source.width - 1) * source.dx, finalLat = source.lat0 + (source.height - 1) * source.dy;
+  if (Math.min(source.lat0, finalLat) < -90 || Math.max(source.lat0, finalLat) > 90
+      || (source.wrapLongitude ? Math.abs(Math.abs(source.width * source.dx) - 360) > 1e-8 : Math.min(source.lon0, finalLon) < -180 || Math.max(source.lon0, finalLon) > 180)) {
+    throw new Error('Refinement source grid requires valid latitudes and either a complete longitude wrap or a noncrossing longitude extent');
   }
-  const sourceBounds = resolveSourceSupportBounds(source);
+  const sourceBounds: GeographicBounds = [source.wrapLongitude ? -180 : Math.min(source.lon0, finalLon), Math.min(source.lat0, finalLat), source.wrapLongitude ? 180 : Math.max(source.lon0, finalLon), Math.max(source.lat0, finalLat)];
   const admitted = intersection(bounds, sourceBounds);
   if (!admitted) return [];
   let totalCells = 0;
   const plans: RefinementPlan[] = [];
   for (const feature of [...config.features].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) {
-    const clipped = clippedBounds(feature.geometry, admitted);
-    if (!clipped) continue;
-    const grid = targetGrid(clipped, source.earthRadiusM, haloCells, spacingM), cells = grid.width * grid.height;
+    const bounds = clippedBounds(feature.geometry, admitted);
+    if (!bounds) continue;
+    const grid = targetGrid(bounds, source.earthRadiusM, haloCells), cells = grid.width * grid.height;
     totalCells += cells;
     if (totalCells > maxCells) throw new Error(`Refinement cell budget exceeded: ${totalCells} > ${maxCells}`);
-    plans.push({ id: feature.id, geometry: feature.geometry, bounds: clipped, sourceBounds, grid });
+    plans.push({ id: feature.id, geometry: feature.geometry, bounds, sourceBounds, grid });
   }
   return plans;
 }

@@ -2,7 +2,7 @@
 import type { LayerId } from '@av/contracts/layers';
 import { maxProfileFrames } from '@av/contracts/point-products';
 import { renderedFrames, surfaceFrameCount, type ManifestV5 } from '@av/contracts/publication';
-import type { PinnedBuild, PointFrame, PointHorizon, PointSeries, PointSeriesLoader } from './client-types.ts';
+import type { PinnedBuild, PointFrame, PointHorizon, PointSeries, PointSeriesLoader, PointTerrain } from './client-types.ts';
 
 const MAX_PAGES = 16;
 const liftLayers = ['usable-lift-msl', 'usable-lift-agl'] as const;
@@ -85,10 +85,12 @@ export function createPointSeriesLoader(
   build: PinnedBuild,
   readSample: ReadPage,
   readProfile: ReadPage,
-  assertLive: () => void
+  assertLive: () => void,
+  readTerrain?: (signal: AbortSignal) => Promise<PointTerrain | null>,
 ): PointSeriesLoader {
   const m = build.manifest, cache = new Map<string, PointFrame>();
   const sampled = new Set<string>(), profiled = new Set<string>();
+  let siteTerrain: PointTerrain | null | undefined;
   const { layers, sample, profile } = pointSelection(build);
   const sources: PointSource[] = [];
   if (sample.layers.length) sources.push({ read: readSample, layers: sample.layers, frames: sample.frames,
@@ -126,44 +128,65 @@ export function createPointSeriesLoader(
           }
           return { source, requests };
         });
-        const view = (): PointSeries => ({ layers, frames: frames.flatMap(id => cache.get(id) ?? []) });
+        const view = (): PointSeries => ({
+          layers,
+          frames: frames.flatMap(id => cache.get(id) ?? []),
+          ...(siteTerrain ? { siteTerrain } : {}),
+        });
         const progress = (loading: boolean, result?: PointSeries) => {
           assertActive();
           options?.onProgress?.(result ?? view(), frames.length, loading);
           assertActive();
         };
-        let outstanding = plans.reduce((count, plan) => count + plan.requests.length, 0);
-        // Fetch both sources in parallel, but give the selected map sample the first view.
+        const needsTerrain = readTerrain !== undefined && siteTerrain === undefined;
+        let outstanding = plans.reduce((count, plan) => count + plan.requests.length, 0) + (needsTerrain ? 1 : 0);
+        // Fetch sources in parallel, giving the selected map sample the first view.
         let selectedLiftPending = sample.layers.length > 0 && sample.frames?.has(first) === true && !sampled.has(first);
         if (outstanding && !selectedLiftPending && cache.has(first)) progress(true);
         let failure: { cause: unknown } | undefined;
-        const settled = await Promise.allSettled(plans.map(async ({ source, requests }) => {
-          for (const [index, ids] of requests.entries()) {
-            const selectsLift = selectedLiftPending && source.ready === sampled;
-            let response;
-            try { response = await source.read(ids, source.layers, controller.signal); }
-            catch (cause) {
-              assertActive();
-              failure ??= { cause };
-              outstanding -= requests.length - index;
-              if (selectsLift) {
-                selectedLiftPending = false;
-                if (outstanding && cache.has(first)) progress(true);
+        const terrainTask = needsTerrain
+          ? (async () => {
+              try {
+                const resolved = await readTerrain(controller.signal);
+                assertActive();
+                siteTerrain = resolved;
+              } catch {
+                assertActive();
+                siteTerrain = null;
               }
-              return;
+              if (--outstanding > 0 && !selectedLiftPending && cache.size > 0) progress(true);
+            })()
+          : Promise.resolve();
+        const settled = await Promise.allSettled([
+          terrainTask,
+          ...plans.map(async ({ source, requests }) => {
+            for (const [index, ids] of requests.entries()) {
+              const selectsLift = selectedLiftPending && source.ready === sampled;
+              let response;
+              try { response = await source.read(ids, source.layers, controller.signal); }
+              catch (cause) {
+                assertActive();
+                failure ??= { cause };
+                outstanding -= requests.length - index;
+                if (selectsLift) {
+                  selectedLiftPending = false;
+                  if (outstanding && cache.has(first)) progress(true);
+                }
+                return;
+              }
+              assertActive();
+              for (const frame of response.frames) {
+                const previousFrame = cache.get(frame.id);
+                cache.set(frame.id, previousFrame
+                  ? { ...previousFrame, ...frame, layers: { ...previousFrame.layers, ...frame.layers } }
+                  : frame);
+                source.ready.add(frame.id);
+              }
+              if (selectsLift) selectedLiftPending = false;
+              if (--outstanding > 0 && !selectedLiftPending) progress(true);
             }
-            assertActive();
-            for (const frame of response.frames) {
-              const previousFrame = cache.get(frame.id);
-              cache.set(frame.id, previousFrame
-                ? { ...previousFrame, ...frame, layers: { ...previousFrame.layers, ...frame.layers } }
-                : frame);
-              source.ready.add(frame.id);
-            }
-            if (selectsLift) selectedLiftPending = false;
-            if (--outstanding > 0 && !selectedLiftPending) progress(true);
-          }
-        }));
+          }),
+        ]);
         for (const result of settled) if (result.status === 'rejected') throw result.reason;
         assertActive();
         const result = view();
@@ -177,6 +200,6 @@ export function createPointSeriesLoader(
         if (active === controller) active = null;
       });
     },
-    dispose() { disposed = true; active?.abort(); cache.clear(); sampled.clear(); profiled.clear(); }
+    dispose() { disposed = true; active?.abort(); cache.clear(); sampled.clear(); profiled.clear(); siteTerrain = undefined; }
   };
 }

@@ -1,8 +1,8 @@
 import {
   formatMapLiftCell,
+  formatPlaceTime,
   formatPointMapTimes,
   hasNativeProfiles,
-  longitudeOffsetHours,
   pointLiftExpectation,
   pointMapLift,
   samePoint,
@@ -10,8 +10,10 @@ import {
   type PinnedBuild,
   type PointFrame,
   type PointSeries,
+  type PointTerrain,
   type UnitSystem,
 } from '@av/client';
+import { formatSitePlaceTime, timeZoneOffsetMinutesAt } from '@av/client/timezone';
 import {
   mountWindgram,
   type WindgramCalloutTrigger,
@@ -40,7 +42,6 @@ import {
 } from './point-view-mode.ts';
 import { renderPointSeries } from './scalar-point.ts';
 import { renderWindgramKey } from './svg.ts';
-import { timeZoneOffsetMinutesAt } from './time-zone.ts';
 import { DEFAULT_WINDGRAM_FIELD_MODE, type WindgramFieldMode } from './windgram-atmosphere.ts';
 import type { WindgramTelemetryStrip } from './windgram-readout.ts';
 import { daylightForDate } from './windgram-time-axis.ts';
@@ -77,7 +78,7 @@ export interface PointWindgramOptions {
 type Update = (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean, mapOffsetMinutes?: number) => void;
 type FrameRef = { readonly id: string; readonly validTime: string };
 type DayHour = { readonly id: string; readonly validAt: string };
-type PointWindgramInput = Pick<PointSeries, 'frames'>;
+type PointWindgramInput = Pick<PointSeries, 'frames' | 'siteTerrain'>;
 
 interface PointWindgramState {
   readonly section: HTMLElement;
@@ -98,6 +99,7 @@ interface Calendar {
 interface Data extends Calendar {
   loaded: ReadonlyMap<string, PointFrame>;
   forecast: SiteForecast;
+  siteTerrainKey: string;
   bestDayKey: string | null;
   hasSounding: boolean;
   hasValues: boolean;
@@ -119,32 +121,58 @@ function groupFrames(frames: readonly FrameRef[], timeZone: string): Calendar {
   return { frames: references, frameIdByValidTime, days, dayKeys: [...days.keys()] };
 }
 
+function localMinutesOfDay(ms: number, timeZone: string): number {
+  const shifted = new Date(ms + timeZoneOffsetMinutesAt(ms, timeZone) * 60_000);
+  return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
+}
+
 function pickRepresentativeFrameInDay(
   dayHours: readonly DayHour[],
   currentValidTime: string | null,
-  pointOffsetMinutes: number,
+  timeZone: string,
 ): string | null {
   if (!dayHours.length) return null;
-  const targetMinutes = currentValidTime && Number.isFinite(Date.parse(currentValidTime))
-    ? (() => {
-        const shifted = new Date(Date.parse(currentValidTime) + pointOffsetMinutes * 60_000);
-        return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-      })()
-    : 14 * 60;
+  const currentMs = currentValidTime ? Date.parse(currentValidTime) : NaN;
+  const targetMinutes = Number.isFinite(currentMs) ? localMinutesOfDay(currentMs, timeZone) : 14 * 60;
   let best = dayHours[0]!;
   let bestDist = Infinity;
   for (const candidate of dayHours) {
     const ms = Date.parse(candidate.validAt);
     if (!Number.isFinite(ms)) continue;
-    const shifted = new Date(ms + pointOffsetMinutes * 60_000);
-    const mins = shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-    const dist = Math.abs(mins - targetMinutes);
+    const dist = Math.abs(localMinutesOfDay(ms, timeZone) - targetMinutes);
     if (dist < bestDist) {
       bestDist = dist;
       best = candidate;
     }
   }
   return best.id;
+}
+
+function formatSplitClocks(
+  point: GeoPoint,
+  explicitTimeZone: string | undefined,
+  isUtcFallback: boolean,
+  pointValidTime: string | null,
+  pointOffsetMinutes: number,
+  mapValidTime: string | null,
+  mapOffsetMinutes: number,
+): string {
+  if (!pointValidTime) return 'Point time unavailable';
+  if (!isUtcFallback) {
+    return formatPointMapTimes(
+      { validTime: pointValidTime, offsetMinutes: pointOffsetMinutes },
+      mapValidTime ? { validTime: mapValidTime, offsetMinutes: mapOffsetMinutes } : null,
+    );
+  }
+  const pointMs = Date.parse(pointValidTime);
+  const pointStamp = formatSitePlaceTime(pointMs, point, 'stamp', explicitTimeZone);
+  if (!mapValidTime) return `Point: ${pointStamp} · Map: unavailable`;
+  const mapMs = Date.parse(mapValidTime);
+  if (pointMs === mapMs && mapOffsetMinutes === 0) return `Point and map: ${pointStamp}`;
+  const mapStamp = mapOffsetMinutes === 0
+    ? formatSitePlaceTime(mapMs, point, 'stamp', explicitTimeZone)
+    : formatPlaceTime(mapMs, mapOffsetMinutes, 'stamp');
+  return `Point: ${pointStamp} · Map: ${mapStamp}`;
 }
 
 const states = new WeakMap<HTMLElement, PointWindgramState>();
@@ -167,10 +195,13 @@ function createPointWindgram(
   ensureDocumentStyles(owner);
   const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
   const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
-  const toForecast = createPointForecast(build, options.point, { timeZone: options.timeZone });
+  const toForecast = createPointForecast(build, options.point, {
+    timeZone: options.timeZone,
+    siteTerrain: input.siteTerrain,
+  });
 
   // Full manifest calendar lets us know immediately whether 2+ daylight forecast days exist in this model run.
-  const initialProbeForecast = toForecast([], new Map());
+  const initialProbeForecast = toForecast([], new Map(), input.siteTerrain);
   const initialProbeSite = initialProbeForecast.site;
   const manifestCalendar = groupFrames(build.manifest.frames, initialProbeSite.timeZone);
   const countDaylightDays = (cal: Calendar): number => {
@@ -189,11 +220,17 @@ function createPointWindgram(
   const supportsMultiDay = countDaylightDays(manifestCalendar) > 1;
 
   let grouped: Calendar | undefined;
-  let derivedMemo: { frames: readonly PointFrame[]; totalFrames: number | undefined; data: Data } | null = null;
+  let derivedMemo: {
+    frames: readonly PointFrame[];
+    totalFrames: number | undefined;
+    siteTerrain: PointTerrain | null | undefined;
+    data: Data;
+  } | null = null;
   const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {
     if (
       derivedMemo &&
       derivedMemo.totalFrames === nextOptions.totalFrames &&
+      derivedMemo.siteTerrain === nextInput.siteTerrain &&
       derivedMemo.frames.length === nextInput.frames.length &&
       derivedMemo.frames.every((f, i) => f === nextInput.frames[i])
     ) {
@@ -203,7 +240,7 @@ function createPointWindgram(
     const frames = nextOptions.totalFrames === undefined
       ? build.manifest.frames.filter(frame => loaded.has(frame.id))
       : build.manifest.frames.slice(0, nextOptions.totalFrames);
-    const forecast = toForecast(frames, loaded);
+    const forecast = toForecast(frames, loaded, nextInput.siteTerrain);
     const previous = grouped;
     const calendar = previous && previous.frames.length === frames.length && frames.every(({ id, validTime }, i) => {
       const old = previous.frames[i]!;
@@ -223,11 +260,15 @@ function createPointWindgram(
       ]),
     );
     const bestDayKey = findBestSoaringDayKey(calendar.dayKeys, calendar.days, forecastMap);
+    const siteTerrainKey = nextInput.siteTerrain
+      ? `${nextInput.siteTerrain.status}:${nextInput.siteTerrain.elevationM ?? 'null'}`
+      : '';
 
     const result: Data = {
       ...calendar,
       loaded,
       forecast,
+      siteTerrainKey,
       bestDayKey,
       hasSounding: forecast.hours.some(hour => hour.levels.length > 0),
       hasValues: nextInput.frames.some(frame => Object.values(frame.layers).some(cell => cell.status === 'valid')),
@@ -236,7 +277,12 @@ function createPointWindgram(
         return !frame?.profile || (mapFrames.has(id) && liftLayers.some(layer => !frame.layers[layer]));
       }),
     };
-    derivedMemo = { frames: nextInput.frames, totalFrames: nextOptions.totalFrames, data: result };
+    derivedMemo = {
+      frames: nextInput.frames,
+      totalFrames: nextOptions.totalFrames,
+      siteTerrain: nextInput.siteTerrain,
+      data: result,
+    };
     return result;
   };
   let data = derive(input, options);
@@ -303,14 +349,11 @@ function createPointWindgram(
 
   const resolvePointOffsetMinutes = (validIso?: string | null): number => {
     const ms = validIso ? Date.parse(validIso) : NaN;
-    if (options.timeZone && Number.isFinite(ms)) {
-      return timeZoneOffsetMinutesAt(ms, initialProbeSite.timeZone);
-    }
-    return longitudeOffsetHours(options.point.lon) * 60;
+    return Number.isFinite(ms) ? timeZoneOffsetMinutesAt(ms, initialProbeSite.timeZone) : 0;
   };
 
   let units: UnitSystem = options.unitSystem;
-  let mapOffsetMinutes = options.mapOffsetMinutes ?? resolvePointOffsetMinutes(build.manifest.frames[0]?.validTime);
+  let explicitMapOffset = options.mapOffsetMinutes;
   let loading = options.loading ?? false;
   let selectedFrameId = options.frameId;
   let mapFrameId = options.mapFrameId === undefined ? options.frameId : options.mapFrameId;
@@ -368,8 +411,7 @@ function createPointWindgram(
     if (!data.days.has(targetDayKey)) {
       onRequestFullHorizon?.();
     }
-    const pointOffset = resolvePointOffsetMinutes(dayHours[0]!.validAt);
-    const targetFrameId = pickRepresentativeFrameInDay(dayHours, currentPointValidTime(), pointOffset);
+    const targetFrameId = pickRepresentativeFrameInDay(dayHours, currentPointValidTime(), initialProbeSite.timeZone);
     if (targetFrameId && targetFrameId !== selectedFrameId) {
       onFrame(targetFrameId);
     }
@@ -390,7 +432,7 @@ function createPointWindgram(
       onViewModeChange?.(nextMode);
     }
     if (renderEpoch === epochBefore) {
-      update(selectedFrameId, units, mapFrameId, loading, mapOffsetMinutes);
+      update(selectedFrameId, units, mapFrameId, loading, explicitMapOffset);
     }
   };
 
@@ -413,7 +455,7 @@ function createPointWindgram(
       if (curDay && !nextWindow.includes(curDay)) {
         selectDay(nextWindow.at(-1)!);
       }
-      update(selectedFrameId, units, mapFrameId, loading, mapOffsetMinutes);
+      update(selectedFrameId, units, mapFrameId, loading, explicitMapOffset);
       return;
     }
     const allKeys = manifestCalendar.dayKeys;
@@ -440,7 +482,7 @@ function createPointWindgram(
       if (curDay && !nextWindow.includes(curDay)) {
         selectDay(nextWindow[0]!);
       }
-      update(selectedFrameId, units, mapFrameId, loading, mapOffsetMinutes);
+      update(selectedFrameId, units, mapFrameId, loading, explicitMapOffset);
       return;
     }
     const allKeys = manifestCalendar.dayKeys;
@@ -450,7 +492,7 @@ function createPointWindgram(
 
   const dayViews = (dayKey: string, hours: readonly DayHour[], widthPx: number, heightPx: number | undefined) => {
     const frames = hours.map(hour => data.loaded.get(hour.id));
-    const key = `${dayKey}|${units}|${fieldMode}|${widthPx}|${heightPx}|${hours.length}`;
+    const key = `${dayKey}|${units}|${fieldMode}|${widthPx}|${heightPx}|${hours.length}|${data.siteTerrainKey}`;
     if (singleDayCache?.key !== key || singleDayCache.frames.some((frame, i) => frame !== frames[i])) {
       const timeZone = data.forecast.site.timeZone;
       const daylight = buildWindgramView(data.forecast, {
@@ -469,7 +511,7 @@ function createPointWindgram(
     heightPx: number | undefined,
   ): WindgramView => {
     const frames = windowDays.flatMap(d => (data.days.get(d) ?? []).map(h => data.loaded.get(h.id)));
-    const key = `${windowDays.join(',')}|${bestDayKey ?? ''}|${units}|${fieldMode}|${widthPx}|${heightPx}|${frames.length}`;
+    const key = `${windowDays.join(',')}|${bestDayKey ?? ''}|${units}|${fieldMode}|${widthPx}|${heightPx}|${frames.length}|${data.siteTerrainKey}`;
     if (stitchedCache?.key !== key || stitchedCache.frames.some((frame, i) => frame !== frames[i])) {
       const view = buildStitchedWindgramView(data.forecast, {
         unitSystem: units,
@@ -495,12 +537,12 @@ function createPointWindgram(
     if (target && target.id !== selectedFrameId) onFrame(target.id);
   };
 
-  const update: Update = (frameId, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = mapOffsetMinutes) => {
+  const update: Update = (frameId, nextUnits = units, nextMapFrameId = mapFrameId, nextLoading = loading, nextMapOffset = explicitMapOffset) => {
     if (disposed) return;
     renderEpoch += 1;
     const timeZone = data.forecast.site.timeZone;
     units = nextUnits;
-    if (typeof nextMapOffset === 'number') mapOffsetMinutes = nextMapOffset;
+    if (typeof nextMapOffset === 'number') explicitMapOffset = nextMapOffset;
     loading = nextLoading;
     if (selectedFrameId !== null && frameId !== selectedFrameId) keepWindowAnchor = false;
     selectedFrameId = frameId;
@@ -511,9 +553,15 @@ function createPointWindgram(
     const pointFrame = loadedFrame ?? build.manifest.frames.find(frame => frame.id === frameId);
     const mapFrame = build.manifest.frames.find(frame => frame.id === mapFrameId);
     const pointOffset = resolvePointOffsetMinutes(pointFrame?.validTime);
-    time.textContent = formatPointMapTimes(
-      pointFrame ? { validTime: pointFrame.validTime, offsetMinutes: pointOffset } : null,
-      mapFrame ? { validTime: mapFrame.validTime, offsetMinutes: mapOffsetMinutes } : null,
+    const resolvedMapOffset = explicitMapOffset ?? resolvePointOffsetMinutes(mapFrame?.validTime);
+    time.textContent = formatSplitClocks(
+      options.point,
+      options.timeZone,
+      Boolean(initialProbeSite.isUtcFallback),
+      pointFrame?.validTime ?? null,
+      pointOffset,
+      mapFrame?.validTime ?? null,
+      resolvedMapOffset,
     );
     time.hidden = !pointFrame || pointFrame.id === mapFrameId;
 
@@ -637,8 +685,8 @@ function createPointWindgram(
     if (nextOptions.viewMode !== undefined && supportsMultiDay) {
       viewMode = nextOptions.viewMode;
     }
-    if (typeof nextOptions.mapOffsetMinutes === 'number') mapOffsetMinutes = nextOptions.mapOffsetMinutes;
-    update(nextOptions.frameId, nextOptions.unitSystem, nextOptions.mapFrameId, nextOptions.loading, mapOffsetMinutes);
+    if (typeof nextOptions.mapOffsetMinutes === 'number') explicitMapOffset = nextOptions.mapOffsetMinutes;
+    update(nextOptions.frameId, nextOptions.unitSystem, nextOptions.mapFrameId, nextOptions.loading, explicitMapOffset);
   };
 
   if (viewMode === '3d' && data.dayKeys.length < Math.min(DEFAULT_MULTI_DAY_SPAN, manifestCalendar.dayKeys.length)) {

@@ -375,4 +375,61 @@ describe('native profile API', () => {
     const duplicate = await app.fetch(new Request(`${url}&${query}`, { headers: { 'cf-connecting-ip': '192.0.2.1' } }), { BUCKET: f.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
     expect(duplicate.status).toBe(400); await duplicate.body?.cancel(); expect(f.get).not.toHaveBeenCalled();
   });
+
+  it('keeps public blWindShearMps and buoyancyShearRatio endpoint-defined across cold and warm profile-v3 cache reads', async () => {
+    const f = attachNativeProfiles(
+      createV5Fixture({
+        nativeLayers: layers,
+        nativeValue: (layer, frame, x) =>
+          layer === 'wind-10m-u' ? 2
+            : layer === 'wind-10m-v' ? 0
+              : layer === 'thermal-top-msl' ? 1100
+                : layer === 'thermal-velocity' ? 2.4
+                  : nativeValue(layer, frame, x),
+      }),
+      {
+        levels: 3,
+        profile: () => ({
+          modelTerrainM: 100,
+          surfacePressureHpa: 990,
+          status: 'valid',
+          levels: [
+            { pressureHpa: 950, heightM: 450, temperatureC: 22, dewPointC: 8, uWindMps: 14, vWindMps: 0, omegaPaS: null },
+            { pressureHpa: 900, heightM: 900, temperatureC: 18, dewPointC: 6, uWindMps: 2, vWindMps: 0, omegaPaS: null },
+            { pressureHpa: 850, heightM: 1400, temperatureC: 14, dewPointC: 3, uWindMps: 2, vWindMps: 0, omegaPaS: null },
+          ],
+        }),
+      },
+    );
+    const entries = new Map<string, Response>();
+    const cache = {
+      match: vi.fn(async (req: Request) => entries.get(req.url)?.clone()),
+      put: vi.fn(async (req: Request, res: Response) => {
+        entries.set(req.url, res.clone());
+      }),
+    };
+    vi.stubGlobal('caches', { default: cache });
+
+    const owners: Promise<unknown>[] = [];
+    const issue = () =>
+      f.app.fetch(
+        new Request(`https://api.test${path(f, 'lat=8.8&lon=-115.3125&frame=h001')}`, {
+          headers: { 'cf-connecting-ip': '192.0.2.1' },
+        }),
+        { BUCKET: f.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } },
+        { waitUntil: promise => owners.push(promise) },
+      );
+
+    const coldRes = await issue();
+    await Promise.all(owners);
+    const cold = await read(coldRes);
+    const warmRes = await issue();
+    expect(warmRes.headers.get('x-av-response-cache')).toBe('hit');
+    const warm = await read(warmRes);
+
+    expect(cold.frames[0]!.derived.blWindShearMps).toBe(0);
+    expect(cold.frames[0]!.derived.buoyancyShearRatio).toBeCloseTo(2.4 / 0.2, 4);
+    expect(warm).toEqual(cold);
+    assertReleased(f);
+  });
 });
