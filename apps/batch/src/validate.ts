@@ -48,7 +48,7 @@ export function assertTerrainManifestBinding(manifest: ManifestV5, terrain: NonN
   if (descriptor.dataId !== terrain.dataId || descriptor.source.verticalDatum !== terrain.verticalDatum || descriptor.source.surface !== terrain.surface
       || !source || typeof source !== 'object' || !('dataId' in source) || source.dataId !== terrain.dataId || !('key' in source) || source.key !== terrain.key
       || !('sha256' in source) || source.sha256 !== terrain.sha256 || !('arrayBytes' in source) || source.arrayBytes !== arrayBytes
-      || manifest.tool.terrainMethod !== terrainColumnMethodForProduct({ ...product, layers: manifest.layers }).id
+      || manifest.tool.terrainMethod !== terrainColumnMethodForProduct(product).id
       || manifest.tool.terrainClearance !== TERRAIN_CLEARANCE_METHOD.id) throw new Error('Terrain source or method mismatch');
 }
 
@@ -137,7 +137,7 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
         || Date.parse(frame.intervalEnd) !== end || Date.parse(frame.validTime) !== end) throw new Error(`Invalid frame interval ${frame.id}`);
   }
   const provenance = await readLocalProvenance(root, manifest);
-  if (provenance.value.version === 2) for (const [index, reference] of provenance.value.frames.entries()) {
+  for (const [index, reference] of provenance.value.frames.entries()) {
     const frame = manifest.frames[index]!, chunk = await readFrameProvenance(remote ?? root, manifest, frame, reference);
     if (!matchesFrameIntervals(chunk.intervals, frame, manifest.layers.includes('precip-rate'))) throw new Error('Provenance frame interval mismatch');
   }
@@ -155,11 +155,9 @@ export async function validateBuild(root: string, raw: unknown, mask: CoverageMa
     assertSampleLayoutBindingV5(surface, binding);
     if (surface.kind === 'native' && renderedLayers(product.layers).length !== product.layers.length && !surface.profiles) throw new Error('Native profiles are required for point products');
     if (surface.profiles) assertProfileLayoutBindingV5(surface, binding);
-    const groups = surface.samples.format === 'cell-major-block-shards-v1'
-      ? [{ channels: surface.samples.channelCount, shards: surface.samples.shards }]
-      : surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
-        channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => 'group' in shard && shard.group === first.group)
-      }));
+    const groups = surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
+      channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => shard.group === first.group)
+    }));
     for (const group of groups) {
       if (!remote) await validateSampleGroup(root, surface, coverage.mask.coverage, manifest.descriptors, group);
       else {

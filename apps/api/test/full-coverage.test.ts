@@ -22,9 +22,9 @@ async function fixture(product: ProductDefinition, native = false) {
     id: native ? 'native' : 'fine', kind: native ? 'native' : 'fine', grid: mask.grid, gridHash: description.descriptor.gridHash,
     coverage: { id: product.coverageId, hash, maskKey: `${prefix}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: description.descriptor.gridHash },
     layers: native ? ['precip-rate'] : ['usable-lift-msl', 'usable-lift-agl'],
-    samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: channels,
+    samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: channels,
       coverageHash: hash, blockCount: layout.blockCount, storedCells: layout.storedCells,
-      shards: layout.shards.map((shard, i) => ({ firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.byteLength / (channels * 5), bytes: shard.byteLength, key: `shard-${i}`, sha256: 'a'.repeat(64) })) }
+      shards: layout.shards.map((shard, i) => ({ group: 0, firstFrame: 0, frameCount: product.frameHours.length, blockShard: i, firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.byteLength / (channels * 5), bytes: shard.byteLength, key: `shard-${i}`, sha256: 'a'.repeat(64) })) }
   };
   return { surface, descriptor: description.descriptor, bytes: description.bytes, sparse, tiles: mask.tiles, layout };
 }

@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { assertWholeDomainDonorsActive, coverageAtZoom, layerSurface, matchesFrameIntervals, renderedLayers, mapFrameCount, sourceIntervalHours, type ProvenanceFrameReference, type LayerId, type Manifest } from '@av/contracts';
+import { assertWholeDomainDonorsActive, coverageAtZoom, layerSurface, matchesFrameIntervals, renderedLayers, mapFrameCount, sourceIntervalHours, type ProvenanceFrameReference, type LayerId, type ManifestV5 } from '@av/contracts';
 import { deriveFrame, prepareNativeProfiles, writeProfileRecord, resolveProductFrameHours, validateNormalizedFrame, type GridField, type PackedGridField, type ShardedSamplePackLayout } from '@av/forecast';
 import { createNormalizedFrameTarget, type ForecastProvider } from '../provider.js';
 import type { NormalizedFrame } from '@av/forecast/inputs';
@@ -32,8 +32,8 @@ export interface WholeDomainSurfaceResult {
 }
 export interface WholeDomainFrameResult {
   cycle: string;
-  frames: Manifest['frames'];
-  artifacts: Manifest['artifacts'];
+  frames: ManifestV5['frames'];
+  artifacts: ManifestV5['artifacts'];
   receipts: ProvenanceFrameReference[];
   surfaces: WholeDomainSurfaceResult[];
   capacity: WholeDomainCapacity;
@@ -106,9 +106,12 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const { capacity, layouts, profileLayout, assemblyBufferBytes } = hours.length === capacityInput.frames && mapFrames === capacityInput.mapFrames
       ? admission : planWholeDomainCapacity(wholeDomainCapacityInput(product, provider, prepared, [hours]));
     if (capacity.violations.length) throw new Error(`Whole-domain build exceeds capacity: ${capacity.violations.join('; ')}`);
-    const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) =>
-      createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
-        surfaceId: options.surfaceTarget?.(surface) ?? surface, ...(options.sampleGroup === undefined ? {} : { group: options.sampleGroup }) }, { signal });
+    const writer = (surface: 'native' | 'fine', layout: ShardedSamplePackLayout, coverage: typeof prepared.fine.mask.coverage) => {
+      const surfaceFrames = surface === 'fine' ? mapFrames : hours.length;
+      const role = options.sampleGroup !== undefined || surfaceFrames > 24 ? 'hour' as const : 'serving' as const;
+      return createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
+        surfaceId: options.surfaceTarget?.(surface) ?? surface, group: options.sampleGroup ?? 0, role }, { signal });
+    };
     nativeWriter = layouts.native ? writer('native', layouts.native, prepared.native.mask.coverage) : undefined;
     fineWriter = layouts.fine ? writer('fine', layouts.fine, prepared.fine.mask.coverage) : undefined;
     const profileBytes = profileLayout?.recordBytes ?? 0;
@@ -127,7 +130,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
     const rendererOptions = { signal, rasterWorkers: capacity.rasterWorkers, rasterSharedInputBytes: capacity.rasterSharedInputBytes };
     const nativeRenderer = createRenderer(coverageAtZoom(mask, product.maxNativeZoom), rendererOptions);
     const fineRenderer = createRenderer(coverageAtZoom(prepared.fine.mask, product.maxNativeZoom), rendererOptions);
-    const frames: Manifest['frames'] = [], artifacts: Manifest['artifacts'] = [], receipts: WholeDomainFrameResult['receipts'] = [], summaries: Record<string, Record<string, unknown>> = {};
+    const frames: ManifestV5['frames'] = [], artifacts: ManifestV5['artifacts'] = [], receipts: WholeDomainFrameResult['receipts'] = [], summaries: Record<string, Record<string, unknown>> = {};
     const fineCells = prepared.fine.mask.coverage.offsets[prepared.fine.mask.coverage.blockIds.length]!;
     const fineOutput = mapFrames ? Object.fromEntries((['usable-lift-msl', 'usable-lift-agl'] as const).map(layer => [layer, {
       values: new Float32Array(new SharedArrayBuffer(fineCells * Float32Array.BYTES_PER_ELEMENT)),

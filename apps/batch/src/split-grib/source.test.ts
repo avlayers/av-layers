@@ -11,13 +11,14 @@ import {
   coverageIndices,
 
   setBit,
+  sparseCoverageFromDense,
   STATUS_MASK,
   STATUS_VALID,
   type CoverageMask
 } from '@av/contracts';
 import {
   deriveFrame,
-  prepareSamplePackLayout,
+  prepareShardedSamplePackLayout,
   resolveProductFrameHours,
   validateNormalizedFrame
 } from '@av/forecast';
@@ -877,7 +878,8 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
   it('loads the bundled icon-eu-land-v1 coverage mask, passes build admission, and filters dark regional hours before acquisition', async () => {
     const mask = await loadCoverage(profile.model);
     const indices = coverageIndices(mask);
-    const layout = prepareSamplePackLayout(mask.grid, mask.output, mask.halo);
+    const sparse = sparseCoverageFromDense({ width: mask.grid.width, height: mask.grid.height, wrapLongitude: mask.grid.wrapLongitude, gridHash: 'a'.repeat(64), output: mask.output, halo: mask.halo });
+    const layout = prepareShardedSamplePackLayout(mask.grid, sparse.blockIds, 1);
     expect(indices.output.length).toBe(399913);
     expect(indices.active.length).toBe(409684);
     expect(layout.storedCells).toBe(528650);

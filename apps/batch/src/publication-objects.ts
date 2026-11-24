@@ -78,5 +78,5 @@ export async function buildObjects(root: string, manifest: ManifestV5, remote?: 
 
 /** List separately stored frame receipts in provenance index order. */
 export function provenanceObjects(value: ReturnType<typeof parseProvenance>) {
-  return value.version === 2 ? value.frames.map(frame => ({ ...frame, contentType: 'application/json' as const })) : [];
+  return value.frames.map(frame => ({ ...frame, contentType: 'application/json' as const }));
 }

@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getProduct } from '@av/contracts/models';
-import { gridSchema, modelIdSchema, type Grid, type GeographicBounds } from '@av/contracts';
+import { modelIdSchema, type GeographicBounds } from '@av/contracts';
 import { putImmutable } from '../immutable-upload.js';
 import { readLocalFile } from '../local-file.js';
 import { r2Storage } from '../storage.js';
@@ -12,8 +12,7 @@ import { CATALOG_MAX_BYTES, encodeJson, parseJson, terrainAssetSchema, terrainIn
 import { fetchSourceInventory } from './source.js';
 import { finalizeTerrainCatalog, syncTerrainShard } from './ingest.js';
 import { localTerrainStorage } from './local-store.js';
-import { prepareTerrain, preparedTerrainRefSchema } from './prepare.js';
-import { loadTerrainCatalog, stagePreparedTerrain } from './staging.js';
+import { loadTerrainCatalog } from './staging.js';
 import { createTerrainReader } from './reader.js';
 
 const COMMON = ['store-dir', 'out'] as const;
@@ -21,9 +20,7 @@ export const TERRAIN_COMMANDS: Readonly<Record<string, readonly string[]>> = {
   inventory: COMMON,
   sync: [...COMMON, 'inventory', 'shard', 'shards', 'concurrency'],
   finalize: [...COMMON, 'inventory'],
-  prepare: [...COMMON, 'catalog-ref', 'grid'],
   'prepare-model': [...COMMON, 'catalog-ref', 'model', 'source-cache-dir'],
-  stage: [...COMMON, 'prepared-ref', 'grid'],
   inspect: [...COMMON, 'catalog-ref', 'bounds']
 };
 export function terrainArguments(args: string[]) {
@@ -34,7 +31,7 @@ export function terrainArguments(args: string[]) {
   if (positionals.length || typeof values.out !== 'string' || !values.out) throw new Error('--out is required');
   if (values['store-dir'] !== undefined && !values['store-dir'].trim()) throw new Error('--store-dir must be a nonempty directory');
   if (values['source-cache-dir'] !== undefined && !values['source-cache-dir'].trim()) throw new Error('--source-cache-dir must be a nonempty directory');
-  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], prepare: ['catalog-ref', 'grid'], 'prepare-model': ['catalog-ref', 'model'], stage: ['prepared-ref', 'grid'], inspect: ['catalog-ref', 'bounds'] };
+  const required: Record<string, string[]> = { sync: ['inventory'], finalize: ['inventory'], 'prepare-model': ['catalog-ref', 'model'], inspect: ['catalog-ref', 'bounds'] };
   for (const option of required[command] ?? []) if (!values[option]) throw new Error(`--${option} is required`);
   return { command, values: values as Record<string, string> };
 }
@@ -52,9 +49,6 @@ function storage(directory?: string): TerrainStorage {
 async function writeJson(path: string, value: unknown) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, encodeJson(value));
-}
-async function readGrid(path: string): Promise<Grid> {
-  return parseJson(await readLocalFile(path, 16 * 1024), gridSchema, 16 * 1024);
 }
 export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
   const { command, values } = terrainArguments(args), store = storage(values['store-dir']);
@@ -79,12 +73,6 @@ export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
       console.log(JSON.stringify(result));
       return;
     }
-    if (command === 'stage') {
-      const ref = parseJson(await readLocalFile(values['prepared-ref'], 16 * 1024), preparedTerrainRefSchema, 16 * 1024);
-      await stagePreparedTerrain({ ref, storage: store, out: values.out, grid: await readGrid(values.grid), signal });
-      console.log(JSON.stringify({ staged: ref.key, out: values.out }));
-      return;
-    }
     const catalogRef = parseJson(await readLocalFile(values['catalog-ref'], 16 * 1024), terrainAssetSchema, 16 * 1024);
     if (command === 'prepare-model') {
       const model = modelIdSchema.parse(values.model), product = getProduct(model);
@@ -103,12 +91,6 @@ export async function runTerrain(args = process.argv.slice(2)): Promise<void> {
       return;
     }
     const catalog = await loadTerrainCatalog(catalogRef, store, signal);
-    if (command === 'prepare') {
-      const ref = await prepareTerrain({ catalog, storage: store, grid: await readGrid(values.grid), signal, onReport: report => console.error(JSON.stringify(report)) });
-      await writeJson(values.out, ref);
-      console.log(JSON.stringify(ref));
-      return;
-    }
     const numbers = values.bounds.split(',').map(Number);
     if (numbers.length !== 4 || numbers.some(value => !Number.isFinite(value))) throw new Error('--bounds must be west,south,east,north');
     const reader = await createTerrainReader({ catalog, storage: store, signal });

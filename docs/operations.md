@@ -204,9 +204,7 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
-While a build marked `tool.useStoredMslNoLift` remains retained, use a Worker
-revision that recognizes the marker. Pointer rollback leaves retained builds
-readable by ID.
+Pointer rollback leaves retained builds readable by ID.
 
 Delete unreferenced build prefixes whose newest object is at least seven days old:
 
@@ -224,8 +222,7 @@ preparations.
 
 Production forecasts use the catalog pinned in the
 [model workflow](../.github/workflows/forecast-model.yml). All configured weather models
-use this catalog for whole-domain terrain preparation (and the shared
-[polygon configuration](../packages/contracts/config/refinement.json) for regional patch evaluation).
+use this catalog for whole-domain terrain preparation.
 
 The Forecast workflow's `terrain-catalog-ref` input overrides the environment's
 `TERRAIN_CATALOG_REF`, which overrides the production pin. For staging, set the

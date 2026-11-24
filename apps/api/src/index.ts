@@ -58,7 +58,7 @@ function layerId(value: string): LayerId {
 
 export function createApp({ products = Object.fromEntries(PRODUCTS.map(product => [product.modelId, product])) }: { products?: Record<string, ProductDefinition> } = {}) {
 let discoveryConfig: Promise<string> | undefined;
-async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string, representationSuffix = ''): Promise<Response> {
+async function discovery(c: Context<Env>, build: () => unknown, observed: readonly (ModelPointer | Problem)[], expiries: readonly string[] = [], expiresAt?: string): Promise<Response> {
   const states = observed.map(pointerCacheState), now = Date.now();
   const deadlines = states.map(state => state?.until ?? now);
   for (const expiry of expiries) {
@@ -67,7 +67,7 @@ async function discovery(c: Context<Env>, build: () => unknown, observed: readon
   }
   const until = deadlines.length ? Math.min(...deadlines) : now;
   const config = await (discoveryConfig ??= sha256(new TextEncoder().encode(JSON.stringify(products))));
-  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}${representationSuffix}`;
+  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
   return cached(c.req.raw, expiresAt, c.executionCtx, async () => json(build()), representation, until);
 }
 const modelId = (c: Context<Env>): ModelId => {
@@ -228,7 +228,7 @@ registerJsonRoute(
     const m = await manifest(c.env.BUCKET, model, ptr.latestBuildId, entry, c.executionCtx, products[model], signal);
     const metrics = (c.executionCtx as WaitContext).metrics;
     if (metrics) metrics.buildId = m.buildId;
-    const servedManifest = publicManifest(m, entry, url.origin);
+    const servedManifest = publicManifest(m, url.origin);
     return discovery(c, () => ({
       pointer: modelPointerSchema.parse(ptr),
       ...(url.searchParams.has('expand') ? {
@@ -236,7 +236,7 @@ registerJsonRoute(
         templates: Object.fromEntries(renderedLayers(m.layers, m.descriptors.layers).map(layer => [layer, `${url.origin}/tiles/${m.model}/${m.buildId}/${layer}/{frame}/{z}/{x}/{y}.webp`]))
       } : {}),
       freshness: computeFreshness(m)
-    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt, !m.mapData && entry.mapData ? `:wind:${entry.mapData.sha256}` : '');
+    }), [ptr], ptr.retained.map(item => item.expiresAt), m.expiresAt);
   }
 );
 
@@ -259,10 +259,9 @@ registerJsonRoute(
   {},
   manifestResponseSchema,
   async (c, url) => {
-    const { entry, manifest: m } = await pinnedBuild(c);
-    const served = publicManifest(m, entry, url.origin);
-    const revision = !m.mapData && entry.mapData ? 'v3' : 'v2';
-    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-${revision}`), `source-${revision}`);
+    const { manifest: m } = await pinnedBuild(c);
+    const served = publicManifest(m, url.origin);
+    return cached(c.req.raw, m.expiresAt, c.executionCtx, async () => json(served, m.expiresAt, `manifest-${m.buildId}-v2`), 'source-v2');
   }
 );
 

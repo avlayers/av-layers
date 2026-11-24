@@ -168,11 +168,11 @@ async function surfaceBytes(root: string, manifest: ReturnType<typeof manifestV5
 
 function sizedManifest(manifest: ReturnType<typeof manifestV5Schema.parse>, sizes: { bytes: number; storedCells: number }[]) {
   const copy = structuredClone(manifest), surface = copy.surfaces[0]!;
-  surface.samples.channelCount = 1;
+  surface.samples.channelCount = surface.layers.length;
   surface.samples.blockCount = sizes.length;
   surface.samples.storedCells = sizes.reduce((sum, shard) => sum + shard.storedCells, 0);
-  surface.samples.shards = sizes.map((size, index) => ({ firstBlock: index, blockCount: 1, storedCells: size.storedCells,
-    bytes: size.bytes, key: `${surface.samples.shards[0]!.key.replace(/\/0\.bin$/, '')}/${index}.bin`, sha256: 'a'.repeat(64) }));
+  surface.samples.shards = sizes.map((size, index) => ({ group: 0, firstFrame: 0, frameCount: 1, blockShard: index, firstBlock: index, blockCount: 1, storedCells: size.storedCells,
+    bytes: size.bytes, key: `${surface.samples.shards[0]!.key.replace(/\/g0-b0\.bin$/, '')}/g0-b${index}.bin`, sha256: 'a'.repeat(64) }));
   return copy;
 }
 async function buildSerialFixture() {
@@ -1070,7 +1070,7 @@ describe('whole-domain v5 production', () => {
       const session = await originalOpen(options);
       return { ...session, async acquire(hour, target) { if (hour !== 2) throw failure; return session.acquire(hour, target); } };
     } };
-    const columns = { ...prepared.columns, deriveAsync: vi.fn<typeof prepared.columns.deriveAsync>(async (_frame, _terrain, _time, options) => {
+    const columns = { ...prepared.columns, deriveAsync: vi.fn(async (_frame: Parameters<typeof prepared.columns.deriveAsync>[0], _terrain: Parameters<typeof prepared.columns.deriveAsync>[1], _time: Parameters<typeof prepared.columns.deriveAsync>[2], options: Parameters<typeof prepared.columns.deriveAsync>[3]) => {
       const signal = options.signal!;
       signal.throwIfAborted();
       return new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));

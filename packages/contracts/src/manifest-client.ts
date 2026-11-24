@@ -152,7 +152,7 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
     samples.channelCount = channels;
     for (const shard of samples.shards) {
       const stored = shard.storedCells;
-      const shardChannels = samples.format === 'frame-group-block-shards-v1' ? Number(shard.frameCount) * layers.length : channels;
+      const shardChannels = Number(shard.frameCount) * layers.length;
       if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 1 || !Number.isSafeInteger(shardChannels) || shardChannels < 1) throw new Error('Unsupported contract');
       shard.bytes = stored * shardChannels * CELL_BYTES;
     }
@@ -178,10 +178,10 @@ export function projectClientManifest(value: unknown): { manifest: ManifestV5; e
 
 function admitSampleBytes(samples: NonNullable<MutableSurface['samples']>, layerCount: number, frames: number): void {
   const channels = frames * layerCount;
-  if (!Number.isSafeInteger(channels) || samples.channelCount !== channels || !samples.shards) throw new Error('Unsupported contract');
+  if (samples.format !== 'frame-group-block-shards-v1' || !Number.isSafeInteger(channels) || samples.channelCount !== channels || !samples.shards) throw new Error('Unsupported contract');
   for (const shard of samples.shards) {
     const stored = shard.storedCells;
-    const shardChannels = samples.format === 'frame-group-block-shards-v1' ? Number(shard.frameCount) * layerCount : channels;
+    const shardChannels = Number(shard.frameCount) * layerCount;
     if (typeof stored !== 'number' || !Number.isSafeInteger(stored) || stored < 1 || !Number.isSafeInteger(shardChannels) || shardChannels < 1) throw new Error('Unsupported contract');
     const bytes = stored * shardChannels * CELL_BYTES;
     if (!Number.isSafeInteger(bytes) || shard.bytes !== bytes) throw new Error('Unsupported contract');

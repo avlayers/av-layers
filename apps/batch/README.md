@@ -47,7 +47,6 @@ The workflow retains the plan, coverage, and receipts. Use
 - [Whole-domain frames](src/whole-domain/frames.ts) derive, pack, and render layers.
 - [Parallel builds](src/parallel.ts) plan and assemble shards. [Build receipts](src/build-receipts.ts) verify uploads.
 - [Publication](src/publication.ts) validates objects and commits the latest pointer.
-- [Terrain evaluation](src/refinement/README.md) replays archived regional controls.
 
 ## Tests
 

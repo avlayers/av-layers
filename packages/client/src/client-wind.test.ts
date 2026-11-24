@@ -516,9 +516,9 @@ it('matches the reference sampler for mixed fine statuses and contributor counts
     : reply(String(url).includes('/wind/') ? wind : bytes));
   const source = new WindDataSource('https://api.test', { fetchImpl: fetcher });
   const patterns = [[0, 0, 0, 0], [0, 1, 1, 0], [1, 1, 1, 1], [0, 2, 0, 3], [2, 0, 3, 0], [1, 2, 0, 0], [4, 5, 0, 0]];
-  for (const stored of [false, true]) for (const pattern of patterns) {
-    pinned.manifest.buildId = `fixture-${stored}-${pattern.join('-')}`;
-    pinned.manifest.tool.useStoredMslNoLift = stored ? true : undefined;
+  for (const pattern of patterns) {
+    pinned.manifest.buildId = `fixture-${pattern.join('-')}`;
+    pinned.manifest.tool.useStoredMslNoLift = true;
     for (let i = 0; i < 4; i++) {
       const pos = (Math.floor(i / 2) * 64 + i % 2) * WIND_FINE_CELL_BYTES;
       fineView.setFloat32(pos, 100 + i * 20, true); fineView.setFloat32(pos + 4, 400 + i * 100, true);
@@ -531,7 +531,7 @@ it('matches the reference sampler for mixed fine statuses and contributor counts
         const pos = (item.row * 64 + item.column) * WIND_FINE_CELL_BYTES, packed = fineView.getUint8(pos + 8);
         return { value: fineView.getFloat32(pos + (height === 'lift' ? 4 : 0), true), flags: height === 'lift' ? ((packed >> 2) & 3) | fineView.getUint8(pos + 9) : packed & 3 };
       });
-      const selected = windTargetHeight(plan, cells, height === 'lift' ? { lift: true } : { agl: height }, stored);
+      const selected = windTargetHeight(plan, cells, height === 'lift' ? { lift: true } : { agl: height });
       let expected;
       if (selected.status !== STATUS_VALID || selected.value === null) expected = { status: selected.status === STATUS_NO_LIFT ? 'no-lift' : selected.status === STATUS_OUTSIDE ? 'outside' : 'unavailable', u: null, v: null };
       else {

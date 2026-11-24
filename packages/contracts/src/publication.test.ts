@@ -1,16 +1,11 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { fixtureManifest, fixturePatch } from '../../../tests/forecast-fixture.js';
+import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 import { encodeBoundedJson, MAX_MANIFEST_BYTES, PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, methodDescriptorSchema, parseBoundedJson, TERRAIN_COLUMN_METHOD } from './index.js';
-import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, manifestSchema, manifestV5Schema, parseFrameProvenance, sampleResponseV5Schema, validateArtifactRecords, validateArtifactRecordsV5, type Manifest, type ManifestV5 } from './index.js';
-
-function refined(): Manifest {
-  const manifest = fixtureManifest();
-  return manifestSchema.parse({ ...manifest, version: 4, patches: [fixturePatch(manifest)] });
-}
+import { assertProfileLayoutBindingV5, assertSampleLayoutBindingV5, manifestV5Schema, parseFrameProvenance, sampleResponseV5Schema, validateArtifactRecordsV5, type ManifestV5 } from './index.js';
 
 it('requires advertised precipitation support when API and rollback verify a frame receipt', () => {
-  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const manifest = fixtureManifestV5(), frame = manifest.frames[0]!;
   const identity = { model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle };
   const window = { start: frame.intervalStart, end: frame.intervalEnd };
   const chunk = { version: 1, ...identity, frame, hour: (Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000,
@@ -25,7 +20,7 @@ it('requires advertised precipitation support when API and rollback verify a fra
 });
 
 it('binds provenance frame values independently of input key order', () => {
-  const manifest = fixtureManifest(), frame = manifest.frames[0]!;
+  const manifest = fixtureManifestV5(), frame = manifest.frames[0]!;
   const expected = { intervalEnd: frame.intervalEnd, validTime: frame.validTime, id: frame.id, intervalStart: frame.intervalStart };
   const window = { start: frame.intervalStart, end: frame.intervalEnd };
   const chunk = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
@@ -36,62 +31,19 @@ it('binds provenance frame values independently of input key order', () => {
   expect(() => parseFrameProvenance(chunk, manifest, { ...expected, intervalStart: frame.intervalEnd })).toThrow('does not match');
 });
 
-describe('refined forecast publications', () => {
-  it('round-trips v3 and v4 without changing the public model, frame axis or raster archive paths', () => {
-    for (const manifest of [fixtureManifest(), refined()]) {
-      const decoded = manifestSchema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)));
-      expect(decoded).toEqual(manifest);
-      expect(() => validateArtifactRecords(decoded)).not.toThrow();
-    }
-    const base = fixtureManifest(), manifest = refined();
-    expect(manifest.model).toBe(base.model);
-    expect(manifest.frames).toEqual(base.frames);
-    expect(manifest.artifacts).toEqual(base.artifacts);
-  });
-
-  it('requires a matching version and a nonempty, bounded patch list', () => {
-    const manifest = refined();
-    expect(manifestSchema.safeParse({ ...manifest, version: 3 }).success).toBe(false);
-    expect(manifestSchema.safeParse({ ...manifest, patches: undefined }).success).toBe(false);
-    expect(manifestSchema.safeParse({ ...manifest, patches: [] }).success).toBe(false);
-    expect(manifestSchema.safeParse({ ...manifest, patches: new Array(17).fill(manifest.patches![0]) }).success).toBe(false);
-  });
-
-  it.each(['layers', 'path', 'channels', 'bytes', 'zoom', 'coverage', 'method', 'method-hash', 'limit'] as const)('rejects a patch with mismatched %s before reading assets', defect => {
-    const manifest = refined(), patch = manifest.patches![0];
-    if (defect === 'layers') patch.layers.push('usable-lift-agl');
-    if (defect === 'path') patch.samples.key = manifest.samples.key;
-    if (defect === 'channels') patch.samples.channelCount++;
-    if (defect === 'bytes') patch.samples.bytes++;
-    if (defect === 'zoom') patch.coverage.maxZoom--;
-    if (defect === 'coverage') patch.coverage.maskKey = manifest.coverage.maskKey;
-    if (defect === 'method') patch.method.id = manifest.method.id;
-    if (defect === 'method-hash') patch.method.hash = 'e'.repeat(64);
-    if (defect === 'limit') patch.descriptors.maxSampleValues = 1;
-    expect(() => validateArtifactRecords(manifest)).toThrow(/refinement/i);
-  });
-
-  it('rejects overlapping patch ownership and unsupported parent layers', () => {
-    const manifest = refined();
-    manifest.patches!.push(fixturePatch(manifest, { id: 'zone-002' }));
-    expect(() => validateArtifactRecords(manifest)).toThrow(/overlap|touch/);
-    const noRain = fixtureManifest({ layers: ['usable-lift-msl', 'usable-lift-agl'] });
-    noRain.version = 4;
-    noRain.patches = [fixturePatch(noRain, { layers: ['precip-rate'] })];
-    expect(() => validateArtifactRecords(noRain)).toThrow(/refinement/i);
-  });
-});
-
 function v5(): ManifestV5 {
-  const base = fixtureManifest(), hash = 'b'.repeat(64), gridHash = 'c'.repeat(64);
+  const base = fixtureManifestV5(), hash = 'b'.repeat(64), gridHash = 'c'.repeat(64);
   const prefix = `builds/${base.model}/${base.buildId}`;
-  const grid = { ...base.grid, width: 34, height: 17, wrapLongitude: false };
+  const grid = { ...base.surfaces[0]!.grid, width: 34, height: 17, wrapLongitude: false };
   const terrainIdentity = { dataId: hash, gridHash, method: 'bilinear-native-v1', coverageHash: hash, layoutVersion: 1 };
   const terrainKeyHash = createHash('sha256').update(JSON.stringify(terrainIdentity)).digest('hex');
   const terrainHash = createHash('sha256').update(JSON.stringify({ ...terrainIdentity, files: { elevationM: [], valid: [] } })).digest('hex');
   const descriptors = structuredClone(base.descriptors);
-  for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) descriptors.layers[layer].methodId = TERRAIN_COLUMN_METHOD.id;
-  descriptors.layers['usable-lift-agl'].verticalReference = 'terrain-AGL';
+  descriptors.layers = {
+    'usable-lift-msl': { ...descriptors.layers['usable-lift-msl'], methodId: TERRAIN_COLUMN_METHOD.id },
+    'usable-lift-agl': { ...descriptors.layers['usable-lift-agl'], methodId: TERRAIN_COLUMN_METHOD.id, verticalReference: 'terrain-AGL' },
+    'precip-rate': descriptors.layers['precip-rate']
+  };
   descriptors.methods = { [TERRAIN_COLUMN_METHOD.id]: methodDescriptorSchema.parse(TERRAIN_COLUMN_METHOD), [descriptors.layers['precip-rate'].methodId]: descriptors.methods[descriptors.layers['precip-rate'].methodId] };
   const surface = (id: 'native' | 'fine') => {
     const layers = id === 'native' ? ['precip-rate'] : ['usable-lift-msl', 'usable-lift-agl'];
@@ -99,10 +51,11 @@ function v5(): ManifestV5 {
     return {
       id, kind: id, grid, gridHash,
       coverage: { id, hash, gridHash, maskKey: `coverage/${hash}/coverage.bin`, maxZoom: 7 }, layers,
-      samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount,
+      samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount,
         coverageHash: hash, blockCount: 3, storedCells: 340,
-        shards: [289, 51].map((storedCells, i) => ({ firstBlock: i === 0 ? 0 : 1, blockCount: i === 0 ? 1 : 2,
-          storedCells, bytes: storedCells * channelCount * 5, key: `${prefix}/surfaces/${id}/samples/${i}.bin`, sha256: hash })) },
+        shards: [289, 51].map((storedCells, i) => ({ group: 0, firstFrame: 0, frameCount: base.frames.length, blockShard: i,
+          firstBlock: i === 0 ? 0 : 1, blockCount: i === 0 ? 1 : 2,
+          storedCells, bytes: storedCells * channelCount * 5, key: `${prefix}/surfaces/${id}/samples/g0-b${i}.bin`, sha256: hash })) },
       ...(id === 'fine' ? { terrain: { dataId: hash, key: `terrain/prepared/${terrainKeyHash}/manifest.json`, sha256: terrainHash,
         verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash: hash, layoutVersion: 1 } } : {})
     };
@@ -160,7 +113,6 @@ describe('v5 forecast publications', () => {
     const manifest = v5();
     expect(manifestV5Schema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);
     expect(() => validateArtifactRecordsV5(manifest)).not.toThrow();
-    expect(manifestSchema.safeParse(manifest).success).toBe(false);
     for (const surface of manifest.surfaces) expect(() => assertSampleLayoutBindingV5(surface, {
       grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3]
     })).not.toThrow();
@@ -173,11 +125,11 @@ describe('v5 forecast publications', () => {
     manifest.method.id = TERRAIN_COLUMN_METHOD.id;
     manifest.surfaces = [manifest.surfaces[1]];
     const prefix = `builds/${manifest.model}/${manifest.buildId}`;
-    manifest.surfaces[0].samples.shards.forEach((shard, i) => { shard.key = `${prefix}/surfaces/fine/samples/${i}.bin`; });
+    manifest.surfaces[0].samples.shards.forEach((shard, i) => { shard.key = `${prefix}/surfaces/fine/samples/g0-b${i}.bin`; });
     manifest.artifacts = manifest.artifacts.filter(artifact => artifact.layer !== 'precip-rate');
     for (const artifact of manifest.artifacts) artifact.tilesKey = `${prefix}/${artifact.layer}/${artifact.frame}.pmtiles`;
     delete manifest.descriptors.layers['precip-rate'];
-    delete manifest.descriptors.methods['trailing-precipitation-rate-v1'];
+    delete manifest.descriptors.methods[Object.keys(manifest.descriptors.methods).find(id => id !== TERRAIN_COLUMN_METHOD.id)!];
     expect(manifestV5Schema.safeParse(manifest).success).toBe(true);
   });
 
@@ -233,8 +185,8 @@ describe('published transport contracts', () => {
   it('admits only v5 on the current transport', () => {
     const manifest = v5();
     expect(manifestV5Schema.parse(parseBoundedJson(encodeBoundedJson(manifest, MAX_MANIFEST_BYTES)))).toEqual(manifest);
-    expect(manifestV5Schema.safeParse(fixtureManifest()).success).toBe(false);
-    expect(manifestV5Schema.safeParse(refined()).success).toBe(false);
+    expect(manifestV5Schema.safeParse({ ...manifest, version: 3 }).success).toBe(false);
+    expect(manifestV5Schema.safeParse({ ...manifest, version: 4 }).success).toBe(false);
   });
 
   it('transports v5 samples in manifest surface order with per-value ownership', () => {
@@ -291,7 +243,8 @@ it('binds native profile groups to the scalar coverage block geometry and codec 
   const frames = manifest.frames.length, prefix = `builds/${manifest.model}/${manifest.buildId}/surfaces/native/profiles`;
   surface.profiles = { format: PROFILE_PACK_FORMAT, blockSize: 16, levelCount: 3, recordBytes,
     coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells,
-    groups: [{ firstFrame: 0, frameCount: frames, shards: surface.samples.shards.map((shard, index) => ({ ...shard,
+    groups: [{ firstFrame: 0, frameCount: frames, shards: surface.samples.shards.map((shard, index) => ({
+      firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.storedCells, sha256: shard.sha256,
       bytes: shard.storedCells * frames * recordBytes, key: `${prefix}/g0-b${index}.bin` })) }] };
   const binding = { grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3] };
   expect(() => manifestV5Schema.parse(manifest)).not.toThrow();

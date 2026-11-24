@@ -93,8 +93,7 @@ Each layer and frame writes one composited PMTiles archive. Version-5 manifests
 assign each layer to a native or fine surface with sparse coverage and bounded
 sample shards. Point queries read bounded ranges per selected surface and frame
 group. Tiles and point queries share packed fields and interpolation logic.
-The [regional evaluator](../apps/batch/src/refinement/README.md) reads saved
-polygon-patch controls. The [forecast comparison](../apps/batch/src/comparison/README.md)
+The [forecast comparison](../apps/batch/src/comparison/README.md)
 archives fixed-site products and compares matched model cycles and valid times.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
@@ -138,9 +137,7 @@ The hosted `forecast-terrain` job prepares or validates reusable packed DEMs
 before forecast planning. [Whole-domain preparation](../apps/batch/src/whole-domain/prepare.ts)
 loads the cache, freezes sparse coverage and packed DEM identities in the build
 plan, and stages their files for workers. Local builds prepare missing terrain
-on demand. Precipitation retains its native surface. The
-[polygon configuration](../packages/contracts/config/refinement.json) supports
-regional evaluation grids.
+on demand. Precipitation retains its native surface.
 
 [`@av/forecast/refinement`](../packages/forecast/src/refinement.ts) derives
 terrain-referenced MSL and AGL by reconstructing native columns over prepared

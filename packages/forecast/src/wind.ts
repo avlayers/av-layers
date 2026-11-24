@@ -145,9 +145,9 @@ const TERRAIN_SAMPLE_SPEC = {
   supportsNoLift: false, noLiftSampleValue: null, supportsLiftFlags: false, zeroOnNoLiftInterpolation: false
 } as const;
 
-export function windTargetHeight(plan: SamplePlan, cells: readonly Cell[], mode: { agl: number } | { lift: true }, useStoredMslNoLift: boolean) {
-  if ('lift' in mode) return sampleCells(plan, cells, 'usable-lift-msl', useStoredMslNoLift);
+export function windTargetHeight(plan: SamplePlan, cells: readonly Cell[], mode: { agl: number } | { lift: true }, _useStoredMslNoLift = true) {
+  if ('lift' in mode) return sampleCells(plan, cells, 'usable-lift-msl');
   if (!Number.isFinite(mode.agl) || mode.agl < 0) throw new RangeError('Invalid AGL height');
-  const terrain = sampleCells(plan, cells, TERRAIN_SAMPLE_SPEC, false);
+  const terrain = sampleCells(plan, cells, TERRAIN_SAMPLE_SPEC);
   return { ...terrain, value: terrain.value === null ? null : terrain.value + mode.agl };
 }

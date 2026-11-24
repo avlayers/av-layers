@@ -67,7 +67,7 @@ it('finalizes only verified receipts for the immutable plan and reuses a complet
 
 function payloadReceipt(plan: BuildPlan, objects: readonly ObjectReceipt[]) {
   const prefix = `builds/${plan.model}/${plan.buildId}`;
-  const sample = { firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 5, key: `${prefix}/surfaces/native/samples/0.bin`, sha256: 'a'.repeat(64) };
+  const sample = { firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 5, key: `${prefix}/surfaces/native/samples/src-g0-b0.bin`, sha256: 'a'.repeat(64) };
   return { version: 2, planHash: sha256(encodeBoundedJson(plan, MAX_MANIFEST_BYTES)), shard: 0,
     artifacts: [], provenance: [{ hour: 1, frame: 'f001', bytes: 8, key: `${prefix}/provenance/f001.json`, sha256: 'b'.repeat(64) }],
     surfaces: [{ id: 'native', channelCount: 1, shards: [sample] }], objects,

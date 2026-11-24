@@ -142,12 +142,14 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
       }
       throw new Error('Forecast shard surface key mismatch');
     }
+    const frameCount = id === 'native' ? frames.length : mapped;
     const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
       coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
       layers: layers[id],
-      samples: { format: 'cell-major-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer',
+      samples: { format: 'frame-group-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer',
         channelCount: surface.channelCount, coverageHash: info.hash, blockCount: binding.blockIds.length,
-        storedCells: surface.shards.reduce((sum, item) => sum + item.storedCells, 0), shards: surface.shards } };
+        storedCells: surface.shards.reduce((sum, item) => sum + item.storedCells, 0),
+        shards: surface.shards.map((item, blockShard) => ({ ...item, group: shard, firstFrame: 0, frameCount, blockShard })) } };
     assertSampleLayoutBindingV5(candidate, binding);
     const requiresProfiles = id === 'native' && renderedLayers(product.layers).length !== product.layers.length;
     if (requiresProfiles !== !!surface.profiles) throw new Error('Forecast shard profile set mismatch');

@@ -38,16 +38,10 @@ it('serves a verified run index and exact selected frame receipt through the rou
   expect(value.frame.id).toBe('f002'); expect(value.hour).toBe(2);
 });
 
-it('rejects unknown frames without loading provenance and preserves legacy inline provenance', async () => {
+it('rejects unknown frames without loading provenance', async () => {
   const f = fixture(), unknown = await f.request('?frame=f003');
   expect(unknown.status).toBe(404); await unknown.arrayBuffer();
   expect(f.get.mock.calls.some(([key]) => key.includes('/provenance'))).toBe(false);
-  const legacy = createV5Fixture();
-  const path = `/v1/models/${legacy.manifest.model}/runs/${legacy.buildId}/provenance`;
-  const response = await legacy.request(path);
-  expect(response.status).toBe(200); expect((await response.json() as { version: number }).version).toBe(1);
-  const unavailable = await legacy.request(`${path}?frame=h001`);
-  expect(unavailable.status).toBe(409); await unavailable.arrayBuffer();
 });
 
 it('rejects missing, short, corrupt and scientifically mismatched frame files', async () => {

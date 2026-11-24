@@ -106,7 +106,7 @@ it.each([
   expect(() => assertValidatedBuild(serial, left, { ...onValidated.mock.calls[0][0] })).toThrow('validation result');
   for (const source of left.surfaces) {
     const target = right.surfaces.find(surface => surface.kind === source.kind)!;
-    expect(source.samples.format).toBe('cell-major-block-shards-v1');
+    expect(source.samples.format).toBe('frame-group-block-shards-v1');
     expect(target.samples.format).toBe('frame-group-block-shards-v1');
     expect(source.samples.shards.map(shard => shard.sha256)).toEqual(target.samples.shards.map(shard => shard.sha256));
   }

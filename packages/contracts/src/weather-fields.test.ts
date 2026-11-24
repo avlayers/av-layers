@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { getProduct, PRODUCTS } from '@av/contracts/models';
-import { LAYERS, createHistoricalWholeDomainDescriptors, createWholeDomainDescriptors, descriptorSchema, manifestV5Schema, matchesHistoricalDescriptors,
-  projectClientManifest, sameJsonValue, weatherFieldDefinition, weatherFieldDefinitionSchema, WEATHER_LAYER_IDS, acceptDirectScalar, DIRECT_SCALAR_BOUNDARY } from './index.js';
+import { PRODUCTS } from '@av/contracts/models';
+import { createWholeDomainDescriptors, descriptorSchema, manifestV5Schema,
+  projectClientManifest, weatherFieldDefinition, weatherFieldDefinitionSchema, WEATHER_LAYER_IDS, acceptDirectScalar, DIRECT_SCALAR_BOUNDARY } from './index.js';
 import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 import contract from '../schemas/wrf-zarr-v3.schema.json' with { type: 'json' };
 
@@ -26,29 +26,6 @@ describe('weather field definitions', () => {
     expect(wrfLow?.kind === 'cloud-cover' ? wrfLow.algorithmId : undefined).toBe(contract.lowCloudDefinition);
     expect(weatherFieldDefinition('wrf-va-1km', 'cape-jkg')).toEqual(wrfCape);
     expect(weatherFieldDefinition('wrf-va-1km', 'cloud-cover-low')).toEqual(wrfLow);
-  });
-
-  it('keeps historical descriptors stable when the live registry changes', () => {
-    const product = getProduct('gfs')!;
-    const historical = createHistoricalWholeDomainDescriptors(product);
-    const live = createWholeDomainDescriptors(product);
-    expect(historical).toBeDefined();
-    expect(historical!.layers['cape-jkg'].definition).toBeUndefined();
-    expect(matchesHistoricalDescriptors(product, { layers: product.layers, descriptors: historical! })).toBe(true);
-    expect(matchesHistoricalDescriptors(product, { layers: product.layers, descriptors: live })).toBe(false);
-    const stripped = structuredClone(live);
-    for (const layer of Object.values(stripped.layers)) delete layer.definition;
-    expect(sameJsonValue(stripped, historical)).toBe(true);
-    const precipitation = LAYERS['precip-rate'];
-    const units = precipitation.units;
-    precipitation.units = 'cm/h';
-    try {
-      expect(createHistoricalWholeDomainDescriptors(product)).toEqual(historical);
-      expect(createWholeDomainDescriptors(product).layers['precip-rate'].units).toBe('cm/h');
-    } finally {
-      precipitation.units = units;
-    }
-    expect(createHistoricalWholeDomainDescriptors({ ...product, id: 'missing-product' })).toBeUndefined();
   });
 
   it('accepts cloud and CAPE at the physical bounds and rejects values beyond the tolerance', () => {

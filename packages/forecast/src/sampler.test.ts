@@ -153,10 +153,6 @@ describe('point sampling', () => {
       expect(prepared).toEqual(packed);
       expect(paired).toEqual(packed);
     }
-    const retained = result();
-    gridSampler.bind(field, layer, false)(0, 0, retained);
-    expect(retained).toEqual(sampleGrid(grid, field, 0.5, 0.5, layer, undefined, false));
-    expect(retained.value).toBeCloseTo(303.333333);
 
     const majority = result();
     prepareGridSampling(mask, Float64Array.of(0.9), Float64Array.of(0.9)).bind(field, layer, true)(0, 0, majority);

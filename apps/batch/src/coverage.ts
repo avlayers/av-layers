@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { readLocalFile } from './local-file.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, encodeSparseCoverage, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
+import { assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, encodeSparseCoverage, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
 
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const names = ['output', 'halo', 'tiles'] as const;
@@ -62,12 +62,6 @@ export async function loadCoverage(product: ProductDefinition): Promise<Coverage
 
 export async function readCoverage(root: string, coverageHash: string): Promise<CoverageMask> {
   return (await readCoverageDirectory(join(root, coveragePrefix(coverageHash)), coverageHash)).mask;
-}
-
-export async function readGridCoverage(root: string, grid: Parameters<typeof assertCoverageBinding>[1]): Promise<CoverageMask> {
-  const result = await readCoverageDirectory(join(root, coveragePrefix(grid.coverage.hash)), grid.coverage.hash);
-  assertCoverageBinding(result.descriptor, grid);
-  return result.mask;
 }
 
 export function describeSparseCoverage(mask: SparseCoverageMask, product: CoverageDefinition): { descriptor: SparseCoverageDescriptor; bytes: Uint8Array; sparseBytes: Uint8Array; hash: string } {

@@ -87,11 +87,9 @@ selected horizon, including night. Precipitation retains its trailing interval
 at night. GFS and RRFS hour 27 covers f026–f027: the precipitation rate is the
 one-hour mean recovered from the reset-bucket accumulation, and an amount for
 that frame is the rate multiplied by one hour. From hour 123 the GFS source
-interval is three hours, and the amount uses that duration. `mapFrameCount`
-selects the tiles and fine-lift prefix; retained builds may expose later native
-samples and profiles.
-Retained `regional-daylight` builds follow the [daylight selection rule](science.md#input-fields),
-including its all-dark fallback.
+interval is three hours, and the amount uses that duration. `mapFrameCount` selects the tiles and fine-lift prefix; native samples and
+profiles cover the complete frame axis.
+`regional-daylight` builds follow the [daylight selection rule](science.md#input-fields).
 
 `/profile` echoes the requested `lat` and `lon` and identifies the nearest
 covered native grid cell in `cell`. Each frame's `layers` and `profile` come
@@ -105,12 +103,28 @@ The full point forecast uses the complete frame axis. Historical frames remain
 viewable until the build's `expiresAt` deadline. See [operations](operations.md)
 for publication and expiry rules.
 
+## On-disk format
+
+Each published build writes immutable objects under `builds/{model}/{buildId}/`
+and updates `catalog/{model}/latest.json`.
+
+| Object family | R2 key pattern | Version / format | Layout & schema owner |
+| --- | --- | --- | --- |
+| Model pointer | `catalog/{model}/latest.json` | `version: 1` | `latestBuildId` and `retained[]` (`RETENTION_DAYS = 7`); [publication.ts](../packages/contracts/src/publication.ts) |
+| Build manifest | `builds/{model}/{buildId}/manifest.json` | `version: 5` | `frames`, `mapFrameCount`, `surfaces` (`fine`, `native`), `artifacts`, optional `mapData`, `descriptors`; [publication.ts](../packages/contracts/src/publication.ts) |
+| Provenance index & frames | `builds/{model}/{buildId}/provenance.json`, `provenance/{frame}.json` | `version: 2`, frame `version: 1` | Frame index with per-frame `sha256` and `bytes` referencing upstream GRIB2/Zarr receipts; [publication.ts](../packages/contracts/src/publication.ts) |
+| Sparse coverage | `coverage/{coverageHash}/{manifest.json,sparse.bin,tiles.bin}` | `version: 2`, `AVSC` v1 | `16 × 16` block index (`blockIds`, `offsets`) with 32-byte `output` and `halo` bitsets per block, plus packed zoom tile bitsets; [sparse-coverage.ts](../packages/contracts/src/sparse-coverage.ts) |
+| Prepared sparse terrain | `terrain/prepared/{hash}/{manifest.json,elevation-{i}.f32,valid-{i}.u8}` | `version: 2`, `layoutVersion: 1` | Active-cell `Float32` EGM2008 elevations and `Uint8` validity masks in `SparseCoverage` offset order; [sparse.ts](../apps/batch/src/terrain/sparse.ts) |
+| Scalar sample shards | `builds/{model}/{buildId}/surfaces/{surfaceId}/samples/g{group}-b{shard}.bin` | `frame-group-block-shards-v1` | `16 × 16` blocks with `+1` right/bottom seam (`17 × 17` interior cells), 5-byte cell records (`f32 value`, `u8 flags`) across `group.frameCount × surface.layers.length` channels; [sample-pack.ts](../packages/forecast/src/sample-pack.ts) |
+| Native profile shards | `builds/{model}/{buildId}/surfaces/{surfaceId}/profiles/g{group}-b{shard}.bin` | `block-major-cell-major-frame-levels-int16-v1` | Same `16 × 16` block/seam geometry; `4 + 12 × levelCount` bytes per cell-frame (`i16 terrainM`, `u16 sfcPressureDecaPa`, and `levelCount` ascending 12-byte levels); [profile-pack.ts](../packages/forecast/src/profile-pack.ts) |
+| Map raster archives | `builds/{model}/{buildId}/tiles/{layer}/{frame}.pmtiles` | PMTiles v3 (`256 × 256` lossless WebP) | Rendered for `renderedLayers(manifest.layers)` across the `mapFrameCount` prefix; [render.ts](../apps/batch/src/render.ts) |
+| Numeric wind map data | `builds/{model}/{buildId}/map-data.json`, `map-data/{frame}.json`, `map-data/{frame}/{kind}-{page}.{bin,idx}` | Root `version: 1`, frame `version: 3` | Equal-sized `wind` (`WND2`), `fine`, and `overview-{2,4,8,16}` chunks with 32-byte SHA-256 index entries; [wind-data.ts](../packages/contracts/src/wind-data.ts) |
+
 ## Numeric wind map data
 
 Scheduled and `repository_dispatch` forecast builds (and local builds with
 `AV_NUMERIC_WIND=true`) publish verified binary wind fields
-alongside map rasters (`mapData` on the retained pointer; the served manifest
-includes that reference when the stored manifest omitted it). Non-numeric
+alongside map rasters (`mapData` on the manifest and retained pointer). Non-numeric
 builds omit `mapData` and return HTTP `409 product-unavailable` on `/data/...`.
 [wind-data.ts](../packages/contracts/src/wind-data.ts) owns the wire contract:
 
@@ -148,7 +162,6 @@ MSL maps colour known no-lift cells at their stored ground elevation, including
 at night. AGL maps leave no-lift cells and nonpositive values clear. Unavailable
 and outside-domain cells remain clear in both views. Point status distinguishes
 these cases; high terrain colours alone do not imply usable height above ground.
-Retained builds with older render styles leave no-lift MSL cells clear too.
 
 When all four surrounding grid cells are valid (or `no-usable-lift` on lift
 layers), the sampler interpolates bilinearly; if any contributor is missing, it

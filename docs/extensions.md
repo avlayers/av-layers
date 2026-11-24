@@ -85,14 +85,22 @@ Return a [`NormalizedFrame`](../packages/forecast/src/inputs.ts) ordered by
 A direct weather scalar publishes a `definition` from
 [field-definitions.ts](../packages/contracts/src/field-definitions.ts), passes
 `acceptDirectScalar`, and matches the source binding checked during
-acquisition. Historical whole-domain descriptors remain in
-[historical-descriptors.ts](../packages/contracts/src/historical-descriptors.ts)
-and [historical-registry.json](../packages/contracts/src/historical-registry.json).
-Deploy the reader that accepts those frozen descriptors before publishing a
-build whose descriptors include `definition`.
+acquisition.
 
-For changes to existing descriptors or grids, verify retained manifests against
-the candidate Worker. See the [reader cutover checks](hardening-plan.md#gate-reader-removal-on-retention-and-recoverability).
+## Change an on-disk format or descriptor
+
+Retained builds expire after `RETENTION_DAYS = 7` ([format.ts](../packages/contracts/src/format.ts)).
+Any incompatible change to a stored schema, binary pack layout, or descriptor
+follows a two-step cutover:
+
+1. **Dual-read + new-write:** bump the explicit version or format literal, add
+   reader support for `N` and `N - 1`, and switch the batch builder to emit `N`.
+2. **Retire `N - 1`:** once all retained builds in `catalog/{model}/latest.json`
+   across staging and production use `N` (at most 7 days after step 1), delete
+   the `N - 1` schema branch, reader fallback, and fixtures in one change.
+
+Keep at most two versions (`N` and `N - 1`) in the codebase during an active
+7-day retention window, and one canonical version (`N`) in steady state.
 
 ## Add a grid or neighboring-cell calculation
 
