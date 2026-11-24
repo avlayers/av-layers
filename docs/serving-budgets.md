@@ -122,10 +122,10 @@ combined work across all grids selected by a request.
   materialized bytes, with 8 active ranges, 128 waiters and the default queue
   and deadline limits in `MaterializedReads`. Cancelling one waiter preserves
   the read for remaining consumers.
-- **Binary sample & provenance reads:** 8 concurrent loads; identical range
-  reads coalesce and share materialized `Uint8Array` bytes. Up to 64 distinct
-  reads wait FIFO and 96 callers may wait in total. Each V5 point request
-  starts at most 4 numeric reads concurrently across scalar and profile
+- **Binary sample & provenance reads:** 32 concurrent loads; identical range
+  reads coalesce and share materialized `Uint8Array` bytes. Up to 128 distinct
+  reads wait FIFO and 192 callers may wait in total. Each V5 point request
+  starts at most 8 numeric reads concurrently across scalar and profile
   ranges. The 15 s deadline includes queue time.
 - **Memory & response pools:** 32 MiB shared stream/verification pool (provenance
   reserves from verified object length) and 16 MiB outgoing response pool (4×
@@ -154,7 +154,9 @@ covered native cell.
 
 Profile responses cap JSON at 1 MiB. The point loader uses `maxProfileFrames`
 to page the selected fields and native levels under the server's response
-estimate. See [point-products.ts](../packages/contracts/src/point-products.ts).
+estimate, partitions multi-group profile series into canonical pages of one
+scalar group and at most six profile groups, and fetches those pages
+concurrently. See [point-products.ts](../packages/contracts/src/point-products.ts).
 
 ## Memory envelope
 

@@ -307,6 +307,54 @@ describe('cached point forecast pages', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
+  it('partitions multi-group native profiles into canonical 6-group pages and fetches them in one parallel wave', async () => {
+    const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
+    const build = fixtureProfileBuild({ frameHours: hours, mapFrameCount: 40 });
+    const native = build.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    const scalarShard = native.samples.shards[0]!;
+    native.samples = {
+      ...native.samples,
+      format: 'frame-group-block-shards-v1',
+      shards: [
+        { ...scalarShard, group: 0, firstFrame: 0, frameCount: 24, blockShard: 0 },
+        { ...scalarShard, group: 1, firstFrame: 24, frameCount: 16, blockShard: 0 },
+      ],
+    };
+    const profileShard = native.profiles!.groups[0]!.shards[0]!;
+    native.profiles!.groups = hours.map((_, index) => ({
+      group: index,
+      firstFrame: index,
+      frameCount: 1,
+      shards: [{ ...profileShard, group: index, firstFrame: index, frameCount: 1, key: `builds/${build.manifest.model}/${build.manifest.buildId}/profiles/g${index}/b0.pack` }],
+    }));
+    let activeProfiles = 0, peakProfiles = 0, releaseProfiles!: () => void;
+    const profileGate = new Promise<void>(resolve => { releaseProfiles = resolve; });
+    const profilePages: string[][] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/profile')) {
+        profilePages.push(url.searchParams.get('frame')!.split(','));
+        activeProfiles++; peakProfiles = Math.max(peakProfiles, activeProfiles);
+        try {
+          await profileGate;
+          return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+        } finally { activeProfiles--; }
+      }
+      return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const progress = vi.fn(), loader = api.pointSeries(build, point);
+    const pending = loader.load('day', undefined, { frameId: 'f008', onProgress: progress });
+    try { await vi.waitFor(() => expect(activeProfiles).toBe(7)); }
+    finally { releaseProfiles(); }
+    const series = await pending;
+    expect(peakProfiles).toBe(7);
+    expect(profilePages.map(page => page.length)).toEqual([6, 6, 6, 6, 5, 5, 6]);
+    expect(profilePages[0]).toEqual(['f007', 'f008', 'f009', 'f010', 'f011', 'f012']);
+    expect(series.frames).toHaveLength(40);
+    expect(series.frames.every(frame => frame.profile?.status === 'valid')).toBe(true);
+  });
+
   it('prioritizes a late native hour and stops further progress after close', async () => {
     const { fetchImpl, loader } = setup(), onProgress = vi.fn((_series: PointSeries, _total: number) => loader.dispose());
     await expect(loader.load('forecast', undefined, { frameId: 'f384', onProgress })).rejects.toThrow();

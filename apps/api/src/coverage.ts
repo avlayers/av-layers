@@ -14,6 +14,7 @@ export interface ResolvedSparseCoverage {
   descriptor: SparseCoverageDescriptor;
   mask: SparseCoverageMask;
   layouts: ReadonlyMap<number, ShardedSamplePackLayout>;
+  profileLayouts: ReadonlyMap<string, ShardedSamplePackLayout>;
   groups: readonly FrameGroup[] | null;
 }
 interface SparseTiles { descriptor: SparseCoverageDescriptor; tiles: Uint8Array }
@@ -218,7 +219,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
         assertSparseCoverageHalo(coverage);
         const mask: SparseCoverageMask = { grid: descriptor.grid, bounds: descriptor.bounds, maxZoom: descriptor.maxZoom, coverage, tiles };
         const layouts = new Map(channelCounts.map(count => [count, prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, count)]));
-        const result = { descriptor, mask, layouts, groups: null };
+        const result: ResolvedSparseCoverage = { descriptor, mask, layouts, profileLayouts: new Map(), groups: null };
         const actual = sparseRetainedBytes(result);
         if (actual > retained) throw new CoverageError('Sparse coverage exceeds serving byte budget');
         signal.throwIfAborted();
@@ -258,6 +259,27 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       cache.set(cacheKey, resolved, sparseRetainedBytes(resolved), Date.now() + 3_600_000);
     } catch (error) { releaseExtra(); throw error; }
   }
+  if (kind === 'profile' && surface.profiles) {
+    const profiles = surface.profiles;
+    const profileLayouts = resolved.profileLayouts as Map<string, ShardedSamplePackLayout>;
+    for (const group of profiles.groups) {
+      const layoutKey = `${group.frameCount}:${profiles.recordBytes}`;
+      if (profileLayouts.has(layoutKey)) continue;
+      const maximum = mask.coverage.blockIds.length * 8 + group.shards.length * 64;
+      if (sparseRetainedBytes(resolved) + maximum > COVERAGE_CACHE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+      const releaseExtra = reserveAllocation(maximum);
+      try {
+        const added = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, group.frameCount, undefined, profiles.recordBytes);
+        const actual = added.indexBytes + added.shards.length * 64;
+        if (actual > maximum) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+        profileLayouts.set(layoutKey, added);
+        const previous = state.release;
+        state.release = () => { previous?.(); releaseExtra(); };
+        state.bytes += maximum;
+        cache.set(cacheKey, resolved, sparseRetainedBytes(resolved), Date.now() + 3_600_000);
+      } catch (error) { releaseExtra(); throw error; }
+    }
+  }
   return { coverage: { ...resolved, groups }, release };
   } catch (error) { release(); throw error; }
 }
@@ -267,5 +289,6 @@ function sparseRetainedBytes(value: ResolvedSparseCoverage): number {
   let bytes = coverage.blockIds.byteLength + coverage.offsets.byteLength + coverage.output.byteLength + coverage.halo.byteLength
     + tiles.byteLength + estimateJsonBytes(value.descriptor) + 2048;
   for (const layout of value.layouts.values()) bytes += layout.indexBytes + layout.shards.length * 64;
+  for (const layout of value.profileLayouts.values()) bytes += layout.indexBytes + layout.shards.length * 64;
   return bytes;
 }

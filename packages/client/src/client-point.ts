@@ -5,6 +5,7 @@ import { renderedFrames, surfaceFrameCount, type ManifestV5 } from '@av/contract
 import type { PinnedBuild, PointFrame, PointHorizon, PointSeries, PointSeriesLoader, PointTerrain } from './client-types.ts';
 
 const MAX_PAGES = 16;
+const MAX_PROFILE_GROUPS_PER_PAGE = 6;
 const liftLayers = ['usable-lift-msl', 'usable-lift-agl'] as const;
 const diagnostics = ['precip-rate', 'thermal-velocity', 'thermal-top-msl', 'surface-lcl-msl',
   'bl-mean-wind-u', 'bl-mean-wind-v', 'wind-10m-u', 'wind-10m-v'] as const;
@@ -35,6 +36,58 @@ export function pointLiftExpectation(build: PinnedBuild): { layers: readonly Lay
 
 function nativeSurface({ manifest }: PinnedBuild) {
   return manifest.surfaces.find(surface => surface.kind === 'native');
+}
+
+function profileSeriesPages(
+  manifest: ManifestV5,
+  surface: NonNullable<ReturnType<typeof nativeSurface>>,
+  frameIds: readonly string[],
+  pageSize: number,
+  preferredFrameId: string
+): string[][] {
+  if (!frameIds.length) return [];
+  const profileGroups = surface.profiles?.groups ?? [];
+  const indexById = new Map(manifest.frames.map((frame, index) => [frame.id, index]));
+  const scalarGroups = surface.samples.format === 'frame-group-block-shards-v1'
+    ? [...new Map(surface.samples.shards.map(shard => [shard.group, { firstFrame: shard.firstFrame, frameCount: shard.frameCount }])).values()]
+    : [{ firstFrame: 0, frameCount: manifest.frames.length }];
+  const buckets: string[][][] = scalarGroups.map(() => []);
+  for (const group of profileGroups) {
+    const selected = frameIds.filter(id => {
+      const index = indexById.get(id);
+      return index !== undefined && index >= group.firstFrame && index < group.firstFrame + group.frameCount;
+    });
+    if (!selected.length) continue;
+    const scalarIndex = Math.max(0, scalarGroups.findIndex(scalar =>
+      group.firstFrame >= scalar.firstFrame && group.firstFrame < scalar.firstFrame + scalar.frameCount));
+    for (let offset = 0; offset < selected.length; offset += pageSize) {
+      buckets[scalarIndex]!.push(selected.slice(offset, offset + pageSize));
+    }
+  }
+  const activeBuckets = buckets.filter(bucket => bucket.length > 0);
+  if (!activeBuckets.length) return fieldSeriesPages(frameIds, 1, pageSize);
+  for (let maxGroups = MAX_PROFILE_GROUPS_PER_PAGE; ; maxGroups++) {
+    const pages: string[][] = [];
+    for (const bucket of activeBuckets) {
+      const pageCount = Math.ceil(bucket.length / maxGroups);
+      for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
+        const start = Math.floor(pageIndex * bucket.length / pageCount);
+        const end = Math.floor((pageIndex + 1) * bucket.length / pageCount);
+        const merged = bucket.slice(start, end).flat();
+        for (let offset = 0; offset < merged.length; offset += pageSize) {
+          pages.push(merged.slice(offset, offset + pageSize));
+        }
+      }
+    }
+    if (pages.length <= MAX_PAGES || maxGroups >= profileGroups.length) {
+      const preferredIndex = pages.findIndex(page => page.includes(preferredFrameId));
+      if (preferredIndex > 0) {
+        const [preferred] = pages.splice(preferredIndex, 1);
+        pages.unshift(preferred!);
+      }
+      return pages;
+    }
+  }
 }
 
 export function hasNativeProfiles(build: PinnedBuild): boolean {
@@ -88,7 +141,7 @@ export function createPointSeriesLoader(
   assertLive: () => void,
   readTerrain?: (signal: AbortSignal) => Promise<PointTerrain | null>,
 ): PointSeriesLoader {
-  const m = build.manifest, cache = new Map<string, PointFrame>();
+  const m = build.manifest, native = nativeSurface(build), cache = new Map<string, PointFrame>();
   const sampled = new Set<string>(), profiled = new Set<string>();
   let siteTerrain: PointTerrain | null | undefined;
   const { layers, sample, profile } = pointSelection(build);
@@ -117,16 +170,23 @@ export function createPointSeriesLoader(
         const plans = sources.map(source => {
           const missing = frames.filter(id => (!source.frames || source.frames.has(id)) && !source.ready.has(id));
           const requests: string[][] = [];
+          const parallel = source.ready === profiled && (native?.profiles?.groups.length ?? 0) > MAX_PROFILE_GROUPS_PER_PAGE;
           if (missing.length) {
             const pageSize = source.pageSize();
             if (pageSize < 1) throw new RangeError('Point response exceeds the byte budget');
-            if (missing.includes(first)) requests.push([first]);
-            const rest = missing.filter(id => id !== first);
-            const restPages = fieldSeriesPages(rest, 1, pageSize);
-            if (requests.length + restPages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
-            requests.push(...restPages);
+            if (parallel && native) {
+              const pages = profileSeriesPages(m, native, missing, pageSize, first);
+              if (pages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
+              requests.push(...pages);
+            } else {
+              if (missing.includes(first)) requests.push([first]);
+              const rest = missing.filter(id => id !== first);
+              const restPages = fieldSeriesPages(rest, 1, pageSize);
+              if (requests.length + restPages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
+              requests.push(...restPages);
+            }
           }
-          return { source, requests };
+          return { source, requests, parallel };
         });
         const view = (): PointSeries => ({
           layers,
@@ -160,7 +220,34 @@ export function createPointSeriesLoader(
           : Promise.resolve();
         const settled = await Promise.allSettled([
           terrainTask,
-          ...plans.map(async ({ source, requests }) => {
+          ...plans.map(async ({ source, requests, parallel }) => {
+            const applyPage = (response: { frames: readonly PointFrame[] }) => {
+              for (const frame of response.frames) {
+                const previousFrame = cache.get(frame.id);
+                cache.set(frame.id, previousFrame
+                  ? { ...previousFrame, ...frame, layers: { ...previousFrame.layers, ...frame.layers } }
+                  : frame);
+                source.ready.add(frame.id);
+              }
+            };
+            if (parallel && requests.length > 1) {
+              const results = await Promise.all(requests.map(async (ids, index) => {
+                let response;
+                try { response = await source.read(ids, source.layers, controller.signal); }
+                catch (cause) {
+                  assertActive();
+                  failure ??= { cause };
+                  --outstanding;
+                  return false;
+                }
+                assertActive();
+                applyPage(response);
+                if (--outstanding > 0 && index === 0 && !selectedLiftPending) progress(true);
+                return true;
+              }));
+              if (outstanding > 0 && !selectedLiftPending && results.slice(1).some(Boolean)) progress(true);
+              return;
+            }
             for (const [index, ids] of requests.entries()) {
               const selectsLift = selectedLiftPending && source.ready === sampled;
               let response;
@@ -176,13 +263,7 @@ export function createPointSeriesLoader(
                 return;
               }
               assertActive();
-              for (const frame of response.frames) {
-                const previousFrame = cache.get(frame.id);
-                cache.set(frame.id, previousFrame
-                  ? { ...previousFrame, ...frame, layers: { ...previousFrame.layers, ...frame.layers } }
-                  : frame);
-                source.ready.add(frame.id);
-              }
+              applyPage(response);
               if (selectsLift) selectedLiftPending = false;
               if (--outstanding > 0 && !selectedLiftPending) progress(true);
             }

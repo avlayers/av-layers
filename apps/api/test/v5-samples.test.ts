@@ -186,7 +186,7 @@ describe('version-5 batch samples', () => {
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
-  it('limits frame-group reads to four and drains every lease', async () => {
+  it('limits frame-group reads to eight and drains every lease', async () => {
     const fixture = createGroupedV5Fixture({ groups: [[1], [2], [3], [4], [5], [6]] });
     const original = fixture.get.getMockImplementation()!;
     let active = 0, peak = 0, release!: () => void;
@@ -197,10 +197,10 @@ describe('version-5 batch samples', () => {
       try { await gate; return await original(key, options); } finally { active--; }
     });
     const pending = batch(fixture, '9,-180;8.9,-179.9', '&frame=all');
-    try { await vi.waitFor(() => expect(active).toBe(4)); } finally { release(); }
+    try { await vi.waitFor(() => expect(active).toBe(8)); } finally { release(); }
     const result = await body(await pending);
     expect(result.points.every(({ sample }) => sample.frames.length === 6)).toBe(true);
-    expect(peak).toBe(4);
+    expect(peak).toBe(8);
     expect(peak).toBeLessThanOrEqual(MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST);
     expect(active).toBe(0);
     expect(coverageMemory(fixture.bucket).leaseRefs).toBe(0);

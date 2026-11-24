@@ -313,22 +313,22 @@ describe('API v5 sampling', () => {
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
-  it('plans varying frame groups locally for single and all frames with four reads per request', async () => {
+  it('plans varying frame groups locally for single and all frames with eight reads per request', async () => {
     const fixture = groupedFixture(), original = fixture.get.getMockImplementation()!;
     let active = 0, peak = 0, started!: () => void, release!: () => void;
     const opened = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
     fixture.get.mockImplementation(async (key, options) => {
-      if (options?.range) { active++; peak = Math.max(peak, active); if (active === 4) started(); await gate; active--; }
+      if (options?.range) { active++; peak = Math.max(peak, active); if (active === 8) started(); await gate; active--; }
       return original(key, options);
     });
     const all = fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=all');
-    await opened; expect(peak).toBe(4); release();
+    await opened; expect(peak).toBe(8); release();
     const response = await all;
     expect(response.status, await response.clone().text()).toBe(200);
     const body = await response.json() as V5Body;
     expect(body.frames.map(frame => frame.layers['precip-rate'].value)).toEqual([7, 8, 9, 10, 11, 12]);
     expect(body.frames.map(frame => frame.layers['usable-lift-msl'].value)).toEqual([310.25, 320.25, 330.25, 340.25, 350.25, 360.25]);
-    expect(peak).toBe(4);
+    expect(peak).toBe(8);
     const single = await fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=h003&layers=precip-rate');
     expect(single.status).toBe(200);
     expect((await single.json() as V5Body).frames[0].layers['precip-rate'].value).toBe(9);

@@ -5,7 +5,7 @@ import {
 } from '@av/contracts';
 import {
   packedCellsFromRange, packedRecordsFromRange, planSample, planShardedPackedSample,
-  prepareShardedSamplePackLayout, readProfileRecord, sampleCells, samplingCovered, type NativeProfile,
+  readProfileRecord, sampleCells, samplingCovered, type NativeProfile,
   type SamplePlan
 } from '@av/forecast';
 import {
@@ -57,7 +57,10 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
       }
       if (plan) {
         for (const { jobs: samples, layout, channels, shards } of sampleChannelGroups(m, surface, coverage, frames, readLayers)) {
-          const packed = planShardedPackedSample(layout, plan, channels, shards), shard = shards[packed.shard]!;
+          const spanChannels = plan.contributors.length === 1 && layout.channelCount > 1 && layout.channelCount * 5 <= 4096
+            ? [...new Set([0, ...channels, layout.channelCount - 1])]
+            : channels;
+          const packed = planShardedPackedSample(layout, plan, spanChannels, shards), shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const { frameId, layer, channel } of samples) {
               const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer], m.tool.useStoredMslNoLift === true);
@@ -67,22 +70,16 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             }
           } });
         }
-        const layouts = new Map<number, ReturnType<typeof prepareShardedSamplePackLayout>>();
+        const frameIndex = new Map(m.frames.map((frame, index) => [frame, index]));
         for (const group of profiles.groups) {
-          const shards = group.shards, selected = frames.filter(frame => { const index = m.frames.indexOf(frame); return index >= group.firstFrame && index < group.firstFrame + group.frameCount; });
+          const shards = group.shards, selected = frames.filter(frame => { const index = frameIndex.get(frame)!; return index >= group.firstFrame && index < group.firstFrame + group.frameCount; });
           if (!selected.length) continue;
-          let layout = layouts.get(group.frameCount);
-          if (!layout) {
-            const maximum = coverage.mask.coverage.blockIds.length * 8 + shards.length * 64;
-            releases.push(reserveAllocation(maximum));
-            layout = prepareShardedSamplePackLayout(surface.grid, coverage.mask.coverage.blockIds, group.frameCount, undefined, profiles.recordBytes);
-            if (layout.indexBytes + layout.shards.length * 64 > maximum) fail(503, 'publication-invalid', 'Profile layout exceeds its allocation');
-            layouts.set(group.frameCount, layout);
-          }
-          const packed = planShardedPackedSample(layout, plan, selected.map(frame => m.frames.indexOf(frame) - group.firstFrame), shards), shard = shards[packed.shard]!;
+          const layout = coverage.profileLayouts.get(`${group.frameCount}:${profiles.recordBytes}`);
+          if (!layout) fail(503, 'publication-invalid', 'Missing atmospheric profile layout');
+          const packed = planShardedPackedSample(layout, plan, selected.map(frame => frameIndex.get(frame)! - group.firstFrame), shards), shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const frame of selected) {
-              try { columns.set(frame.id, readProfileRecord(packedRecordsFromRange(packed, bytes, m.frames.indexOf(frame) - group.firstFrame)[0]!)); }
+              try { columns.set(frame.id, readProfileRecord(packedRecordsFromRange(packed, bytes, frameIndex.get(frame)! - group.firstFrame)[0]!)); }
               catch { fail(503, 'publication-invalid', 'Invalid atmospheric profile record'); }
             }
           } });

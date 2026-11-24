@@ -83,7 +83,7 @@ describe('frame-group v5 serving', () => {
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
-  it.each(cases)('limits an all-frame $product.modelId request to four reads and the combined byte budget', async options => {
+  it.each(cases)('limits an all-frame $product.modelId request to eight reads and the combined byte budget', async options => {
     const fixture = createGroupedV5Fixture(options), original = fixture.get.getMockImplementation()!;
     const reads = options.groups.length * fixture.manifest.surfaces.length;
     let active = 0, peak = 0, release!: () => void;
@@ -93,7 +93,7 @@ describe('frame-group v5 serving', () => {
       return original(key, options);
     });
     const pending = fixture.sample(commonPoint.lat, commonPoint.lon, '&frame=all');
-    try { await vi.waitFor(() => expect(active).toBe(4)); }
+    try { await vi.waitFor(() => expect(active).toBe(8)); }
     finally { release(); }
     const body = await sampleBody(await pending);
     expectFrames(body, fixture.manifest, fixture.manifest.frames.map((_, index) => index));
@@ -102,7 +102,7 @@ describe('frame-group v5 serving', () => {
     const bytes = ranges.reduce((total, range) => total + range.length, 0);
     expect(bytes).toBe(fixture.manifest.frames.length * fixture.manifest.layers.length * CELL_BYTES);
     expect(bytes).toBeLessThanOrEqual(MAX_SAMPLE_RANGE_BYTES);
-    expect(peak).toBe(4);
+    expect(peak).toBe(8);
     expect(inFlightAllocationBytes()).toBe(0);
   });
 
@@ -133,7 +133,7 @@ describe('frame-group v5 serving', () => {
     await Promise.all(owners);
     for (const [index, body] of bodies.entries()) expectFrames(body, queries[index].fixture.manifest, queries[index].indices);
     expect(peak).toBeGreaterThan(1);
-    expect(peak).toBeLessThanOrEqual(8);
+    expect(peak).toBeLessThanOrEqual(32);
     const ranges = new Set(fixtures[0].get.mock.calls.flatMap(([key, options]) => options?.range ? [`${key}:${options.range.offset}:${options.range.length}`] : []));
     expect(ranges.size).toBeGreaterThan(20);
     expect(active).toBe(0);
