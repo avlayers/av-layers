@@ -12,9 +12,12 @@ import { validateBuild } from './validate.js';
 
 import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 
+let cachedIndexedCoverage: Promise<CoverageMask> | undefined;
+const indexedCoverage = () => cachedIndexedCoverage ??= loadCoverage(INDEXED_PRODUCT);
+
 describe('coverage integrity', () => {
   it('uses identical bundled/published descriptors and rejects changed persisted bitsets', async () => {
-    const mask = await loadCoverage(INDEXED_PRODUCT), description = describeCoverage(mask, INDEXED_PRODUCT);
+    const mask = await indexedCoverage(), description = describeCoverage(mask, INDEXED_PRODUCT);
     const bundled = await readFile(new URL('../../../packages/contracts/coverage/manifest.json', import.meta.url));
     expect(bundled.equals(description.bytes)).toBe(true);
     const source = JSON.parse(await readFile(new URL('../../../packages/contracts/coverage/source.json', import.meta.url), 'utf8'));
@@ -34,7 +37,7 @@ describe('coverage integrity', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it('rejects incompatible grids, domains and targets above the coverage ceiling', async () => {
-    const mask = await loadCoverage(INDEXED_PRODUCT);
+    const mask = await indexedCoverage();
     for (const product of [
       { ...INDEXED_PRODUCT, grid: { ...INDEXED_GRID, width: 4 } },
       { ...INDEXED_PRODUCT, bounds: [-180, -50, 180, 65] as const },
@@ -42,7 +45,7 @@ describe('coverage integrity', () => {
     ]) await expect(loadCoverage(product)).rejects.toThrow('trusted product');
   });
   it('reuses immutable coverage and its identity across rendered zoom targets', async () => {
-    const original = await loadCoverage(INDEXED_PRODUCT), hash = describeCoverage(original, INDEXED_PRODUCT).hash;
+    const original = await indexedCoverage(), hash = describeCoverage(original, INDEXED_PRODUCT).hash;
     for (const maxNativeZoom of [0, original.maxZoom]) {
       const configured = { ...INDEXED_PRODUCT, maxNativeZoom }, mask = await loadCoverage(configured);
       expect(mask).toEqual(original);
@@ -50,7 +53,7 @@ describe('coverage integrity', () => {
     }
   });
   it('rejects a modified output, halo or tile bitset during v5 validation', async () => {
-    const product = getProduct('gfs')!, original = await loadCoverage(product);
+    const product = getProduct('gfs')!, original = await indexedCoverage();
     const manifest = fixtureManifestV5({ layers: [...product.layers] });
     for (const name of ['output', 'halo', 'tiles'] as const) {
       const changed: CoverageMask = { ...original, [name]: Uint8Array.from(original[name]) };

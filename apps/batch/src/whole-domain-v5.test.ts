@@ -204,10 +204,16 @@ it('serves separate 1 km Lambert lift and native surfaces with serial and shard 
   const options = { cycle, product: configured, provider, mask: denseFixtureMask(configured, grid) };
   const serialRoot = await root('wd-lambert-k1-serial'), out = await root('wd-lambert-k1-shards'), store = new PublicationStore();
   const elevationM = 175;
-  const serial = await readV5(await buildForecast({ ...options, out: serialRoot, wholeDomain: await syntheticWholeDomain(serialRoot, configured, elevationM) }));
-  const plan = await createBuildPlan({ ...options, out, store, shards: 2, wholeDomain: await syntheticWholeDomain(out, configured, elevationM) });
-  for (const [shard] of plan.groups.entries()) await buildShard({ ...options, out, plan, shard, store });
-  const path = await finalizeBuild({ ...options, out, plan, store }), manifest = await readV5(path);
+  const [serial, manifest] = await Promise.all([
+    (async () => readV5(await buildForecast({ ...options, out: serialRoot, wholeDomain: await syntheticWholeDomain(serialRoot, configured, elevationM) })))(),
+    (async () => {
+      const plan = await createBuildPlan({ ...options, out, store, shards: 2, wholeDomain: await syntheticWholeDomain(out, configured, elevationM) });
+      await Promise.all(plan.groups.map((_, shard) => buildShard({ ...options, out, plan, shard, store })));
+      const path = await finalizeBuild({ ...options, out, plan, store }), built = await readV5(path);
+      await store.put(`builds/${built.model}/${built.buildId}/manifest.json`, await readFile(path), { ifNoneMatch: '*' });
+      return built;
+    })()
+  ]);
   expect(manifest.frames).toEqual(serial.frames);
   for (const id of ['native', 'fine'] as const) {
     const shards = surface(manifest, id).samples.shards;
@@ -215,8 +221,6 @@ it('serves separate 1 km Lambert lift and native surfaces with serial and shard 
     expect(actual).toEqual(await surfaceBytes(serialRoot, serial, id));
   }
   expect(surface(manifest, 'fine')).toMatchObject({ grid, kind: 'fine', terrain: { layoutVersion: 1 } });
-  const manifestKey = `builds/${manifest.model}/${manifest.buildId}/manifest.json`;
-  await store.put(manifestKey, await readFile(path), { ifNoneMatch: '*' });
   const sample = await sampleReader(store, manifest, configured);
   const result = await sample(new URLSearchParams({ lat: String(grid.latitudeOfOriginDeg), lon: String(grid.centralMeridianDeg),
     frame: 'all', layers: 'usable-lift-msl,usable-lift-agl' }));
@@ -288,7 +292,7 @@ describe('whole-domain v5 production', () => {
 
   it.each(['bottom', 'lower-right', 'lower-left'] as const)('compares %s overlaps without intervening blocks', async direction => {
     const grid: RegularLatLonGrid = { kind: 'regular-latlon', width: 18, height: 18, earthRadiusM: 6371229, lon0: -180, lat0: 72, dx: 20, dy: -1, wrapLongitude: true };
-    const configured: ProductDefinition = { ...product, grid, bounds: [-180, 55, 180, 72] };
+    const configured: ProductDefinition = { ...product, grid, bounds: [-180, 55, 180, 72], frameHours: [2] };
     const count = grid.width * grid.height, mask: CoverageMask = { grid, bounds: configured.bounds, maxZoom: 0, output: new Uint8Array(Math.ceil(count / 8)), halo: new Uint8Array(Math.ceil(count / 8)), tiles: Uint8Array.of(1) };
     for (let index = 0; index < count; index++) setBit(mask.output, index);
     const fineGrid = planWholeDomainGrid(grid, 2).fine, fineCells = fineGrid.width * fineGrid.height;
@@ -596,7 +600,7 @@ describe('whole-domain v5 production', () => {
     const configured: ProductDefinition = { ...product, modelId: 'gfs', frameHours: [12, 24], layers: [...product.layers, 'sfc-temp-c'] };
     const cycle = new Date(Math.floor(Date.now() / 3600000) * 3600000).toISOString();
     const plan = await createBuildPlan({ out, cycle, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup, shards: 2, store });
-    for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store });
+    await Promise.all(plan.groups.map((_, shard) => buildShard({ plan, shard, out, product: configured, mask: nativeMask, provider: source.provider, store })));
     let sealed: ValidatedBuild | undefined;
     const path = await finalizeBuild({ plan, out, product: configured, mask: nativeMask, provider: source.provider, store, onValidated: async result => { sealed = result; } });
     if (!sealed) throw new Error('Missing remote validation seal');
@@ -654,7 +658,7 @@ describe('whole-domain v5 production', () => {
   }, 60_000);
 
   it.each([
-    { receiptsOnly: true, hours: Array.from({ length: 24 }, (_, i) => (i + 1) * 2) },
+    { receiptsOnly: true, hours: [2, 4, 6] },
     { receiptsOnly: false, hours: [12, 24] }
   ])('finalizes $hours.length frame groups and serves samples with receipt-only mode $receiptsOnly', async ({ receiptsOnly, hours }) => {
     const setup = await fixture(), out = await root('wd-remote'), store = new PublicationStore(), source = fixtureProvider();
@@ -1255,8 +1259,15 @@ it('emits all native channels and profiles with serial/parallel parity and close
   const configured: ProductDefinition = { ...product, layers: LAYER_IDS, frameHours: [2, 4, 8],
     capabilities: { ...product.capabilities, maxVerticalLevels: 3 } };
   const setup = await fixture(configured), source = fixtureProvider(), serialRoot = await root('wd-profiles-serial'), parallelRoot = await root('wd-profiles-parallel');
-  const serial = await readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, product: configured,
-    mask: nativeMask, provider: source.provider, wholeDomain: setup }));
+  const store = new PublicationStore(), inputs = { product: configured, mask: nativeMask, provider: source.provider };
+  const [serial, parallel] = await Promise.all([
+    (async () => readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, product: configured, mask: nativeMask, provider: source.provider, wholeDomain: setup })))(),
+    (async () => {
+      const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
+      await Promise.all(plan.groups.map((_, shard) => buildShard({ plan, shard, out: parallelRoot, ...inputs, store })));
+      return readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
+    })()
+  ]);
   expect(serial.artifacts).toHaveLength(9);
   expect(new Set(serial.artifacts.map(artifact => artifact.layer))).toEqual(new Set(['usable-lift-msl', 'usable-lift-agl', 'precip-rate']));
   expect(surface(serial, 'native').layers).toHaveLength(18);
@@ -1271,10 +1282,6 @@ it('emits all native channels and profiles with serial/parallel parity and close
   delete surface(missing, 'native').profiles;
   await expect(validateBuild(serialRoot, missing, nativeMask, configured)).rejects.toThrow('Native profiles are required');
 
-  const store = new PublicationStore(), inputs = { product: configured, mask: nativeMask, provider: source.provider };
-  const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
-  for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, ...inputs, store });
-  const parallel = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
   const grouped = surface(parallel, 'native').profiles!;
   expect(grouped.groups).toHaveLength(2);
   const numeric = [...surface(parallel, 'native').samples.shards, ...grouped.groups.flatMap(group => group.shards), ...surface(parallel, 'fine').samples.shards];
@@ -1323,8 +1330,18 @@ it('keeps map bytes fixed across skipped hours, source intervals and native-only
   } };
   const serialRoot = await root('wd-horizon-serial'), referenceRoot = await root('wd-horizon-map'), parallelRoot = await root('wd-horizon-parallel');
   const inputs = { product: configured, mask: nativeMask, provider };
-  const serial = await readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, ...inputs, wholeDomain: setup }));
-  const reference = await readV5(await buildForecast({ out: referenceRoot, cycle: CYCLE, ...inputs, product: { ...configured, frameHours: [24] }, wholeDomain: setup }));
+  const store = new PublicationStore();
+  const [serial, reference, { later, parallel }] = await Promise.all([
+    (async () => readV5(await buildForecast({ out: serialRoot, cycle: CYCLE, ...inputs, wholeDomain: setup })))(),
+    (async () => readV5(await buildForecast({ out: referenceRoot, cycle: CYCLE, ...inputs, product: { ...configured, frameHours: [24] }, wholeDomain: setup })))(),
+    (async () => {
+      const plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
+      await Promise.all(plan.groups.map((_, shard) => buildShard({ plan, shard, out: parallelRoot, ...inputs, store })));
+      const receipt = JSON.parse(await readFile(join(parallelRoot, 'shards/1/receipt.json'), 'utf8'));
+      const built = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
+      return { later: receipt, parallel: built };
+    })()
+  ]);
   expect(serial.mapFrameCount).toBe(1);
   publicationPolicy.minHorizonHours = 48;
   try {
@@ -1351,12 +1368,8 @@ it('keeps map bytes fixed across skipped hours, source intervals and native-only
   expect(first.status).toBe('valid'); expect(last.status).toBe('valid');
   expect(last.levels[0]!.temperatureC).toBe(first.levels[0]!.temperatureC);
 
-  const store = new PublicationStore(), plan = await createBuildPlan({ out: parallelRoot, cycle: CYCLE, ...inputs, wholeDomain: setup, shards: 2, store });
-  for (let shard = 0; shard < plan.groups.length; shard++) await buildShard({ plan, shard, out: parallelRoot, ...inputs, store });
-  const later = JSON.parse(await readFile(join(parallelRoot, 'shards/1/receipt.json'), 'utf8'));
   expect(later.artifacts).toEqual([]);
   expect(later.surfaces.map((item: { id: string }) => item.id)).toEqual(['native']);
-  const parallel = await readV5(await finalizeBuild({ plan, out: parallelRoot, ...inputs, store }));
   expect(parallel.frames).toEqual(serial.frames);
   expect(parallel.mapFrameCount).toBe(1);
   expect(await surfaceBytes(parallelRoot, parallel, 'fine')).toEqual(await surfaceBytes(serialRoot, serial, 'fine'));

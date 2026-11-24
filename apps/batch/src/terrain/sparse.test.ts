@@ -31,7 +31,8 @@ vi.mock('./reader.js', async importOriginal => ({
 beforeEach(() => { vi.clearAllMocks(); hooks.sourceBlocks = undefined; hooks.sampleBatch = undefined; });
 afterEach(() => { vi.restoreAllMocks(); });
 
-function fixture(width = 3, height = 2, dy = -1 / height) {
+const baseFixtures = new Map<string, Omit<ReturnType<typeof buildBaseFixture>, 'never'>>();
+function buildBaseFixture(width: number, height: number, dy: number) {
   const grid = { kind: 'regular-latlon' as const, width, height, earthRadiusM: 6371229, lon0: 0, lat0: 0.75, dx: 1 / width, dy, wrapLongitude: false };
   const cells = width * height, output = new Uint8Array(Math.ceil(cells / 8)).fill(255);
   if (cells % 8) output[output.length - 1] = (1 << (cells % 8)) - 1;
@@ -42,7 +43,13 @@ function fixture(width = 3, height = 2, dy = -1 / height) {
     sampleLayout: { format: 'cell-major-block-shards-v1', blockSize: 16 },
     files: { sparse: { bytes: encoded.length, sha256: sha256(encoded) }, tiles: { bytes: 1, sha256: sha256(Uint8Array.of(1)) } }
   }));
-  return { catalog: terrainCatalogFixture(), storage: new TerrainTestStorage(), grid, coverage, coverageDescriptor };
+  return { catalog: terrainCatalogFixture(), grid, coverage, coverageDescriptor };
+}
+function fixture(width = 3, height = 2, dy = -1 / height) {
+  const key = `${width}:${height}:${dy}`;
+  let base = baseFixtures.get(key);
+  if (!base) { base = buildBaseFixture(width, height, dy); baseFixtures.set(key, base); }
+  return { ...base, coverageDescriptor: Buffer.from(base.coverageDescriptor), storage: new TerrainTestStorage() };
 }
 
 function changedMetadata(input: ReturnType<typeof fixture>, coverage = input.coverage) {

@@ -19,16 +19,22 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: pnpm tools:pmtiles
-      - name: Verify foundation
-        run: pnpm verify
-      - name: Install Chromium for wind smoke
-        run: pnpm exec playwright install --with-deps chromium
-      - name: Smoke numeric wind preview
-        run: pnpm smoke:wind --fixture
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.8.17'
-      - name: Verify coverage geometry
-        run: uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/test_fine_masks.py
-      - name: Verify lossless terrain packing
-        run: uv run --python 3.12 --with rasterio==1.4.3 --with numpy==2.2.6 python apps/batch/src/terrain/test_repack.py
+          prune-cache: false
+          cache-dependency-glob: |
+            scripts/masks/*.py
+            apps/batch/src/terrain/*.py
+            .github/workflows/ci.yml
+      - name: Verify foundation
+        run: pnpm verify
+      - name: Ensure browser for wind smoke
+        run: command -v google-chrome >/dev/null || pnpm exec playwright install --with-deps chromium
+      - name: Smoke numeric wind preview and Python checks
+        run: |
+          pnpm smoke:wind --fixture &
+          SMOKE_PID=$!
+          uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/test_fine_masks.py
+          uv run --python 3.12 --with rasterio==1.4.3 --with numpy==2.2.6 python apps/batch/src/terrain/test_repack.py
+          wait $SMOKE_PID

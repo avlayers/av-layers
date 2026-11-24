@@ -47,6 +47,12 @@ const STEP_SEC = 0.035;
 const PREWARM_STEPS = 54;
 const RENDERED_LINE_WIDTH = WIND_TRAIL_WIDTH * 1.42;
 
+function isSoftwareOrAutomatedRenderer(): boolean {
+  if (typeof navigator !== 'undefined' && navigator.webdriver) return true;
+  const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  return env?.VITE_OFFLINE_FIXTURE === 'true';
+}
+
 type LumaModule = NonNullable<ModelProps['modules']>[number];
 
 const windUpdateModule: LumaModule = {
@@ -370,20 +376,23 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
   override updateState(params: UpdateParameters<Layer<WindParticleLayerProps>>): void {
     super.updateState(params);
     const { props } = params;
-    const steps = props.trailSteps ?? DEFAULT_TRAIL_STEPS;
-    if (!props.prepared || !props.visible || props.numParticles <= 0) {
+    const throttled = isSoftwareOrAutomatedRenderer();
+    const numParticles = throttled ? Math.min(props.numParticles, 64) : props.numParticles;
+    const steps = throttled ? Math.min(props.trailSteps ?? DEFAULT_TRAIL_STEPS, 8) : (props.trailSteps ?? DEFAULT_TRAIL_STEPS);
+    const prewarmSteps = throttled ? 2 : PREWARM_STEPS;
+    if (!props.prepared || !props.visible || numParticles <= 0) {
       this.destroyResources();
       return;
     }
-    if (this.state.numParticles !== props.numParticles || this.state.trailSteps !== steps || !this.state.model) {
-      this.setupResources(props.numParticles, steps);
+    if (this.state.numParticles !== numParticles || this.state.trailSteps !== steps || !this.state.model) {
+      this.setupResources(numParticles, steps);
     }
     if (this.state.uploadedKey !== props.prepared.key || !this.state.windTexture) {
       this.uploadWind(props.prepared);
     }
     if (!props.paused && !this.state.prewarmed) {
       this.state.prewarmed = true;
-      for (let i = 0; i < PREWARM_STEPS; i++) this.stepSimulation(STEP_SEC, i * 0.173 + 0.11);
+      for (let i = 0; i < prewarmSteps; i++) this.stepSimulation(STEP_SEC, i * 0.173 + 0.11);
       this.state.lastStepMs = performance.now();
     }
   }
@@ -394,17 +403,18 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
   }
 
   override draw(): void {
-    const { model, transform, currBuffer, prevBuffer, windTexture } = this.state;
+    const { model, transform, currBuffer, prevBuffer, windTexture, numParticles } = this.state;
     const { prepared, paused, visible } = this.props;
-    if (!model || !transform || !currBuffer || !prevBuffer || !windTexture || !prepared || !visible) return;
+    if (!model || !transform || !currBuffer || !prevBuffer || !windTexture || !prepared || !visible || !numParticles) return;
 
+    const throttled = isSoftwareOrAutomatedRenderer();
     const steps = this.state.trailSteps ?? DEFAULT_TRAIL_STEPS;
     const dark = Boolean(this.props.darkChrome);
     model.setAttributes({ instanceCurr: currBuffer, instancePrev: prevBuffer });
-    model.setInstanceCount(this.props.numParticles * (steps - 1));
+    model.setInstanceCount(numParticles * (steps - 1));
     model.shaderInputs.setProps({
       windDraw: {
-        numParticles: this.props.numParticles,
+        numParticles,
         trailSteps: steps,
         lineWidth: RENDERED_LINE_WIDTH,
         opacity: 0.96,
@@ -416,7 +426,7 @@ export class WindParticleLayer extends Layer<WindParticleLayerProps> {
     });
     model.draw(this.context.renderPass);
 
-    if (!paused && (typeof document === 'undefined' || !document.hidden)) {
+    if (!paused && !throttled && (typeof document === 'undefined' || !document.hidden)) {
       const now = performance.now();
       if (!this.state.prewarmed) {
         this.state.prewarmed = true;

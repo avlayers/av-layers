@@ -94,17 +94,17 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
     const pins = new Map<string, string>();
     try {
       const store = boundStorage(proxy.env.BUCKET);
-      for (const { product: fixture, cycleHourUtc } of fixtureRuns) {
+      await Promise.all(fixtureRuns.map(async ({ product: fixture, cycleHourUtc }) => {
         testSignal.throwIfAborted();
         enterPhase(`prepare ${fixture.modelId}`);
         const todayCycle = new Date(startedAt).setUTCHours(cycleHourUtc, 0, 0, 0);
         const cycle = new Date(todayCycle > startedAt ? todayCycle - 86_400_000 : todayCycle).toISOString().replace('.000Z', 'Z');
-        const out = join(root, fixture.modelId), bundled = join(out, 'bundled');
+        const out = join(root, fixture.modelId), bundled = join(out, 'bundled'), cacheDir = join(root, 'source', fixture.modelId);
         const product = { ...fixture, coverageDir: relative(contractDir, bundled) };
         fixtureRegistry.set(product.modelId, product);
         await publishUppFixture(store, product, cycle);
         const provider = createIndexedGribProvider(product);
-        const resolved = await provider.resolveRun!({ cacheDir: join(root, 'source'), store, signal: testSignal });
+        const resolved = await provider.resolveRun!({ cacheDir, store, signal: testSignal });
         expect(resolved.cycle).toBe(cycle);
         const mask = denseFixtureMask(product, product.grid);
         const nativeHash = await writeCoverage(out, mask, product);
@@ -117,11 +117,9 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
         testSignal.throwIfAborted();
         await uploadForecastControlPlan(store, out, plan);
         const signal = forecastPlanSignal(plan, testSignal);
-        for (const shard of [0, 1]) {
-          enterPhase(`build ${fixture.modelId} shard ${shard}`);
-          await completeForecastControlShard(store, plan, shard, join(out, 'shards', String(shard), 'receipt.json'),
-            () => buildShard({ ...inputs, plan, shard, cacheDir: join(root, 'source'), signal }), signal);
-        }
+        enterPhase(`build ${fixture.modelId} shards`);
+        await Promise.all([0, 1].map(shard => completeForecastControlShard(store, plan, shard, join(out, 'shards', String(shard), 'receipt.json'),
+          () => buildShard({ ...inputs, plan, shard, cacheDir, signal }), signal)));
         enterPhase(`publish ${fixture.modelId}`);
         const assembly = join(root, product.modelId + '-publish');
         await mkdir(assembly);
@@ -135,7 +133,7 @@ it('builds and serves committed private UPP runs in both hemispheres', async ({ 
           await publish(store, assembly, validated.manifest, { authority, validated, receiptsOnly: true, deadlineAt: plan.deadlineAt, signal });
         } });
         pins.set(product.modelId, plan.buildId);
-      }
+      }));
     } finally {
       enterPhase('close R2 proxy');
       await withWranglerDeadline(phase, proxy.dispose());

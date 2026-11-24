@@ -38,13 +38,17 @@ export function selectWorkflowModels({ selection = 'all', schedule, products = P
   return selected.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const forecast = process.argv.includes('--forecast');
-  const selection = process.env.MODEL_SELECTION ?? 'all';
-  const schedule = forecast ? process.env.MODEL_SCHEDULE : undefined;
-  const models = selectWorkflowModels({ selection, schedule, kind: forecast ? 'forecast' : 'health', ...(forecast ? {} : { environment: monitoringEnvironment() }) });
+export function writeWorkflowModelsOutput(argv = process.argv, env: NodeJS.ProcessEnv = process.env): void {
+  const forecast = argv.includes('--forecast');
+  const selection = env.MODEL_SELECTION ?? 'all';
+  const schedule = forecast ? env.MODEL_SCHEDULE : undefined;
+  const models = selectWorkflowModels({ selection, schedule, kind: forecast ? 'forecast' : 'health', ...(forecast ? {} : { environment: monitoringEnvironment(env.TARGET_ENV) }) });
   const value = forecast ? { include: models } : models.map(model => model.model);
   const output = `${forecast ? 'matrix' : 'models'}=${JSON.stringify(value)}\n${forecast ? `model-parallelism=${schedule ? models.length : 1}\n` : ''}`;
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, output);
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, output);
   console.log(`Selected forecast models: ${models.map(model => model.model).join(', ')}`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  writeWorkflowModelsOutput();
 }

@@ -14,6 +14,13 @@ import { loadBundledFineCoverage, wholeDomainPlan } from './whole-domain/coverag
 
 const temporary: string[] = [];
 afterEach(async () => { await Promise.all(temporary.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+const cachedFine = new Map<string, ReturnType<typeof loadBundledFineCoverage>>();
+function sharedFineCoverage(product: typeof INDEXED_PRODUCT) {
+  const plan = wholeDomainPlan(product)!;
+  let pending = cachedFine.get(product.id);
+  if (!pending) { pending = loadBundledFineCoverage(product, plan); cachedFine.set(product.id, pending); }
+  return pending.then(loaded => ({ plan, fine: loaded.mask }));
+}
 function fixture() {
   const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 4, height: 3, lon0: -180, lat0: 60, dx: 90, dy: -60, wrapLongitude: true };
   const mask: CoverageMask = { grid, output: new Uint8Array(2), halo: new Uint8Array(2), tiles: new Uint8Array(1), maxZoom: 1 };
@@ -82,7 +89,7 @@ describe('bounded per-frame raster workers', () => {
   });
 
   it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('admits each configured packed snapshot within a bounded whole-domain budget', async product => {
-    const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
+    const { plan, fine } = await sharedFineCoverage(product);
     const active = fine.coverage.offsets[fine.coverage.blockIds.length]!;
     expect(active).toBeGreaterThan(0);
     const nativeLayers = product.layers.includes('precip-rate') ? 1 : 0;
@@ -121,7 +128,7 @@ describe('bounded per-frame raster workers', () => {
 
   it.skipIf(rasterWorkerCount() === 0)('keeps a fitting derive-only pair at the worker budget boundary', async () => {
     const product = { ...INDEXED_PRODUCT, execution: { ...INDEXED_PRODUCT.execution, workers: 3 } };
-    const plan = wholeDomainPlan(product)!, fine = (await loadBundledFineCoverage(product, plan)).mask;
+    const { plan, fine } = await sharedFineCoverage(INDEXED_PRODUCT);
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
     const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,
       nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,
@@ -164,14 +171,14 @@ describe('bounded per-frame raster workers', () => {
 
   it('keeps worker lift interpolation identical to inline for step and linear-rgb modes', async () => {
     const { mask, targets } = fixture(), target = targets[0];
-    for (const mode of ['step', 'linear-rgb'] as const) {
+    await Promise.all((['step', 'linear-rgb'] as const).map(async mode => {
       const inline = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: mode }).renderTileRgba(target.field, target.layer, 1, 0, 0);
       const pool = await createRasterPool(mask, [target], { workers: 1, geometryCacheBytes: 120_000, maxPending: 1, liftInterpolation: mode });
       try {
         const result = await pool.render(0, 0, 1, 0, 0);
         expect(Buffer.from(result.rgba).equals(Buffer.from(inline)), mode).toBe(true);
       } finally { await pool.close(); }
-    }
+    }));
   }, 20_000);
 
   it('propagates worker sampling errors, settles admitted work and closes the pool', async () => {
