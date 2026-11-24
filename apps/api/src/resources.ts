@@ -1,36 +1,26 @@
+import { LRUCache } from 'lru-cache';
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, ResourceLimitError } from '@av/contracts';
 export { parseBoundedJson, ResourceLimitError } from '@av/contracts';
 
-/** Cache limits account retained typed arrays and estimated decoded object storage. */
-export class ByteCache<K, V> {
-  private entries = new Map<K, { value: V; bytes: number; until: number }>();
-  private used = 0;
-  constructor(readonly maxEntries: number, readonly maxBytes: number) {}
-  get size(): number { return this.entries.size; }
-  get bytes(): number { return this.used; }
-  get(key: K, now = Date.now()): V | undefined {
-    const entry = this.entries.get(key);
-    if (!entry) return undefined;
-    if (entry.until <= now) { this.delete(key); return undefined; }
-    this.entries.delete(key);
-    this.entries.set(key, entry);
-    return entry.value;
+const wallClock = { now: () => Date.now() };
+
+/** LRU bounded by entry count and accounted bytes (retained typed arrays plus estimated decoded objects), expiring at an absolute time. */
+export class ByteCache<K extends NonNullable<unknown>, V extends NonNullable<unknown>> {
+  private readonly lru: LRUCache<K, V>;
+  constructor(maxEntries: number, maxBytes: number) {
+    this.lru = new LRUCache<K, V>({ max: maxEntries, maxSize: maxBytes, perf: wallClock, ttlResolution: 0 });
   }
-  delete(key: K): void {
-    const entry = this.entries.get(key);
-    if (entry) this.used -= entry.bytes;
-    this.entries.delete(key);
-  }
+  get size(): number { return this.lru.size; }
+  get bytes(): number { return this.lru.calculatedSize; }
+  get(key: K): V | undefined { return this.lru.get(key); }
+  delete(key: K): void { this.lru.delete(key); }
   set(key: K, value: V, bytes: number, until = Infinity): void {
-    this.delete(key);
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.maxBytes || until <= Date.now()) return;
-    while (this.entries.size >= this.maxEntries || this.used + bytes > this.maxBytes) {
-      const oldest = this.entries.keys().next();
-      if (oldest.done) break;
-      this.delete(oldest.value);
-    }
-    this.entries.set(key, { value, bytes, until });
-    this.used += bytes;
+    // lru-cache expires once age exceeds ttl; one millisecond less expires at `until` itself.
+    const ttl = until - Date.now() - 1;
+    // Delete first: lru-cache keeps the old size when the same value is set again.
+    this.lru.delete(key);
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || ttl < 1) return;
+    this.lru.set(key, value, { size: Math.max(1, bytes), ...(Number.isFinite(ttl) ? { ttl } : {}) });
   }
 }
 
