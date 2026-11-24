@@ -7,4 +7,6 @@ a number; mark a replaced record "Superseded by NNNN".
 
 | # | Decision |
 |---|---|
-| [0010](0010-agpl-and-cla.md) | License the repository under AGPL-3.0-only with a contributor licence agreement |
+| [0001](0001-agpl-and-cla.md) | License the repository under AGPL-3.0-only with a contributor licence agreement |
+| [0002](0002-libraries-and-kept-infrastructure.md) | Use libraries for generic infrastructure; keep the listed code where a library has a named gap |
+| [0003](0003-four-map-themes.md) | Ship four map themes as data records |

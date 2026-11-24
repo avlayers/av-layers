@@ -57,7 +57,7 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -65,7 +65,7 @@ jobs:
       - name: Prepare reusable terrain in R2
         run: pnpm operations forecast-terrain
       - name: Upload terrain preparation failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure() || cancelled()
         with:
           name: forecast-terrain-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -85,7 +85,7 @@ jobs:
       artifact: ${{ steps.plan.outputs.artifact }}
     env: *plan-env
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -97,7 +97,7 @@ jobs:
           FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets.FORECAST_SHARD_CREDENTIAL_KEY }}
         run: pnpm operations forecast-plan
       - name: Share immutable build plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: steps.plan.outputs.ready == 'true'
         with:
           name: ${{ steps.plan.outputs.artifact }}
@@ -110,7 +110,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Upload planning failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure() || cancelled()
         with:
           name: forecast-plan-failure-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -138,12 +138,12 @@ jobs:
       SHARD_ID: ${{ matrix.shard.id }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.prepare.outputs.artifact }}
           path: output
@@ -152,7 +152,7 @@ jobs:
           FORECAST_SHARD_CREDENTIAL_KEY: ${{ secrets.FORECAST_SHARD_CREDENTIAL_KEY }}
         run: pnpm operations forecast-shard
       - name: Upload full shard payload on request
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ inputs['retain-full-artifacts'] }}
         with:
           name: ${{ needs.prepare.outputs.artifact }}-payload-${{ matrix.shard.id }}
@@ -161,7 +161,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Upload shard diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: forecast-shard-records-${{ env.MODEL }}-${{ github.run_id }}-${{ matrix.shard.id }}
@@ -184,7 +184,7 @@ jobs:
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -193,7 +193,7 @@ jobs:
         id: downloads
         run: node -e "require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, 'started=' + Date.now() + '\n')"
       - name: Download build plan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: ${{ !inputs['resume-run-id'] }}
         with:
           name: ${{ needs.prepare.outputs.artifact }}
@@ -203,14 +203,14 @@ jobs:
           FORECAST_ARTIFACT_DOWNLOAD_STARTED_AT: ${{ steps.downloads.outputs.started }}
         run: pnpm operations forecast
       - name: Download retained shard payloads
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: ${{ always() && !inputs['resume-run-id'] && inputs['retain-full-artifacts'] && needs.shard.result == 'success' }}
         with:
           pattern: ${{ needs.prepare.outputs.artifact }}-payload-*
           merge-multiple: true
           path: output/builds
       - name: Upload build records
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: forecast-receipts-${{ env.MODEL }}-${{ github.run_id }}
@@ -228,7 +228,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload resumable build records
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: forecast-${{ env.MODEL }}-${{ github.run_id }}
@@ -245,7 +245,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Upload full build artifacts on request
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: ${{ always() && env.RETAIN_FULL_ARTIFACTS == 'true' }}
         with:
           name: forecast-full-${{ env.MODEL }}-${{ github.run_id }}-${{ github.run_attempt }}

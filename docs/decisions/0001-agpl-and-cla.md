@@ -1,4 +1,4 @@
-# 0010. AGPL-3.0-only with a contributor licence agreement
+# 0001. AGPL-3.0-only with a contributor licence agreement
 
 **Status:** accepted, 2026-11-24
 
