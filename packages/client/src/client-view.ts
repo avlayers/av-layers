@@ -210,18 +210,6 @@ export interface PreviewRasterLayer {
   paint: Record<string, number>;
 }
 
-export interface WindyTileOptions {
-  tileSize: number;
-  detectRetina: boolean;
-  minZoom: number;
-  maxZoom: number;
-  maxNativeZoom: number;
-  opacity: number;
-  attribution: string;
-  minNativeZoom: number;
-  zIndex?: number;
-}
-
 export function clampOpacity(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_OPACITY;
   return Math.min(1, Math.max(0, value));
@@ -382,20 +370,6 @@ export function previewRasterLayer(opacity = DEFAULT_OPACITY): PreviewRasterLaye
       'raster-opacity': clampOpacity(opacity),
       'raster-fade-duration': 0
     }
-  };
-}
-
-export function windyTileOptions(maxNativeZoom: number, opacity = DEFAULT_OPACITY, attribution: string): WindyTileOptions {
-  if (!Number.isInteger(maxNativeZoom) || maxNativeZoom < 0) throw new RangeError('maxNativeZoom must be a non-negative integer');
-  return {
-    tileSize: RASTER_TILE_SIZE,
-    detectRetina: false,
-    minZoom: 0,
-    maxZoom: 18,
-    maxNativeZoom,
-    minNativeZoom: 0,
-    opacity: clampOpacity(opacity),
-    attribution
   };
 }
 

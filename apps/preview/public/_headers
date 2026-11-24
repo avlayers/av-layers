@@ -1,3 +1,0 @@
-/windy-plugin/*
-  Access-Control-Allow-Origin: https://www.windy.com
-  Cache-Control: public, max-age=0, must-revalidate

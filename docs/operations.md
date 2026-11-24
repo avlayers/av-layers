@@ -177,8 +177,7 @@ checks only models enrolled for that environment, so a new model can stay
 registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
 tile routes; invalid, incomplete and expired publications fail deployment.
-After Cloudflare Pages deploys, the job checks the revision marker and Windy
-plugin CORS headers.
+After Cloudflare Pages deploys, the job checks the revision marker.
 
 Deployment checks each available model's tile front cache with bounded repeated
 GETs. Workers Cache serves tile hits before API admission; TTL ends by the

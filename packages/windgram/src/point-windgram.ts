@@ -1,6 +1,7 @@
 import {
   formatMapLiftCell,
   formatPlaceTime,
+  formatPointMapLift,
   formatPointMapTimes,
   hasNativeProfiles,
   pointLiftExpectation,
@@ -28,6 +29,7 @@ import {
   type SiteForecast,
   type WindgramView,
 } from './model.ts';
+import { sceneData } from './scene-store.ts';
 import { adoptDocumentStyleSheet } from './style-registry.ts';
 import windgramPanelCss from './styles/windgram-panel.css?inline';
 import {
@@ -44,7 +46,10 @@ import {
 import { renderPointSeries } from './scalar-point.ts';
 import { renderWindgramKey } from './svg.ts';
 import { DEFAULT_WINDGRAM_FIELD_MODE, type WindgramFieldMode } from './windgram-atmosphere.ts';
-import type { WindgramTelemetryStrip } from './windgram-readout.ts';
+import { findVisibleChartHourIndex } from './windgram-dom.ts';
+import { clamp } from './windgram-format.ts';
+import { readWindgram } from './windgram-inspector.ts';
+import { formatWindgramHourStamp, formatWindgramReading, type WindgramTelemetryStrip } from './windgram-readout.ts';
 import { daylightForDate } from './windgram-time-axis.ts';
 
 const STYLE_ID = 'av-windgram-document-style';
@@ -559,13 +564,16 @@ function createPointWindgram(
       ? navigable
       : data.frames.map(f => ({ id: f.id, validAt: f.validTime }));
     const curMs = Date.parse(currentPointValidTime() ?? '');
-    let index = list.findIndex(frame => frame.id === selectedFrameId);
-    if (index < 0 && Number.isFinite(curMs)) {
-      index = delta > 0
-        ? list.findIndex(frame => Date.parse(frame.validAt) > curMs) - 1
-        : list.findLastIndex(frame => Date.parse(frame.validAt) < curMs) + 1;
+    const exactIndex = list.findIndex(frame => frame.id === selectedFrameId);
+    let target: DayHour | undefined;
+    if (exactIndex >= 0) {
+      const nextIndex = exactIndex + delta;
+      if (nextIndex >= 0 && nextIndex < list.length) target = list[nextIndex];
+    } else if (Number.isFinite(curMs)) {
+      target = delta > 0
+        ? list.find(frame => Date.parse(frame.validAt) > curMs)
+        : list.findLast(frame => Date.parse(frame.validAt) < curMs);
     }
-    const target = list[Math.max(0, Math.min(list.length - 1, index + delta))];
     if (target && target.id !== selectedFrameId) onFrame(target.id);
   };
 
@@ -616,9 +624,10 @@ function createPointWindgram(
       return;
     }
 
-    const nextKeySig = `${units}|${fieldMode}`;
+    const southernHemisphere = options.point.lat < 0;
+    const nextKeySig = `${units}|${fieldMode}|${southernHemisphere ? 'S' : 'N'}`;
     if (keySignature !== nextKeySig) {
-      keyCard.innerHTML = renderWindgramKey(units, usesDsm, fieldMode);
+      keyCard.innerHTML = renderWindgramKey(units, usesDsm, fieldMode, southernHemisphere);
       keySignature = nextKeySig;
     }
 
@@ -636,7 +645,6 @@ function createPointWindgram(
     activeHeight = heightPx;
 
     let view: WindgramView;
-    let chartSelectedValidAt = selectedValidAt;
     if (effectiveMode === '3d') {
       const win = resolveStitchedDayWindow(data.dayKeys, {
         focusDayKey: targetDayKey,
@@ -653,6 +661,8 @@ function createPointWindgram(
       stepNextBtn.ariaLabel = 'Next 3-day window';
       stepLabelEl.textContent = formatDayWindowLabel(win.windowDays);
       stepLabelEl.className = 'wg-step-label';
+      stepLabelEl.title = '';
+      stepLabelEl.removeAttribute?.('title');
       publishVisibleDays(win.windowDays);
       view = stitchedDayViews(win.windowDays, targetDayKey, data.bestDayKey, widthPx, heightPx);
     } else {
@@ -666,23 +676,47 @@ function createPointWindgram(
       const isBest = data.bestDayKey === targetDayKey;
       stepLabelEl.textContent = `${formatShortDayLabel(targetDayKey)}${isBest ? ' ★' : ''}`;
       stepLabelEl.className = isBest ? 'wg-step-label is-best' : 'wg-step-label';
+      if (isBest) {
+        stepLabelEl.title = '★ Highest daily thermal score in window (peak usable lift height, w*, and surface wind)';
+      } else {
+        stepLabelEl.title = '';
+        stepLabelEl.removeAttribute?.('title');
+      }
       publishVisibleDays(viewMode === '3d' ? [targetDayKey] : null);
 
       const views = dayViews(targetDayKey, dayHours, widthPx, heightPx);
       const daylightView = views.daylight;
       const visibleDayHours = daylightView.hours.filter(hour => hour.x >= daylightView.left && hour.x <= daylightView.left + daylightView.plotWidth);
       const useDaylightCrop = visibleDayHours.length >= Math.min(2, dayHours.length) && visibleDayHours.length > 0;
-      if (useDaylightCrop && selectedValidAt !== null && !visibleDayHours.some(hour => hour.validAt === selectedValidAt)) {
-        const targetMs = Date.parse(selectedValidAt);
-        if (Number.isFinite(targetMs)) {
-          chartSelectedValidAt = visibleDayHours.reduce((best, cur) =>
-            Math.abs(Date.parse(cur.validAt) - targetMs) < Math.abs(Date.parse(best.validAt) - targetMs) ? cur : best,
-          ).validAt;
-        }
-      }
       view = useDaylightCrop ? daylightView : (views.full ??= buildWindgramView(data.forecast, {
         unitSystem: units, fieldMode, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours,
       }));
+    }
+
+    const rawView = sceneData(view);
+    const selectedInVisibleChart = findVisibleChartHourIndex(rawView, selectedValidAt) >= 0;
+    time.hidden = !pointFrame || (pointFrame.id === mapFrameId && selectedInVisibleChart);
+
+    let offChartReadout: string | null = null;
+    if (!selectedInVisibleChart && selectedValidAt !== null && dayHours) {
+      const fullView = sceneData(
+        dayViews(targetDayKey, dayHours, widthPx, heightPx).full ??= buildWindgramView(data.forecast, {
+          unitSystem: units, fieldMode, timeZone, widthPx, heightPx, compact: true, heightRange: 'soaring', hours: dayHours,
+        }),
+      );
+      const fullIdx = fullView.hours.findIndex(hour => hour.validAt === selectedValidAt);
+      if (fullIdx >= 0) {
+        const fullHour = fullView.hours[fullIdx]!;
+        const sourceHour = fullView.sourceHours[fullIdx]!;
+        const when = formatWindgramHourStamp(fullView, fullIdx, fullHour.validAt);
+        const minFloorM = Math.max(fullView.floorM, sourceHour.mapLift.terrainM ?? sourceHour.modelTerrainM ?? fullView.floorM);
+        const tolM = fullHour.usableLiftTopM !== null && fullHour.usableLiftTopM >= fullView.floorM && fullHour.usableLiftTopM <= fullView.topM
+          ? fullHour.usableLiftTopM
+          : null;
+        const inspectM = tolM ?? clamp(minFloorM + 90, minFloorM, fullView.topM);
+        const reading = readWindgram(fullView, fullIdx, inspectM);
+        offChartReadout = `${when} · ${formatPointMapLift(sourceHour.mapLift, units)} · ${formatWindgramReading(fullView, reading, tolM !== null ? 'height' : 'surface').join(' · ')}`;
+      }
     }
 
     if (!mounted) {
@@ -690,7 +724,8 @@ function createPointWindgram(
         view,
         idPrefix,
         readout: srReadout,
-        selectedValidAt: chartSelectedValidAt,
+        selectedValidAt,
+        offChartReadout,
         inspectionMode: 'magnetic',
         calloutVariant: options.calloutVariant,
         calloutTrigger: options.calloutTrigger ?? 'interact',
@@ -708,7 +743,7 @@ function createPointWindgram(
       });
     } else {
       if (mountedView !== view) mounted.update(view);
-      mounted.select(chartSelectedValidAt);
+      mounted.select(selectedValidAt, offChartReadout);
     }
     mountedView = view;
   };

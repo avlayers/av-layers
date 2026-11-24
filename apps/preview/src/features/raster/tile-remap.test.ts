@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LIFT_COLORS, RAIN_COLORS } from '@av/contracts/layers';
-import { remapRgbaInPlace } from './tile-remap';
+import { remapRgbaInPlace, remapTileToBitmap } from './tile-remap';
 
 function hexPixel(hex: string, alpha = 255): [number, number, number, number] {
   const clean = hex.slice(1);
@@ -98,5 +98,85 @@ describe('remapRgbaInPlace', () => {
     for (let i = 0; i < 8; i++) strip.set(px, i * 4);
     remapRgbaInPlace(strip, 8, 1, 'rain', 'chart');
     expect(strip[3]).toBeGreaterThan(strip[6 * 4 + 3]! * 2);
+  });
+
+  it('retires a worker that emits a fatal onerror and completes queued and subsequent jobs via fallback', async () => {
+    const origWorker = globalThis.Worker;
+    const origOffscreen = globalThis.OffscreenCanvas;
+    const origCreateImageBitmap = globalThis.createImageBitmap;
+    const origNav = globalThis.navigator;
+    let terminated = 0;
+    let postCalls = 0;
+
+    class BrokenWorker {
+      onmessage: ((e: MessageEvent) => void) | null = null;
+      onerror: ((e: ErrorEvent) => void) | null = null;
+      postMessage() {
+        postCalls++;
+        queueMicrotask(() => {
+          this.onerror?.({ message: 'Simulated fatal worker crash' } as ErrorEvent);
+        });
+      }
+      terminate() {
+        terminated++;
+      }
+    }
+
+    class FakeOffscreenCanvas {
+      width: number;
+      height: number;
+      constructor(w: number, h: number) {
+        this.width = w;
+        this.height = h;
+      }
+      getContext() {
+        return {
+          clearRect: () => {},
+          drawImage: () => {},
+          getImageData: (_x: number, _y: number, w: number, h: number) => ({
+            data: new Uint8ClampedArray(w * h * 4),
+            width: w,
+            height: h
+          }),
+          putImageData: () => {}
+        };
+      }
+      transferToImageBitmap() {
+        return { width: this.width, height: this.height, close: () => {} } as unknown as ImageBitmap;
+      }
+    }
+
+    vi.stubGlobal('navigator', { hardwareConcurrency: 1 });
+    vi.stubGlobal('Worker', BrokenWorker);
+    vi.stubGlobal('OffscreenCanvas', FakeOffscreenCanvas);
+    vi.stubGlobal('createImageBitmap', async () => ({ width: 4, height: 4, close: () => {} } as unknown as ImageBitmap));
+
+    try {
+      const payload1 = new Uint8Array(64).buffer;
+      const payload2 = new Uint8Array(64).buffer;
+      const payload3 = new Uint8Array(64).buffer;
+
+      const job1 = remapTileToBitmap(payload1, 'lift', 'stone');
+      const job2 = remapTileToBitmap(payload2, 'lift', 'stone');
+      const job3 = remapTileToBitmap(payload3, 'lift', 'stone');
+
+      await expect(job1).rejects.toThrow(/Simulated fatal worker crash/);
+      await expect(job2).rejects.toThrow(/Simulated fatal worker crash/);
+      // Queued job3 drains via workspace fallback once all pool workers fail
+      const bmp3 = await job3;
+      expect(bmp3.width).toBe(4);
+      expect(terminated).toBe(2);
+      expect(postCalls).toBe(2);
+
+      // Subsequent jobs also run directly via fallback without dispatching to dead workers
+      const bmp4 = await remapTileToBitmap(new Uint8Array(64).buffer, 'lift', 'stone');
+      expect(bmp4.width).toBe(4);
+      expect(postCalls).toBe(2);
+    } finally {
+      vi.stubGlobal('Worker', origWorker);
+      vi.stubGlobal('OffscreenCanvas', origOffscreen);
+      vi.stubGlobal('createImageBitmap', origCreateImageBitmap);
+      vi.stubGlobal('navigator', origNav);
+    }
   });
 });

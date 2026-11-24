@@ -106,6 +106,54 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
     await vi.waitFor(() => expect(calls.length).toBeGreaterThan(2));
     expect(calls[2]!.frames.length).toBeGreaterThanOrEqual(2);
     sampler.dispose();
+
+    // 5. Unavailable cloud-cover-total cells preserve NaN and hasClouds=false (distinct from valid 0% clear sky)
+    const unavailApi = {
+      samples: vi.fn(async (_b: unknown, req: { points: Array<{ lat: number; lon: number }>; frames: readonly string[] }) => ({
+        points: req.points.map((_pt, index) => ({
+          index,
+          sample: {
+            frames: req.frames.map(id => ({
+              id,
+              layers: {
+                'cloud-cover-total': { value: null, status: 'unavailable' },
+                'cloud-cover-low': { value: null, status: 'unavailable' }
+              }
+            }))
+          }
+        }))
+      }))
+    };
+    const unavailSampler = new SynopticSampler(unavailApi as never);
+    const unavailField = await unavailSampler.load(build, frame0, view, { needClouds: true, needMslp: false });
+    expect(unavailField).not.toBeNull();
+    expect(unavailField!.hasClouds).toBe(false);
+    expect(Number.isNaN(unavailField!.total[0]!)).toBe(true);
+    expect(Number.isNaN(unavailField!.low[0]!)).toBe(true);
+    unavailSampler.dispose();
+
+    const clearSkyApi = {
+      samples: vi.fn(async (_b: unknown, req: { points: Array<{ lat: number; lon: number }>; frames: readonly string[] }) => ({
+        points: req.points.map((_pt, index) => ({
+          index,
+          sample: {
+            frames: req.frames.map(id => ({
+              id,
+              layers: {
+                'cloud-cover-total': { value: 0, status: 'valid' },
+                'cloud-cover-low': { value: 0, status: 'valid' }
+              }
+            }))
+          }
+        }))
+      }))
+    };
+    const clearSampler = new SynopticSampler(clearSkyApi as never);
+    const clearField = await clearSampler.load(build, frame0, view, { needClouds: true, needMslp: false });
+    expect(clearField!.hasClouds).toBe(true);
+    expect(clearField!.total[0]).toBe(0);
+    expect(clearField!.low[0]).toBe(0);
+    clearSampler.dispose();
   });
 
   it('skips redundant setData, updateImage, and setPaintProperty calls on cached cloud & isobar scrubs', () => {

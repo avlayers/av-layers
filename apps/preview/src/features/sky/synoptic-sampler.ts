@@ -18,6 +18,8 @@ export interface SynopticField {
   readonly mslp: Float32Array;
   readonly hasClouds: boolean;
   readonly hasMslp: boolean;
+  readonly cloudsEvaluated?: boolean;
+  readonly mslpEvaluated?: boolean;
 }
 
 export interface ViewportBounds {
@@ -128,7 +130,8 @@ export function pilotHorizonFrameOrder(build: PinnedBuild, anchorFrame: string):
 }
 
 function fieldSatisfies(field: SynopticField, wantClouds: boolean, wantMslp: boolean): boolean {
-  return (!wantClouds || field.hasClouds) && (!wantMslp || field.hasMslp);
+  return (!wantClouds || field.hasClouds || Boolean(field.cloudsEvaluated)) &&
+    (!wantMslp || field.hasMslp || Boolean(field.mslpEvaluated));
 }
 
 /**
@@ -223,8 +226,8 @@ export class SynopticSampler {
     const cacheKey = `${buildId}:${frame}:${box.key}`;
     const partial = this.cache.get(cacheKey);
 
-    const fetchClouds = wantClouds && !partial?.hasClouds;
-    const fetchMslp = wantMslp && !partial?.hasMslp;
+    const fetchClouds = wantClouds && !partial?.hasClouds && !partial?.cloudsEvaluated;
+    const fetchMslp = wantMslp && !partial?.hasMslp && !partial?.mslpEvaluated;
     const inflightKey = `${cacheKey}:${fetchClouds ? 'c' : ''}${fetchMslp ? 'p' : ''}`;
 
     const existing = this.fgInflight.get(inflightKey);
@@ -378,15 +381,17 @@ export class SynopticSampler {
         const prev = this.cache.get(cacheKey);
 
         const total = spec.fetchClouds
-          ? new Float32Array(points.length)
-          : (prev?.total ?? new Float32Array(points.length));
+          ? new Float32Array(points.length).fill(Number.NaN)
+          : (prev?.total ?? new Float32Array(points.length).fill(Number.NaN));
         const low = spec.fetchClouds
-          ? new Float32Array(points.length)
-          : (prev?.low ?? new Float32Array(points.length));
+          ? new Float32Array(points.length).fill(Number.NaN)
+          : (prev?.low ?? new Float32Array(points.length).fill(Number.NaN));
         const mslp = spec.fetchMslp
           ? new Float32Array(points.length).fill(Number.NaN)
           : (prev?.mslp ?? new Float32Array(points.length).fill(Number.NaN));
 
+        let validCloudCells = 0;
+        let validMslpCells = 0;
         for (let i = 0; i < res.points.length; i++) {
           const sampleFrames = res.points[i]!.sample.frames;
           const frameEntry = sampleFrames[fIdx]?.id === frameId
@@ -394,19 +399,40 @@ export class SynopticSampler {
             : sampleFrames.find(entry => entry.id === frameId);
           const frameLayers = frameEntry?.layers;
           if (spec.fetchClouds) {
-            const tVal = frameLayers?.['cloud-cover-total']?.value;
-            const lVal = spec.hasLow ? frameLayers?.['cloud-cover-low']?.value : (typeof tVal === 'number' ? tVal * 0.55 : null);
-            total[i] = typeof tVal === 'number' && Number.isFinite(tVal) ? Math.max(0, Math.min(100, tVal)) * 0.01 : 0;
-            low[i] = typeof lVal === 'number' && Number.isFinite(lVal) ? Math.max(0, Math.min(100, lVal)) * 0.01 : 0;
+            const tCell = frameLayers?.['cloud-cover-total'];
+            const tVal = tCell && tCell.status !== 'unavailable' && tCell.status !== 'outside-domain' ? tCell.value : null;
+            const lCell = spec.hasLow ? frameLayers?.['cloud-cover-low'] : undefined;
+            const lVal = spec.hasLow
+              ? (lCell && lCell.status !== 'unavailable' && lCell.status !== 'outside-domain' ? lCell.value : null)
+              : (typeof tVal === 'number' && Number.isFinite(tVal) ? tVal * 0.55 : null);
+            if (typeof tVal === 'number' && Number.isFinite(tVal)) {
+              const clampedTotal = Math.max(0, Math.min(100, tVal)) * 0.01;
+              total[i] = clampedTotal;
+              low[i] = typeof lVal === 'number' && Number.isFinite(lVal)
+                ? Math.max(0, Math.min(100, lVal)) * 0.01
+                : clampedTotal * 0.55;
+              validCloudCells++;
+            } else {
+              total[i] = Number.NaN;
+              low[i] = Number.NaN;
+            }
           }
           if (spec.fetchMslp) {
-            const pVal = frameLayers?.['mslp-hpa']?.value;
-            mslp[i] = typeof pVal === 'number' && Number.isFinite(pVal) && pVal > 850 && pVal < 1090 ? pVal : Number.NaN;
+            const pCell = frameLayers?.['mslp-hpa'];
+            const pVal = pCell && pCell.status !== 'unavailable' && pCell.status !== 'outside-domain' ? pCell.value : null;
+            if (typeof pVal === 'number' && Number.isFinite(pVal) && pVal > 850 && pVal < 1090) {
+              mslp[i] = pVal;
+              validMslpCells++;
+            } else {
+              mslp[i] = Number.NaN;
+            }
           }
         }
 
-        const hasClouds = spec.fetchClouds || Boolean(prev?.hasClouds);
-        const hasMslp = spec.fetchMslp || Boolean(prev?.hasMslp);
+        const hasClouds = (spec.fetchClouds && validCloudCells > 0) || Boolean(prev?.hasClouds);
+        const hasMslp = (spec.fetchMslp && validMslpCells > 0) || Boolean(prev?.hasMslp);
+        const cloudsEvaluated = spec.fetchClouds || Boolean(prev?.cloudsEvaluated);
+        const mslpEvaluated = spec.fetchMslp || Boolean(prev?.mslpEvaluated);
         // Bump id suffix if upgraded in place so downstream contour caches key cleanly on channel presence.
         const field: SynopticField = {
           id: `${cacheKey}:${hasClouds ? 'c' : ''}${hasMslp ? 'p' : ''}`,
@@ -422,7 +448,9 @@ export class SynopticSampler {
           low,
           mslp,
           hasClouds,
-          hasMslp
+          hasMslp,
+          cloudsEvaluated,
+          mslpEvaluated
         };
         this.storeField(cacheKey, field);
         out.push(field);

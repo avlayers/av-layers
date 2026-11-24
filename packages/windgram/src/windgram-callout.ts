@@ -28,7 +28,7 @@ import {
 } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import type { WindgramReading } from './scene-types.ts';
-import { isTolCappedBelowThermalTop, type WindgramTelemetryStrip } from './windgram-readout.ts';
+import { resolveSnappedTolClimb, type WindgramTelemetryStrip } from './windgram-readout.ts';
 
 export const WINDGRAM_CALLOUT_VARIANTS = ['tile-2x2', 'classic'] as const;
 export type WindgramCalloutVariant = (typeof WINDGRAM_CALLOUT_VARIANTS)[number];
@@ -353,21 +353,24 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         const aglX = compactTime ? Math.round(39 + compactTime.length * 5.3 + 6) : 40;
         setAttr(agl, 'x', String(aglX));
 
-        const liquidRhVal = reading.relativeHumidityPercent !== null && Number.isFinite(reading.relativeHumidityPercent)
-          ? Math.round(clamp(reading.relativeHumidityPercent, 0, 100))
+        const rawLiquidRh = reading.relativeHumidityPercent !== null && Number.isFinite(reading.relativeHumidityPercent)
+          ? clamp(reading.relativeHumidityPercent, 0, 100)
           : null;
+        const liquidRhVal = rawLiquidRh !== null ? Math.round(rawLiquidRh) : null;
         const rawCloudRh = reading.cloudHumidityPercent ?? reading.relativeHumidityPercent;
-        const cloudRhVal = rawCloudRh !== null && Number.isFinite(rawCloudRh)
-          ? Math.round(clamp(rawCloudRh, 0, 100))
+        const clampedCloudRh = rawCloudRh !== null && Number.isFinite(rawCloudRh)
+          ? clamp(rawCloudRh, 0, 100)
           : null;
-        const inLiquidSaturatedCloud = liquidRhVal !== null && liquidRhVal >= CLOUD_RH_THRESHOLD_PERCENT;
-        const inSaturatedCloud = reading.cloud === 'humidity' || (cloudRhVal !== null && cloudRhVal >= CLOUD_RH_THRESHOLD_PERCENT);
+        const cloudRhVal = clampedCloudRh !== null ? Math.round(clampedCloudRh) : null;
+        const inLiquidSaturatedCloud = rawLiquidRh !== null && rawLiquidRh >= CLOUD_RH_THRESHOLD_PERCENT;
+        const inSaturatedCloud = reading.cloud === 'humidity' || (clampedCloudRh !== null && clampedCloudRh >= CLOUD_RH_THRESHOLD_PERCENT);
         const activeLayer = reading.activeCloudLayer ?? null;
         const inStratiformDeck = activeLayer?.kind === 'stratiform';
         const inConvectiveTower =
           !useTol &&
           activeLayer !== null &&
           activeLayer.kind !== 'stratiform' &&
+          activeLayer.depthM >= 50 &&
           reading.heightM > activeLayer.baseM + 20;
         const inAnyCloudAtHeight = inSaturatedCloud || inStratiformDeck || inConvectiveTower;
         const inInversion = reading.lapseCPer1000Ft != null && Number.isFinite(reading.lapseCPer1000Ft) && reading.lapseCPer1000Ft > 0.05;
@@ -474,12 +477,10 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         let climbSubClass = 'wg-tile-sub';
         let waveMode: 'none' | 'up' | 'down' = 'none';
         if (useTol) {
-          if (isTolCappedBelowThermalTop(reading) && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
-            displayClimbMps = reading.estimatedClimbMps;
-            climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ At ceiling';
-          } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {
-            displayClimbMps = reading.peakClimbMps;
-            climbCaption = reading.cloudCapped ? '▲ Cu base' : '▲ Peak lift';
+          const snappedClimb = resolveSnappedTolClimb(reading);
+          if (snappedClimb) {
+            displayClimbMps = snappedClimb.climbMps;
+            climbCaption = snappedClimb.tileCaption;
           }
         } else if (reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.05) {
           displayClimbMps = reading.estimatedClimbMps;
@@ -547,13 +548,16 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           : Math.round(clamp(reading.cloudCoverTotalPercent, 0, 100));
         const layers = reading.cloudLayers ?? [];
         const maxLayerCover = layers.length ? Math.max(...layers.map(l => l.coverPercent)) : null;
+        const suppliedDisagreesWithLayer = cloudPct !== null && maxLayerCover !== null && maxLayerCover - cloudPct >= 25;
         const effectiveCoverPct = cloudPct !== null && maxLayerCover !== null
-          ? Math.max(cloudPct, maxLayerCover)
+          ? (suppliedDisagreesWithLayer ? cloudPct : Math.max(cloudPct, maxLayerCover))
           : (cloudPct ?? maxLayerCover ?? (inSaturatedCloud ? 100 : null));
-        const highOnly = Boolean(reading.highCloudOnly) && !inAnyCloudAtHeight;
-        const litCount = inSaturatedCloud
+        const localRhKnown = liquidRhVal !== null || cloudRhVal !== null;
+        const localCloudKnown = localRhKnown || layers.length > 0;
+        const highOnly = Boolean(reading.highCloudOnly) && !inAnyCloudAtHeight && localRhKnown;
+        const litCount = inSaturatedCloud && !suppliedDisagreesWithLayer
           ? Math.max(4, cloudOktasSegments(effectiveCoverPct))
-          : inAnyCloudAtHeight
+          : inAnyCloudAtHeight && !suppliedDisagreesWithLayer
             ? Math.max(2, cloudOktasSegments(activeLayer?.coverPercent ?? effectiveCoverPct))
             : cloudOktasSegments(effectiveCoverPct);
 
@@ -570,10 +574,13 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(oktas[i], 'class', oktaCls);
         }
 
-        const localCloudKnown = liquidRhVal !== null || cloudRhVal !== null || layers.length > 0;
         let skyCode = '—';
         let skyCodeClass = 'wg-tile-sky-code';
-        if (inSaturatedCloud) {
+        if (suppliedDisagreesWithLayer) {
+          skyCode = `SKY ${cloudPct}%`;
+          if (inAnyCloudAtHeight) skyCodeClass = 'wg-tile-sky-code is-cloud';
+          else if (cloudPct < 5) skyCodeClass = 'wg-tile-sky-code is-muted';
+        } else if (inSaturatedCloud) {
           skyCode = activeLayer ? `${activeLayer.coverageCode} ${activeLayer.coverPercent}%` : 'OVC';
           skyCodeClass = 'wg-tile-sky-code is-cloud';
         } else if (inStratiformDeck && activeLayer) {
@@ -599,9 +606,14 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         setAttr(skyCodeEl, 'class', skyCodeClass);
 
         const cuLayer = layers.find(l => l.kind !== 'stratiform') ?? (activeLayer?.kind !== 'stratiform' ? activeLayer : null);
+        const outsidePrefix = suppliedDisagreesWithLayer ? 'Moist RH' : 'Clear';
         if (inSaturatedCloud) {
           const satDepth = activeLayer?.depthM ?? null;
-          const cloudPrefix = !inLiquidSaturatedCloud && tempC !== null && tempC < 0 ? '☁ Cold cloud' : '☁ In cloud';
+          const cloudPrefix = !inLiquidSaturatedCloud && tempC !== null && tempC < 0
+            ? '☁ Cold cloud'
+            : suppliedDisagreesWithLayer
+              ? '☁ Moist RH'
+              : '☁ In cloud';
           const label = satDepth !== null && satDepth >= 40
             ? `${cloudPrefix} · ${formatCompactSpan(satDepth, unitSystem)}`
             : cloudRhVal !== null
@@ -610,7 +622,8 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setText(cloudText, label);
           setAttr(cloudText, 'class', 'wg-tile-sub is-cloud');
         } else if (inStratiformDeck && activeLayer) {
-          setText(cloudText, `☁ ${activeLayer.coverageCode} deck · ${formatCompactSpan(activeLayer.depthM, unitSystem)}`);
+          const deckPrefix = suppliedDisagreesWithLayer ? '☁ Moist layer' : `☁ ${activeLayer.coverageCode} deck`;
+          setText(cloudText, `${deckPrefix} · ${formatCompactSpan(activeLayer.depthM, unitSystem)}`);
           setAttr(cloudText, 'class', 'wg-tile-sub is-cloud');
         } else if (inConvectiveTower && activeLayer) {
           const tag = activeLayer.kind === 'overdeveloped' ? 'OD' : 'Cu';
@@ -626,17 +639,17 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
           setAttr(cloudText, 'class', 'wg-tile-sub is-cloud');
         } else if (reading.nearestCloudBaseAboveM != null && reading.nearestCloudBaseAboveM - reading.heightM <= 4000) {
           const clearanceM = reading.nearestCloudBaseAboveM - reading.heightM;
-          setText(cloudText, `Clear · Base +${formatCompactSpan(clearanceM, unitSystem)}`);
+          setText(cloudText, `${outsidePrefix} · Base +${formatCompactSpan(clearanceM, unitSystem)}`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (highOnly) {
           setText(cloudText, 'Clear · High cirrus');
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (reading.nearestCloudTopBelowM != null && reading.heightM - reading.nearestCloudTopBelowM <= 2500) {
           const aboveM = reading.heightM - reading.nearestCloudTopBelowM;
-          setText(cloudText, `Clear · Top -${formatCompactSpan(aboveM, unitSystem)}`);
+          setText(cloudText, `${outsidePrefix} · Top -${formatCompactSpan(aboveM, unitSystem)}`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (liquidRhVal !== null) {
-          setText(cloudText, `Clear · RH ${liquidRhVal}%`);
+          setText(cloudText, `${outsidePrefix} · RH ${liquidRhVal}%`);
           setAttr(cloudText, 'class', 'wg-tile-sub');
         } else if (cloudRhVal !== null) {
           setText(cloudText, `Model RH ${cloudRhVal}%`);
@@ -687,11 +700,17 @@ const tile2x2Renderer: WindgramCalloutRenderer = {
         }
 
         if (hasRain) {
-          setAttr(rainBg, 'class', cloudSuckRisk || highCape ? 'wg-tile-cell-tint is-danger' : 'wg-tile-cell-tint is-rain');
+          setAttr(rainBg, 'class', cloudSuckRisk || highCape || icingRisk ? 'wg-tile-cell-tint is-danger' : 'wg-tile-cell-tint is-rain');
           setAttr(rainIcon, 'visibility', 'visible');
           setAttr(hazardEl, 'x', '118.5');
           const rateLabel = formatQuantity(precipMm, 'rainRate', undefined, unitSystem);
-          if (cloudSuckRisk) {
+          if (icingRisk && cloudSuckRisk) {
+            setText(hazardEl, `${rateLabel} · ❄ Ice · Suck`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (icingRisk) {
+            setText(hazardEl, `${rateLabel} · ❄ Icing risk`);
+            setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
+          } else if (cloudSuckRisk) {
             setText(hazardEl, `${rateLabel} · ⚠ Suck`);
             setAttr(hazardEl, 'class', 'wg-tile-sub is-danger');
           } else if (highCape && highShear) {

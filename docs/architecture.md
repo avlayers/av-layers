@@ -1,8 +1,8 @@
 # Architecture
 
 The batch app downloads weather data and builds forecast files. A Cloudflare
-Worker serves those files from a private R2 bucket to the standalone map, Windy
-plugin, and API clients.
+Worker serves those files from a private R2 bucket to the standalone map and
+API clients.
 
 ```mermaid
 flowchart LR
@@ -10,7 +10,7 @@ flowchart LR
   batch --> files["Tiles, point data<br/>and manifest"]
   files --> r2["Private R2 bucket"]
   r2 --> api["API Worker"]
-  api --> clients["Preview / Windy<br/>API clients"]
+  api --> clients["Preview and<br/>API clients"]
 ```
 
 Models share the build and serving pipeline. The scheduled workflow runs each
@@ -24,7 +24,6 @@ surfaces share each model's cycle, timeline, publication and URLs. See
   validation, uploads, and cleanup.
 - [apps/api](../apps/api/README.md): HTTP routes, R2 reads, and caching.
 - [apps/preview](../apps/preview/README.md): standalone MapLibre map.
-- [apps/windy-plugin](../apps/windy-plugin/README.md): Windy map and time controls.
 - [packages/contracts](../packages/contracts/README.md): wire schemas, model and
   layer definitions, grids, and palettes.
 - [packages/client](../packages/client/README.md): pinned API requests, raster

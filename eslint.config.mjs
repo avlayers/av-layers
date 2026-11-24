@@ -18,7 +18,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ['packages/{client,windgram}/src/**/*.{ts,tsx}', 'apps/{preview,windy-plugin}/src/**/*.{ts,tsx}'],
+    files: ['packages/{client,windgram}/src/**/*.{ts,tsx}', 'apps/preview/src/**/*.{ts,tsx}'],
     ignores: ['**/*.test.ts'],
     rules: {
       'no-restricted-imports': ['error', {

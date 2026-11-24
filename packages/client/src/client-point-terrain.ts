@@ -406,6 +406,7 @@ export class PointTerrainCache {
     } finally {
       clearTimeout(timer);
       callerSignal?.removeEventListener('abort', forwardAbort);
+      if (!deadlineController.signal.aborted) deadlineController.abort();
     }
   }
 }

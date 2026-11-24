@@ -105,11 +105,24 @@ function ensurePool(): PoolSlot[] | null {
         const failed = slot.activeTask;
         slot.activeTask = null;
         slot.busy = false;
+        const idx = created.indexOf(slot);
+        if (idx >= 0) created.splice(idx, 1);
+        try {
+          slot.worker.terminate?.();
+        } catch {
+          // Ignore terminate errors on a crashed worker.
+        }
         if (failed && inflight.delete(failed.id)) {
           if (failed.onAbort && failed.signal) failed.signal.removeEventListener('abort', failed.onAbort);
           failed.reject(new Error(err.message || 'Tile remap worker error'));
         }
-        pumpPool();
+        if (created.length === 0) {
+          pool = null;
+          workerUnavailable = true;
+          drainQueuesToFallback();
+        } else {
+          pumpPool();
+        }
         console.error('Tile remap worker error', err);
       };
       created.push(slot);
@@ -159,6 +172,18 @@ function pumpPool(): void {
 
 // Isolated workspace pool fallback when Web Workers are unavailable (e.g. headless test environments).
 const fallbackIdle: RemapBitmapWorkspace[] = [];
+
+function drainQueuesToFallback(): void {
+  while (fgQueue.length > 0 || bgQueue.length > 0) {
+    const task = fgQueue.shift() ?? bgQueue.shift()!;
+    if (task.onAbort && task.signal) task.signal.removeEventListener('abort', task.onAbort);
+    if (task.signal?.aborted) {
+      task.reject(abortError());
+      continue;
+    }
+    void runFallback(task.data, task.kind, task.theme, task.maskData).then(task.resolve, task.reject);
+  }
+}
 
 async function runFallback(
   data: ArrayBuffer,

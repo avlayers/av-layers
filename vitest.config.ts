@@ -6,7 +6,6 @@ const integration = [
   '{packages,apps,scripts,tests}/**/*.integration.test.ts',
   'apps/api/test/runtime.test.ts',
   'apps/batch/src/{archive,raster-pool,render,whole-domain-v5}.test.ts',
-  'apps/windy-plugin/src/bundle.test.ts',
   'scripts/sample-preview.test.ts'
 ];
 

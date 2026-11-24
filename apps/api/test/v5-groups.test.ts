@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CELL_BYTES, MAX_SAMPLE_RANGE_BYTES, sampleResponseV5Schema, type ManifestV5 } from '@av/contracts';
-import { ApiClient, layerMaxZoom, previewRasterSource, windyTileOptions } from '@av/client';
+import { ApiClient, layerMaxZoom, previewRasterSource } from '@av/client';
 import { createApp } from '../src/index';
 import { coverageMemory } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
@@ -65,7 +65,6 @@ describe('frame-group v5 serving', () => {
       const zoom = layerMaxZoom(pinned.manifest, layer);
       expect(zoom).toBe(options.maxZoom);
       expect(previewRasterSource(pinned.templates[layer], pinned.manifest.frames[0].id, zoom, 'Fixture').maxzoom).toBe(zoom);
-      expect(windyTileOptions(zoom, 0.5, 'Fixture').maxNativeZoom).toBe(zoom);
     }
     const indices = fixture.manifest.frames.map((_, index) => index);
     const series = await api.sample(pinned, { ...commonPoint, frames: 'all' });

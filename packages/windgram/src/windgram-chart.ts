@@ -382,9 +382,10 @@ export function renderWindgramSvg(
       const pillCx = pillX + pillW / 2;
       const classes = `wg-day-banner${panel.isSelectedDay ? ' is-selected' : ''}${panel.isBestDay ? ' is-best' : ''}`;
       const pillTitle = `${panel.isBestDay ? '★ ' : ''}${panel.label}`;
+      const rankHint = panel.isBestDay ? ' — ★ highest daily thermal score in window (peak lift height, w*, and surface wind)' : '';
       parts.push(
-        `<g class="${classes}" data-windgram-day="${escape(panel.dateKey)}" role="button" tabindex="0" aria-label="${escape(`Zoom to ${panel.label} 1-day windgram`)}">` +
-        `<title>${escape(`Open ${panel.label} 1-day windgram`)}</title>` +
+        `<g class="${classes}" data-windgram-day="${escape(panel.dateKey)}" role="button" tabindex="0" aria-label="${escape(`Zoom to ${panel.label} 1-day windgram${rankHint}`)}">` +
+        `<title>${escape(`Open ${panel.label} 1-day windgram${rankHint}`)}</title>` +
         `<rect x="${fmt(pillX)}" y="2.5" width="${fmt(pillW)}" height="14" rx="4.5" class="wg-day-banner-pill"/>` +
         text(pillCx, 12.2, pillTitle, 'text-anchor="middle" class="wg-day-banner-label"') +
         `</g>`,
@@ -457,7 +458,7 @@ export function renderWindgramSvg(
   return `<svg xmlns="${SVG_NS}" width="${fmt(view.width)}" height="${fmt(view.height)}" viewBox="0 0 ${fmt(view.width)} ${fmt(view.height)}" role="img" aria-label="Wind, temperature and clouds by hour and altitude" aria-describedby="${id}-description" class="windgram${hybrid ? ' windgram-hybrid' : ''}${view.compact ? ' windgram-compact' : ''}${stitched ? ' windgram-stitched' : ''}"><desc id="${id}-description">${escape(description)}</desc>${parts.join('\n')}</svg>`;
 }
 
-function renderKeyWindStrip(fieldMode: WindgramFieldMode): string {
+function renderKeyWindStrip(fieldMode: WindgramFieldMode, southernHemisphere = false): string {
   const hybrid = fieldMode === 'hybrid-climb';
   const colorFor = (kt: number) => (hybrid ? windBarbSpeedColor(kt) : kt < 9 ? '#78ff78' : '#ffffff');
   const samples = [
@@ -469,7 +470,7 @@ function renderKeyWindStrip(fieldMode: WindgramFieldMode): string {
   ] as const;
   const glyphs = samples
     .map(({ kt, x, label }) => {
-      const geo = barbGeometry(kt, 0, 14, false);
+      const geo = barbGeometry(kt, 0, 14, southernHemisphere);
       const color = colorFor(kt);
       const body = geo.calm
         ? `<circle r="${CALM_RADIUS}" fill="none" stroke="${color}" stroke-width="1.35"/>`
@@ -504,7 +505,7 @@ const LAPSE_SHORT_LABELS = [
   'Weak',
   'Marginal',
   'Stable',
-  'Very stbl',
+  'Weak inv',
   'Inversion',
 ] as const;
 
@@ -514,6 +515,7 @@ export function renderWindgramKey(
   system: UnitSystem,
   usesDsm = false,
   fieldMode: WindgramFieldMode = DEFAULT_WINDGRAM_FIELD_MODE,
+  southernHemisphere = false,
 ): string {
   const icon = (content: string, width = 32) => `<svg xmlns="${SVG_NS}" viewBox="0 0 ${width} 22" width="${width}" height="22" aria-hidden="true">${content}</svg>`;
   const feathers = 'half 5 / full 10 / flag 50 kt';
@@ -525,7 +527,7 @@ export function renderWindgramKey(
     '<rect x="2" y="2" width="28" height="18" rx="3" fill="#a7a4c0"/>' +
     '<path d="M4 19L19 4M12 19L27 4M4 11L11 4M20 19L27 12" stroke="#5b5875" stroke-width="1.2"/>',
   );
-  const windStrip = renderKeyWindStrip(fieldMode);
+  const windStrip = renderKeyWindStrip(fieldMode, southernHemisphere);
 
   if (fieldMode === 'lapse') {
     const humidity = icon(
