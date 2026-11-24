@@ -255,7 +255,7 @@ async function verifyTileCache(baseUrl: string, manifest: ManifestV5, request: t
   }, { retries: 2, delayMs: 1000, signal });
 }
 
-/** Deployment checks every registered model, accepting absent event-driven publications. */
+/** Deployment checks every registered model, accepting absent or expired event-driven publications. */
 export async function verifyApiDeployment(options: {
   baseUrl: string; expectedDeploymentId: string; signal?: AbortSignal; fetchImpl?: typeof fetch;
 }): Promise<void> {
@@ -268,9 +268,9 @@ export async function verifyApiDeployment(options: {
     const entry = catalog.find(entry => entry.model === product.modelId);
     invariant(entry, `Catalog omitted registered forecast model ${product.modelId}`);
     if (entry.available) return true;
-    invariant(product.execution.schedule.length === 0 && entry.error === 'publication-unavailable',
+    invariant(product.execution.schedule.length === 0 && (entry.error === 'publication-unavailable' || entry.error === 'not-retained'),
       `Catalog reports no publication for ${product.modelId}: ${entry.error ?? 'unknown error'}`);
-    console.log(`Deployment: ${product.modelId} has no publication; awaiting an external forecast cycle`);
+    console.log(`Deployment: ${product.modelId} has no active publication (${entry.error}); awaiting an external forecast cycle`);
     return false;
   });
   for (const product of published) {
