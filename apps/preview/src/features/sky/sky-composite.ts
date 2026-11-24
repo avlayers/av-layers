@@ -4,6 +4,7 @@ import {
   type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild
 } from '@av/client';
 import { resolveChannelStyles, type ResolvedChannelStyles } from '../map/channel-styles';
+import type { ChannelView, MapChannel } from '../../channels/channel';
 import type { MapTheme } from '../../themes/registry';
 import { canRemapTiles } from '../raster/tile-remap';
 import { CloudLayerController } from './cloud-layer';
@@ -21,7 +22,7 @@ const WARM_IDLE_MS = 120;
  * - `RainLayerController` (`#1` Inner Vignette Cuff + Crisp Dry Halo + intensity-coupled `RainAnimator`)
  * - `IsobarLayerController` (2 / 4 hPa sea-level pressure contours & H / L centers)
  */
-export class SkyComposite {
+export class SkyComposite implements MapChannel {
   private readonly supported: boolean;
   private readonly sampler: SynopticSampler;
   private readonly clouds: CloudLayerController;
@@ -140,6 +141,12 @@ export class SkyComposite {
     } else if (this.build && this.frame && !this.peeking) {
       this.scheduleHorizonWarm();
     }
+  }
+
+  update(view: ChannelView): void {
+    this.setTheme(view.theme);
+    this.setOpacity(view.opacity);
+    this.setVisibility(view);
   }
 
   setTheme(theme: MapTheme): void {

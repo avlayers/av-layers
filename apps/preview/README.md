@@ -66,7 +66,10 @@ scalar chart covers builds that publish no native profiles.
 
 - [src/index.tsx](src/index.tsx): the only production bootstrap.
 - [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
-- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): construction, commands, map/forecast/history wiring and shutdown.
+- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the store and API client, creates the map channels, routes commands and forecast events, and shuts down.
+- [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
+- [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
@@ -88,7 +91,8 @@ values and typed commands. URL/history behavior is tested through
 `url-state.test.ts`; controller policy is tested in Node without a browser.
 
 To change a control, update its store intent, command and component; leave the
-graphics engine alone. To add a behavior, use the existing client/contracts
+graphics engine alone. To add a map layer group, implement `MapChannel` and add
+it to the root's channel list; to add a theme, add one file under `src/themes/`. To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 
 ## Layer benchmark

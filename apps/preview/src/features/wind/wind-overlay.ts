@@ -1,6 +1,8 @@
 import type { Map } from 'maplibre-gl';
 import type { WindPreparedGrid } from '@av/client/wind';
 import type { PreparationBudget } from '@av/client';
+import type { ChannelView, MapChannel } from '../../channels/channel';
+import { themeOption } from '../../themes/registry';
 import { WindDeck, type WindDeckOptions, type WindField } from './wind-deck';
 
 export type { WindField };
@@ -8,7 +10,7 @@ type WindOverlayOptions = WindDeckOptions;
 interface WindOverlayAllocationOptions { budget?: PreparationBudget }
 
 /** Owns the GPU wind renderer and the retained prepared grid for the current scene. */
-export class WindOverlay {
+export class WindOverlay implements MapChannel {
   private field: WindField | null = null;
   private prepared: WindPreparedGrid | null = null;
   private releasePrepared: (() => void) | null = null;
@@ -83,6 +85,17 @@ export class WindOverlay {
 
   setField(field: WindField | null, mode: 'replace' | 'swap' = 'replace', frame: string | null = this.frame): void {
     this.install(field, null, mode, frame);
+  }
+
+  update(view: ChannelView): void {
+    const next: WindOverlayOptions = {
+      style: view.windStyle, visible: view.windVisible && !view.peeking, paused: view.windPaused,
+      units: view.units, darkChrome: themeOption(view.theme).darkChrome
+    };
+    const current = this.options;
+    if (next.style === current.style && next.visible === current.visible && next.paused === current.paused
+      && next.units === current.units && next.darkChrome === current.darkChrome) return;
+    this.setOptions(next);
   }
 
   setOptions(options: Partial<WindOverlayOptions>): void {
