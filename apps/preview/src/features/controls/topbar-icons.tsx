@@ -1,19 +1,12 @@
+import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { UnitSystem } from '@av/client';
-import {
-  CLOUD_STYLE_OPTIONS,
-  RAIN_STYLE_OPTIONS,
-  resolveChannelStyles,
-  type CloudStyleChoice,
-  type RainStyleChoice
-} from '../map/channel-styles';
-import { THEME_OPTIONS, themeOption, type MapTheme } from '../map/visual-theme';
+import { stepTheme, THEME_OPTIONS, themeOption, type MapTheme } from '../../themes/registry';
 import type { WindHeight, WindStatus, WindStyle } from '../wind/wind-model';
 import {
   DOCK_CHANNELS,
   formatWindLevelLabel,
   readThemeInfoOpen,
-  THEME_CHIP_LABELS,
   WIND_ENCODING_OPTIONS,
   writeThemeInfoOpen,
   type DockChannelKey,
@@ -51,83 +44,25 @@ export function ModelEmblem({ isAuto }: { isAuto: boolean }) {
   );
 }
 
-export function ThemeGlyph({ theme }: { theme: MapTheme }) {
-  const common = {
-    width: 16,
-    height: 16,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    'stroke-width': 1.8,
-    'stroke-linecap': 'round' as const,
-    'stroke-linejoin': 'round' as const,
-    'aria-hidden': true
-  };
-  switch (theme) {
-    case 'stone':
-      return (
-        <svg {...common}>
-          <circle cx="17.5" cy="6.5" r="2.6" />
-          <path d="M2.5 19.5 9.2 9.5l4.1 5.3 3-3.8 5.2 8.5Z" />
-        </svg>
-      );
-    case 'slate':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="8.5" />
-          <circle cx="12" cy="12" r="4" stroke-dasharray="2.5 2.5" />
-          <path d="M12 12 18 6.5" />
-          <circle cx="15.5" cy="14.5" r="1.2" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case 'chart':
-      return (
-        <svg {...common}>
-          <ellipse cx="12" cy="13" rx="9.2" ry="6.4" />
-          <ellipse cx="12.4" cy="12.6" rx="5.8" ry="3.8" />
-          <ellipse cx="12.8" cy="12.2" rx="2.4" ry="1.5" />
-        </svg>
-      );
-    case 'alabaster':
-      return (
-        <svg {...common}>
-          <path d="M3 7.5c3.5-2.8 6.5 2.8 10 0s5-2.2 8 0" />
-          <path d="M3 12.5c3.5-2.8 6.5 2.8 10 0s5-2.2 8 0" />
-          <path d="M3 17.5c3.5-2.8 6.5 2.8 10 0s5-2.2 8 0" />
-        </svg>
-      );
-    case 'convergence':
-      return (
-        <svg {...common}>
-          <path d="M4.5 14.5h15a3 3 0 0 0 .4-5.96A4.4 4.4 0 0 0 11.5 7a3.4 3.4 0 0 0-6.2 1.8A2.8 2.8 0 0 0 4.5 14.5Z" />
-          <path d="M3 18.8h18" stroke-dasharray="3 2.5" />
-        </svg>
-      );
-    case 'blueprint':
-      return (
-        <svg {...common}>
-          <rect x="3.5" y="3.5" width="17" height="17" rx="2.5" />
-          <path d="M3.5 9.2h17M3.5 14.8h17M9.2 3.5v17M14.8 3.5v17" stroke-width="1.35" />
-        </svg>
-      );
-    case 'cockpit':
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="4.3" />
-          <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8" />
-        </svg>
-      );
-    case 'classic':
-      return (
-        <svg {...common}>
-          <path d="M2.5 9.5 12 5.5l9.5 4-9.5-1.6-9.5 1.6Z" />
-          <path d="M4 14.5h16M6 18h12" />
-        </svg>
-      );
-  }
+function ThemeGlyph({ theme }: { theme: MapTheme }) {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width={1.8}
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden
+    >
+      {themeOption(theme).glyph.map((shape, index) => h(shape.tag, { key: index, ...shape.attrs }))}
+    </svg>
+  );
 }
 
-export function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
+function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
   const common = {
     width: 17,
     height: 17,
@@ -211,14 +146,10 @@ export function ThemeIconPicker(props: {
   const touchTileSelectRef = useRef(false);
 
   const activeTheme = themeOption(props.theme);
-  const activeChipLabel = THEME_CHIP_LABELS[props.theme];
+  const activeChipLabel = themeOption(props.theme).chipLabel;
   const inspected = themeOption(hoveredTheme ?? props.theme);
-  const themeIndex = Math.max(0, THEME_OPTIONS.findIndex(item => item.id === props.theme));
 
-  const cycleTheme = (step: -1 | 1) => {
-    const next = THEME_OPTIONS[(themeIndex + step + THEME_OPTIONS.length) % THEME_OPTIONS.length];
-    if (next) props.onSelectTheme(next.id);
-  };
+  const cycleTheme = (step: -1 | 1) => props.onSelectTheme(stepTheme(props.theme, step));
 
   const toggleInfo = () => {
     setInfoOpen(prev => {
@@ -282,7 +213,7 @@ export function ThemeIconPicker(props: {
             <kbd class="hover-card-kbd">[ / ]</kbd>
           </div>
 
-          <div class="theme-icon-grid">
+          <div class="theme-icon-grid" style={{ "--av-theme-count": THEME_OPTIONS.length }}>
             {THEME_OPTIONS.map(option => {
               const selected = option.id === props.theme;
               return (
@@ -306,7 +237,7 @@ export function ThemeIconPicker(props: {
                   }}
                 >
                   <ThemeGlyph theme={option.id} />
-                  <span class="theme-tile-name">{THEME_CHIP_LABELS[option.id]}</span>
+                  <span class="theme-tile-name">{option.chipLabel}</span>
                   <span class="theme-tile-bar" style={{ background: option.swatch }} aria-hidden="true" />
                 </button>
               );
@@ -359,8 +290,6 @@ export function ThemeIconPicker(props: {
 export function WeatherChannelDock(props: {
   theme: MapTheme;
   units: UnitSystem;
-  cloudStyle: CloudStyleChoice;
-  rainStyle: RainStyleChoice;
   windSupported: boolean;
   windVisible: boolean;
   windStyle: WindStyle;
@@ -375,8 +304,6 @@ export function WeatherChannelDock(props: {
   disabled: boolean;
   onToggleChannel: (channel: WeatherChannelKey) => void;
   onPrepareChannel?: (channel: WeatherChannelKey) => void;
-  onSetCloudStyle: (style: CloudStyleChoice) => void;
-  onSetRainStyle: (style: RainStyleChoice) => void;
   onSetWindStyle: (style: WindStyle) => void;
   onSetWindPaused: (paused: boolean) => void;
   onSetPeeking: (peeking: boolean) => void;
@@ -499,7 +426,6 @@ export function WeatherChannelDock(props: {
     ? DOCK_CHANNELS.find(c => c.key === activeInfoKey) ?? null
     : null;
   const activeIsOn = activeInfoKey ? channelActive(activeInfoKey) : false;
-  const resolvedStyles = resolveChannelStyles(props.theme, { cloudStyle: props.cloudStyle, rainStyle: props.rainStyle });
   const windPausedActive = props.windVisible && props.windPaused && props.windStyle !== 'barbs';
   const windStateBadge = !activeIsOn ? 'OFF'
     : props.windStatus === 'loading' ? 'LOADING'
@@ -654,8 +580,6 @@ export function WeatherChannelDock(props: {
           </div>
           <p class="hover-card-detail">
             {activeDesc.detail(props.theme, {
-              cloudStyle: props.cloudStyle,
-              rainStyle: props.rainStyle,
               windStyle: props.windStyle,
               windHeight: props.windHeight,
               units: props.units
@@ -695,54 +619,6 @@ export function WeatherChannelDock(props: {
               >
                 {windPausedActive ? 'Play' : 'Pause'}
               </button>
-            </div>
-          ) : null}
-
-          {activeDesc.key === 'clouds' ? (
-            <div class="hover-encoding-group" role="group" aria-label="Cloud cover encoding">
-              {CLOUD_STYLE_OPTIONS.map(opt => {
-                const selected = props.cloudStyle === opt.id;
-                const isAutoTarget = props.cloudStyle === 'auto' && opt.id === resolvedStyles.cloudStyle;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    class={`hover-encoding-pill${selected ? ' is-selected' : ''}${isAutoTarget ? ' is-auto-target' : ''}`}
-                    aria-pressed={selected}
-                    title={opt.summary}
-                    onClick={() => {
-                      props.onSetCloudStyle(opt.id);
-                      if (touchInspectKey) armTouchAutoDismiss();
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          {activeDesc.key === 'rain' ? (
-            <div class="hover-encoding-group" role="group" aria-label="Rain boundary encoding">
-              {RAIN_STYLE_OPTIONS.map(opt => {
-                const selected = props.rainStyle === opt.id;
-                const isAutoTarget = props.rainStyle === 'auto' && opt.id === resolvedStyles.rainStyle;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    class={`hover-encoding-pill${selected ? ' is-selected' : ''}${isAutoTarget ? ' is-auto-target' : ''}`}
-                    aria-pressed={selected}
-                    title={opt.summary}
-                    onClick={() => {
-                      props.onSetRainStyle(opt.id);
-                      if (touchInspectKey) armTouchAutoDismiss();
-                    }}
-                  >
-                    {opt.label}
-                  </button>
-                );
-              })}
             </div>
           ) : null}
 

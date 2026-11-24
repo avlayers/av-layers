@@ -1,7 +1,8 @@
 {
-  "name": "windy-av-layer",
+  "name": "av-layers",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "packageManager": "pnpm@10.34.9",
   "engines": {
@@ -16,9 +17,9 @@
     }
   },
   "scripts": {
-    "comparison": "node --import tsx apps/batch/src/comparison/cli.ts",
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
+    "knip": "knip --no-progress",
     "typecheck": "node --input-type=module -e \"import { spawn } from 'node:child_process'; const run = p => new Promise((res, rej) => spawn('tsc', ['--noEmit', ...(p ? ['-p', p] : [])], { stdio: 'inherit', shell: process.platform === 'win32' }).on('exit', c => c ? rej(c) : res())); await Promise.all([run(), run('apps/preview/tsconfig.json'), run('apps/api/tsconfig.json')]).catch(() => process.exit(1));\"",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -36,9 +37,11 @@
     "bench:preview": "node --import tsx scripts/preview-layer-bench.ts",
     "smoke:wind": "node --import tsx scripts/wind-feature-smoke.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
-    "verify": "node scripts/setup-pmtiles.mjs --check && node --input-type=module -e \"import { spawn } from 'node:child_process'; const run = s => new Promise((res, rej) => spawn('pnpm', [s], { stdio: 'inherit', shell: process.platform === 'win32' }).on('exit', c => c ? rej(c) : res())); await Promise.all([run('lint'), run('typecheck'), run('docs:check'), run('build')]).catch(() => process.exit(1));\" && vitest run && git diff --check",
+    "verify": "node scripts/setup-pmtiles.mjs --check && node --input-type=module -e \"import { spawn } from 'node:child_process'; const run = s => new Promise((res, rej) => spawn('pnpm', [s], { stdio: 'inherit', shell: process.platform === 'win32' }).on('exit', c => c ? rej(c) : res())); await Promise.all([run('lint'), run('typecheck'), run('knip'), run('docs:check'), run('build')]).catch(() => process.exit(1));\" && vitest run && git diff --check",
     "test:frontend": "vitest run --project unit apps/preview packages/client packages/windgram",
-    "check:frontend": "pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm --filter @av/preview build"
+    "check:frontend": "pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm --filter @av/preview build",
+    "visual-check": "node --import tsx scripts/visual-check.ts",
+    "api-golden": "node --import tsx scripts/api-golden.ts"
   },
   "devDependencies": {
     "@av/client": "workspace:*",
@@ -49,8 +52,13 @@
     "@av/thermodynamics": "workspace:*",
     "@cloudflare/workers-types": "catalog:",
     "@types/node": "22.19.15",
+    "@types/pngjs": "6.0.5",
     "eslint": "10.14.0",
+    "knip": "5.66.0",
+    "p-retry": "9.0.0",
+    "pixelmatch": "7.1.0",
     "playwright": "1.64.0",
+    "pngjs": "7.0.0",
     "tsx": "4.23.15",
     "typescript": "catalog:",
     "typescript-eslint": "8.72.1",

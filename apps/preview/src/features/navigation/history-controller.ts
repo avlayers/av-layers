@@ -1,15 +1,15 @@
 import { previewQuery, previewUrl } from './url-state';
 
-export type PreviewUrlState = Parameters<typeof previewUrl>[1];
+type PreviewUrlState = Parameters<typeof previewUrl>[1];
 
-export interface HistoryHost {
+interface HistoryHost {
   pathname(): string;
   search(): string;
   push(url: string): void;
   replace(url: string): void;
 }
 
-export interface HistoryController {
+interface HistoryController {
   read(search: string): ReturnType<typeof previewQuery>;
   write(state: PreviewUrlState, mode: 'push' | 'replace', allowed: boolean): void;
   beginRestore(): number;

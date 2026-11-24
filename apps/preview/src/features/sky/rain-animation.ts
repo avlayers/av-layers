@@ -1,19 +1,15 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
-import type { RainStyleId, ResolvedChannelStyles } from '../map/channel-styles';
+import { paletteValueLut, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
+import type { ResolvedChannelStyles } from '../map/channel-styles';
 import {
-  buildInwardTickSegments,
-  buildScallopedPolyline,
   extractOrientedContours,
   type GeoPt
 } from './contour-rings';
 
-const LUT_SIZE = 32_768;
-const MAX_COLOR_DIST_SQ = 1_200;
 const MAX_LAT = 85.05112878;
 const DEG = Math.PI / 180;
-export const MIN_RAIN_MMH = 0.15;
-export const RAIN_CUFF_EDGE_MMH = 0.65;
+const MIN_RAIN_MMH = 0.15;
+const RAIN_CUFF_EDGE_MMH = 0.65;
 const SHOWER_CONTOUR_MMH = 0.65;
 const SQUALL_CONTOUR_MMH = 8.0;
 
@@ -30,7 +26,7 @@ const SPRITE_CELL_H = 72;
 const WEIGHT_LUT_MAX_MMH = 64;
 const WEIGHT_LUT_SIZE = 1_280;
 
-export interface PrecipBounds {
+interface PrecipBounds {
   readonly west: number;
   readonly south: number;
   readonly east: number;
@@ -55,7 +51,7 @@ export interface PrecipField {
   readonly wetCdf: Float32Array;
 }
 
-export interface ViewportSpawnDistribution {
+interface ViewportSpawnDistribution {
   readonly indices: Uint32Array;
   readonly cdf: Float32Array;
   readonly visibleWetFraction: number;
@@ -67,7 +63,7 @@ export interface RainContourGeoJson {
   readonly type: 'FeatureCollection';
   readonly features: Array<{
     readonly type: 'Feature';
-    readonly properties: { readonly tier: 'shower' | 'squall' | 'tick'; readonly mmh: number };
+    readonly properties: { readonly tier: 'shower' | 'squall'; readonly mmh: number };
     readonly geometry: { readonly type: 'LineString'; readonly coordinates: Array<[number, number]> };
   }>;
 }
@@ -100,43 +96,8 @@ function mmhWeight(v: number): number {
 }
 
 function getRainRgb555Lut(): Float32Array {
-  if (rainRgb555Lut) return rainRgb555Lut;
-  const lut = new Float32Array(LUT_SIZE).fill(0);
-  const rgb = RAIN_COLORS.map(hex => {
-    const clean = hex.startsWith('#') ? hex.slice(1) : hex;
-    return [
-      Number.parseInt(clean.slice(0, 2), 16),
-      Number.parseInt(clean.slice(2, 4), 16),
-      Number.parseInt(clean.slice(4, 6), 16)
-    ] as const;
-  });
-  const midpoints = RAIN_COLORS.map((_, i) => {
-    const lo = RAIN_EDGES[i] ?? 0.1;
-    const hi = RAIN_EDGES[i + 1] ?? (lo + 20);
-    return (lo + hi) * 0.5;
-  });
-  for (let r5 = 0; r5 < 32; r5++) {
-    const r = (r5 << 3) | (r5 >> 2);
-    for (let g5 = 0; g5 < 32; g5++) {
-      const g = (g5 << 3) | (g5 >> 2);
-      for (let b5 = 0; b5 < 32; b5++) {
-        const b = (b5 << 3) | (b5 >> 2);
-        let bestIdx = -1;
-        let bestDist = MAX_COLOR_DIST_SQ + 1;
-        for (let i = 0; i < rgb.length; i++) {
-          const [cr, cg, cb] = rgb[i]!;
-          const dr = r - cr, dg = g - cg, db = b - cb;
-          const dist = dr * dr + dg * dg + db * db;
-          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
-        }
-        if (bestIdx >= 0 && bestDist <= MAX_COLOR_DIST_SQ) {
-          lut[(r5 << 10) | (g5 << 5) | b5] = midpoints[bestIdx]!;
-        }
-      }
-    }
-  }
-  rainRgb555Lut = lut;
-  return lut;
+  // Unmatched colours read as dry (0 mm/h).
+  return rainRgb555Lut ??= paletteValueLut(RAIN_COLORS, RAIN_EDGES, 20).map(value => Math.max(0, value));
 }
 
 /**
@@ -316,11 +277,8 @@ export function renderRainInnerVignetteRgba(
   }
 
   const [cr, cg, cb] = styles.rainEdge.cuffRgb;
-  const style = styles.rainStyle;
-  const cuffCells = style === 'vignette-cuff' ? 13.5 : style === 'wet-lens' ? 7.5 : 8.5;
-  const maxAlpha = style === 'vignette-cuff'
-    ? styles.rainEdge.cuffMaxAlpha
-    : Math.round(styles.rainEdge.cuffMaxAlpha * 0.68);
+  const cuffCells = 13.5;
+  const maxAlpha = styles.rainEdge.cuffMaxAlpha;
 
   let maxPlacedAlpha = 0;
   for (let i = 0; i < n; i++) {
@@ -490,17 +448,8 @@ export function samplePrecipMmh(field: PrecipField, lon: number, lat: number, pr
   return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy;
 }
 
-/**
- * Extracts oriented storm-cell perimeter contours for the active `RainStyleId`:
- * - `'vignette-cuff'` (#1 default) & `'wet-lens'` (#4): smooth crisp dry-halo perimeter + squall core
- * - `'sigwx-scallop'` (#2): outward-bulging aviation SIGWX scalloped cloud arcs
- * - `'inward-comb'` (#3): perimeter contour + inward-pointing slanted rain-tick hachures
- */
-export function buildRainContourGeoJson(
-  field: PrecipField,
-  rainStyle: RainStyleId = 'vignette-cuff',
-  viewSpanDeg = Math.max(0.2, field.east - field.west)
-): RainContourGeoJson {
+/** Extracts oriented storm-cell perimeter contours: a crisp dry-halo perimeter plus the squall core. */
+export function buildRainContourGeoJson(field: PrecipField): RainContourGeoJson {
   if (field.maxMmh < SHOWER_CONTOUR_MMH || field.cols < 2 || field.rows < 2) {
     return { type: 'FeatureCollection', features: [] };
   }
@@ -528,7 +477,6 @@ export function buildRainContourGeoJson(
   };
 
   const features: RainContourGeoJson['features'] = [];
-  const scaleDeg = Math.max(0.015, viewSpanDeg);
 
   const levels: ReadonlyArray<{ tier: 'shower' | 'squall'; mmh: number }> = [
     { tier: 'shower', mmh: SHOWER_CONTOUR_MMH },
@@ -539,34 +487,11 @@ export function buildRainContourGeoJson(
     if (field.maxMmh < mmh) continue;
     const rings = extractOrientedContours(grid, cols, rows, mmh, toGeo, 4);
     for (const ring of rings) {
-      if (rainStyle === 'sigwx-scallop') {
-        const step = tier === 'squall' ? scaleDeg * 0.018 : scaleDeg * 0.026;
-        const bulge = tier === 'squall' ? step * 0.34 : step * 0.30;
-        features.push({
-          type: 'Feature',
-          properties: { tier, mmh },
-          geometry: { type: 'LineString', coordinates: buildScallopedPolyline(ring, step, bulge) }
-        });
-        continue;
-      }
-
       features.push({
         type: 'Feature',
         properties: { tier, mmh },
         geometry: { type: 'LineString', coordinates: ring }
       });
-
-      if (rainStyle === 'inward-comb') {
-        const spacing = tier === 'squall' ? scaleDeg * 0.013 : scaleDeg * 0.018;
-        const tickLen = tier === 'squall' ? scaleDeg * 0.011 : scaleDeg * 0.0085;
-        for (const [base, tip] of buildInwardTickSegments(ring, spacing, tickLen)) {
-          features.push({
-            type: 'Feature',
-            properties: { tier: 'tick', mmh },
-            geometry: { type: 'LineString', coordinates: [base, tip] }
-          });
-        }
-      }
     }
   }
   return { type: 'FeatureCollection', features };

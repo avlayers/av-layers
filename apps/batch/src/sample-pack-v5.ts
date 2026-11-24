@@ -19,7 +19,7 @@ export interface ShardedSamplePackShard {
   readonly sha256: string;
 }
 
-export interface ShardedSamplePackTarget {
+interface ShardedSamplePackTarget {
   readonly root: string;
   readonly model: string;
   readonly buildId: string;

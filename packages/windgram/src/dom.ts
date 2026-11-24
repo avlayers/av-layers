@@ -6,12 +6,11 @@ import { windgramCalloutStyles, type WindgramCalloutVariant } from './windgram-c
 import {
   mountWindgram as mount,
   type WindgramCalloutTrigger,
-  type WindgramInspectionMode,
   type WindgramMountOptions,
 } from './windgram-dom.ts';
 
 export type WindgramMount = ReturnType<typeof mountWindgram>;
-export type { WindgramCalloutTrigger, WindgramCalloutVariant, WindgramInspectionMode, WindgramMountOptions };
+export type { WindgramCalloutTrigger, WindgramCalloutVariant,   };
 
 const CHART_DOCUMENT_CSS = `${windgramChartCss}\n${windgramCalloutStyles}`;
 

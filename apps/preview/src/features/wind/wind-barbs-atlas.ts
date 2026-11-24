@@ -1,7 +1,7 @@
 import { quantizedBarbSpeed } from '@av/contracts/units';
 
-export interface BarbIcon { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number; mask: boolean }
-export type BarbMapping = Record<string, BarbIcon>;
+interface BarbIcon { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number; mask: boolean }
+type BarbMapping = Record<string, BarbIcon>;
 
 const SCALE = 4;
 const SLOT_CSS = 32;

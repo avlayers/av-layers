@@ -147,7 +147,7 @@ export interface WindgramView extends WindgramLayout {
   highCloudOnlyByHour?: readonly boolean[];
 }
 
-export type WindgramSeriesSpec = readonly [
+type WindgramSeriesSpec = readonly [
   key: string,
   label: string,
   color: string,

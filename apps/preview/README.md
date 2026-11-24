@@ -27,7 +27,8 @@ Reload the page to pick up a newly published build (subject to the API's
 
 Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
 A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.
-Builds with numeric wind render GPU particles through `weatherlayers-gl` and
+Builds with numeric wind render GPU particles through the in-house
+`WindParticleLayer` (deck.gl/luma.gl transform feedback) and
 WMO/ICAO knot-feathered barbs through `@deck.gl/layers` (`IconLayer` in the map
 plane, upright `TextLayer` labels). The barb atlas covers calm plus 5–280 kt in
 both hemispheres and generates on-demand icons above 280 kt. Overlays share
@@ -35,7 +36,9 @@ MapLibre's WebGL2 context (`MapLibreOverlay`, interleaved) and re-attach on
 `style.load`. Speed labels show `km/h` or `mph` at the selected height.
 The basemap combines AWS Terrarium DEM color-relief and multidirectional
 hillshade with OpenFreeMap vector roads, borders, airfields, peaks, and place
-labels across 8 soaring map themes.
+labels across four map themes (Stone, Slate, Chart and Classic). Each theme
+fixes its own lift palette and cloud and rain styling. Retired theme ids in old
+links fall back to the nearest kept theme.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.
@@ -45,10 +48,8 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`1,200,000 B` gzip) and lazy
-(`300,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
-The startup cap reserves the pinned `@deck.gl/*`, `@luma.gl/*` and `weatherlayers-gl`
-renderer set.
+[Build checks](vite.config.ts) bound startup and lazy JavaScript transfer (see
+[preview performance](../../docs/preview-performance.md)) and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. The km/mi control sets units.
@@ -63,13 +64,16 @@ scalar chart covers builds that publish no native profiles.
 
 - [src/index.tsx](src/index.tsx): the only production bootstrap.
 - [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
-- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): construction, commands, map/forecast/history wiring and shutdown.
+- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the store and API client, creates the map channels, routes commands and forecast events, and shuts down.
+- [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
+- [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
 - [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
-- [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl/WeatherLayers particles, map-plane barbs and labels.
+- [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
 - [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
@@ -85,7 +89,11 @@ values and typed commands. URL/history behavior is tested through
 `url-state.test.ts`; controller policy is tested in Node without a browser.
 
 To change a control, update its store intent, command and component; leave the
-graphics engine alone. To add a behavior, use the existing client/contracts
+graphics engine alone. To add a map layer group, implement `MapChannel` and add
+it to the root's channel list, which updates, clears and destroys every channel.
+A group that loads forecast data also needs a select call where the root selects
+the raster and sky frames;
+to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 
 ## Layer benchmark

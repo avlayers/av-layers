@@ -47,7 +47,7 @@ const BACKGROUND_BYTES = 2 * 1024 * 1024;
 const FOREGROUND_RESERVE_ACTIVE = 2;
 const FOREGROUND_RESERVE_BYTES = 2 * 1024 * 1024;
 
-export type CapacityCode = 'capacity' | 'configuration';
+type CapacityCode = 'capacity' | 'configuration';
 
 export class ForecastCapacityError extends Error {
   constructor(readonly code: CapacityCode, message: string) {

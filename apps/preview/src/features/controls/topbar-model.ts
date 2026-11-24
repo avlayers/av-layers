@@ -1,30 +1,13 @@
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import type { UnitSystem } from '@av/client';
-import {
-  CLOUD_STYLE_OPTIONS,
-  RAIN_STYLE_OPTIONS,
-  resolveChannelStyles,
-  type CloudStyleChoice,
-  type RainStyleChoice
-} from '../map/channel-styles';
-import { themeOption, type MapTheme } from '../map/visual-theme';
+import { themeOption, type MapTheme } from '../../themes/registry';
+import type { CloudStyleId } from '../../themes/theme';
 import { WIND_STYLE_LABELS, windStopLabel, type WindHeight, type WindStyle } from '../wind/wind-model';
 
 export type WeatherChannelKey = 'lift' | 'wind' | 'clouds' | 'rain' | 'isobars';
 export type DockChannelKey = WeatherChannelKey | 'peek';
 
 const THEME_INFO_STORAGE_KEY = 'av.preview.themeInfoOpen';
-
-export const THEME_CHIP_LABELS: Readonly<Record<MapTheme, string>> = {
-  stone: 'Stone',
-  slate: 'Slate',
-  chart: 'Chart',
-  alabaster: 'Alabaster',
-  convergence: 'Converge',
-  blueprint: 'Blueprint',
-  cockpit: 'Cockpit',
-  classic: 'Classic'
-};
 
 export const WIND_ENCODING_OPTIONS: ReadonlyArray<{ readonly id: WindStyle; readonly label: string; readonly summary: string }> = [
   { id: 'trails', label: 'Flow', summary: WIND_STYLE_LABELS.trails },
@@ -87,15 +70,19 @@ export function writeThemeInfoOpen(open: boolean): void {
   }
 }
 
-export interface ChannelDetailContext {
-  readonly cloudStyle?: CloudStyleChoice;
-  readonly rainStyle?: RainStyleChoice;
+const CLOUD_STYLE_SUMMARIES: Readonly<Record<CloudStyleId, string>> = {
+  'sunlit-veil': 'Billowy sunlit Cu + neutral overcast ground shadow',
+  nephanalysis: 'Crisp vector 40 / 75% cloud isolines + airy veil',
+  'satellite-ir': 'Simulated IR deck (bright upper tops, gray low cloud)'
+};
+
+interface ChannelDetailContext {
   readonly windStyle?: WindStyle;
   readonly windHeight?: WindHeight;
   readonly units?: UnitSystem;
 }
 
-export interface ChannelDescriptor {
+interface ChannelDescriptor {
   readonly key: DockChannelKey;
   readonly id: string;
   readonly shortLabel: string;
@@ -111,9 +98,7 @@ export const DOCK_CHANNELS: readonly ChannelDescriptor[] = [
     id: 'toggle-lift',
     shortLabel: 'Lift',
     title: 'Thermal Lift',
-    detail: theme => theme === 'classic'
-      ? 'Usable thermal ceiling in classic 22-step soaring palette'
-      : `Usable thermal ceiling (${themeOption(theme).shortLabel} palette)`
+    detail: theme => themeOption(theme).liftDetail
   },
   {
     key: 'wind',
@@ -133,24 +118,14 @@ export const DOCK_CHANNELS: readonly ChannelDescriptor[] = [
     id: 'toggle-clouds',
     shortLabel: 'Clouds',
     title: 'Cloud Cover',
-    hasStyles: true,
-    detail: (theme, ctx) => {
-      const resolved = resolveChannelStyles(theme, ctx);
-      const found = CLOUD_STYLE_OPTIONS.find(opt => opt.id === resolved.cloudStyle);
-      return found?.summary ?? 'Smooth cumulus billows & neutral overcast ground shadow';
-    }
+    detail: theme => CLOUD_STYLE_SUMMARIES[themeOption(theme).cloudStyle]
   },
   {
     key: 'rain',
     id: 'toggle-rain',
     shortLabel: 'Rain',
     title: 'Precipitation',
-    hasStyles: true,
-    detail: (theme, ctx) => {
-      const resolved = resolveChannelStyles(theme, ctx);
-      const found = RAIN_STYLE_OPTIONS.find(opt => opt.id === resolved.rainStyle);
-      return found?.summary ?? 'Asymmetric inner storm cuff + crisp dry halo & falling rain';
-    }
+    detail: () => 'Asymmetric inner storm cuff + crisp dry halo & falling rain'
   },
   {
     key: 'isobars',

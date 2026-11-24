@@ -7,7 +7,7 @@ The API model catalog lists published models. Each expanded latest-build respons
 supplies its build ID, cycle, frame times, coverage and calculation methods.
 These records identify the forecast displayed by the clients.
 
-The [Actions history](https://github.com/jdorrance/av-layers/actions) records
+The [Actions history](https://github.com/avlayers/av-layers/actions) records
 verification, deployments, forecasts and terrain imports. Forecast manifests
 record elapsed time, peak memory and capacity accounting. Follow
 [operations](operations.md) for retry, resume, rollback and publication checks.

@@ -2,6 +2,7 @@
   "name": "@av/batch",
   "version": "0.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "dependencies": {
     "@av/contracts": "workspace:*",
@@ -10,6 +11,7 @@
     "@aws-sdk/client-s3": "3.1160.0",
     "@azohra/meteo.grib": "0.1.4",
     "geotiff": "3.0.5",
+    "p-retry": "9.0.0",
     "pmtiles": "catalog:",
     "sharp": "0.35.5",
     "zarrita": "0.7.5",

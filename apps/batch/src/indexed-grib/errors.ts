@@ -1,4 +1,4 @@
-export type IndexedGribErrorCode =
+type IndexedGribErrorCode =
   | 'invalid-option'
   | 'run-unavailable'
   | 'record-missing'

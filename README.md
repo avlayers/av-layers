@@ -30,7 +30,13 @@ The [terrain example](docs/development.md#terrain-refinement) uses
 
 Complete [setup](docs/development.md#setup) in each new worktree.
 Run `pnpm test` while working. `pnpm test:integration` exercises local workerd
-and PMTiles. Run `pnpm verify` for both suites and app builds.
+and PMTiles. Run `pnpm verify` for lint, types, unused code (`knip`), both suites
+and app builds.
+
+For a structural change, compare against a checkout of `main`:
+`pnpm api-golden --baseline ../main` checks every API route and
+`pnpm visual-check --baseline ../main --out output/visual` compares map screenshots
+for every theme.
 
 [Local development](docs/development.md) covers test data and server options.
 
@@ -54,6 +60,13 @@ and PMTiles. Run `pnpm verify` for both suites and app builds.
 - [Development](docs/development.md): working on the code.
 - [Operations](docs/operations.md): publishing forecasts and deploying the apps.
 - [Deployments](docs/status.md): live applications and build history.
+- [Decisions](docs/decisions/README.md): licence, libraries versus in-repo code, and map themes.
+- [Contributing](CONTRIBUTING.md): the contributor licence agreement and pull requests.
 
 Source data and third-party license notices are in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+## License
+
+[AGPL-3.0-only](LICENSE). Contributions are accepted under the
+[contributor licence agreement](CLA.md); see [contributing](CONTRIBUTING.md).

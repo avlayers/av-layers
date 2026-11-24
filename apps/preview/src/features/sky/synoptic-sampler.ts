@@ -29,7 +29,7 @@ export interface ViewportBounds {
   readonly north: number;
 }
 
-export interface SynopticChannelNeed {
+interface SynopticChannelNeed {
   readonly needClouds?: boolean;
   readonly needMslp?: boolean;
 }

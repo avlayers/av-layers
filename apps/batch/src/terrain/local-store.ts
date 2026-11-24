@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
+import pRetry from 'p-retry';
 import { ASSET_MAX_BYTES, type TerrainStorage } from './contract.js';
 
 class MetadataChanged extends Error {}
@@ -12,18 +13,12 @@ export function localTerrainStorage(directory: string): TerrainStorage {
     if (!/^terrain\/(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(key) || key.split('/').some(part => part === '.' || part === '..')) throw new Error('Invalid local terrain object key');
     return join(root, key);
   }
-  async function retry<T>(key: string, signal: AbortSignal | undefined, run: (fresh: boolean) => Promise<T>, onRetry?: () => void): Promise<T> {
-    for (let attempt = 0; ; attempt++) {
-      signal?.throwIfAborted();
-      if (attempt) onRetry?.();
-      try { return await run(attempt > 0); }
-      catch (error) {
-        if (!(error instanceof MetadataChanged)) throw error;
-        etags.delete(key);
-        signal?.throwIfAborted();
-        if (attempt >= 2) throw error;
-      }
-    }
+  function retry<T>(key: string, signal: AbortSignal | undefined, run: (fresh: boolean) => Promise<T>, onRetry?: () => void): Promise<T> {
+    return pRetry(attempt => { if (attempt > 1) onRetry?.(); return run(attempt > 1); }, {
+      retries: 2, minTimeout: 0, signal,
+      onFailedAttempt: ({ error }) => { if (error instanceof MetadataChanged) etags.delete(key); },
+      shouldRetry: ({ error }) => error instanceof MetadataChanged
+    });
   }
   async function head(key: string, signal?: AbortSignal, fresh = false) {
     const path = pathFor(key);

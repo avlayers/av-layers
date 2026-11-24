@@ -78,7 +78,7 @@ describe('declarative workflows', () => {
       const job = record(jobs[name]);
       expect(job['runs-on']).toBe('ubuntu-24.04');
       for (const step of list(job.steps).map(record)) {
-        if (step.uses === 'actions/upload-artifact@v4') expect(record(step.with).overwrite).toBe(true);
+        if (String(step.uses).startsWith('actions/upload-artifact@')) expect(record(step.with).overwrite).toBe(true);
         if (typeof step.run === 'string') expect(step.run).not.toMatch(/operations forecast|operations deploy|pnpm forecast/);
       }
     }
@@ -158,9 +158,9 @@ describe('declarative workflows', () => {
     expect(record(publisher.env).R2_SECRET_ACCESS_KEY).toBe('${{ secrets.R2_SECRET_ACCESS_KEY }}');
     const steps = list(publisher.steps).map(record);
     expect(steps.find(step => step.run === 'pnpm operations forecast')?.if).toBeUndefined();
-    expect(steps.filter(step => step.uses === 'actions/download-artifact@v4' && step.name !== 'Download retained shard payloads').map(step => step.name)).toEqual(['Download build plan']);
+    expect(steps.filter(step => String(step.uses).startsWith('actions/download-artifact@') && step.name !== 'Download retained shard payloads').map(step => step.name)).toEqual(['Download build plan']);
     expect(list(shard.steps).map(record).some(step => step.name === 'Upload completed shard')).toBe(false);
-    const plan = list(record(jobs.prepare).steps).map(record).find(step => step.uses === 'actions/upload-artifact@v4' && step.if === "steps.plan.outputs.ready == 'true'")!;
+    const plan = list(record(jobs.prepare).steps).map(record).find(step => String(step.uses).startsWith('actions/upload-artifact@') && step.if === "steps.plan.outputs.ready == 'true'")!;
     expect(String(record(plan.with).path)).toContain('output/coverage/');
     expect(String(record(plan.with).path)).toContain('output/shard-credentials.json');
     expect(String(record(plan.with).path)).toContain('output/terrain/prepared/*/manifest.json');
@@ -170,7 +170,7 @@ describe('declarative workflows', () => {
     for (const part of ['output/plan.json', 'output/workflow.json', 'output/shards/*/*.json', 'output/builds/*/*/*.json', 'output/coverage/']) expect(String(record(bundle.with).path)).toContain(part);
     const full = steps.find(step => String(step.name).startsWith('Upload full build artifacts'))!;
     expect(full.if).toBe("${{ always() && env.RETAIN_FULL_ARTIFACTS == 'true' }}");
-    for (const step of [...list(shard.steps).map(record), ...steps]) if (step.uses === 'actions/upload-artifact@v4') expect(String(record(step.with).path)).not.toContain('shard-credentials.json');
+    for (const step of [...list(shard.steps).map(record), ...steps]) if (String(step.uses).startsWith('actions/upload-artifact@')) expect(String(record(step.with).path)).not.toContain('shard-credentials.json');
     expect(String(record(full.with).path)).toContain('output/coverage/');
     expect(String(record(full.with).path)).toContain('output/terrain/');
     for (const [job, command] of [[record(jobs.prepare), 'forecast-plan'], [shard, 'forecast-shard']] as const) {
@@ -186,7 +186,7 @@ describe('declarative workflows', () => {
     const select = list(record(record(workflow('health.yml').jobs).select).steps).map(record);
     expect(record(select.find(step => step.run === 'node --import tsx scripts/workflow-models.ts')!.env).TARGET_ENV).toBe("${{ inputs.environment || 'production' }}");
     expect(record(steps.find(step => step.run === 'pnpm health')!.env).MODEL).toBe('${{ matrix.model }}');
-    expect(record(steps.find(step => step.uses === 'actions/upload-artifact@v4')!.with).name).toBe("health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}");
+    expect(record(steps.find(step => String(step.uses).startsWith('actions/upload-artifact@'))!.with).name).toBe("health-${{ inputs.environment || 'production' }}-${{ matrix.model }}-${{ github.run_id }}");
   });
 
 });

@@ -123,7 +123,7 @@ function stitchDirectedSegments(segments: Array<[GeoPt, GeoPt]>, minVertices: nu
   return polylines;
 }
 
-export function smoothPolyline(line: GeoPt[]): GeoPt[] {
+function smoothPolyline(line: GeoPt[]): GeoPt[] {
   if (line.length < 4) return line;
   const closed = Math.hypot(line[0]![0] - line[line.length - 1]![0], line[0]![1] - line[line.length - 1]![1]) < 1e-4;
   const out: GeoPt[] = closed ? [] : [line[0]!];
@@ -136,97 +136,4 @@ export function smoothPolyline(line: GeoPt[]): GeoPt[] {
   if (closed && out.length) out.push(out[0]!);
   else out.push(line[limit]!);
   return out;
-}
-
-/**
- * Generates outward-bulging aviation SIGWX scalloped arcs along an oriented contour polyline
- * (where outward/dry is the right-hand normal `(dy, -dx)`).
- */
-export function buildScallopedPolyline(line: GeoPt[], stepDeg: number, bulgeDeg: number): GeoPt[] {
-  if (line.length < 3 || stepDeg <= 0) return line;
-  const cosLat = Math.max(0.2, Math.cos((line[0]![1] * Math.PI) / 180));
-  const out: GeoPt[] = [line[0]!];
-  let carry = 0;
-  let anchor = line[0]!;
-
-  for (let i = 0; i < line.length - 1; i++) {
-    const p0 = line[i]!, p1 = line[i + 1]!;
-    const dx = (p1[0] - p0[0]) * cosLat;
-    const dy = p1[1] - p0[1];
-    const segLen = Math.hypot(dx, dy);
-    if (segLen < 1e-6) continue;
-    let dist = stepDeg - carry;
-    while (dist <= segLen) {
-      const t = dist / segLen;
-      const nextAnchor: GeoPt = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t];
-      appendScallopArc(out, anchor, nextAnchor, cosLat, bulgeDeg);
-      anchor = nextAnchor;
-      dist += stepDeg;
-    }
-    carry = segLen - (dist - stepDeg);
-  }
-  if (Math.hypot(anchor[0] - line[line.length - 1]![0], anchor[1] - line[line.length - 1]![1]) > 1e-5) {
-    appendScallopArc(out, anchor, line[line.length - 1]!, cosLat, bulgeDeg * 0.65);
-  }
-  return out;
-}
-
-function appendScallopArc(out: GeoPt[], a: GeoPt, b: GeoPt, cosLat: number, bulge: number): void {
-  const dx = (b[0] - a[0]) * cosLat;
-  const dy = b[1] - a[1];
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return;
-  // Right-hand outward normal in isotropic local degrees
-  const nx = dy / len;
-  const ny = -dx / len;
-  const steps = 5;
-  for (let s = 1; s <= steps; s++) {
-    const u = s / steps;
-    const arch = Math.sin(u * Math.PI) * bulge;
-    out.push([
-      a[0] + (b[0] - a[0]) * u + (nx * arch) / cosLat,
-      a[1] + (b[1] - a[1]) * u + ny * arch
-    ]);
-  }
-}
-
-/**
- * Generates inward-pointing slanted rain-tick hachure segments (`[base, tip]`) along an oriented contour
- * so each tick points unambiguously into the wet interior (`left-hand normal = (-dy, dx)`).
- */
-export function buildInwardTickSegments(
-  line: GeoPt[],
-  spacingDeg: number,
-  tickLenDeg: number
-): Array<[GeoPt, GeoPt]> {
-  if (line.length < 3 || spacingDeg <= 0 || tickLenDeg <= 0) return [];
-  const cosLat = Math.max(0.2, Math.cos((line[0]![1] * Math.PI) / 180));
-  const ticks: Array<[GeoPt, GeoPt]> = [];
-  let carry = spacingDeg * 0.5;
-
-  for (let i = 0; i < line.length - 1; i++) {
-    const p0 = line[i]!, p1 = line[i + 1]!;
-    const dx = (p1[0] - p0[0]) * cosLat;
-    const dy = p1[1] - p0[1];
-    const segLen = Math.hypot(dx, dy);
-    if (segLen < 1e-6) continue;
-    const tx = dx / segLen, ty = dy / segLen;
-    // Left-hand inward normal + slight 14-degree rain-slant tangent bias
-    const inX = -ty * 0.96 + tx * 0.26;
-    const inY = tx * 0.96 + ty * 0.26;
-
-    let dist = spacingDeg - carry;
-    while (dist <= segLen) {
-      const t = dist / segLen;
-      const bx = p0[0] + (p1[0] - p0[0]) * t;
-      const by = p0[1] + (p1[1] - p0[1]) * t;
-      ticks.push([
-        [bx, by],
-        [bx + (inX * tickLenDeg) / cosLat, by + inY * tickLenDeg]
-      ]);
-      dist += spacingDeg;
-    }
-    carry = segLen - (dist - spacingDeg);
-  }
-  return ticks;
 }

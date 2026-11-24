@@ -7,7 +7,7 @@ import type { AltitudeReference } from '../navigation/url-state';
 import { frameIndexFor } from '../timeline/timeline-model';
 
 export const LIFT_LAYERS: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
-export const HIDDEN_PREVIEW_LAYERS: ReadonlySet<LayerId> = new Set(['precip-rate']);
+const HIDDEN_PREVIEW_LAYERS: ReadonlySet<LayerId> = new Set(['precip-rate']);
 
 export interface LayerOption { readonly id: 'lift' | LayerId; readonly label: string }
 
@@ -28,9 +28,9 @@ export const validatedCustomLayer = (build: PinnedBuild | null, requested: Layer
 export const shortLayerName = (layer: LayerId, descriptor?: { label: string }): string =>
   layer.startsWith('cloud') ? 'Cloud' : (descriptor?.label ?? layer).replace(/\s*\(.*\)$/, '');
 
-export const liftLayers = (build: PinnedBuild): LayerId[] => LIFT_LAYERS.filter(layer => build.templates[layer]);
+const liftLayers = (build: PinnedBuild): LayerId[] => LIFT_LAYERS.filter(layer => build.templates[layer]);
 
-export const nonLiftLayers = (build: PinnedBuild): LayerId[] =>
+const nonLiftLayers = (build: PinnedBuild): LayerId[] =>
   renderedLayers(build.manifest.layers, build.manifest.descriptors.layers)
     .filter(layer => build.templates[layer] && !isLiftLayer(layer) && !HIDDEN_PREVIEW_LAYERS.has(layer));
 

@@ -199,7 +199,7 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
       hasMslp: true
     };
 
-    const styles = resolveChannelStyles('stone', { cloudStyle: 'auto', rainStyle: 'auto' });
+    const styles = resolveChannelStyles('stone');
     const iso = new IsobarLayerController(map);
     iso.paint(field, styles.isobar, true);
 

@@ -35,10 +35,10 @@ export type WindgramCalloutVariant = (typeof WINDGRAM_CALLOUT_VARIANTS)[number];
 export const DEFAULT_WINDGRAM_CALLOUT: WindgramCalloutVariant = 'tile-2x2';
 
 export type ParagliderWindLevel = 'missing' | 'calm' | 'ok' | 'moderate' | 'caution' | 'danger' | 'pennant';
-export type ClimbVisualLevel = 'none' | 'mild' | 'good' | 'strong';
+type ClimbVisualLevel = 'none' | 'mild' | 'good' | 'strong';
 export type CalloutHorizontalSide = 'left' | 'right';
 
-export interface WindgramCalloutPayload {
+interface WindgramCalloutPayload {
   readonly aglText: string;
   readonly mslText: string;
   readonly useTol: boolean;
@@ -47,11 +47,11 @@ export interface WindgramCalloutPayload {
   readonly unitSystem: UnitSystem;
 }
 
-export interface BoundWindgramCallout {
+interface BoundWindgramCallout {
   paint(payload: WindgramCalloutPayload): { readonly width: number; readonly height: number };
 }
 
-export interface WindgramCalloutRenderer {
+interface WindgramCalloutRenderer {
   readonly id: WindgramCalloutVariant;
   readonly stylesheet: string;
   renderSvg(): string;
@@ -861,14 +861,10 @@ const classicRenderer: WindgramCalloutRenderer = {
   },
 };
 
-export const WINDGRAM_CALLOUT_RENDERERS: Readonly<Record<WindgramCalloutVariant, WindgramCalloutRenderer>> = {
+const WINDGRAM_CALLOUT_RENDERERS: Readonly<Record<WindgramCalloutVariant, WindgramCalloutRenderer>> = {
   'tile-2x2': tile2x2Renderer,
   classic: classicRenderer,
 };
-
-export function resolveWindgramCalloutVariant(value: string | null | undefined): WindgramCalloutVariant {
-  return value === 'classic' || value === 'tile-2x2' ? value : DEFAULT_WINDGRAM_CALLOUT;
-}
 
 export function getWindgramCalloutRenderer(variant?: WindgramCalloutVariant): WindgramCalloutRenderer {
   return WINDGRAM_CALLOUT_RENDERERS[variant ?? DEFAULT_WINDGRAM_CALLOUT];

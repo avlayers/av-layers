@@ -1,16 +1,19 @@
-import type { MapTheme } from '../map/visual-theme';
+import type { MapTheme } from '../../themes/registry';
 import {
   createBitmapWorkspace,
   decodeAndRemapBitmap,
-  remapRgbaInPlace,
+  needsRemap,
   type RemapBitmapWorkspace,
   type RemapKind
 } from './tile-remap-core';
 import type { WorkerRemapRequest, WorkerRemapResponse } from './tile-remap.worker';
 
-export { remapRgbaInPlace, type RemapKind };
-
 let remapSupported: boolean | null = null;
+
+/** Whether this tile is repainted for `theme` in this browser. */
+export function shouldRemapTile(theme: MapTheme, data: ArrayBuffer): boolean {
+  return needsRemap(theme, data) && canRemapTiles();
+}
 
 export function canRemapTiles(): boolean {
   if (remapSupported !== null) return remapSupported;
@@ -28,7 +31,7 @@ export function canRemapTiles(): boolean {
   return remapSupported;
 }
 
-export interface RemapTileOptions {
+interface RemapTileOptions {
   readonly priority?: 'foreground' | 'background';
   readonly signal?: AbortSignal;
   readonly transferInput?: boolean;
@@ -208,7 +211,7 @@ export function remapTileToBitmap(
   options: RemapTileOptions = {}
 ): Promise<ImageBitmap> {
   if (options.signal?.aborted) return Promise.reject(abortError());
-  if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) {
+  if (!shouldRemapTile(theme, data)) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const slots = ensurePool();

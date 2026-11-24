@@ -1,6 +1,6 @@
 import sharp from 'sharp';
 
-export interface WebpImage {
+interface WebpImage {
   width: number;
   height: number;
   data: Uint8Array;

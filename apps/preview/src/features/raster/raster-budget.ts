@@ -4,16 +4,12 @@ import { WIND_FIELD_SAMPLER_BYTES, WIND_NUMERIC_BYTES, WIND_PREPARED_GRID_BYTES 
 
 export { WIND_FIELD_SAMPLER_BYTES, WIND_PREPARED_GRID_BYTES };
 
-export const RASTER_CACHE_TILES = 16;
 export const RASTER_PAN_TILES = 24;
 export const RASTER_MIPMAPPED_TILE_BYTES = 349_524;
 export const RASTER_TRANSIENT_TILE_BYTES = 16_384;
 export const MAP_TEXTURE_POOL_RESERVE_BYTES = 50 * RASTER_MIPMAPPED_TILE_BYTES;
 export const MAX_RASTER_SOURCES = 4;
-export const WIND_TRAIL_PIXELS = 2 * 1024 * 1024;
 export const WIND_TRAIL_WIDTH = 1.45;
-export const WIND_CANVAS_PIXELS = 8 * 1024 * 1024;
-export const WIND_CANVAS_BYTES = WIND_CANVAS_PIXELS * 4;
 export const WIND_DISPLAY_BYTES = 8 * 1024 * 1024;
 export const WIND_FRAME_PREPARED_BYTES = WIND_PREPARED_GRID_BYTES + WIND_FIELD_SAMPLER_BYTES;
 export const WIND_CACHE_CAPACITY_BYTES = 32 * 1024 * 1024;
@@ -21,7 +17,7 @@ export const VIEWPORT_BYTES = 120 * 1024 * 1024;
 const WIND_RESERVE_BYTES = WIND_NUMERIC_BYTES + WIND_DISPLAY_BYTES;
 const OVERVIEW_BYTES = 12 * 1024 * 1024;
 
-export interface WindHorizonProtectionInput {
+interface WindHorizonProtectionInput {
   readonly totalFrames: number;
   readonly readyFrames: number;
   readonly numericAllocatedBytes: number;

@@ -42,7 +42,7 @@ it('installs retained data, forwards options, and releases replaced grids', () =
   overlay.install(field, second as never, 'replace', 'f002');
   expect(first.retain!.mock.results[0]!.value).toHaveBeenCalledOnce();
   expect(second.retain).toHaveBeenCalledOnce();
-  overlay.setOptions({ style: 'barbs', units: 'imperial' });
+  overlay.update({ theme: 'stone', opacity: 1, units: 'imperial', peeking: false, liftVisible: true, cloudsVisible: true, rainVisible: true, isobarsVisible: true, windVisible: true, windStyle: 'barbs', windPaused: false });
   expect(instance.options.at(-1)).toMatchObject({ style: 'barbs', units: 'imperial' });
   overlay.clear();
   expect(instance.data.at(-1)).toMatchObject({ field: null, prepared: null, frame: null });

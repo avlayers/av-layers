@@ -1,14 +1,16 @@
 import type { Map } from 'maplibre-gl';
 import type { WindPreparedGrid } from '@av/client/wind';
 import type { PreparationBudget } from '@av/client';
+import type { ChannelView, MapChannel } from '../../channels/channel';
+import { themeOption } from '../../themes/registry';
 import { WindDeck, type WindDeckOptions, type WindField } from './wind-deck';
 
 export type { WindField };
-export type WindOverlayOptions = WindDeckOptions;
-export interface WindOverlayAllocationOptions { budget?: PreparationBudget }
+type WindOverlayOptions = WindDeckOptions;
+interface WindOverlayAllocationOptions { budget?: PreparationBudget }
 
 /** Owns the GPU wind renderer and the retained prepared grid for the current scene. */
-export class WindOverlay {
+export class WindOverlay implements MapChannel {
   private field: WindField | null = null;
   private prepared: WindPreparedGrid | null = null;
   private releasePrepared: (() => void) | null = null;
@@ -85,10 +87,21 @@ export class WindOverlay {
     this.install(field, null, mode, frame);
   }
 
-  setOptions(options: Partial<WindOverlayOptions>): void {
+  update(view: ChannelView): void {
+    const next: WindOverlayOptions = {
+      style: view.windStyle, visible: view.windVisible && !view.peeking, paused: view.windPaused,
+      units: view.units, darkChrome: themeOption(view.theme).darkChrome
+    };
+    const current = this.options;
+    if (next.style === current.style && next.visible === current.visible && next.paused === current.paused
+      && next.units === current.units && next.darkChrome === current.darkChrome) return;
+    this.applyOptions(next);
+  }
+
+  private applyOptions(options: WindOverlayOptions): void {
     if (this.destroyed) return;
-    this.options = { ...this.options, ...options };
-    try { this.deck.setOptions(this.options); } catch { /* the map is replacing its style */ }
+    this.options = options;
+    try { this.deck.setOptions(options); } catch { /* the map is replacing its style; the next map sync re-applies them */ }
   }
 
   clear(): void { this.install(null, null, 'replace', null); }

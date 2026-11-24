@@ -2,13 +2,13 @@ import type { SplitSource } from './source.js';
 import { recentSourceCycles } from '../source.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 import { splitGribFieldUrl, validateSplitGribCycle } from './fields.js';
-import { pause } from '../pause.js';
+import pRetry, { AbortError } from 'p-retry';
 
 const PROBE_CONCURRENCY = 4;
 const PROBE_ATTEMPTS = 3;
 
 
-export interface SplitGribDiscoveryResult {
+interface SplitGribDiscoveryResult {
   readonly schemaVersion: 1;
   readonly model: string;
   readonly cycle: string;
@@ -57,24 +57,27 @@ function probeFailure(error: unknown): string {
   return `${error instanceof Error ? error.message : String(error)}${code}`.slice(0, 256);
 }
 
+class ProbeFailure extends Error {
+  constructor(message: string, readonly final = false) { super(message); }
+}
+
 async function probeSentinel(url: string, fetchFn: typeof fetch, signal: AbortSignal): Promise<string | undefined> {
-  let failure = '';
-  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt++) {
-    signal.throwIfAborted();
-    try {
-      const response = await fetchFn(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS)]) });
+  try {
+    await pRetry(async () => {
+      let response: Response;
+      try { response = await fetchFn(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS)]) }); }
+      catch (error) { signal.throwIfAborted(); throw new ProbeFailure(probeFailure(error)); }
       try {
         if (response.ok) return;
-        failure = `HTTP ${response.status}`;
-        if (response.status !== 408 && response.status !== 429 && response.status < 500) return failure;
+        const failure = `HTTP ${response.status}`;
+        throw response.status !== 408 && response.status !== 429 && response.status < 500 ? new AbortError(new ProbeFailure(failure, true)) : new ProbeFailure(failure);
       } finally { await response.body?.cancel(); }
-    } catch (error) {
-      signal.throwIfAborted();
-      failure = probeFailure(error);
-    }
-    if (attempt + 1 < PROBE_ATTEMPTS) await pause(250 * (attempt + 1), signal);
+    }, { retries: PROBE_ATTEMPTS - 1, minTimeout: 250, signal });
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!(error instanceof ProbeFailure)) throw error;
+    return error.final ? error.message : `${error.message} after ${PROBE_ATTEMPTS} attempts`;
   }
-  return `${failure} after ${PROBE_ATTEMPTS} attempts`;
 }
 
 export async function discoverSplitGribRun(source: SplitSource,

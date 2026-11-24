@@ -248,7 +248,7 @@ Inspect the run's uploaded receipt artifacts:
 - `maintenance.json`: records cleanup or rollback status.
 - `serving.json`: records live API verification after commit.
 
-The hourly [health workflow](https://github.com/jdorrance/av-layers/actions/workflows/health.yml)
+The hourly [health workflow](https://github.com/avlayers/av-layers/actions/workflows/health.yml)
 checks each model enrolled in `monitoring.environments` for the selected
 environment. An empty list leaves the model out of that matrix. A manual run
 can still name it. Enroll `staging` after a validated staging publication, and

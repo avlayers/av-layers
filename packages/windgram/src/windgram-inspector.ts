@@ -16,8 +16,7 @@ import {
 import { sampleHeight } from './windgram-sampling.ts';
 import type { WindgramCloud, WindgramView } from './windgram-view.ts';
 
-import type { WindgramReading } from './scene-types.ts';
-export type { WindgramReading } from './scene-types.ts';
+import type { WindgramReading } from './scene-types.ts';;
 
 function windShearAtHeight(sample: WindgramView['sampling'][number] | undefined, heightM: number): WindgramReading['windShear'] {
   if (!sample || sample.windU.length < 2 || heightM < sample.windU[0].altitudeM || heightM > sample.windU.at(-1)!.altitudeM) return null;

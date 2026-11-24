@@ -18,7 +18,7 @@ const execFileAsync = promisify(execFile);
 
 export interface ArchiveTarget { path: string; field: GridField; layer: LayerId }
 
-export interface RendererOptions {
+interface RendererOptions {
   /** Hard limit for retained axes and coverage bits; fields are never cached. */
   geometryCacheBytes?: number;
   /** Bounded native encodes and ordered output buffers, not JS CPU workers. */

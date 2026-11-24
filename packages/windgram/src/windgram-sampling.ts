@@ -44,7 +44,7 @@ export function sampleField<Axis extends string>(nodes: readonly (Record<Axis, n
   return null;
 }
 
-export type HeightGap = readonly [lower: number, upper: number];
+type HeightGap = readonly [lower: number, upper: number];
 
 /** Published levels retain their order when a height is missing. */
 export function profileHeightGaps(levels: ProfileHour['levels']): HeightGap[] {

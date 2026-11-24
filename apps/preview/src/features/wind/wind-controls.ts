@@ -6,7 +6,7 @@ import {
   type StoredWindPreferences, type WindControlState, type WindHeight, type WindStatus, type WindStyle, type WindUnits
 } from './wind-model';
 
-export type { WindControlState, WindHeight, WindStatus, WindStyle, WindUnits } from './wind-model';
+export type { WindControlState,     } from './wind-model';
 
 export interface WindControlsOptions {
   onChange(state: WindControlState): void;

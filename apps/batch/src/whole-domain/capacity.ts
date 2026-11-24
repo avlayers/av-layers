@@ -9,9 +9,9 @@ import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/sparse.js';
 import type { ForecastProvider } from '../provider.js';
 
 export const MAX_PACKED_COLUMN_BYTES = 512 * 1024 * 1024;
-export const WIND_WORKING_SET_RESERVE_BYTES = 8 * 1024 * 1024;
+const WIND_WORKING_SET_RESERVE_BYTES = 8 * 1024 * 1024;
 
-export interface WholeDomainCapacityInput {
+interface WholeDomainCapacityInput {
   product: ProductDefinition;
   plan: WholeDomainGrid;
   nativeBlocks: Uint32Array;

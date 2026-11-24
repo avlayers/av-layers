@@ -19,6 +19,7 @@ import { localPath, sha256, type ValidatedBuild } from '../apps/batch/src/valida
 import { validateApiBaseUrl, verifyPublishedForecast } from './smoke-api.js';
 import { completeForecastControlShard, downloadForecastControlReceipts, forecastPlanSignal } from './forecast-control.js';
 import { terrainCatalogInput } from './terrain-inputs.js';
+import pRetry from 'p-retry';
 
 const TERRAIN_ATTEMPTS = 3;
 
@@ -186,20 +187,15 @@ export async function prepareForecastTerrain(store?: ObjectStorage): Promise<voi
     if (!plan) throw new Error(`No whole-domain terrain grid for ${model}`);
     const fine = await loadBundledFineCoverage(product, plan);
     const reuseFrom = (reuseSignal?: AbortSignal) => publishedTerrainRef(store, model, reuseSignal);
-    for (let attempt = 1; attempt <= TERRAIN_ATTEMPTS; attempt++) {
-      signal.throwIfAborted();
-      try {
-        const ref = await ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
-          coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal, reuseFrom });
-        console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
-        return;
-      } catch (error) {
-        signal.throwIfAborted();
-        const deadline = error instanceof Error && error.message === 'Terrain preparation deadline exceeded';
-        if (attempt === TERRAIN_ATTEMPTS || (!deadline && !isTransientStorageError(error))) throw error;
-        console.error(JSON.stringify({ phase: 'terrain-retry', model, attempt, error: String(error) }));
+    const retryable = (error: Error) => error.message === 'Terrain preparation deadline exceeded' || isTransientStorageError(error);
+    const ref = await pRetry(() => ensureWholeDomainTerrain({ ...wholeDomain, sourceCacheDir: join('.cache', 'terrain-source', model), grid: plan.fine,
+      coverage: fine.mask.coverage, coverageDescriptor: fine.bytes, signal, reuseFrom }), {
+      retries: TERRAIN_ATTEMPTS - 1, minTimeout: 0, signal, shouldRetry: ({ error }) => retryable(error),
+      onFailedAttempt: ({ error, attemptNumber, retriesLeft }) => {
+        if (retriesLeft && retryable(error)) console.error(JSON.stringify({ phase: 'terrain-retry', model, attempt: attemptNumber, error: String(error) }));
       }
-    }
+    });
+    console.log(JSON.stringify({ phase: 'terrain-ready', model, ...ref }));
   }, store);
 }
 

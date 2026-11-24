@@ -57,9 +57,21 @@ describe('serving resource bounds', () => {
     expect(cache.bytes).toBe(8);
     cache.set('large', 4, 11);
     expect(cache.get('large')).toBeUndefined();
-    cache.set('short', 5, 1, Date.now() + 1000);
-    expect(cache.get('short', Date.now() + 1001)).toBeUndefined();
-    expect(cache.bytes).toBe(8);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      cache.set('short', 5, 1, Date.now() + 1000);
+      vi.setSystemTime(Date.now() + 999);
+      expect(cache.get('short')).toBe(5);
+      vi.setSystemTime(Date.now() + 1);
+      expect(cache.get('short')).toBeUndefined();
+      expect(cache.bytes).toBe(8);
+    } finally { vi.useRealTimers(); }
+  });
+  it('re-accounts an entry set again with the same value and a new size', () => {
+    const cache = new ByteCache<string, number>(3, 100);
+    cache.set('a', 1, 10);
+    cache.set('a', 1, 50);
+    expect(cache.bytes).toBe(50);
   });
   it('coalesces materialized reads, holds the owner context and allows retry after failure', async () => {
     const reads = new MaterializedReads<number>(1, 15_000, 96, 0);

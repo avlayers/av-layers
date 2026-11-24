@@ -1,20 +1,15 @@
 import { availableParallelism } from 'node:os';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import type { Worker } from 'node:worker_threads';
 import { createSparseCoverage, MAX_MODEL_WORKERS, MAX_TILE_BYTES, RASTER_TILE_SIZE, type LayerId, type PaletteInterpolation } from '@av/contracts';
 import { validateSamplingField, type GridField, type SamplingMask } from '@av/forecast';
 import { BUILD_BUDGETS } from './capacity.js';
 import type { RasterMetrics, RasterPixels } from './raster.js';
+import { RASTER_WORKER_RESOURCE_LIMITS, startTsWorker } from './ts-worker.js';
 export type { RasterMetrics, RasterPixels } from './raster.js';
 
 export const MAX_RASTER_WORKERS = MAX_MODEL_WORKERS;
 export const MAX_RASTER_SHARED_INPUT_BYTES = 64 * 1024 * 1024;
-export const RASTER_WORKER_RESOURCE_LIMITS = Object.freeze({
-  maxOldGenerationSizeMb: 64,
-  maxYoungGenerationSizeMb: 16,
-  stackSizeMb: 4
-} as const);
+export { RASTER_WORKER_RESOURCE_LIMITS };
 export const RASTER_WORKER_NATIVE_RESERVE_MB = 44;
 /** Admission reserve per worker: 84 MiB V8 heap/stack ceiling plus 44 MiB native/off-heap allowance. */
 export const RASTER_WORKER_RESERVE_BYTES =
@@ -99,13 +94,8 @@ export async function createRasterPool(mask: SamplingMask, targets: readonly { f
     await Promise.all(Array.from({ length: count }, (_, index) => new Promise<void>((resolve, reject) => {
       initialization.push(reject);
       const data: RasterWorkerData = { mask: sharedMask, fields, layers, geometryCacheBytes: Math.floor(geometryCacheBytes / count), liftInterpolation: options.liftInterpolation };
-      const worker = new Worker('import("node:worker_threads").then(async ({workerData}) => { const {tsImport} = await import(workerData.loader); await tsImport(workerData.entry, workerData.entry); })', {
-        eval: true, resourceLimits: { ...RASTER_WORKER_RESOURCE_LIMITS },
-        workerData: { ...data, loader: pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href, entry: new URL('./raster-worker.ts', import.meta.url).href }
-      });
+      const worker = startTsWorker(new URL('./raster-worker.ts', import.meta.url), data, 'Raster', fail, () => Boolean(closing));
       workers.push(worker);
-      worker.on('error', fail);
-      worker.on('exit', code => { if (!closing) fail(new Error(`Raster worker unexpectedly exited ${code}`)); });
       worker.on('message', (message: RasterResult | { ready: true } | { id: number; error: Error }) => {
         if ('ready' in message) { resolve(); return; }
         if ('error' in message) { fail(message.error); return; }

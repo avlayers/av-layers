@@ -1,6 +1,6 @@
 export interface BufferMemory { bufferBytes: number; peakBufferBytes: number; buffers: number; peakBuffers: number }
 
-export type BufferContext = WebGLRenderingContext | WebGL2RenderingContext;
+type BufferContext = WebGLRenderingContext | WebGL2RenderingContext;
 type GL = BufferContext;
 interface Binding {
   bindings: Map<number, WebGLBuffer | null>;

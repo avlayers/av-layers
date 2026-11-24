@@ -8,11 +8,11 @@ import { cameraBounds, coversBounds, windBounds } from '../map/viewport-policy';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
 
-export interface WindSchedulerPort {
+interface WindSchedulerPort {
   fetch: typeof fetch;
   request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
 }
-export interface WindCachePort {
+interface WindCachePort {
   isBuildUnavailable(buildId: string): boolean;
   readonly allocatedBytes: number;
   clear(): void;
@@ -20,7 +20,7 @@ export interface WindCachePort {
   evictUnreferenced?: () => number;
 }
 
-export interface WindSessionOptions {
+interface WindSessionOptions {
   readonly apiBaseUrl: string;
   readonly map: MapBoundsPort;
   readonly lowMemory: boolean;
@@ -61,7 +61,8 @@ export interface WindSession {
   update(): void;
   reconcile(): void;
   clear(): void;
-  setPlaying(playing: boolean): void;
+  /** Reschedules preparation after playback starts or stops. */
+  playbackChanged(): void;
   heightChanged(previous: WindHeight): void;
   beforeRasterReveal(target: { build: PinnedBuild; frame: string }): void;
   readonly ready: ReadonlyMap<string, ReadonlySet<WindHeight>>;
@@ -535,7 +536,7 @@ export function createWindSession(options: WindSessionOptions): WindSession {
   const unsubscribe = options.budget?.onRelease(released);
   return {
     update, reconcile, clear: reset,
-    setPlaying() { schedule(); },
+    playbackChanged() { schedule(); },
     heightChanged(previous) {
       const s = state();
       if (previous === s.height || destroyed) return;

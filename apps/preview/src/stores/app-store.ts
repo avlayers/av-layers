@@ -5,8 +5,7 @@ import type { PinnedBuild, PointHorizon, UnitSystem } from '@av/client';
 import type { PointViewMode } from '@av/windgram';
 import { DEFAULT_DOCK_VIEW, type DockViewId } from '../features/controls/bottom-dock-model';
 import type { AltitudeReference } from '../features/navigation/url-state';
-import type { CloudStyleChoice, RainStyleChoice } from '../features/map/channel-styles';
-import type { MapTheme } from '../features/map/visual-theme';
+import { DEFAULT_THEME, type MapTheme } from '../themes/registry';
 import type { OverlayState } from '../features/raster/raster-overlay';
 import type { WindHeight, WindStatus, WindStyle } from '../features/wind/wind-model';
 import type { LayerOption } from '../features/forecast/forecast-model';
@@ -19,8 +18,6 @@ export interface PreviewIntent {
   readonly units: UnitSystem;
   readonly theme: MapTheme;
   readonly dockView: DockViewId;
-  readonly cloudStyle: CloudStyleChoice;
-  readonly rainStyle: RainStyleChoice;
   readonly liftVisible: boolean;
   readonly cloudsVisible: boolean;
   readonly rainVisible: boolean;
@@ -37,10 +34,10 @@ export interface PreviewIntent {
   readonly requestedTime: string | null;
 }
 
-type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'dockView' | 'cloudStyle' | 'rainStyle' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking' | 'pointViewMode'>;
-export type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
+type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'dockView' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking' | 'pointViewMode'>;
+type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
 
-export interface ForecastView {
+interface ForecastView {
   readonly build: PinnedBuild | null;
   readonly selectedFrame: string | null;
   readonly pendingModel: ModelId | null;
@@ -53,14 +50,14 @@ export interface ForecastView {
   readonly playing: boolean;
 }
 
-export interface WindView {
+interface WindView {
   readonly status: WindStatus;
   readonly overview: boolean;
   readonly displayed: boolean;
   readonly supported: boolean;
 }
 
-export interface PointView {
+interface PointView {
   readonly open: boolean;
   readonly location: string;
   readonly detailLocation?: string;
@@ -71,13 +68,13 @@ export interface PointView {
   readonly wind: string;
 }
 
-export interface LocationView {
+interface LocationView {
   readonly message: string;
   readonly detail: string;
   readonly busy: boolean;
 }
 
-export interface NoticeView {
+interface NoticeView {
   readonly error: string;
   readonly tileError: string;
   readonly horizon: string;
@@ -166,10 +163,8 @@ function applyPatch<T extends object>(target: Signal<T>, update: Partial<T>): vo
  */
 export function createPreviewStore(initial: PreviewInitialState): PreviewStore {
   const normalizedIntent: PreviewIntent = Object.freeze({
-    theme: 'stone',
+    theme: DEFAULT_THEME,
     dockView: DEFAULT_DOCK_VIEW,
-    cloudStyle: 'auto',
-    rainStyle: 'auto',
     liftVisible: true,
     cloudsVisible: true,
     rainVisible: true,

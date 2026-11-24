@@ -1,4 +1,4 @@
-export interface IsobarViewportBox {
+interface IsobarViewportBox {
   readonly west: number;
   readonly south: number;
   readonly east: number;

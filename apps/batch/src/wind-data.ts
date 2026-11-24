@@ -17,7 +17,7 @@ type WindGrids = Pick<WholeDomainGrid, 'native' | 'fine'>;
 interface WindCapacity { mapFrames: number; numericBytes: number; estimatedPeakBytes: number; workingSet?: Record<string, number> }
 interface WindTerrain { elevationM: Float32Array; valid: Uint8Array }
 interface WindObject { key: string; bytes: number; sha256: string; contentType: string }
-export interface WindSparsity { activeIndices?: Uint32Array; fineCoverage?: SparseCoverage }
+interface WindSparsity { activeIndices?: Uint32Array; fineCoverage?: SparseCoverage }
 
 interface TileSelection { total: number; count: number; tiles?: number[]; mask?: string }
 

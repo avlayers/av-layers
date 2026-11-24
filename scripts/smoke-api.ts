@@ -3,6 +3,7 @@ import { DEFAULT_PROBE_TIMEOUT_MS, MAX_PROVENANCE_BYTES, maxProfileFrames, parse
 import { WIND_FRAME_LIMIT, parseWindFrame } from '@av/contracts/wind-data';
 import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
 import { PRODUCTS } from '@av/contracts/models';
+import pRetry from 'p-retry';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -36,19 +37,15 @@ export async function readResponseBytes(response: Response, limit = 1024 * 1024)
 
 export interface RetryOptions { retries?: number; delayMs?: number; signal?: AbortSignal }
 export async function retryProbe(label: string, check: () => Promise<void>, options: RetryOptions = {}): Promise<void> {
-  let last = '';
-  for (let attempt = 0; attempt <= (options.retries ?? 12); attempt++) {
+  try {
+    await pRetry(async () => {
+      try { await check(); }
+      catch (error) { throw new Error(error instanceof Error ? error.message : String(error)); }
+    }, { retries: options.retries ?? 12, minTimeout: options.delayMs ?? 5000, factor: 1, signal: options.signal });
+  } catch (error) {
     options.signal?.throwIfAborted();
-    if (attempt) await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => { options.signal?.removeEventListener('abort', abort); resolve(); }, options.delayMs ?? 5000);
-      const abort = () => { clearTimeout(timer); reject(options.signal?.reason); };
-      options.signal?.addEventListener('abort', abort, { once: true });
-    });
-    options.signal?.throwIfAborted();
-    try { await check(); return; }
-    catch (error) { options.signal?.throwIfAborted(); last = error instanceof Error ? error.message : String(error); }
+    throw new Error(`${label} verification failed: ${(error as Error).message}`);
   }
-  throw new Error(`${label} verification failed: ${last}`);
 }
 
 export function validateHealthContract(health: unknown, expectedDeploymentId?: string): void {

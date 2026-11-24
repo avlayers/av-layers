@@ -4,11 +4,11 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { longitudeOffsetHours } from '@av/client';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
-import type { MapTheme } from './visual-theme';
+import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 
 maplibregl.setWorkerUrl(workerUrl);
 
-export interface MapOptions {
+interface MapOptions {
   readonly container: HTMLElement;
   readonly offlineFixture: boolean;
   readonly camera: { center: [number, number]; zoom: number } | null;
@@ -24,13 +24,13 @@ export function createMap(options: MapOptions): maplibregl.Map {
     maxTileCacheZoomLevels: 2,
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : compositeBasemapStyle(options.theme ?? 'stone')
+      : compositeBasemapStyle(options.theme ?? DEFAULT_THEME)
   });
 }
 
 export { maplibregl };
 
-export interface MapCameraOptions {
+interface MapCameraOptions {
   readonly home: { lat: number; lng: number };
   readonly followsPlace: boolean;
   readonly initialOffset: number;

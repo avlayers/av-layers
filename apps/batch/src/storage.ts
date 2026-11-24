@@ -1,9 +1,9 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { addAbortSignal, Readable } from 'node:stream';
-import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, paginateListObjectsV2, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import pRetry from 'p-retry';
 import { BUILD_BUDGETS, forecastPlanDeadline } from './capacity.js';
 import type { BuildPlan } from './parallel.js';
-import { pause } from './pause.js';
 import { pinnedSourcePrefix } from './source.js';
 import { getProduct } from '@av/contracts/models';
 
@@ -212,18 +212,20 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   const config = r2ClientOptions(env), client = new S3Client(config);
   let getClient: S3Client | undefined;
   async function* listing(prefix: string, signal: AbortSignal | undefined, budget: { pages: number }, delimiter?: string) {
-    let token: string | undefined;
     const seen = new Set<string>();
-    do {
+    const overBudget = () => { if (budget.pages >= 1000) throw new Error('Object listing exceeds page budget'); };
+    overBudget();
+    for await (const page of paginateListObjectsV2({ client }, { Bucket: R2_BUCKET, Prefix: prefix, Delimiter: delimiter }, { abortSignal: signal })) {
       signal?.throwIfAborted();
-      if (++budget.pages > 1000) throw new Error('Object listing exceeds page budget');
-      const page = await client.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token, Delimiter: delimiter }), { abortSignal: signal });
-      signal?.throwIfAborted();
-      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      budget.pages++;
+      const token = page.IsTruncated ? page.NextContinuationToken : undefined;
       if (page.IsTruncated && (!token || seen.has(token))) throw new Error('Invalid or repeated listing continuation token');
       if (token) seen.add(token);
       yield page;
-    } while (token);
+      // The paginator follows any NextContinuationToken; IsTruncated ends the listing.
+      if (!token) return;
+      overBudget();
+    }
   }
   function listed(contents: Array<{ Key?: string; LastModified?: Date; Size?: number }>, prefix: string): ListedObject[] {
     return contents.map(object => {
@@ -245,9 +247,9 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
       signal?.throwIfAborted();
       if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid read budget');
       try {
-        for (let attempt = 0; ; attempt++) {
-          signal?.throwIfAborted();
-          if (attempt) onRetry?.();
+        const transient = new WeakSet<object>();
+        return await pRetry(async attempt => {
+          if (attempt > 1) onRetry?.();
           const requestClient = getClient ??= new S3Client({ ...config, maxAttempts: 1 });
           const maximum = Math.min(range?.length ?? maxBytes, maxBytes);
           const command = new GetObjectCommand({ Bucket: R2_BUCKET, Key: key, IfMatch: identity?.etag,
@@ -284,12 +286,7 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           }, { step: 'deserialize', priority: 'low', name: 'boundedR2ErrorBody' });
           let result;
           try { result = await requestClient.send(command, { abortSignal: signal }); }
-          catch (error) {
-            signal?.throwIfAborted();
-            if (attempt >= R2_MAX_ATTEMPTS - 1 || !retryableRequestError(error)) throw error;
-            await pause(250 * (attempt + 1), signal);
-            continue;
-          }
+          catch (error) { if (retryableRequestError(error)) transient.add(error as object); throw error; }
           if (!(result.Body instanceof Readable) || !result.ETag) {
             if (result.Body instanceof Readable) result.Body.destroy();
             throw new Error(`Incomplete response for ${key}`);
@@ -305,16 +302,11 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
           }
           let bytes: Uint8Array;
           try { bytes = await readBody(result.Body, maximum, key, signal); }
-          catch (error) {
-            signal?.throwIfAborted();
-            if (attempt >= R2_MAX_ATTEMPTS - 1 || !retryableBodyError(error)) throw error;
-            await pause(250 * (attempt + 1), signal);
-            continue;
-          }
+          catch (error) { if (retryableBodyError(error)) transient.add(error as object); throw error; }
           if (bytes.length !== result.ContentLength) throw new Error(`Incorrect object response length for ${key}`);
           if (range && bytes.length !== range.length) throw new Error(`Incorrect range length for ${key}`);
           return { bytes, etag: result.ETag };
-        }
+        }, { retries: R2_MAX_ATTEMPTS - 1, minTimeout: 250, signal, shouldRetry: ({ error }) => transient.has(error) });
       } catch (error) {
         signal?.throwIfAborted();
         if ((error as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode === 404) return null;

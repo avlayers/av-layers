@@ -1,6 +1,6 @@
 import type { LegendStop } from './legend-model';
 
-export const DOCK_VIEW_IDS = ['capsule'] as const;
+const DOCK_VIEW_IDS = ['capsule'] as const;
 export type DockViewId = (typeof DOCK_VIEW_IDS)[number];
 export const DEFAULT_DOCK_VIEW: DockViewId = 'capsule';
 

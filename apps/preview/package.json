@@ -2,6 +2,7 @@
   "name": "@av/preview",
   "version": "0.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,15 +16,13 @@
     "@av/solar": "workspace:*",
     "@av/windgram": "workspace:*",
     "@deck.gl/core": "9.4.1",
-    "@deck.gl/extensions": "9.4.1",
     "@deck.gl/layers": "9.4.1",
     "@deck.gl/maplibre": "9.4.1",
     "@luma.gl/core": "9.4.2",
     "@luma.gl/engine": "9.4.2",
     "@preact/signals": "2.11.4",
     "maplibre-gl": "6.16.0",
-    "preact": "10.29.8",
-    "weatherlayers-gl": "2026.9.1"
+    "preact": "10.29.8"
   },
   "devDependencies": {
     "@preact/preset-vite": "2.10.6",

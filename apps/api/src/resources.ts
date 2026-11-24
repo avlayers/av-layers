@@ -1,36 +1,28 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, parseBoundedJson, ResourceLimitError } from '@av/contracts';
+import { LRUCache } from 'lru-cache';
+import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, ResourceLimitError } from '@av/contracts';
 export { parseBoundedJson, ResourceLimitError } from '@av/contracts';
 
-/** Cache limits account retained typed arrays and estimated decoded object storage. */
-export class ByteCache<K, V> {
-  private entries = new Map<K, { value: V; bytes: number; until: number }>();
-  private used = 0;
-  constructor(readonly maxEntries: number, readonly maxBytes: number) {}
-  get size(): number { return this.entries.size; }
-  get bytes(): number { return this.used; }
-  get(key: K, now = Date.now()): V | undefined {
-    const entry = this.entries.get(key);
-    if (!entry) return undefined;
-    if (entry.until <= now) { this.delete(key); return undefined; }
-    this.entries.delete(key);
-    this.entries.set(key, entry);
-    return entry.value;
+const wallClock = { now: () => Date.now() };
+
+/** LRU bounded by entry count and accounted bytes (retained typed arrays plus estimated decoded objects), expiring at an absolute time. */
+export class ByteCache<K extends NonNullable<unknown>, V extends NonNullable<unknown>> {
+  private readonly lru: LRUCache<K, V>;
+  constructor(maxEntries: number, maxBytes: number) {
+    this.lru = new LRUCache<K, V>({ max: maxEntries, maxSize: maxBytes, perf: wallClock, ttlResolution: 0 });
   }
-  delete(key: K): void {
-    const entry = this.entries.get(key);
-    if (entry) this.used -= entry.bytes;
-    this.entries.delete(key);
-  }
+  get size(): number { return this.lru.size; }
+  get bytes(): number { return this.lru.calculatedSize; }
+  get(key: K): V | undefined { return this.lru.get(key); }
+  delete(key: K): void { this.lru.delete(key); }
+  /** Zero-byte entries count as one byte, and entries due within 2 ms are not stored. */
   set(key: K, value: V, bytes: number, until = Infinity): void {
-    this.delete(key);
-    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > this.maxBytes || until <= Date.now()) return;
-    while (this.entries.size >= this.maxEntries || this.used + bytes > this.maxBytes) {
-      const oldest = this.entries.keys().next();
-      if (oldest.done) break;
-      this.delete(oldest.value);
-    }
-    this.entries.set(key, { value, bytes, until });
-    this.used += bytes;
+    const now = Date.now();
+    // lru-cache expires once age exceeds ttl; one millisecond less expires at `until` itself.
+    const ttl = until - now - 1;
+    // Delete first: lru-cache keeps the old size when the same value is set again.
+    this.lru.delete(key);
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || ttl < 1) return;
+    this.lru.set(key, value, { size: Math.max(1, bytes), ...(Number.isFinite(ttl) ? { ttl, start: now } : {}) });
   }
 }
 
@@ -274,10 +266,6 @@ export function estimateJsonBytes(value: unknown): number {
   if (Array.isArray(value)) return 40 + value.length * 8 + value.reduce((sum, item) => sum + estimateJsonBytes(item), 0);
   return 64 + Object.entries(value).reduce((sum, [key, item]) => sum + 32 + 24 + key.length * 2 + estimateJsonBytes(item), 0);
 }
-export async function readObjectJson(object: R2ObjectBody, limit: number, ctx?: WaitContext, signal?: AbortSignal, maxTokens?: number): Promise<{ value: unknown; bytes: number; estimatedBytes: number }> {
-  const bytes = await readObjectBytes(object, limit, false, ctx, signal), value = parseBoundedJson(bytes, maxTokens);
-  return { value, bytes: bytes.byteLength, estimatedBytes: estimateJsonBytes(value) };
-}
 
 // Reserve before constructing a body. One lease covers the payload and both Cache API
 // tee branches; it is released only after every branch consumes, cancels or expires.
@@ -374,8 +362,8 @@ export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQ
 const binaryReads = new WeakMap<R2Bucket, MaterializedReads<Uint8Array>>();
 export const MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST = 8;
 export const MAX_BINARY_READ_CONCURRENCY = 32;
-export const MAX_BINARY_READ_WAITERS = 192;
-export const MAX_BINARY_READ_QUEUED = 128;
+const MAX_BINARY_READ_WAITERS = 192;
+const MAX_BINARY_READ_QUEUED = 128;
 export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   let reads = binaryReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(MAX_BINARY_READ_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT_MS, MAX_BINARY_READ_WAITERS, MAX_BINARY_READ_QUEUED); binaryReads.set(bucket, reads); }

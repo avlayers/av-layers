@@ -1,6 +1,7 @@
 {
   "name": "@av/api",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local --var AV_LOCAL_DEVELOPMENT:true",
@@ -13,6 +14,7 @@
     "@av/forecast": "workspace:*",
     "@hono/zod-openapi": "1.6.3",
     "hono": "4.13.14",
+    "lru-cache": "11.5.3",
     "pmtiles": "catalog:",
     "zod": "catalog:"
   },

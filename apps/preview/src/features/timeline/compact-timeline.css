@@ -358,7 +358,7 @@
 .ct-step:first-child { border-radius: 7px 0 0 7px; }
 .ct-step:last-child { border-radius: 0 7px 7px 0; }
 
-/* Dark chrome parity (Slate & Blueprint) */
+/* Dark chrome parity (Slate) */
 #app[data-chrome="dark"] .compact-timeline {
   color: #e2e8f0;
 }

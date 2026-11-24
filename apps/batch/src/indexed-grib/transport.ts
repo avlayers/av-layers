@@ -3,6 +3,8 @@ import { mkdir, open, rename, rm, writeFile } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { byteRange, parseIdx, type IdxRecord } from '@azohra/meteo.grib';
+import pRetry from 'p-retry';
+import { retriable } from '../retriable.ts';
 import { IndexedGribError } from './errors.ts';
 import type { IndexedR2Object, IndexedR2Run } from './ready.ts';
 import type { IndexedGribDuplicateVerification, SelectedIdxRecord, SourceAssetReceipt, IndexedGribFetchOptions } from './types.ts';
@@ -281,48 +283,58 @@ export class IndexedGribTransport {
   }
 
   private async readHttp(url: string, record: IdxRecord | null, rangeHeader: string | null): Promise<Buffer> {
-    const deadline = Date.now() + this.retry.deadlineMs;
-    let bytes: Buffer | undefined;
-    for (let attempt = 1; attempt <= this.retry.maxAttempts; attempt++) {
-      this.abort();
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new IndexedGribError('transport', `NOAA request deadline exceeded for ${url}`, { reason: 'deadline', attempt });
-      const timeout = AbortSignal.timeout(Math.min(remaining, this.retry.attemptTimeoutMs));
-      const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
-      let response: Response | undefined;
-      try {
-        this.stats.networkRequests++;
-        response = await this.fetchImpl(url, { headers: rangeHeader ? { Range: rangeHeader } : {}, redirect: 'error', signal });
-        const expectedStatus = record ? 206 : 200;
-        if (response.status !== expectedStatus) {
-          if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
-            const after = response.headers.get('retry-after');
-            const retryAfterMs = after === null ? 0 : /^\d+$/.test(after) ? Number(after) * 1000 : Math.max(0, Date.parse(after) - Date.now());
-            throw new RetryableTransportError(`HTTP ${response.status} for ${url}; expected ${expectedStatus}`, Number.isFinite(retryAfterMs) ? retryAfterMs : 0);
-          }
-          throw new IndexedGribError('transport', `HTTP ${response.status} for ${url}; expected ${expectedStatus}`, { reason: response.status === 404 ? 'upstream-not-ready' : 'http-status', status: response.status });
-        }
-        if (record) {
-          const contentRange = response.headers.get('content-range'), parsed = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? '');
-          if (!parsed || Number(parsed[1]) !== record.offset || Number(parsed[2]) !== record.offset + record.length! - 1 || !Number.isSafeInteger(Number(parsed[3])) || Number(parsed[3]) <= Number(parsed[2])) throw new IndexedGribError('transport', `Wrong NOAA Content-Range for ${url}: ${contentRange ?? 'missing'}`);
-        }
-        bytes = await readBody(response, url, record?.length ?? MAX_NOAA_INDEX_BYTES, signal, record?.length);
-        break;
-      } catch (error) {
-        await response?.body?.cancel().catch(() => {});
+    const { maxAttempts, deadlineMs, attemptTimeoutMs, baseDelayMs, maxDelayMs } = this.retry;
+    const deadline = Date.now() + deadlineMs;
+    let attempts = 0, timedOut = false;
+    const retryable = (error: Error) => !(error instanceof IndexedGribError) && Date.now() < deadline;
+    try {
+      return await pRetry(async () => {
+        attempts++;
         this.abort();
-        if (error instanceof IndexedGribError) throw error;
-        const message = error instanceof Error ? error.message : String(error);
-        if (attempt === this.retry.maxAttempts || Date.now() >= deadline) throw new IndexedGribError('transport', `NOAA fetch failed after ${attempt} attempts for ${url}: ${message}`, { reason: timeout.aborted ? 'timeout' : 'transient-exhausted', attempts: attempt });
-        this.stats.retries = (this.stats.retries ?? 0) + 1;
-        const jitter = this.retry.baseDelayMs * 2 ** (attempt - 1) * (0.5 + Math.random());
-        const requestedDelay = error instanceof RetryableTransportError ? Math.max(jitter, error.retryAfterMs) : jitter;
-        const wait = Math.min(this.retry.maxDelayMs, Math.ceil(requestedDelay), Math.max(0, deadline - Date.now()));
-        if (wait > 0) await delay(wait, undefined, { signal: this.signal });
-      }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new IndexedGribError('transport', `NOAA request deadline exceeded for ${url}`, { reason: 'deadline', attempt: attempts });
+        const timeout = AbortSignal.timeout(Math.min(remaining, attemptTimeoutMs));
+        const signal = this.signal ? AbortSignal.any([this.signal, timeout]) : timeout;
+        let response: Response | undefined;
+        try {
+          this.stats.networkRequests++;
+          response = await this.fetchImpl(url, { headers: rangeHeader ? { Range: rangeHeader } : {}, redirect: 'error', signal });
+          const expectedStatus = record ? 206 : 200;
+          if (response.status !== expectedStatus) {
+            if ([408, 429, 500, 502, 503, 504].includes(response.status)) {
+              const after = response.headers.get('retry-after');
+              const retryAfterMs = after === null ? 0 : /^\d+$/.test(after) ? Number(after) * 1000 : Math.max(0, Date.parse(after) - Date.now());
+              throw new RetryableTransportError(`HTTP ${response.status} for ${url}; expected ${expectedStatus}`, Number.isFinite(retryAfterMs) ? retryAfterMs : 0);
+            }
+            throw new IndexedGribError('transport', `HTTP ${response.status} for ${url}; expected ${expectedStatus}`, { reason: response.status === 404 ? 'upstream-not-ready' : 'http-status', status: response.status });
+          }
+          if (record) {
+            const contentRange = response.headers.get('content-range'), parsed = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? '');
+            if (!parsed || Number(parsed[1]) !== record.offset || Number(parsed[2]) !== record.offset + record.length! - 1 || !Number.isSafeInteger(Number(parsed[3])) || Number(parsed[3]) <= Number(parsed[2])) throw new IndexedGribError('transport', `Wrong NOAA Content-Range for ${url}: ${contentRange ?? 'missing'}`);
+          }
+          return await readBody(response, url, record?.length ?? MAX_NOAA_INDEX_BYTES, signal, record?.length);
+        } catch (error) {
+          await response?.body?.cancel().catch(() => {});
+          this.abort();
+          timedOut = timeout.aborted;
+          throw retriable(error);
+        }
+      }, {
+        retries: maxAttempts - 1, minTimeout: baseDelayMs / 2, maxTimeout: maxDelayMs, randomize: true, maxRetryTime: deadlineMs, signal: this.signal,
+        shouldRetry: ({ error }) => retryable(error),
+        // Retry-After lengthens the backoff up to the delay cap and the deadline.
+        onFailedAttempt: async ({ error, retryDelay, retriesLeft }) => {
+          if (!retriesLeft || !retryable(error)) return;
+          this.stats.retries = (this.stats.retries ?? 0) + 1;
+          const extra = error instanceof RetryableTransportError ? Math.min(maxDelayMs, error.retryAfterMs, deadline - Date.now()) - retryDelay : 0;
+          if (extra > 0) await delay(Math.ceil(extra), undefined, { signal: this.signal });
+        }
+      });
+    } catch (error) {
+      if (error instanceof IndexedGribError || this.signal?.aborted) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      throw new IndexedGribError('transport', `NOAA fetch failed after ${attempts} attempts for ${url}: ${message}`, { reason: timedOut ? 'timeout' : 'transient-exhausted', attempts });
     }
-    if (!bytes) throw new IndexedGribError('transport', `NOAA request produced no bytes for ${url}`);
-    return bytes;
   }
 
 }

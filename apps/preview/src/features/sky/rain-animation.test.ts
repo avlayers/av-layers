@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { RAIN_COLORS } from '@av/contracts/layers';
 import { rainContourStrokePair, resolveChannelStyles } from '../map/channel-styles';
-import { MAP_THEMES, THEME_OPTIONS } from '../map/visual-theme';
+import { MAP_THEMES, THEME_OPTIONS } from '../../themes/registry';
 import { buildCloudContourGeoJson, renderSmoothCloudRgba } from './cloud-layer';
 import {
   buildRainContourGeoJson,
@@ -41,7 +41,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(field.wetIndices.length).toBe(0);
     expect(samplePrecipMmh(field, -52, -16)).toBe(0);
     expect(renderRainInnerVignetteRgba(field, styles, cuff)).toBe(false);
-    expect(buildRainContourGeoJson(field, 'vignette-cuff', 15).features).toHaveLength(0);
+    expect(buildRainContourGeoJson(field).features).toHaveLength(0);
   });
 
   it('short-circuits cuff upload when 100% of crop cells are uniformly inside a rain shield', () => {
@@ -98,13 +98,10 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(cloudRasterBeforeId(fakeMap as never)).toBe('av-rain-cuff');
   });
 
-  it('preserves dual-polarity outer casing + inner rim contrast across all 8 views and all 4 rain styles', () => {
+  it('preserves dual-polarity outer casing + inner rim contrast in every theme', () => {
     for (const theme of MAP_THEMES) {
-      for (const rainStyle of ['vignette-cuff', 'sigwx-scallop', 'inward-comb', 'wet-lens'] as const) {
-        const styles = resolveChannelStyles(theme, { rainStyle });
-        const pair = rainContourStrokePair(styles);
-        expect(pair.haloColor).not.toBe(pair.showerColor);
-      }
+      const pair = rainContourStrokePair(resolveChannelStyles(theme));
+      expect(pair.haloColor).not.toBe(pair.showerColor);
     }
   });
 
@@ -145,10 +142,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(rimAlpha).toBeGreaterThan(45);
     expect(cuff[(24 * size + 24) * 4 + 3]).toBe(0);
 
-    expect(buildRainContourGeoJson(field, 'vignette-cuff', 16).features.length).toBeGreaterThan(0);
-    expect(buildRainContourGeoJson(field, 'sigwx-scallop', 16).features.length).toBeGreaterThan(0);
-    const tickFeatures = buildRainContourGeoJson(field, 'inward-comb', 16).features;
-    expect(tickFeatures.some(f => f.properties.tier === 'tick')).toBe(true);
+    expect(buildRainContourGeoJson(field).features.length).toBeGreaterThan(0);
   });
 
   it('concentrates viewport spawn weight onto heavy convective cores and extracts shower/squall contours', () => {
@@ -171,7 +165,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(dist.visibleWetFraction).toBeGreaterThan(0.2);
     expect(dist.cdf[dist.cdf.length - 1]).toBeCloseTo(1, 5);
 
-    const contours = buildRainContourGeoJson(field, 'vignette-cuff', 16);
+    const contours = buildRainContourGeoJson(field);
     const tiers = new Set(contours.features.map(f => f.properties.tier));
     expect(tiers.has('shower')).toBe(true);
     expect(tiers.has('squall')).toBe(true);

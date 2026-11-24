@@ -4,8 +4,8 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, requiredSourceZoom, type RasterCrop } from './raster-crop';
-import type { MapTheme } from '../map/visual-theme';
-import { canRemapTiles, remapTileToBitmap } from './tile-remap';
+import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
+import { remapTileToBitmap, shouldRemapTile } from './tile-remap';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 
@@ -46,8 +46,8 @@ interface ImageSourceLike {
   updateImage?: (options: { image: ImageBitmap; coordinates: Coordinates }) => void;
   setCoordinates?: (coordinates: Coordinates) => void;
 }
-export interface RasterOverviewState { ready: number; total: number; failed: number }
-export interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
+interface RasterOverviewState { ready: number; total: number; failed: number }
+interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
 export interface RasterOverviewOptions { budget?: PreparationBudget; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
 
 const SELECTED_PREVIEW_SLOTS = 4;
@@ -129,7 +129,7 @@ export class RasterOverview {
   private readonly unsubscribeBudget: (() => void) | null;
 
   constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void, private readonly options: RasterOverviewOptions = {}) {
-    this.theme = options.theme ?? 'stone';
+    this.theme = options.theme ?? DEFAULT_THEME;
     this.canvas = typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function' && typeof map.getCanvas === 'function'
       ? new OffscreenCanvas(RASTER_TILE_SIZE, RASTER_TILE_SIZE) : null;
     this.supported = !!this.canvas?.getContext('2d') && typeof this.canvas.transferToImageBitmap === 'function';
@@ -734,7 +734,7 @@ export class RasterOverview {
     };
     void Promise.resolve().then(() => {
       if (!this.ownsJob(job, context)) return null;
-      if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
+      if (!shouldRemapTile(theme, data)) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
       return prepareBitmap();
     }).then(image => {
       if (!image) return;

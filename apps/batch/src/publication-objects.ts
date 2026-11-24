@@ -5,7 +5,7 @@ import { WIND_FRAME_LIMIT, WIND_ROOT_LIMIT, assertWindFrameLayout, parseWindFram
 import { readLocalFile } from './local-file.js';
 import type { ObjectStorage } from './storage.js';
 
-export interface ForecastObject {
+interface ForecastObject {
   key: string;
   sha256: string;
   contentType: string;
@@ -36,7 +36,7 @@ async function readDescriptorBytes(root: string, key: string, limit: number, exp
 }
 
 /** Enumerate verified numeric wind shards, indexes, frame descriptors, and root descriptor in publication order. */
-export async function windObjects(root: string, manifest: ManifestV5, remote?: { store: Pick<ObjectStorage, 'get'>; signal?: AbortSignal }): Promise<ForecastObject[]> {
+async function windObjects(root: string, manifest: ManifestV5, remote?: { store: Pick<ObjectStorage, 'get'>; signal?: AbortSignal }): Promise<ForecastObject[]> {
   if (!manifest.mapData) return [];
   const prefix = `builds/${manifest.model}/${manifest.buildId}`, rootKey = `${prefix}/map-data.json`;
   const rootBytes = await readDescriptorBytes(root, rootKey, WIND_ROOT_LIMIT, manifest.mapData.bytes, remote);

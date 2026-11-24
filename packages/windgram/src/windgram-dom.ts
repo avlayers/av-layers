@@ -19,7 +19,7 @@ import { readWindgram } from './windgram-inspector.ts';
 import { hourX, visibleWindgramHourIndices } from './windgram-time-axis.ts';
 import type { WindgramDayPanel, WindgramView } from './windgram-view.ts';
 
-export type WindgramInspectionMode = 'magnetic' | 'lift' | 'height';
+type WindgramInspectionMode = 'magnetic' | 'lift' | 'height';
 export type WindgramCalloutTrigger = 'always' | 'interact';
 
 export interface WindgramMountOptions {

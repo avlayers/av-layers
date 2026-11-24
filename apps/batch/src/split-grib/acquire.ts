@@ -4,6 +4,8 @@ import { recoverTrailingWindow } from '@av/forecast/intervals';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import pRetry from 'p-retry';
+import { retriable } from '../retriable.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS, sourceIntervalHours } from '@av/contracts';
 import type { ModelLevelFrame } from '@av/forecast';
 import { readLocalFile } from '../local-file.js';
@@ -17,14 +19,13 @@ import {
 import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
-import { pause } from '../pause.js';
 import { MAX_NATIVE_MAPPING_DISTANCE_M, prepareNativeMapping } from './native-grid.js';
 
 const DEFAULT_CONCURRENCY = 8;
 const MAX_TRANSFER_ATTEMPTS = 3;
 const RETRYABLE_HTTP_STATUS = [408, 429, 500, 502, 503, 504];
 
-export interface SplitGribObjectReceipt {
+interface SplitGribObjectReceipt {
   readonly field: string;
   readonly hour: number;
   readonly level: number | null;
@@ -36,7 +37,7 @@ export interface SplitGribObjectReceipt {
   readonly normalization?: { units: string; scale: number };
 }
 
-export interface SplitGribTransportStats {
+interface SplitGribTransportStats {
   [key: string]: unknown;
   downloads: number;
   cacheHits: number;
@@ -44,7 +45,7 @@ export interface SplitGribTransportStats {
   retries: number;
 }
 
-export interface SplitGribAcquisitionOptions {
+interface SplitGribAcquisitionOptions {
   readonly cycle?: string;
   readonly activeIndices: Uint32Array;
   readonly cacheDir: string;
@@ -56,7 +57,7 @@ export interface SplitGribAcquisitionOptions {
   readonly offline?: boolean;
 }
 
-export interface SplitGribStaticGeometryCache {
+interface SplitGribStaticGeometryCache {
   readonly cycle: string;
   readonly terrainM: Float32Array;
   readonly missingTerrain: Uint8Array;
@@ -149,28 +150,21 @@ async function loadSplitGribField(
   }
 
   const fetchFn = options.fetchImpl ?? fetch;
-  let buffer: Uint8Array;
-  for (let attempt = 1; ; attempt++) {
-    options.signal?.throwIfAborted();
+  const buffer = await pRetry(async attempt => {
+    if (attempt > 1) stats.retries += 1;
+    const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
     try {
-      const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
-      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-      const response = await fetchFn(url, { signal });
+      const response = await fetchFn(url, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
       if (!response.ok) {
         await response.body?.cancel().catch(() => {});
         const message = `HTTP ${response.status} for ${url}`;
         if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
         throw new Error(message);
       }
-      buffer = await readObjectBody(response);
-      break;
-    } catch (error) {
-      options.signal?.throwIfAborted();
-      if (error instanceof InvalidSplitGribResponse || attempt === MAX_TRANSFER_ATTEMPTS) throw error;
-      await pause(Math.ceil(250 * 2 ** (attempt - 1) * (0.5 + Math.random())), options.signal);
-      stats.retries += 1;
-    }
-  }
+      return await readObjectBody(response);
+    } catch (error) { throw retriable(error); }
+  }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
+    shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
   options.signal?.throwIfAborted();
   stats.downloads += 1;
   stats.downloadedBytes += buffer.byteLength;
@@ -224,7 +218,7 @@ function frameValues({ values }: DecodedSplitGribField): Float32Array {
 }
 
 /** Build midpoint heights from configured interfaces and verify ground agreement. */
-export function computeSplitGribModelLevelHeights(source: SplitSource,
+function computeSplitGribModelLevelHeights(source: SplitSource,
   hsurf: Pick<DecodedSplitGribField, 'values' | 'missing'>,
   halfLevelsByLevel: ReadonlyMap<number, Pick<DecodedSplitGribField, 'values' | 'missing'>>,
   modelLevels: readonly number[] = source.modelLevels

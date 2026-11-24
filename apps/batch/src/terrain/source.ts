@@ -1,5 +1,6 @@
 import { ASSET_MAX_BYTES, TERRAIN_SOURCE, sha256, terrainInventorySchema, type TerrainCatalog, type TerrainInventory, type TerrainStorage, type TerrainTileSource } from './contract.js';
-import { pause } from '../pause.js';
+import pRetry from 'p-retry';
+import { retriable } from '../retriable.js';
 
 const SOURCE_ORIGIN = 'https://copernicus-dem-90m.s3.amazonaws.com';
 export const INVENTORY_MAX_BYTES = 4 * 1024 * 1024;
@@ -51,8 +52,7 @@ class SourceResponseError extends Error {
 }
 
 async function fetchBytes(url: string, limit: number, { fetch: request = globalThis.fetch, signal }: SourceOptions): Promise<Uint8Array> {
-  for (let attempt = 0; ; attempt++) {
-    signal?.throwIfAborted();
+  return pRetry(async () => {
     const deadline = AbortSignal.timeout(60_000), combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
     try {
       const response = await request(url, { signal: combined, headers: { 'accept-encoding': 'identity' }, redirect: 'error' });
@@ -82,10 +82,6 @@ async function fetchBytes(url: string, limit: number, { fetch: request = globalT
         await reader.cancel().catch(() => {});
         reader.releaseLock();
       }
-    } catch (error) {
-      signal?.throwIfAborted();
-      if (attempt >= 2 || (error instanceof SourceResponseError && !error.retryable)) throw error;
-      await pause(500 * (attempt + 1), signal);
-    }
-  }
+    } catch (error) { throw retriable(error); }
+  }, { retries: 2, minTimeout: 500, signal, shouldRetry: ({ error }) => !(error instanceof SourceResponseError) || error.retryable });
 }

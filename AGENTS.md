@@ -26,6 +26,9 @@ tests, commands, comments, config, and UI.
   a measurement.
 - GFS, ICON-EU, RRFS, av-wrf, and the current layers are the implemented scope. A new model or product waits
   for a real caller and follows [extensions](docs/extensions.md).
+- Use a maintained library or the platform for generic infrastructure (caches,
+  retries, queues, HTTP, storage clients). New in-repo infrastructure needs a
+  [decision record](docs/decisions/README.md) naming the library it beats.
 - Remove unreachable code, exports, docs, and comments in the change that
   leaves them unreached. A comment records an obligation the code cannot state.
 - Preserve public contracts and forecast behavior during structural edits.

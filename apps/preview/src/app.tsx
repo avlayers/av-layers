@@ -8,7 +8,7 @@ import { BottomDock } from './features/controls/bottom-dock';
 import { ModelEmblem, ThemeIconPicker, WeatherChannelDock } from './features/controls/topbar-icons';
 import { cleanModelDisplayLabel, formatModelResolutionKm, modelRegionSubtitle } from './features/controls/topbar-model';
 
-export interface AppProps {
+interface AppProps {
   readonly store: PreviewStore;
   readonly commands: PreviewCommands;
   readonly offline: boolean;
@@ -124,8 +124,6 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
           <WeatherChannelDock
             theme={intent.theme}
             units={intent.units}
-            cloudStyle={intent.cloudStyle}
-            rainStyle={intent.rainStyle}
             windSupported={wind.supported}
             windVisible={intent.windVisible}
             windStyle={intent.windStyle}
@@ -140,8 +138,6 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
             disabled={controlsDisabled}
             onToggleChannel={commands.toggleWeatherLayer}
             onPrepareChannel={commands.prepareWeatherChannel}
-            onSetCloudStyle={commands.setCloudStyle}
-            onSetRainStyle={commands.setRainStyle}
             onSetWindStyle={style => commands.setWind({ style, visible: true, paused: intent.windPaused, height: intent.windHeight })}
             onSetWindPaused={paused => commands.setWind({ style: intent.windStyle, visible: true, paused, height: intent.windHeight })}
             onSetPeeking={commands.setPeeking}

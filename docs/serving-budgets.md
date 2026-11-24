@@ -81,7 +81,7 @@ combined work across all grids selected by a request.
   path. Background warming prepares each acquired frame's 128×128 RGBA lattice
   (64 KiB per height) on the main thread; selection uploads it instead of
   resampling the native grid. The GPU particle layer keeps the 700 ms field blend;
-  deck.gl/WeatherLayers draws trails, map-plane barbs and upright labels in
+  deck.gl draws trails, map-plane barbs and upright labels in
   MapLibre's WebGL2 context.
   The timeline reports how many rested frames are decoded.
   MapLibre's texture pool and browser allocations are separate; the
