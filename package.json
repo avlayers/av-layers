@@ -16,7 +16,6 @@
     }
   },
   "scripts": {
-    "comparison": "node --import tsx apps/batch/src/comparison/cli.ts",
     "terrain": "node --import tsx apps/batch/src/terrain/cli.ts",
     "lint": "eslint .",
     "knip": "knip --no-progress",

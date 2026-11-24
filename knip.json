@@ -11,6 +11,9 @@
       "project": [
         "scripts/**/*.{ts,mjs}",
         "tests/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@av/solar"
       ]
     },
     "apps/api": {

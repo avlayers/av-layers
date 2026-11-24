@@ -93,8 +93,6 @@ Each layer and frame writes one composited PMTiles archive. Version-5 manifests
 assign each layer to a native or fine surface with sparse coverage and bounded
 sample shards. Point queries read bounded ranges per selected surface and frame
 group. Tiles and point queries share packed fields and interpolation logic.
-The [forecast comparison](../apps/batch/src/comparison/README.md)
-archives fixed-site products and compares matched model cycles and valid times.
 
 The build manifest lists files, SHA-256 digests, frames, layers, methods,
 provenance, and expiry. Coverage bitsets mark public output cells and halo cells
