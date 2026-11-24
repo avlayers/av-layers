@@ -43,51 +43,37 @@ function profileSeriesPages(
   surface: NonNullable<ReturnType<typeof nativeSurface>>,
   frameIds: readonly string[],
   pageSize: number,
-  preferredFrameId: string
+  maxPages: number,
 ): string[][] {
   if (!frameIds.length) return [];
   const profileGroups = surface.profiles?.groups ?? [];
+  if (profileGroups.length <= MAX_PROFILE_GROUPS_PER_PAGE) return fieldSeriesPages(frameIds, 1, pageSize);
   const indexById = new Map(manifest.frames.map((frame, index) => [frame.id, index]));
-  const scalarGroups = surface.samples.format === 'frame-group-block-shards-v1'
-    ? [...new Map(surface.samples.shards.map(shard => [shard.group, { firstFrame: shard.firstFrame, frameCount: shard.frameCount }])).values()]
-    : [{ firstFrame: 0, frameCount: manifest.frames.length }];
-  const buckets: string[][][] = scalarGroups.map(() => []);
+  const shards = surface.samples.format === 'frame-group-block-shards-v1' ? surface.samples.shards : null;
+  const buckets = new Map<number, string[][]>();
+  let covered = 0;
   for (const group of profileGroups) {
     const selected = frameIds.filter(id => {
       const index = indexById.get(id);
       return index !== undefined && index >= group.firstFrame && index < group.firstFrame + group.frameCount;
     });
     if (!selected.length) continue;
-    const scalarIndex = Math.max(0, scalarGroups.findIndex(scalar =>
-      group.firstFrame >= scalar.firstFrame && group.firstFrame < scalar.firstFrame + scalar.frameCount));
-    for (let offset = 0; offset < selected.length; offset += pageSize) {
-      buckets[scalarIndex]!.push(selected.slice(offset, offset + pageSize));
+    covered += selected.length;
+    const scalarGroup = shards?.find(s => group.firstFrame >= s.firstFrame && group.firstFrame < s.firstFrame + s.frameCount)?.group ?? 0;
+    const bucket = buckets.get(scalarGroup) ?? [];
+    bucket.push(...fieldSeriesPages(selected, 1, pageSize));
+    buckets.set(scalarGroup, bucket);
+  }
+  if (covered !== frameIds.length) return fieldSeriesPages(frameIds, 1, pageSize);
+  const pages: string[][] = [];
+  for (const bucket of buckets.values()) {
+    const pageCount = Math.ceil(bucket.length / MAX_PROFILE_GROUPS_PER_PAGE);
+    for (let i = 0; i < pageCount; i++) {
+      const merged = bucket.slice(Math.floor(i * bucket.length / pageCount), Math.floor((i + 1) * bucket.length / pageCount)).flat();
+      pages.push(...fieldSeriesPages(merged, 1, pageSize));
     }
   }
-  const activeBuckets = buckets.filter(bucket => bucket.length > 0);
-  if (!activeBuckets.length) return fieldSeriesPages(frameIds, 1, pageSize);
-  for (let maxGroups = MAX_PROFILE_GROUPS_PER_PAGE; ; maxGroups++) {
-    const pages: string[][] = [];
-    for (const bucket of activeBuckets) {
-      const pageCount = Math.ceil(bucket.length / maxGroups);
-      for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-        const start = Math.floor(pageIndex * bucket.length / pageCount);
-        const end = Math.floor((pageIndex + 1) * bucket.length / pageCount);
-        const merged = bucket.slice(start, end).flat();
-        for (let offset = 0; offset < merged.length; offset += pageSize) {
-          pages.push(merged.slice(offset, offset + pageSize));
-        }
-      }
-    }
-    if (pages.length <= MAX_PAGES || maxGroups >= profileGroups.length) {
-      const preferredIndex = pages.findIndex(page => page.includes(preferredFrameId));
-      if (preferredIndex > 0) {
-        const [preferred] = pages.splice(preferredIndex, 1);
-        pages.unshift(preferred!);
-      }
-      return pages;
-    }
-  }
+  return pages.length <= maxPages ? pages : fieldSeriesPages(frameIds, 1, pageSize);
 }
 
 export function hasNativeProfiles(build: PinnedBuild): boolean {
@@ -171,22 +157,19 @@ export function createPointSeriesLoader(
           const missing = frames.filter(id => (!source.frames || source.frames.has(id)) && !source.ready.has(id));
           const requests: string[][] = [];
           const parallel = source.ready === profiled && (native?.profiles?.groups.length ?? 0) > MAX_PROFILE_GROUPS_PER_PAGE;
+          const hasFirstPage = missing.includes(first);
           if (missing.length) {
             const pageSize = source.pageSize();
             if (pageSize < 1) throw new RangeError('Point response exceeds the byte budget');
-            if (parallel && native) {
-              const pages = profileSeriesPages(m, native, missing, pageSize, first);
-              if (pages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
-              requests.push(...pages);
-            } else {
-              if (missing.includes(first)) requests.push([first]);
-              const rest = missing.filter(id => id !== first);
-              const restPages = fieldSeriesPages(rest, 1, pageSize);
-              if (requests.length + restPages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
-              requests.push(...restPages);
-            }
+            if (hasFirstPage) requests.push([first]);
+            const rest = missing.filter(id => id !== first);
+            const restPages = parallel && native
+              ? profileSeriesPages(m, native, rest, pageSize, MAX_PAGES - requests.length)
+              : fieldSeriesPages(rest, 1, pageSize);
+            if (requests.length + restPages.length > MAX_PAGES) throw new RangeError('Point forecast page budget exceeded');
+            requests.push(...restPages);
           }
-          return { source, requests, parallel };
+          return { source, requests, parallel, hasFirstPage };
         });
         const view = (): PointSeries => ({
           layers,
@@ -220,7 +203,7 @@ export function createPointSeriesLoader(
           : Promise.resolve();
         const settled = await Promise.allSettled([
           terrainTask,
-          ...plans.map(async ({ source, requests, parallel }) => {
+          ...plans.map(async ({ source, requests, parallel, hasFirstPage }) => {
             const applyPage = (response: { frames: readonly PointFrame[] }) => {
               for (const frame of response.frames) {
                 const previousFrame = cache.get(frame.id);
@@ -230,8 +213,22 @@ export function createPointSeriesLoader(
                 source.ready.add(frame.id);
               }
             };
-            if (parallel && requests.length > 1) {
-              const results = await Promise.all(requests.map(async (ids, index) => {
+            const restPages = hasFirstPage ? requests.slice(1) : requests;
+            if (parallel && restPages.length > 1) {
+              if (hasFirstPage) {
+                let firstResponse;
+                try { firstResponse = await source.read(requests[0]!, source.layers, controller.signal); }
+                catch (cause) {
+                  assertActive();
+                  failure ??= { cause };
+                  outstanding -= requests.length;
+                  return;
+                }
+                assertActive();
+                applyPage(firstResponse);
+                if (--outstanding > 0 && !selectedLiftPending) progress(true);
+              }
+              const restSettled = await Promise.allSettled(restPages.map(async ids => {
                 let response;
                 try { response = await source.read(ids, source.layers, controller.signal); }
                 catch (cause) {
@@ -242,10 +239,13 @@ export function createPointSeriesLoader(
                 }
                 assertActive();
                 applyPage(response);
-                if (--outstanding > 0 && index === 0 && !selectedLiftPending) progress(true);
+                --outstanding;
                 return true;
               }));
-              if (outstanding > 0 && !selectedLiftPending && results.slice(1).some(Boolean)) progress(true);
+              for (const item of restSettled) if (item.status === 'rejected') throw item.reason;
+              if (outstanding > 0 && !selectedLiftPending && restSettled.some(item => item.status === 'fulfilled' && item.value)) {
+                progress(true);
+              }
               return;
             }
             for (const [index, ids] of requests.entries()) {
@@ -278,6 +278,7 @@ export function createPointSeriesLoader(
       })();
       pending = work;
       return work.finally(() => {
+        controller.abort();
         signal?.removeEventListener('abort', abort);
         if (active === controller) active = null;
       });

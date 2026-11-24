@@ -78,15 +78,47 @@ export function withHeightGaps<T extends { altitudeM: number }>(nodes: T[], gaps
 }
 
 const hourSamplingMemo = new WeakMap<ProfileHour, HourSampling>();
+const levelsSamplingMemo = new WeakMap<
+  ProfileHour['levels'],
+  {
+    modelTerrainM: number | null;
+    tempC: number | null;
+    tdC: number | null;
+    u10: number | null;
+    v10: number | null;
+    ref: string;
+    sampling: HourSampling;
+  }
+>();
 
 export function hourSampling(hour: ProfileHour): HourSampling {
   const cached = hourSamplingMemo.get(hour);
   if (cached) return cached;
   const floorM = hour.modelTerrainM;
+  const moistureRef = hour.upperAirDewpointReference ?? 'liquid-vapor-pressure';
+  const sfcTemp = finiteScalar(hour.surface.temperatureC);
+  const sfcTd = finiteScalar(hour.surface.dewPointC);
+  const u10 = finiteScalar(hour.surface.windU);
+  const v10 = finiteScalar(hour.surface.windV);
+  if (hour.levels.length > 0) {
+    const byLevels = levelsSamplingMemo.get(hour.levels);
+    if (
+      byLevels &&
+      byLevels.sampling.validAt === hour.validAt &&
+      byLevels.modelTerrainM === floorM &&
+      byLevels.tempC === sfcTemp &&
+      byLevels.tdC === sfcTd &&
+      byLevels.u10 === u10 &&
+      byLevels.v10 === v10 &&
+      byLevels.ref === moistureRef
+    ) {
+      hourSamplingMemo.set(hour, byLevels.sampling);
+      return byLevels.sampling;
+    }
+  }
   const levels = hour.levels.filter(l => l.heightM !== null && (floorM === null || l.heightM > floorM));
   const gaps = profileHeightGaps(hour.levels);
   const missingValue = (altitudeM: number) => ({ altitudeM, value: NaN });
-  const moistureRef = hour.upperAirDewpointReference ?? 'liquid-vapor-pressure';
   const interpretedLevels = levels.map(l => {
     const temp = finiteScalar(l.temperatureC);
     const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC), moistureRef);
@@ -106,8 +138,6 @@ export function hourSampling(hour: ProfileHour): HourSampling {
     }
     return withHeightGaps(values.sort((a, b) => a.altitudeM - b.altitudeM), gaps, missingValue);
   };
-  const sfcTemp = finiteScalar(hour.surface.temperatureC);
-  const sfcTd = finiteScalar(hour.surface.dewPointC);
   const temperatureC = anchorNodes(
     interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.temperatureC })),
     sfcTemp,
@@ -170,6 +200,17 @@ export function hourSampling(hour: ProfileHour): HourSampling {
     })), gaps, missingValue),
   };
   hourSamplingMemo.set(hour, sampled);
+  if (hour.levels.length > 0) {
+    levelsSamplingMemo.set(hour.levels, {
+      modelTerrainM: floorM,
+      tempC: sfcTemp,
+      tdC: sfcTd,
+      u10,
+      v10,
+      ref: moistureRef,
+      sampling: sampled,
+    });
+  }
   return sampled;
 }
 

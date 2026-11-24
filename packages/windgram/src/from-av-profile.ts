@@ -299,6 +299,11 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
         ) {
           return cached.hour;
         }
+        if (cached && cached.frame === frame && cached.hour.validAt === validTime) {
+          const hour = { ...cached.hour, fineTerrainM: effectiveFineTerrainM };
+          cache.set(id, { frame, fineTerrainM: effectiveFineTerrainM, hour });
+          return hour;
+        }
         const hour = chartHour(
           validTime,
           frame,

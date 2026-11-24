@@ -370,6 +370,35 @@ describe('native profile API', () => {
     expect((await read(secondRes)).frames.map(frame => frame.id)).toEqual(['h003', 'h004']);
     expect(scalarCalls).toBe(1);
     assertReleased(shared);
+
+    // Near-limit requests fall back to narrow scalar channel spans instead of exceeding MAX_SAMPLE_RANGE_BYTES.
+    const grid = { kind: 'regular-latlon' as const, width: 1, height: 18, lon0: -180, lat0: 17, dx: 360, dy: -1, wrapLongitude: true, earthRadiusM: 6371229 };
+    const nearLimit = attachNativeProfiles(createGroupedV5Fixture({
+      grid,
+      groups: [Array.from({ length: 24 }, (_, i) => i + 1), Array.from({ length: 49 }, (_, i) => 25 + i)],
+      nativeLayers: layers,
+      nativeValue,
+    }), {
+      levels: 255,
+      profile: () => ({
+        modelTerrainM: 100,
+        surfacePressureHpa: 987.6,
+        status: 'valid',
+        levels: Array.from({ length: 255 }, (_, index) => ({
+          pressureHpa: 1000 - index * 2,
+          heightM: 600 + index * 50,
+          temperatureC: 15,
+          dewPointC: 10,
+          uWindMps: 2,
+          vWindMps: -3,
+          omegaPaS: 0.1,
+        })),
+      }),
+    });
+    const nearRes = await nearLimit.request(path(nearLimit, 'lat=9&lon=-180&frame=h001,h073'));
+    expect(nearRes.status).toBe(200);
+    expect((await read(nearRes)).frames.map(frame => frame.id)).toEqual(['h001', 'h073']);
+    assertReleased(nearLimit);
   });
 
   it('releases an aborted profile request while its R2 owner drains', async () => {
