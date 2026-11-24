@@ -85,16 +85,16 @@ function buildSurface(product: ProductDefinition, grid: Grid, id: string, kind: 
       }
     }
   }
-  const shardKey = `${prefix}/surfaces/${id}/samples/0.bin`, shardSha = hash(bytes);
+  const shardKey = `${prefix}/surfaces/${id}/samples/g0-b0.bin`, shardSha = hash(bytes);
   const gridHash = hash(new TextEncoder().encode(canonicalGridJson(grid)));
   const surface: ForecastSurfaceV5 = {
     id, kind, grid, gridHash,
     coverage: { id: description.descriptor.id, hash: description.hash, maskKey: `${coveragePrefix}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash },
     layers,
     samples: {
-      format: 'cell-major-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer', channelCount,
+      format: 'frame-group-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer', channelCount,
       coverageHash: description.hash, blockCount: layout.blockCount, storedCells: layout.storedCells,
-      shards: [{ firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: bytes.length, key: shardKey, sha256: shardSha }]
+      shards: [{ group: 0, firstFrame: 0, frameCount, blockShard: 0, firstBlock: 0, blockCount: layout.blockCount, storedCells: layout.storedCells, bytes: bytes.length, key: shardKey, sha256: shardSha }]
     },
     ...(kind === 'fine' ? { terrain: { dataId: 'd'.repeat(64), key: `terrain/prepared/${'d'.repeat(64)}/manifest.json`, sha256: 'd'.repeat(64), verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash: description.hash, layoutVersion: 1 as const } } : {})
   };
@@ -134,7 +134,13 @@ export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE
     return { value: value ?? NaN, flags: value === null ? 2 : 0 };
   }, prefix, maxZoom, coveredTile);
   const layers = [...product.layers], surfaces = nativeLayers || configuredNative.length ? [fine.surface, native.surface] : [fine.surface];
-  const provenance = json({ version: 1, model, buildId, cycle, frames: [] });
+  const provenance = json({
+    version: 2, model, buildId, cycle,
+    frames: frameHours.map(hour => ({
+      frame: `f${String(hour).padStart(3, '0')}`, hour,
+      key: `${prefix}/provenance/f${String(hour).padStart(3, '0')}.json`, bytes: 1, sha256: 'c'.repeat(64)
+    }))
+  });
   const descriptors = createWholeDomainDescriptors(product);
   const manifest: ManifestV5 = manifestV5Schema.parse({
     version: 5, model, buildId, cycle, createdAt: cycle, expiresAt,
@@ -144,7 +150,7 @@ export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE
     artifacts: frames.slice(0, mapFrameCount ?? frames.length).flatMap(frame => renderedLayers(layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))),
     surfaces,
     source: { provider: 'Fixture', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) },
-    tool: {}, palettes: ['lift', 'rain'], metrics: {}
+    tool: { useStoredMslNoLift: true }, palettes: ['lift', 'rain'], metrics: {}
   });
   const objects = new Map<string, Uint8Array>([
     [`${prefix}/manifest.json`, json(manifest)], [`${prefix}/provenance.json`, provenance],
@@ -210,6 +216,7 @@ export function attachNativeProfiles(fixture: ReturnType<typeof createV5Fixture>
   }
   surface.profiles = { format: 'native-column-profile-v1', blockSize: SAMPLE_BLOCK_SIZE, levelCount: levels, recordBytes,
     coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells, groups };
+  fixture.manifest.tool = { ...fixture.manifest.tool, profileDewpointReference: 'liquid-vapor-pressure' };
   manifestV5Schema.parse(fixture.manifest);
   fixture.objects.set(`builds/${fixture.manifest.model}/${fixture.buildId}/manifest.json`, json(fixture.manifest));
   return fixture;
@@ -221,7 +228,7 @@ export function createGroupedV5Fixture({ groups, ...options }: Omit<FixtureOptio
   for (const surface of manifest.surfaces) {
     const source = surface.kind === 'fine' ? fixture.fine : fixture.native;
     const blockIds = Uint32Array.from({ length: source.layout.blockCount }, (_, i) => source.layout.block(i).slot);
-    const shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+    const shards: typeof surface.samples.shards = [];
     let firstFrame = 0;
     const count = surface.kind === 'fine' ? manifest.mapFrameCount ?? manifest.frames.length : manifest.frames.length;
     for (const [group, hours] of groups.entries()) {

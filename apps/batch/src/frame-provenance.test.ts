@@ -2,13 +2,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseProvenance, type Manifest, type ProvenanceFrameReference } from '@av/contracts';
+import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseProvenance, type ManifestV5, type ProvenanceFrameReference } from '@av/contracts';
 import { readFrameProvenance, writeFrameProvenance } from './frame-provenance.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
 const identity = { model: 'gfs', buildId: 'provenance-test', cycle: '2026-11-05T00:00:00.000Z' };
-function frame(hour: number): Manifest['frames'][number] {
+function frame(hour: number): ManifestV5['frames'][number] {
   const time = Date.parse(identity.cycle) + hour * 3_600_000;
   return { id: `f${String(hour).padStart(3, '0')}`, validTime: new Date(time).toISOString(), intervalStart: new Date(time - 3_600_000).toISOString(), intervalEnd: new Date(time).toISOString() };
 }

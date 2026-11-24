@@ -42,15 +42,15 @@ function component(value: unknown, name: string): string {
   return value;
 }
 
-export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group?: number, kind: 'samples' | 'profiles' = 'samples', role: 'serving' | 'hour' = 'serving'): string {
+export function sampleShardKey(model: string, buildId: string, surfaceId: string, index: number, group = 0, kind: 'samples' | 'profiles' = 'samples', role: 'serving' | 'hour' = 'serving'): string {
   if (kind !== 'samples' && kind !== 'profiles') throw new RangeError('Invalid sample shard kind');
   if (role !== 'serving' && role !== 'hour') throw new RangeError('Invalid sample shard role');
   component(model, 'model');
   component(buildId, 'build ID');
   component(surfaceId, 'surface ID');
   if (!Number.isSafeInteger(index) || index < 0) throw new RangeError('Invalid sample shard index');
-  if (group !== undefined && (!Number.isSafeInteger(group) || group < 0)) throw new RangeError('Invalid sample frame group');
-  const stem = group === undefined ? String(index) : `${role === 'hour' ? 'src-g' : 'g'}${group}-b${index}`;
+  if (!Number.isSafeInteger(group) || group < 0) throw new RangeError('Invalid sample frame group');
+  const stem = `${role === 'hour' ? 'src-g' : 'g'}${group}-b${index}`;
   return `builds/${model}/${buildId}/surfaces/${surfaceId}/${kind}/${stem}.bin`;
 }
 

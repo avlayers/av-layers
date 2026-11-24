@@ -339,7 +339,7 @@ function samplingPlan(grid: Grid, geometry: GridGeometry, lat: number, lon: numb
   return plan;
 }
 
-function targetHeight(plan: SamplePlan, height: number | 'lift', useStoredMslNoLift: boolean): { value: number | null; status: number } {
+function targetHeight(plan: SamplePlan, height: number | 'lift'): { value: number | null; status: number } {
   if (height !== 'lift' && (!Number.isFinite(height) || height < 0)) throw new RangeError('Invalid AGL height');
   let missing = false, allNoLift = true, noLiftWeight = 0, nearest = 0;
   for (let i = 0; i < plan.contributors.length; i++) {
@@ -354,10 +354,9 @@ function targetHeight(plan: SamplePlan, height: number | 'lift', useStoredMslNoL
     return { value: status === STATUS_VALID ? height === 'lift' ? values[idx] : values[idx] + height : null, status };
   }
   if (height === 'lift' && (allNoLift || noLiftWeight > 0.5)) return { value: null, status: STATUS_NO_LIFT };
-  const renormalize = height === 'lift' && !useStoredMslNoLift && plan.contributors.length === 4 && noLiftWeight > 0;
   let value = 0;
   for (let i = 0; i < plan.contributors.length; i++) {
-    value += renormalize ? (flags[i] & STATUS_MASK) === STATUS_NO_LIFT ? 0 : values[i] * (plan.contributors[i].weight / (1 - noLiftWeight)) : values[i] * plan.contributors[i].weight;
+    value += values[i] * plan.contributors[i].weight;
   }
   return { value: height === 'lift' ? value : value + height, status: STATUS_VALID };
 }
@@ -1092,7 +1091,7 @@ export class WindDataSource {
     if (!nearestOutput) return empty('outside');
     let target: number | 'surface' = 'surface';
     if (height !== 'surface') {
-      const selected = targetHeight(finePlan, height, current.build.manifest.tool.useStoredMslNoLift === true);
+      const selected = targetHeight(finePlan, height);
       if (selected.status !== STATUS_VALID || selected.value === null) return empty(selected.status === STATUS_NO_LIFT ? 'no-lift' : selected.status === STATUS_OUTSIDE ? 'outside' : 'unavailable');
       target = selected.value;
     }

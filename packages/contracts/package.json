@@ -18,7 +18,6 @@
     "./json": "./src/json.ts",
     "./models": "./src/products.ts",
     "./model-options": "./src/model-options.ts",
-    "./refinement": "./src/refinement.ts",
     "./fixture-product": "./src/fixture-product.ts"
   },
   "dependencies": {

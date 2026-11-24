@@ -2,10 +2,10 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
-import { manifestSchema, validateArtifactRecords, validateSampleFlags } from '@av/contracts';
+import { validateArtifactRecordsV5, validateSampleFlags } from '@av/contracts';
+import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
 
-const fixture = (name: string): string => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
-const manifestFixture = () => manifestSchema.parse(JSON.parse(readFileSync(fixture('manifest.contract.json'), 'utf8')));
+const manifestFixture = () => fixtureManifestV5();
 const workflowText = (name: string): string => readFileSync(fileURLToPath(new URL(`../.github/workflows/${name}`, import.meta.url)), 'utf8');
 const record = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('expected object');
@@ -34,15 +34,15 @@ describe('real contract-shaped fixtures', () => {
   it('rejects missing, duplicate and noncanonical artifact records', () => {
     const missing = structuredClone(manifestFixture());
     missing.artifacts.pop();
-    expect(() => validateArtifactRecords(missing)).toThrow(/artifact records/);
+    expect(() => validateArtifactRecordsV5(missing)).toThrow(/artifact count/);
 
     const duplicate = structuredClone(manifestFixture());
     duplicate.artifacts[1] = structuredClone(duplicate.artifacts[0]!);
-    expect(() => validateArtifactRecords(duplicate)).toThrow(/duplicate artifact record/);
+    expect(() => validateArtifactRecordsV5(duplicate)).toThrow(/Invalid artifact record/);
 
     const wrongPath = structuredClone(manifestFixture());
     wrongPath.artifacts[0]!.tilesKey = `builds/${wrongPath.model}/other/usable-lift-msl/f003.pmtiles`;
-    expect(() => validateArtifactRecords(wrongPath)).toThrow(/unexpected tilesKey/);
+    expect(() => validateArtifactRecordsV5(wrongPath)).toThrow(/Invalid artifact record/);
   });
 
   it('rejects invalid packed values and layer-incompatible support flags', () => {

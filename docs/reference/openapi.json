@@ -1028,243 +1028,135 @@
                   "type": "object"
                 },
                 "samples": {
-                  "oneOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "blockCount": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "blockSize": {
-                          "enum": [
-                            16
-                          ],
-                          "type": "number"
-                        },
-                        "channelCount": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "channelOrder": {
-                          "enum": [
-                            "frame-then-layer"
-                          ],
-                          "type": "string"
-                        },
-                        "coverageHash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "format": {
-                          "enum": [
-                            "cell-major-block-shards-v1"
-                          ],
-                          "type": "string"
-                        },
-                        "shards": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "blockCount": {
-                                "exclusiveMinimum": true,
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "bytes": {
-                                "exclusiveMinimum": true,
-                                "maximum": 67108864,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "firstBlock": {
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "key": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "sha256": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "storedCells": {
-                                "exclusiveMinimum": true,
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "firstBlock",
-                              "blockCount",
-                              "storedCells",
-                              "bytes",
-                              "key",
-                              "sha256"
-                            ],
-                            "type": "object"
-                          },
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "storedCells": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "blockSize",
-                        "channelOrder",
-                        "channelCount",
-                        "coverageHash",
-                        "blockCount",
-                        "storedCells",
-                        "format",
-                        "shards"
-                      ],
-                      "type": "object"
+                  "additionalProperties": false,
+                  "properties": {
+                    "blockCount": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
                     },
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "blockCount": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "blockSize": {
-                          "enum": [
-                            16
-                          ],
-                          "type": "number"
-                        },
-                        "channelCount": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        },
-                        "channelOrder": {
-                          "enum": [
-                            "frame-then-layer"
-                          ],
-                          "type": "string"
-                        },
-                        "coverageHash": {
-                          "pattern": "^[a-f0-9]{64}$",
-                          "type": "string"
-                        },
-                        "format": {
-                          "enum": [
-                            "frame-group-block-shards-v1"
-                          ],
-                          "type": "string"
-                        },
-                        "shards": {
-                          "items": {
-                            "additionalProperties": false,
-                            "properties": {
-                              "blockCount": {
-                                "exclusiveMinimum": true,
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "blockShard": {
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "bytes": {
-                                "exclusiveMinimum": true,
-                                "maximum": 67108864,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "firstBlock": {
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "firstFrame": {
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "frameCount": {
-                                "exclusiveMinimum": true,
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "group": {
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              },
-                              "key": {
-                                "minLength": 1,
-                                "type": "string"
-                              },
-                              "sha256": {
-                                "pattern": "^[a-f0-9]{64}$",
-                                "type": "string"
-                              },
-                              "storedCells": {
-                                "exclusiveMinimum": true,
-                                "maximum": 9007199254740991,
-                                "minimum": 0,
-                                "type": "integer"
-                              }
-                            },
-                            "required": [
-                              "firstBlock",
-                              "blockCount",
-                              "storedCells",
-                              "bytes",
-                              "key",
-                              "sha256",
-                              "group",
-                              "firstFrame",
-                              "frameCount",
-                              "blockShard"
-                            ],
-                            "type": "object"
-                          },
-                          "minItems": 1,
-                          "type": "array"
-                        },
-                        "storedCells": {
-                          "exclusiveMinimum": true,
-                          "maximum": 9007199254740991,
-                          "minimum": 0,
-                          "type": "integer"
-                        }
-                      },
-                      "required": [
-                        "blockSize",
-                        "channelOrder",
-                        "channelCount",
-                        "coverageHash",
-                        "blockCount",
-                        "storedCells",
-                        "format",
-                        "shards"
+                    "blockSize": {
+                      "enum": [
+                        16
                       ],
-                      "type": "object"
+                      "type": "number"
+                    },
+                    "channelCount": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "channelOrder": {
+                      "enum": [
+                        "frame-then-layer"
+                      ],
+                      "type": "string"
+                    },
+                    "coverageHash": {
+                      "pattern": "^[a-f0-9]{64}$",
+                      "type": "string"
+                    },
+                    "format": {
+                      "enum": [
+                        "frame-group-block-shards-v1"
+                      ],
+                      "type": "string"
+                    },
+                    "shards": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "blockCount": {
+                            "exclusiveMinimum": true,
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "blockShard": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "bytes": {
+                            "exclusiveMinimum": true,
+                            "maximum": 67108864,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "firstBlock": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "firstFrame": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "frameCount": {
+                            "exclusiveMinimum": true,
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "group": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "key": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "sha256": {
+                            "pattern": "^[a-f0-9]{64}$",
+                            "type": "string"
+                          },
+                          "storedCells": {
+                            "exclusiveMinimum": true,
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "firstBlock",
+                          "blockCount",
+                          "storedCells",
+                          "bytes",
+                          "key",
+                          "sha256",
+                          "group",
+                          "firstFrame",
+                          "frameCount",
+                          "blockShard"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 256,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "storedCells": {
+                      "exclusiveMinimum": true,
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
                     }
-                  ]
+                  },
+                  "required": [
+                    "blockSize",
+                    "channelOrder",
+                    "channelCount",
+                    "coverageHash",
+                    "blockCount",
+                    "storedCells",
+                    "format",
+                    "shards"
+                  ],
+                  "type": "object"
                 },
                 "terrain": {
                   "additionalProperties": false,
@@ -1352,6 +1244,9 @@
                 "type": "boolean"
               }
             },
+            "required": [
+              "useStoredMslNoLift"
+            ],
             "type": "object"
           },
           "version": {
@@ -4361,53 +4256,6 @@
               "application/json": {
                 "schema": {
                   "anyOf": [
-                    {
-                      "additionalProperties": false,
-                      "properties": {
-                        "buildId": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "cycle": {
-                          "format": "date-time",
-                          "type": "string"
-                        },
-                        "frames": {
-                          "items": {
-                            "nullable": true
-                          },
-                          "maxItems": 256,
-                          "type": "array"
-                        },
-                        "model": {
-                          "pattern": "^[a-z][a-z0-9-]{0,63}$",
-                          "type": "string"
-                        },
-                        "provider": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "temporalApproximation": {
-                          "maxLength": 2048,
-                          "type": "string"
-                        },
-                        "version": {
-                          "enum": [
-                            1
-                          ],
-                          "type": "number"
-                        }
-                      },
-                      "required": [
-                        "version",
-                        "model",
-                        "buildId",
-                        "cycle",
-                        "frames"
-                      ],
-                      "type": "object"
-                    },
                     {
                       "additionalProperties": false,
                       "properties": {

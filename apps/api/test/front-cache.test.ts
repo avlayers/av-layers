@@ -82,11 +82,11 @@ describe('front-of-Worker tile caching', () => {
   });
 
   it('keeps discovery, point data and other successful responses outside the front cache', async () => {
-    const fixture = client(attachNativeProfiles(createV5Fixture()));
+    const fixture = client(attachNativeProfiles(createV5Fixture({ framePrefix: 'f' })));
     const prefix = `/v1/models/${fixture.manifest.model}/runs/${fixture.buildId}`;
     for (const path of ['/healthz', '/docs', '/openapi.json', '/v1/catalog',
       `/v1/models/${fixture.manifest.model}/latest?expand=manifest`, `/v1/models/${fixture.manifest.model}/runs`,
-      prefix, `${prefix}/provenance`, `${prefix}/layers/usable-lift-agl/h001/tilejson.json`,
+      prefix, `${prefix}/provenance`, `${prefix}/layers/usable-lift-agl/f001/tilejson.json`,
       `${prefix}/sample?lat=9&lon=-180&layers=precip-rate`,
       `${prefix}/samples?points=9,-180&layers=precip-rate`, `${prefix}/profile?lat=9&lon=-180`]) {
       const result = await fixture.request(path);

@@ -61,7 +61,7 @@ and [serving budgets](serving-budgets.md):
 - **Consistent supported-donor surface closure:** weight reference terrain $h_0$,
   surface pressure $p_0$, temperature $T_0$, and humidity $q_0$ by the same
   height-supported donor weights used for $E_{\text{supported}}(h_f)$, falling
-  back lazily to [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
+  back lazily to [`clearanceCell`](../packages/forecast/src/clearance-cell.ts)
   only on cells where all donors exceed `maximumBelowGroundExtrapolationM`.
 - **Indexed smooth tiles:** quantize `linear-rgb` interpolation in
   [`palette-color.ts`](../packages/contracts/src/palette-color.ts) and average
@@ -93,7 +93,7 @@ and [serving budgets](serving-budgets.md):
   positive surface excess by relative direct + diffuse irradiance.
 - **Sub-grid DEM aggregation:** aggregate `90 m` GLO-90 elevations (mean and
   ridge-envelope percentile) and slope vectors per 1 km cell in
-  [`terrain/prepare.ts`](../apps/batch/src/terrain/prepare.ts) to preserve
+  [`terrain/sparse.ts`](../apps/batch/src/terrain/sparse.ts) to preserve
   narrow summits and ridge geometry.
 
 ## 3. Compute and precomputation optimizations
@@ -136,7 +136,7 @@ and [serving budgets](serving-budgets.md):
   publish Tier 2 boundary-layer wind, vertical wind shear, and `bs-ratio`
   thermal climbability.
 
-## 5. XC Skies basic-view parity (Thermal MSL / AGL presentation & point UX)
+## 5. Soaring map presentation (Thermal MSL / AGL presentation & point UX)
 
 - **Expose terrain elevation (`terrainM`) on every `/sample` frame:** preserve
   the terrain height already written into `usable-lift-msl` on `STATUS_NO_LIFT`

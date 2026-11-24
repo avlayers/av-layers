@@ -10,7 +10,7 @@ import { OFFLINE_PRODUCT } from '@av/contracts/fixture-product';
 import { readLocalProvenance } from '../apps/batch/src/frame-provenance.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
 import { BUILD_BUDGETS } from '../apps/batch/src/capacity.js';
-import { PREPARED_DESCRIPTOR_MAX_BYTES } from '../apps/batch/src/terrain/prepare.js';
+import { PREPARED_DESCRIPTOR_MAX_BYTES } from '../apps/batch/src/terrain/sparse.js';
 import { fileSha256 } from '../apps/batch/src/validate.js';
 import { validateLocalBuild } from '../apps/batch/src/local-build.js';
 import { forecastObjects, provenanceObjects } from '../apps/batch/src/publication-objects.js';

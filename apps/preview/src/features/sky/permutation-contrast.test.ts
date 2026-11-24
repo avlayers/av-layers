@@ -63,13 +63,13 @@ const TERRAIN_BG_SAMPLE: Record<(typeof MAP_THEMES)[number], [number, number, nu
   convergence: [213, 220, 228],
   blueprint: [22, 44, 72],
   cockpit: [248, 246, 240],
-  xcskies: [212, 220, 198]
+  classic: [212, 223, 192]
 };
 
 describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutation audit', () => {
   it('maintains crisp figure-ground contrast across all 8 views × lift intensities × 4 cloud styles × 4 rain styles', () => {
     const w = 32, h = 32;
-    const representativeLiftIndices = [4, 9, 13, 16]; // cyan (#62cbff), green (#35cd34), yellow (#fefa02), red (#f92d2d)
+    const representativeLiftIndices = [4, 9, 13, 16];
     const rawLiftTile = new Uint8ClampedArray(w * h * 4);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
@@ -102,7 +102,7 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
 
     for (const theme of MAP_THEMES) {
       const terrain = TERRAIN_BG_SAMPLE[theme];
-      const remappedLift = theme === 'xcskies'
+      const remappedLift = theme === 'classic'
         ? new Uint8ClampedArray(rawLiftTile)
         : (() => {
             const copy = new Uint8ClampedArray(rawLiftTile);
@@ -174,7 +174,6 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
               );
               expect(maxContrast).toBeGreaterThanOrEqual(65);
 
-              // High-only cirrus (95% total, 0% low) must NEVER crush bright thermal lift chroma into muddy grey!
               if (regime.name === 'high-cirrus' && sampleX >= 19) {
                 const rawChroma = chroma(baseLiftRgb);
                 const postCirrusChroma = chroma(withCloudRgb);
@@ -192,20 +191,20 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
     expect(permutationsVerified).toBe(MAP_THEMES.length * CLOUD_STYLES.length * cloudRegimes.length * RAIN_STYLES.length);
   });
 
-  it('maintains strict MapLibre z-order (lift < hillshade-top < clouds < rain-cuff < coastline < contours < aero-strip < isobar-labels) across rapid swaps', () => {
+  it('maintains strict MapLibre z-order (lift < hillshade-top < clouds < rain-cuff < waterway < contours < aero-strip < isobar-labels) across rapid swaps', () => {
     const order = [
       'terrain-background',
-      'basemap',
       'terrain-relief',
       'terrain-hillshade-base',
+      'water',
       'av-overview-1',
       'av-overlay-1',
       'av-hillshade-top',
-      'coastline',
-      'road_major',
-      'admin_country_a',
+      'waterway',
+      'road_major_motorway',
+      'admin_country',
       'aero-strip',
-      'peak-major',
+      'peak-main',
       'place-city'
     ];
     const sources = new Map<string, Record<string, unknown>>();
@@ -252,15 +251,15 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
     const clouds = new CloudLayerController(fakeMap as never, false);
     const isobars = new IsobarLayerController(fakeMap as never);
     const rain = new RainLayerController(fakeMap as never, 'https://api.example.test', false, {
-      styles: resolveChannelStyles('xcskies'),
+      styles: resolveChannelStyles('classic'),
       opacity: 0.75,
       visible: true
     });
 
     (clouds as unknown as { paintContours: (f: SynopticField, s: unknown, v: boolean) => void })
-      .paintContours(synoptic, resolveChannelStyles('xcskies'), true);
-    isobars.paint(synoptic, themeOption('xcskies').isobar, true);
-    fakeMap.addLayer({ id: 'av-rain-cuff' }, 'coastline');
+      .paintContours(synoptic, resolveChannelStyles('classic'), true);
+    isobars.paint(synoptic, themeOption('classic').isobar, true);
+    fakeMap.addLayer({ id: 'av-rain-cuff' }, 'waterway');
     fakeMap.addLayer({ id: 'av-sky-clouds' }, 'av-rain-cuff');
     fakeMap.addLayer({ id: 'av-overlay-2' }, 'av-hillshade-top');
 
@@ -268,8 +267,8 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
     expect(idxOf('av-overlay-2')).toBeLessThan(idxOf('av-hillshade-top'));
     expect(idxOf('av-hillshade-top')).toBeLessThan(idxOf('av-sky-clouds'));
     expect(idxOf('av-sky-clouds')).toBeLessThan(idxOf('av-rain-cuff'));
-    expect(idxOf('av-rain-cuff')).toBeLessThan(idxOf('coastline'));
-    expect(idxOf('road_major')).toBeLessThan(idxOf('av-cloud-contours-overcast'));
+    expect(idxOf('av-rain-cuff')).toBeLessThan(idxOf('waterway'));
+    expect(idxOf('road_major_motorway')).toBeLessThan(idxOf('av-cloud-contours-overcast'));
     expect(idxOf('av-isobars-line')).toBeLessThan(idxOf('aero-strip'));
     expect(idxOf('aero-strip')).toBeLessThan(idxOf('av-isobars-label'));
 

@@ -43,7 +43,7 @@ export const publicationShape = {
   artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
   tool: z.looseObject({
-    useStoredMslNoLift: z.literal(true).optional(),
+    useStoredMslNoLift: z.literal(true),
     profileDewpointReference: z.literal('liquid-vapor-pressure').optional()
   }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
 };
@@ -55,10 +55,10 @@ export const provenanceFrameReferenceSchema = z.strictObject({ hour: z.number().
 export type ProvenanceFrameReference = z.infer<typeof provenanceFrameReferenceSchema>;
 export const frameProvenanceSchema = z.strictObject({ version: z.literal(1), ...provenanceIdentity,
   frame: frameSchema, hour: z.number().int().positive(), intervals: z.unknown(), receipt: z.unknown() });
-export const provenanceSchema = z.discriminatedUnion('version', [
-  z.strictObject({ version: z.literal(1), ...provenanceDescription, frames: z.array(z.unknown()).max(MAX_JSON_CONTAINER_ENTRIES) }),
-  z.strictObject({ version: z.literal(2), ...provenanceDescription, frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) })
-]);
+export const provenanceSchema = z.strictObject({
+  version: z.literal(2), ...provenanceDescription,
+  frames: z.array(provenanceFrameReferenceSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES)
+});
 export const retainedBuildSchema = z.object({ buildId: key, manifestKey: key, cycle: timestamp, expiresAt: timestamp });
 const hasLatest = (p: { latestBuildId: string; retained: { buildId: string }[] }) => p.retained.some(b => b.buildId === p.latestBuildId);
 export const modelPointerSchema = z.object({ version: z.literal(1), model: modelIdSchema, latestBuildId: key, retained: z.array(retainedBuildSchema).min(1).max(MAX_RETAINED_BUILDS) }).refine(hasLatest, { message: 'latest build must be retained' });
@@ -103,10 +103,7 @@ const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
   coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
   layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  samples: z.discriminatedUnion('format', [
-    z.strictObject({ ...sampleV5Base, format: z.literal('cell-major-block-shards-v1'), shards: z.array(shardSchema).min(1) }),
-    z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1) })
-  ]),
+  samples: z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) }),
   profiles: profilePackSchema.optional(),
   terrain: z.strictObject({
     dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
@@ -210,20 +207,16 @@ function validateV5Records(manifest: ManifestV5): void {
     const blockSlots = Math.ceil(surface.grid.width / SAMPLE_BLOCK_SIZE) * Math.ceil(surface.grid.height / SAMPLE_BLOCK_SIZE);
     if (!Number.isSafeInteger(blockSlots) || samples.blockCount > blockSlots) throw new Error('Invalid sample block count');
     let nextBlock = 0, cells = 0, nextFrame = 0, group = -1, blockShard = 0, groupFirstFrame = 0, groupFrameCount = 0;
-    for (let i = 0; i < samples.shards.length; i++) {
-      const shard = samples.shards[i];
-      let channels = expectedChannels, expectedKey = `${prefix}/surfaces/${surface.id}/samples/${i}.bin`;
-      if (samples.format === 'frame-group-block-shards-v1' && 'group' in shard) {
-        if (shard.group !== group) {
-          if (shard.group !== group + 1 || (group >= 0 && (nextBlock !== samples.blockCount || cells !== samples.storedCells))
-            || shard.firstFrame !== nextFrame) throw new Error('Invalid sample frame group');
-          group = shard.group; groupFirstFrame = shard.firstFrame; groupFrameCount = shard.frameCount;
-          nextFrame += shard.frameCount; nextBlock = 0; cells = 0; blockShard = 0;
-        }
-        if (shard.firstFrame !== groupFirstFrame || shard.frameCount !== groupFrameCount || shard.blockShard !== blockShard++) throw new Error('Invalid sample frame group');
-        channels = shard.frameCount * surface.layers.length;
-        expectedKey = `${prefix}/surfaces/${surface.id}/samples/g${shard.group}-b${shard.blockShard}.bin`;
+    for (const shard of samples.shards) {
+      if (shard.group !== group) {
+        if (shard.group !== group + 1 || (group >= 0 && (nextBlock !== samples.blockCount || cells !== samples.storedCells))
+          || shard.firstFrame !== nextFrame) throw new Error('Invalid sample frame group');
+        group = shard.group; groupFirstFrame = shard.firstFrame; groupFrameCount = shard.frameCount;
+        nextFrame += shard.frameCount; nextBlock = 0; cells = 0; blockShard = 0;
       }
+      if (shard.firstFrame !== groupFirstFrame || shard.frameCount !== groupFrameCount || shard.blockShard !== blockShard++) throw new Error('Invalid sample frame group');
+      const channels = shard.frameCount * surface.layers.length;
+      const expectedKey = `${prefix}/surfaces/${surface.id}/samples/g${shard.group}-b${shard.blockShard}.bin`;
       const bytes = shard.storedCells * channels * CELL_BYTES;
       if (shard.firstBlock !== nextBlock || shard.storedCells < shard.blockCount || shard.storedCells > shard.blockCount * (SAMPLE_BLOCK_SIZE + 1) ** 2
         || !Number.isSafeInteger(bytes) || shard.bytes !== bytes
@@ -231,10 +224,11 @@ function validateV5Records(manifest: ManifestV5): void {
       nextBlock += shard.blockCount; cells += shard.storedCells; keys.add(shard.key);
       if (!Number.isSafeInteger(nextBlock) || !Number.isSafeInteger(cells)) throw new Error('Sample shard arithmetic overflow');
     }
-    if (nextBlock !== samples.blockCount || cells !== samples.storedCells || (samples.format === 'frame-group-block-shards-v1' && nextFrame !== expectedFrames)) throw new Error('Incomplete sample shard ranges');
+    if (nextBlock !== samples.blockCount || cells !== samples.storedCells || nextFrame !== expectedFrames) throw new Error('Incomplete sample shard ranges');
     if (surface.profiles) {
       const profiles = surface.profiles;
       if (surface.kind !== 'native' || profiles.coverageHash !== surface.coverage.hash || profiles.blockCount !== samples.blockCount || profiles.storedCells !== samples.storedCells) throw new Error('Profile coverage identity mismatch');
+      if (manifest.tool.profileDewpointReference !== 'liquid-vapor-pressure') throw new Error('Profile pack requires liquid-vapor-pressure dewpoint reference');
       validateProfileShards(profiles, manifest.frames.length, `${prefix}/surfaces/${surface.id}/profiles`, keys);
     }
   }
@@ -282,7 +276,9 @@ export function assertProfileLayoutBindingV5(surface: ForecastSurfaceV5, binding
 
 function assertPackedLayoutBindingV5(
   surface: ForecastSurfaceV5, binding: SurfaceLayoutBindingV5,
-  pack: Pick<ForecastSurfaceV5['samples'], 'coverageHash' | 'blockCount' | 'storedCells' | 'shards' | 'channelCount'>, recordBytes: number, layers: number
+  pack: Pick<ForecastSurfaceV5['samples'], 'coverageHash' | 'blockCount' | 'storedCells' | 'channelCount'> & {
+    shards: ForecastSurfaceV5['samples']['shards'] | NonNullable<ForecastSurfaceV5['profiles']>['groups'][number]['shards'];
+  }, recordBytes: number, layers: number
 ): void {
   if (!sameGrid(surface.grid, binding.grid) || surface.gridHash !== binding.gridHash || surface.coverage.hash !== binding.coverageHash
     || pack.coverageHash !== binding.coverageHash || pack.blockCount !== binding.blockIds.length) throw new Error('Sample layout identity mismatch');
@@ -306,7 +302,7 @@ function assertPackedLayoutBindingV5(
       const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
       cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
     }
-    const channels = 'frameCount' in shard ? shard.frameCount * layers : 'channelCount' in pack ? pack.channelCount : 0;
+    const channels = 'frameCount' in shard ? shard.frameCount * layers : pack.channelCount;
     if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * recordBytes)
       || shard.bytes !== cells * channels * recordBytes) throw new Error('Sample block size mismatch');
     nextBlock = end; totalCells += cells;
@@ -333,16 +329,14 @@ export function parseProvenance(
   if (provenance.model !== manifest.model || provenance.buildId !== manifest.buildId || provenance.cycle !== manifest.cycle) {
     throw new Error('Provenance does not match manifest');
   }
-  if (provenance.version === 2) {
-    if (manifest.frames && provenance.frames.length !== manifest.frames.length) throw new Error('Incomplete provenance frames');
-    for (const [index, reference] of provenance.frames.entries()) {
-      const frame = manifest.frames?.[index];
-      if (reference.frame !== `f${String(reference.hour).padStart(3, '0')}`
-          || reference.key !== `builds/${manifest.model}/${manifest.buildId}/provenance/${reference.frame}.json`
-          || (index > 0 && reference.hour <= provenance.frames[index - 1]!.hour)
-          || (frame && (reference.frame !== frame.id || Date.parse(frame.validTime) !== Date.parse(manifest.cycle) + reference.hour * 3_600_000))) {
-        throw new Error('Invalid provenance frame reference');
-      }
+  if (manifest.frames && provenance.frames.length !== manifest.frames.length) throw new Error('Incomplete provenance frames');
+  for (const [index, reference] of provenance.frames.entries()) {
+    const frame = manifest.frames?.[index];
+    if (reference.frame !== `f${String(reference.hour).padStart(3, '0')}`
+        || reference.key !== `builds/${manifest.model}/${manifest.buildId}/provenance/${reference.frame}.json`
+        || (index > 0 && reference.hour <= provenance.frames[index - 1]!.hour)
+        || (frame && (reference.frame !== frame.id || Date.parse(frame.validTime) !== Date.parse(manifest.cycle) + reference.hour * 3_600_000))) {
+      throw new Error('Invalid provenance frame reference');
     }
   }
   return provenance;
@@ -370,7 +364,7 @@ export function matchesFrameIntervals(intervals: unknown, frame: ManifestV5['fra
 }
 
 export function computeFreshness(
-  manifest: Pick<ManifestV5, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { version?: number; mapFrameCount?: number },
+  manifest: Pick<ManifestV5, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { mapFrameCount?: number },
   nowMs = Date.now()
 ): Required<FreshnessSummary> {
   const validTimes = renderedFrames(manifest).map(f => Date.parse(f.validTime)).filter(Number.isFinite);
@@ -388,9 +382,9 @@ export function computeFreshness(
   };
 }
 
-/** Raster consumers use the ordered map prefix; legacy manifests expose all frames. */
-export function renderedFrames(manifest: { frames: ManifestV5['frames']; version?: number; mapFrameCount?: number }): ManifestV5['frames'] {
-  return manifest.version === 5 && manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
+/** Raster consumers use the ordered map prefix. */
+export function renderedFrames(manifest: { frames: ManifestV5['frames']; mapFrameCount?: number }): ManifestV5['frames'] {
+  return manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
 }
 
 export function surfaceFrameCount(manifest: ManifestV5, surface: Pick<ForecastSurfaceV5, 'kind'>): number {

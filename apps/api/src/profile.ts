@@ -10,7 +10,7 @@ import {
 } from '@av/forecast';
 import {
   deriveSoaringViews, interpretUpperAirMoisture, nativeColumnCloudDiagnostics,
-  nativeColumnHumidityAtHeight, nativeColumnWindAtHeight, resolveUpperAirMoistureReference
+  nativeColumnHumidityAtHeight, nativeColumnWindAtHeight
 } from '@av/soaring';
 import { resolveSparseCoverage, sha256 } from './coverage';
 import { reserveAllocation, waitFor, type WaitContext } from './resources';
@@ -86,7 +86,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           const shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const { frameId, layer, channel } of samples) {
-              const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer], m.tool.useStoredMslNoLift === true);
+              const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer]);
               const formatted = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
               allValues.get(frameId)![layer] = formatted;
               if (layers.includes(layer)) values.get(frameId)![layer] = formatted;
@@ -96,7 +96,6 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
         jobs.push(...profileJobs);
       }
       await readPackedRanges(bucket, ctx, request.signal, m.expiresAt, 'profile', jobs, (job, bytes) => job.apply(bytes));
-      const moistureRef = resolveUpperAirMoistureReference(m.model, m.tool.profileDewpointReference);
       const result = { version: 1, model: m.model, buildId: m.buildId, cycle: m.cycle, createdAt: m.createdAt, expiresAt: m.expiresAt,
         lat, lon, cell, method: m.method, source: servedSource(m, url.origin), frames: frames.map(frame => {
           const column = columns.get(frame.id)!, fields = values.get(frame.id)!, fullFields = allValues.get(frame.id)!;
@@ -108,7 +107,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
             surfaceDewPointC: value('sfc-dewpoint-c'), pblHeightM: value('pbl-height-agl'),
             wind10mU: value('wind-10m-u'), wind10mV: value('wind-10m-v'),
             levels: column.levels.map(level => ({ ...level, heightM: level.heightM ?? NaN, temperatureC: level.temperatureC ?? NaN,
-              dewPointC: interpretUpperAirMoisture(level.temperatureC, level.dewPointC, moistureRef).dewPointC,
+              dewPointC: interpretUpperAirMoisture(level.temperatureC, level.dewPointC).dewPointC,
               uMps: level.uWindMps, vMps: level.vWindMps })) };
           const storedTopM = value('thermal-top-msl'), terrainM = column.modelTerrainM, thermalVelocityMps = value('thermal-velocity');
           // V1 stores whole-metre terrain alongside the Float32 scalar top.

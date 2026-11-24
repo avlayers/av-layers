@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { getProduct, MODEL_IDS } from '@av/contracts/models';
-import { canonicalGridJson, createSparseCoverage, encodeSparseCoverage, expectedTiles, manifestV5Schema, type Manifest, type ManifestV5, type ModelPointer } from '@av/contracts';
+import { canonicalGridJson, createSparseCoverage, encodeSparseCoverage, expectedTiles, manifestV5Schema, type ManifestV5, type ModelPointer } from '@av/contracts';
+import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from '../apps/batch/src/capacity.js';
 import { localPath } from '../apps/batch/src/validate.js';
@@ -137,7 +137,6 @@ it('reads the published fine terrain reference only when a missing cache request
   expect(fake.discover).not.toHaveBeenCalled();
 });
 it.each([
-  { version: 4, age: 0 }, { version: 4, age: 86400000 },
   { version: 5, age: 0 }, { version: 5, age: 86400000 }
 ])('cold prepares terrain without reading expired v$version latest ($age ms after expiry)', async ({ version, age }) => {
   const { manifest: v5 } = v5ResumeFixture();
@@ -383,7 +382,7 @@ it('records a committed CAS when its deadline expires before cleanup', async () 
 function digest(data: Uint8Array | string): string { return createHash('sha256').update(data).digest('hex'); }
 
 function v5ResumeFixture(metrics?: Record<string, unknown>, execution?: { zoom: number; workers: number; masterZoom: number }): { manifest: ManifestV5; plan: BuildPlan; files: Map<string, Buffer> } {
-  const base = JSON.parse(readFileSync(new URL('./fixtures/manifest.contract.json', import.meta.url), 'utf8')) as Manifest;
+  const base = fixtureManifestV5();
   const grid = { kind: 'regular-latlon' as const, width: 34, height: 17, earthRadiusM: 6371229, lon0: -10, lat0: 10, dx: 0.1, dy: -0.1, wrapLongitude: false };
   const gridHash = digest(canonicalGridJson(grid)), blockCount = 3;
   const output = new Uint8Array(blockCount * 32);
@@ -403,9 +402,9 @@ function v5ResumeFixture(metrics?: Record<string, unknown>, execution?: { zoom: 
   const surface = (id: 'native' | 'fine', layers: ManifestV5['layers']) => {
     const channelCount = base.frames.length * layers.length, storedCells = 3;
     const bytes = Buffer.alloc(storedCells * channelCount * 5, 1);
-    const shard = { firstBlock: 0, blockCount, storedCells, bytes: bytes.byteLength, sha256: digest(bytes), key: `builds/${base.model}/${base.buildId}/surfaces/${id}/samples/0.bin` };
+    const shard = { group: 0, firstFrame: 0, frameCount: base.frames.length, blockShard: 0, firstBlock: 0, blockCount, storedCells, bytes: bytes.byteLength, sha256: digest(bytes), key: `builds/${base.model}/${base.buildId}/surfaces/${id}/samples/g0-b0.bin` };
     return { id, kind: id, grid, gridHash, coverage: { id: 'fine', hash: coverageHash, maskKey, maxZoom: renderZoom, gridHash }, layers,
-      samples: { format: 'cell-major-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const, channelCount,
+      samples: { format: 'frame-group-block-shards-v1' as const, blockSize: 16 as const, channelOrder: 'frame-then-layer' as const, channelCount,
         coverageHash, blockCount, storedCells, shards: [shard] },
       ...(id === 'fine' ? { terrain: { dataId: terrainDataId, key: terrainKey, sha256: terrainSha, verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash, layoutVersion: 1 as const } } : {}),
       file: bytes };
@@ -417,9 +416,11 @@ function v5ResumeFixture(metrics?: Record<string, unknown>, execution?: { zoom: 
   metrics = { renderer: { native: { tiles: coveredTiles * base.frames.length * native.layers.length },
     fine: { tiles: coveredTiles * base.frames.length * fine.layers.length } },
   ...(metrics ?? { elapsedMs: 1000, peakRssBytes: 100_000_000, tiles: counts }) };
+  const archiveBytes = Buffer.from('fixture archive'), archiveHash = digest(archiveBytes);
+  const artifacts = base.artifacts.map(artifact => ({ ...artifact, tilesSha256: archiveHash }));
   const manifest = manifestV5Schema.parse({ version: 5, descriptors: base.descriptors, recipe: { ...base.recipe, sourceRevision: revision, sourceDirty: false }, model: base.model,
     buildId: base.buildId, cycle: base.cycle, createdAt: base.createdAt, expiresAt: base.expiresAt, method: base.method,
-    frames: base.frames, layers: base.layers, artifacts: base.artifacts, source: base.source, tool: base.tool,
+    frames: base.frames, layers: base.layers, artifacts, source: base.source, tool: base.tool,
     palettes: base.palettes, metrics, surfaces: [nativeSurface, fineSurface] });
   const plan: BuildPlan = { version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, preparation: { elapsedMs: 0, peakRssBytes: 0 },
     createdAt: manifest.createdAt, coverageHash, providerId: 'fixture-provider', recipe: structuredClone(manifest.recipe),
@@ -431,6 +432,7 @@ function v5ResumeFixture(metrics?: Record<string, unknown>, execution?: { zoom: 
     [localPath('output', maskKey), descriptor], [localPath('output', `${prefix}/sparse.bin`), Buffer.from(sparse)],
     [localPath('output', `${prefix}/tiles.bin`), Buffer.from(tiles)], [localPath('output', nativeSurface.samples.shards[0]!.key), nativeFile],
     [localPath('output', fineSurface.samples.shards[0]!.key), fineFile], [localPath('output', terrainKey), terrainBytes],
+    ...artifacts.map(artifact => [localPath('output', artifact.tilesKey), archiveBytes] as const),
     [localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest))],
     [resolve('output/plan.json'), Buffer.from(JSON.stringify(plan))]
   ]);
@@ -517,12 +519,7 @@ it.each([true, false].flatMap(committed => [true, false].map(explicit => ({ comm
 
 it('delegates frame-group receipt validation to publication without an earlier duplicate pass', async () => {
   const { manifest, plan, files } = v5ResumeFixture();
-  for (const surface of manifest.surfaces) {
-    const shard = surface.samples.shards[0]!;
-    files.delete(localPath('output', shard.key));
-    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards: [{ ...shard, key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g0-b0.bin`, group: 0, firstFrame: 0, frameCount: manifest.frames.length, blockShard: 0 }] };
-  }
-  files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
+  for (const surface of manifest.surfaces) files.delete(localPath('output', surface.samples.shards[0]!.key));
   mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
@@ -539,13 +536,6 @@ it('delegates frame-group receipt validation to publication without an earlier d
 
 it('rejects a prebranch grouped artifact at the recipe guard before receipt or numeric reads', async () => {
   const { manifest, plan, files } = v5ResumeFixture();
-  for (const surface of manifest.surfaces) {
-    const shard = surface.samples.shards[0]!;
-    surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards: [{ ...shard,
-      key: `builds/${manifest.model}/${manifest.buildId}/surfaces/${surface.id}/samples/g0-b0.bin`,
-      group: 0, firstFrame: 0, frameCount: manifest.frames.length, blockShard: 0 }] };
-  }
-  files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
   fake.identity.mockResolvedValueOnce({ recipe: { hash: 'b'.repeat(64) } });
   mockResumePlan(plan);
   fake.directories.mockResolvedValue([{ name: manifest.buildId, isDirectory: () => true }]);
@@ -561,7 +551,8 @@ it('resumes frame-group local payloads without remote shard receipts', async () 
   plan.groups = [plan.groups[0].slice(0, 3), plan.groups[0].slice(3)];
   for (const surface of manifest.surfaces) {
     const old = surface.samples.shards[0]!, original = files.get(localPath('output', old.key))!;
-    const counts = [3, manifest.frames.length - 3], shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+    files.delete(localPath('output', old.key));
+    const counts = [3, manifest.frames.length - 3], shards: typeof surface.samples.shards = [];
     let firstFrame = 0;
     for (const [group, frameCount] of counts.entries()) {
       const channels = frameCount * surface.layers.length, bytes = Buffer.alloc(old.storedCells * channels * 5);
@@ -573,13 +564,7 @@ it('resumes frame-group local payloads without remote shard receipts', async () 
       shards.push({ ...old, group, firstFrame, frameCount, blockShard: 0, key, bytes: bytes.length, sha256: digest(bytes) });
       firstFrame += frameCount;
     }
-    files.delete(localPath('output', old.key));
     surface.samples = { ...surface.samples, format: 'frame-group-block-shards-v1', shards };
-  }
-  for (const artifact of manifest.artifacts) {
-    const bytes = Buffer.from('fixture archive');
-    artifact.tilesSha256 = digest(bytes);
-    files.set(localPath('output', artifact.tilesKey), bytes);
   }
   files.set(localPath('output', `builds/${manifest.model}/${manifest.buildId}/manifest.json`), Buffer.from(JSON.stringify(manifest)));
   mockResumePlan(plan);
@@ -630,14 +615,6 @@ it.each(['coverage-descriptor', 'sparse', 'tiles', 'shard', 'terrain-file'] as c
   else files.set(localPath('output', surface.terrain!.key), Buffer.from('{"dataId":"other"}'));
   fake.readLocal.mockImplementation(async (path: string) => files.get(path) ?? files.get(resolve(path)) ?? Promise.reject(Object.assign(new Error('missing'), { code: 'ENOENT' })));
   await expect(assertV5ResumeIdentity(manifest, plan, 'output')).rejects.toThrow(/hash|binding/);
-  expect(fake.publish).not.toHaveBeenCalled();
-});
-
-
-it.each([3, 4])('rejects a v%i artifact before publication and directs the operator to rebuild', async version => {
-  fake.readLocal.mockResolvedValueOnce(Buffer.from(JSON.stringify({ ...manifest, version })));
-  await expect(resumePublication(revision)).rejects.toThrow('start a fresh forecast without resume-run-id');
-  expect(fake.readPlan).not.toHaveBeenCalled();
   expect(fake.publish).not.toHaveBeenCalled();
 });
 it('reports incomplete retained shard output without rebuilding or publishing it', async () => {

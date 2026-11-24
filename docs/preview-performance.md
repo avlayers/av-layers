@@ -44,7 +44,7 @@ at a 40 ms response floor. Fine detail follows separately; preparation transfers
 additional coarse data and can delay cold refinement.
 
 [Preview build checks](../apps/preview/vite.config.ts) cap the startup JavaScript
-bundle (MapLibre GL, XC Skies natural basemap, raster previews, numeric wind, and
+bundle (MapLibre GL, DEM/OpenFreeMap soaring basemap, raster previews, numeric wind, and
 the pinned `@deck.gl/*`/`@luma.gl/*`/`weatherlayers-gl` renderer set) at
 **1,200,000 B gzip** and each lazy chunk (the on-demand `@av/windgram` renderer)
 at **300,000 B gzip**.

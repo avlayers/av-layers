@@ -86,7 +86,6 @@ const levelsSamplingMemo = new WeakMap<
     tdC: number | null;
     u10: number | null;
     v10: number | null;
-    ref: string;
     sampling: HourSampling;
   }
 >();
@@ -95,7 +94,6 @@ export function hourSampling(hour: ProfileHour): HourSampling {
   const cached = hourSamplingMemo.get(hour);
   if (cached) return cached;
   const floorM = hour.modelTerrainM;
-  const moistureRef = hour.upperAirDewpointReference ?? 'liquid-vapor-pressure';
   const sfcTemp = finiteScalar(hour.surface.temperatureC);
   const sfcTd = finiteScalar(hour.surface.dewPointC);
   const u10 = finiteScalar(hour.surface.windU);
@@ -109,8 +107,7 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       byLevels.tempC === sfcTemp &&
       byLevels.tdC === sfcTd &&
       byLevels.u10 === u10 &&
-      byLevels.v10 === v10 &&
-      byLevels.ref === moistureRef
+      byLevels.v10 === v10
     ) {
       hourSamplingMemo.set(hour, byLevels.sampling);
       return byLevels.sampling;
@@ -121,12 +118,11 @@ export function hourSampling(hour: ProfileHour): HourSampling {
   const missingValue = (altitudeM: number) => ({ altitudeM, value: NaN });
   const interpretedLevels = levels.map(l => {
     const temp = finiteScalar(l.temperatureC);
-    const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC), moistureRef);
+    const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC));
     return {
       altitudeM: finiteScalar(l.heightM)!,
       temperatureC: temp ?? NaN,
       dewPointC: moisture.dewPointC ?? NaN,
-      cloudRhPercent: moisture.cloudRhPercent ?? NaN,
     };
   });
   const anchorNodes = (values: { altitudeM: number; value: number }[], surfaceVal: number | null) => {
@@ -183,15 +179,10 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       altitudeM: p.altitudeM,
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
     })),
-    cloudHumidityPercent: moistureRef === 'model-rh'
-      ? anchorNodes(
-          interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.cloudRhPercent })),
-          sfcTemp !== null && sfcTd !== null ? effectiveCloudHumidityPercent(sfcTemp, sfcTd) : null,
-        )
-      : temperatureC.map((p, i) => ({
-          altitudeM: p.altitudeM,
-          value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
-        })),
+    cloudHumidityPercent: temperatureC.map((p, i) => ({
+      altitudeM: p.altitudeM,
+      value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
+    })),
     windU: winds.map(p => ({ altitudeM: p.altitudeM, value: p.uMps })),
     windV: winds.map(p => ({ altitudeM: p.altitudeM, value: p.vMps })),
     verticalVelocityPaS: withHeightGaps(levels.map((l) => ({
@@ -207,7 +198,6 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       tdC: sfcTd,
       u10,
       v10,
-      ref: moistureRef,
       sampling: sampled,
     });
   }

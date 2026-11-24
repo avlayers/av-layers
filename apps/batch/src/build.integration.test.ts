@@ -54,7 +54,7 @@ it('writes an admitted v5 build with a map prefix, native tail and indexed sourc
   const provenance = parseProvenance(JSON.parse(await readFile(join(out, manifest.source.provenanceKey), 'utf8')), manifest);
   expect(provenance).toMatchObject({ version: 2, frames: [{ frame: 'f001' }, { frame: 'f002' }] });
   for (const surface of manifest.surfaces) {
-    expect(surface.samples.format).toBe('cell-major-block-shards-v1');
+    expect(surface.samples.format).toBe('frame-group-block-shards-v1');
     expect(surface.samples.channelCount).toBe(surface.layers.length * (surface.kind === 'fine' ? 1 : 2));
     for (const shard of surface.samples.shards) expect((await stat(join(out, shard.key))).size).toBe(shard.bytes);
   }

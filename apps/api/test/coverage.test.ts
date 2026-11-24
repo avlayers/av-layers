@@ -27,7 +27,7 @@ it('lazily verifies sparse coverage and binds its canonical sample layout', asyn
   const bucket = { get } as unknown as R2Bucket;
   const surface: ForecastSurfaceV5 = {
     id: 'fine', kind: 'fine', grid: regular, gridHash, coverage: { id: description.descriptor.id, hash: description.hash, maskKey: `${prefix}/manifest.json`, maxZoom: 0, gridHash }, layers: ['usable-lift-msl'],
-    samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
+    samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ group: 0, firstFrame: 0, frameCount: 1, blockShard: 0, firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
   };
   const binding = vi.spyOn(contracts, 'assertSampleLayoutBindingV5');
   const results = await Promise.all([resolveSparseCoverage(bucket, surface), resolveSparseCoverage(bucket, surface)]);
@@ -41,7 +41,6 @@ it('lazily verifies sparse coverage and binds its canonical sample layout', asyn
   expect(binding).toHaveBeenCalledTimes(1);
   await expect(resolveSparseCoverage(bucket, surface, undefined, [-1, -1, 1, 1])).rejects.toThrow('disagrees');
   await expect(resolveSparseCoverage(bucket, { ...surface, gridHash: '0'.repeat(64) })).rejects.toThrow('disagrees');
-  if (surface.samples.format !== 'cell-major-block-shards-v1') throw new Error('Expected legacy samples');
   await expect(resolveSparseCoverage(bucket, { ...surface, samples: { ...surface.samples, shards: [{ ...surface.samples.shards[0], bytes: 44 }] } })).rejects.toThrow('disagrees');
   const corrupted = new Map(objects); corrupted.set(`${prefix}/sparse.bin`, Uint8Array.from(description.sparseBytes, (value, i) => i ? value : value ^ 1));
   const badBucket = { get: async (key: string) => { const bytes = corrupted.get(key); return bytes ? { size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) } : null; } } as unknown as R2Bucket;
@@ -63,7 +62,7 @@ function sparseBlobFixture() {
   const stream = (bytes: Uint8Array) => ({ size: bytes.length, body: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }) });
   const surface: ForecastSurfaceV5 = {
     id: 'fine', kind: 'fine', grid: regular, gridHash, coverage: { id: description.descriptor.id, hash: description.hash, maskKey: `${prefix}/manifest.json`, maxZoom: 0, gridHash }, layers: ['usable-lift-msl'],
-    samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
+    samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, blockCount: 1, storedCells: 9, coverageHash: description.hash, shards: [{ group: 0, firstFrame: 0, frameCount: 1, blockShard: 0, firstBlock: 0, blockCount: 1, storedCells: 9, bytes: 45, key: 'unused', sha256: 'a'.repeat(64) }] }
   };
   const get = vi.fn(async (key: string) => { const bytes = objects.get(key); return bytes ? stream(bytes) : null; });
   return { coverage, surface, get, bucket: { get } as unknown as R2Bucket };

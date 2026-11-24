@@ -24,7 +24,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
     maxTileCacheZoomLevels: 2,
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : compositeBasemapStyle(options.theme ?? 'stone', typeof window !== 'undefined' ? window.devicePixelRatio : 1)
+      : compositeBasemapStyle(options.theme ?? 'stone')
   });
 }
 

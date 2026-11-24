@@ -541,7 +541,7 @@ export class RasterOverlay {
       const hashTheme = hashIdx >= 0 ? params.url.slice(hashIdx + 1) : '';
       const slotTheme: MapTheme = isMapTheme(hashTheme) ? hashTheme : this.theme;
       const response = await this.protocol!.load({ ...params, url: cleanUrl }, controller);
-      if (slotTheme === 'xcskies' || response.data.byteLength <= 48 || !canRemapTiles()) return response;
+      if (slotTheme === 'classic' || response.data.byteLength <= 48 || !canRemapTiles()) return response;
       const httpIdx = cleanUrl.indexOf('http');
       const rawUrl = httpIdx >= 0 ? cleanUrl.slice(httpIdx) : cleanUrl;
       let maskData: ArrayBuffer | null = null;

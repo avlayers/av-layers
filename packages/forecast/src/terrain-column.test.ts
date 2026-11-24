@@ -1,10 +1,12 @@
 import { expect, it } from 'vitest';
-import { setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PROFILE_TOP, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type RegularLatLonGrid } from '@av/contracts';
+import { getBit, prepareGridGeometry, setBit, STATUS_MASK, STATUS_NO_LIFT, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_PROFILE_TOP, TERRAIN_CLEARANCE_METHOD, type CoverageMask, type RegularLatLonGrid } from '@av/contracts';
 import { normalizedFixtureFrame } from '../../../scripts/fixtures/normalized-provider.js';
 import { saturationVaporPressureHpa } from '@av/thermodynamics';
 import { THERMODYNAMIC_CONSTANTS } from '@av/thermodynamics/constants';
+import { clearanceCell } from './clearance-cell.js';
 import { deriveFrame, FRAME_BRANCH } from './frame.js';
-import { prepareTerrainClearance, prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './refinement.js';
+import { prepareTerrainColumns, terrainColumnCapacity, terrainColumnDaylightBufferBytes } from './refinement.js';
+import { planSample } from './sampler.js';
 
 const grid: RegularLatLonGrid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 1, height: 1,
   lon0: 0, lat0: 0, dx: 1, dy: -1, wrapLongitude: false };
@@ -521,9 +523,22 @@ it.each(['isobaric', 'model-levels'] as const)('matches dense clearance fallback
   const flags = deriveFrame(input, sourceMask, { daylightOnly: false, diagnostics })['usable-lift-agl']!.flags;
   const nativeClearance = { validTime: day.validTime, grid: sourceMask.grid, diagnostics, flags };
   const prepared = prepareTerrainColumns(sourceMask, targetMask, active, 3, { clearanceFallback: 'unsupported' });
-  const dense = prepareTerrainClearance(sourceMask, targetMask);
+  const targetGeo = prepareGridGeometry(targetGrid);
   const compare = () => {
-    const fields = dense.derive(diagnostics, flags, dem, day, false);
+    const msl = new Float32Array(9).fill(NaN), agl = new Float32Array(9).fill(NaN), outFlags = new Uint8Array(9).fill(STATUS_UNAVAILABLE);
+    const out = { msl: 0, agl: 0, flags: 0 };
+    for (let index = 0; index < 9; index++) {
+      if (!dem.valid[index] || !Number.isFinite(dem.elevationM[index])) continue;
+      const point = targetGeo.gridToGeographic(index % 3, Math.floor(index / 3));
+      const plan = point && planSample(sourceMask.grid, point.lat, point.lon);
+      if (!plan || plan.contributors.some(c => c.weight > 0 && !getBit(sourceMask.output, c.index) && !getBit(sourceMask.halo, c.index))) continue;
+      const indices = Uint32Array.from(plan.contributors, contributor => contributor.index);
+      const weights = Float64Array.from(plan.contributors, contributor => contributor.weight);
+      if (clearanceCell(diagnostics, flags, indices, weights, 0, indices.length, dem.elevationM[index]!, out)) {
+        msl[index] = out.msl; agl[index] = out.agl; outFlags[index] = out.flags;
+      }
+    }
+    const fields = { 'usable-lift-msl': { values: msl, flags: outFlags }, 'usable-lift-agl': { values: agl, flags: outFlags.slice() } };
     const reference = prepared.derive(input, dem, day, { daylightOnly: false, clearance: {
       methodId: TERRAIN_CLEARANCE_METHOD.id, validTime: day.validTime, grid: targetGrid, fields
     }, probeIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8] });

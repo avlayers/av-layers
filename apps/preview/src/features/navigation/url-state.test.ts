@@ -24,6 +24,7 @@ describe('previewQuery', () => {
     expect(previewQuery('?units=metric', false).units).toBe('metric');
     expect(previewQuery('', false).dockView).toBeNull();
     expect(previewQuery('?dock=capsule', false).dockView).toBe('capsule');
+    expect(previewQuery('?theme=classic', false).theme).toBe('classic');
   });
 });
 

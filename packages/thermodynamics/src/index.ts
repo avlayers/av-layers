@@ -151,21 +151,11 @@ export const dewpointFromTempAndRhC = (tempC: number, rhPercent: number): number
 export const dewpointFromGfsV16RhC = (tempC: number, rhPercent: number): number =>
   boltonDewpointFromEsAndRhC(gfsV16SaturationVaporPressureHpa(tempC), rhPercent);
 
-export type UpperAirMoistureReference = 'liquid-vapor-pressure' | 'gfs-v16-mixed' | 'model-rh';
-
-const SPFH_PROFILE_MODELS = new Set(['icon-eu', 'rrfs', 'av-wrf', 'wrf-va-1km']);
+export type UpperAirMoistureReference = 'liquid-vapor-pressure';
 
 /** Resolve the upper-air moisture reference of a published profile build. */
-export function resolveUpperAirMoistureReference(
-  model: string,
-  declared?: UpperAirMoistureReference
-): UpperAirMoistureReference {
-  if (declared === 'liquid-vapor-pressure' || declared === 'gfs-v16-mixed' || declared === 'model-rh') {
-    return declared;
-  }
-  if (model === 'gfs') return 'gfs-v16-mixed';
-  if (SPFH_PROFILE_MODELS.has(model) || model.startsWith('wrf-')) return 'liquid-vapor-pressure';
-  return 'model-rh';
+export function resolveUpperAirMoistureReference(): UpperAirMoistureReference {
+  return 'liquid-vapor-pressure';
 }
 
 export interface InterpretedUpperAirMoisture {
@@ -177,66 +167,25 @@ export interface InterpretedUpperAirMoisture {
 
 /**
  * Recover physical liquid-vapor-pressure Bolton dewpoint, liquid RH, and mixed-phase cloud RH
- * from a stored upper-air level according to the build's moisture reference.
- * Unsupported references ('model-rh') report model RH and leave liquid quantities null.
+ * from a stored upper-air level.
  */
 export function interpretUpperAirMoisture(
   temperatureC: number | null | undefined,
-  storedDewPointC: number | null | undefined,
-  reference: UpperAirMoistureReference = 'liquid-vapor-pressure'
+  storedDewPointC: number | null | undefined
 ): InterpretedUpperAirMoisture {
   const hasT = typeof temperatureC === 'number' && Number.isFinite(temperatureC);
   const hasTd = typeof storedDewPointC === 'number' && Number.isFinite(storedDewPointC);
-  if (reference === 'liquid-vapor-pressure') {
-    const dewPointC = hasTd ? storedDewPointC : null;
-    if (!hasT || dewPointC === null) {
-      return { dewPointC, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
-    }
-    const liquidRhPercent = relativeHumidityFromTempAndDewpointPercent(temperatureC, dewPointC);
-    const cloudRhPercent = effectiveCloudHumidityPercent(temperatureC, dewPointC);
-    return {
-      dewPointC,
-      liquidRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null,
-      cloudRhPercent: Number.isFinite(cloudRhPercent) ? cloudRhPercent : null,
-      modelRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null
-    };
+  const dewPointC = hasTd ? storedDewPointC : null;
+  if (!hasT || dewPointC === null) {
+    return { dewPointC, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
   }
-  if (!hasT || !hasTd) {
-    return { dewPointC: null, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
-  }
-  const modelRhPercent = relativeHumidityFromTempAndDewpointPercent(temperatureC, storedDewPointC);
-  if (!Number.isFinite(modelRhPercent)) {
-    return { dewPointC: null, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
-  }
-  if (reference === 'gfs-v16-mixed') {
-    if (temperatureC >= 0) {
-      const cloudRh = effectiveCloudHumidityPercent(temperatureC, storedDewPointC);
-      return {
-        dewPointC: storedDewPointC,
-        liquidRhPercent: modelRhPercent,
-        cloudRhPercent: Number.isFinite(cloudRh) ? cloudRh : null,
-        modelRhPercent
-      };
-    }
-    const esLiquid = saturationVaporPressureHpa(temperatureC);
-    const esStored = saturationVaporPressureHpa(storedDewPointC);
-    const ratio = esLiquid > 0 && Number.isFinite(esStored) ? Math.min(1, Math.max(0, esStored / esLiquid)) : NaN;
-    const physicalTd = boltonDewpointFromVaporPressureC(ratio * gfsV16SaturationVaporPressureHpa(temperatureC));
-    const dewPointC = Number.isFinite(physicalTd) ? physicalTd : null;
-    const liquidRh = dewPointC !== null ? relativeHumidityFromTempAndDewpointPercent(temperatureC, dewPointC) : NaN;
-    const cloudRh = dewPointC !== null ? effectiveCloudHumidityPercent(temperatureC, dewPointC) : NaN;
-    return {
-      dewPointC,
-      liquidRhPercent: Number.isFinite(liquidRh) ? liquidRh : null,
-      cloudRhPercent: Number.isFinite(cloudRh) ? cloudRh : null,
-      modelRhPercent
-    };
-  }
+  const liquidRhPercent = relativeHumidityFromTempAndDewpointPercent(temperatureC, dewPointC);
+  const cloudRhPercent = effectiveCloudHumidityPercent(temperatureC, dewPointC);
   return {
-    dewPointC: null,
-    liquidRhPercent: null,
-    cloudRhPercent: modelRhPercent,
-    modelRhPercent
+    dewPointC,
+    liquidRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null,
+    cloudRhPercent: Number.isFinite(cloudRhPercent) ? cloudRhPercent : null,
+    modelRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null
   };
 }
 

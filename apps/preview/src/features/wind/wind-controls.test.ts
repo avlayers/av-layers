@@ -378,7 +378,7 @@ describe('wind controls', () => {
     fire(byClass(root, 'wind-controls-style')[1]!, 'click', { detail: 1 });
     expect(controls.state.style).toBe('barbs');
     expect(pause.disabled).toBe(true);
-    expect(trigger.getAttribute('aria-label')).toContain('XC barbs');
+    expect(trigger.getAttribute('aria-label')).toContain('WMO barbs');
 
     fire(byClass(root, 'wind-controls-style')[0]!, 'click', { detail: 1 });
     expect(pause.disabled).toBe(false);

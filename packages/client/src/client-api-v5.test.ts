@@ -27,18 +27,18 @@ const manifest: ManifestV5 = manifestV5Schema.parse({
       id: 'fine', kind: 'fine', grid: { kind: 'regular-latlon', width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false, earthRadiusM: 6371229 }, gridHash,
       coverage: { id: 'fine-mask', hash: hash('c'), maskKey: `coverage/${hash('c')}/manifest.json`, maxZoom: 0, gridHash },
       layers: ['usable-lift-msl', 'usable-lift-agl'],
-      samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 2, coverageHash: hash('c'), blockCount: 1, storedCells: 1, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 10, key: `${prefix}/surfaces/fine/samples/0.bin`, sha256: hash('d') }] },
+      samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 2, coverageHash: hash('c'), blockCount: 1, storedCells: 1, shards: [{ group: 0, firstFrame: 0, frameCount: 1, blockShard: 0, firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 10, key: `${prefix}/surfaces/fine/samples/g0-b0.bin`, sha256: hash('d') }] },
       terrain: { dataId: hash('d'), key: `terrain/prepared/${hash('d')}/manifest.json`, sha256: hash('d'), verticalDatum: 'EGM2008', surface: 'DSM', gridHash, coverageHash: hash('c'), layoutVersion: 1 }
     },
     {
       id: 'native', kind: 'native', grid: { kind: 'regular-latlon', width: 2, height: 2, lon0: 0, lat0: 1, dx: 1, dy: -1, wrapLongitude: false, earthRadiusM: 6371229 }, gridHash,
       coverage: { id: 'native-mask', hash: hash('e'), maskKey: `coverage/${hash('e')}/manifest.json`, maxZoom: 0, gridHash },
       layers: ['precip-rate'],
-      samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, coverageHash: hash('e'), blockCount: 1, storedCells: 1, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 5, key: `${prefix}/surfaces/native/samples/0.bin`, sha256: hash('f') }] }
+      samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', channelCount: 1, coverageHash: hash('e'), blockCount: 1, storedCells: 1, shards: [{ group: 0, firstFrame: 0, frameCount: 1, blockShard: 0, firstBlock: 0, blockCount: 1, storedCells: 1, bytes: 5, key: `${prefix}/surfaces/native/samples/g0-b0.bin`, sha256: hash('f') }] }
     }
   ],
   source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash('a') },
-  tool: {}, palettes: ['lift', 'rain'], metrics: {}
+  tool: { useStoredMslNoLift: true }, palettes: ['lift', 'rain'], metrics: {}
 });
 
 function latestPayload() {
@@ -76,7 +76,7 @@ function profileLatestPayload(frameCount = 1, levelCount = 3) {
   extended.artifacts = extended.frames.slice(0, extended.mapFrameCount).flatMap(frame => archives.map(artifact => ({ ...artifact, frame: frame.id, tilesKey: `${prefix}/${artifact.layer}/${frame.id}.pmtiles` })));
   for (const surface of extended.surfaces) {
     const count = surface.kind === 'fine' ? extended.mapFrameCount : frameCount;
-    surface.samples.channelCount *= count; surface.samples.shards[0].bytes *= count;
+    surface.samples.channelCount *= count; surface.samples.shards[0].frameCount = count; surface.samples.shards[0].bytes *= count;
   }
   const native = extended.surfaces.find(surface => surface.kind === 'native')!;
   const recordBytes = profileRecordBytes(levelCount);
@@ -88,6 +88,7 @@ function profileLatestPayload(frameCount = 1, levelCount = 3) {
       return { firstFrame: group * 16, frameCount: count, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: count * recordBytes, key: `${prefix}/surfaces/native/profiles/g${group}-b0.bin`, sha256: hash('a') }] };
     })
   };
+  extended.tool = { ...extended.tool, profileDewpointReference: 'liquid-vapor-pressure' };
   payload.manifest = manifestV5Schema.parse(extended);
   return payload;
 }
@@ -255,13 +256,8 @@ describe('ApiClient v5 pinning', () => {
     expect((await api.sample(build, request)).frames[0]?.layers['precip-rate']?.value).toBe(7);
   });
 
-  it.each(['cell-major-block-shards-v1', 'frame-group-block-shards-v1'] as const)('rejects an extended publication whose original dimensions or method identity are wrong (%s)', async format => {
+  it('rejects an extended publication whose original dimensions or method identity are wrong', async () => {
     const payload = appendScalar(latestPayload(), 'own');
-    if (format === 'frame-group-block-shards-v1') for (const surface of payload.manifest.surfaces) {
-      const samples = surface.samples as { format?: string; shards: Array<Record<string, unknown>> };
-      samples.format = format;
-      samples.shards = samples.shards.map((shard, blockShard) => ({ ...shard, group: 0, firstFrame: 0, frameCount: payload.manifest.frames.length, blockShard, key: `${prefix}/surfaces/${surface.id}/samples/g0-b${blockShard}.bin` }));
-    }
     const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse(payload));
     const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(created) });
     expect((await api.latest('gfs')).publication?.surfaces.find(surface => surface.kind === 'native')?.layers).toContain('cloud-cover-mid');
@@ -342,21 +338,12 @@ describe('ApiClient v5 pinning', () => {
     await expect(api.latest('gfs')).rejects.toBeInstanceOf(InvalidApiResponseError);
   });
 
-  it.each(['cell-major-block-shards-v1', 'frame-group-block-shards-v1'] as const)('pins native precipitation and fine lift in %s', async format => {
+  it('pins native precipitation and fine lift in frame-group-block-shards-v1', async () => {
     const payload = latestPayload();
-    if (format === 'frame-group-block-shards-v1') payload.manifest = {
-      ...manifest, surfaces: manifest.surfaces.map(surface => ({
-        ...surface, samples: { ...surface.samples, format,
-          shards: surface.samples.shards.map((shard, blockShard) => ({
-            ...shard, group: 0, firstFrame: 0, frameCount: 1, blockShard,
-            key: `${prefix}/surfaces/${surface.id}/samples/g0-b${blockShard}.bin`
-          })) }
-      }))
-    };
     const { client: api, fetchImpl } = client(() => payload);
     const build = await api.latest('gfs');
     expect(fetchImpl).toHaveBeenCalledWith('https://api.test/v1/models/gfs/latest?expand=manifest', expect.anything());
-    expect(build.manifest.surfaces.every(surface => surface.samples.format === format)).toBe(true);
+    expect(build.manifest.surfaces.every(surface => surface.samples.format === 'frame-group-block-shards-v1')).toBe(true);
     expect(build.templates['precip-rate']).toContain('/precip-rate/');
     expect(build.expiresAtMs).toBe(Date.parse(expiresAt));
   });

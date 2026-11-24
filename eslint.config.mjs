@@ -22,7 +22,7 @@ export default tseslint.config(
     ignores: ['**/*.test.ts'],
     rules: {
       'no-restricted-imports': ['error', {
-        paths: ['@av/contracts', '@av/contracts/models', '@av/contracts/refinement', '@av/forecast', '@av/forecast/frame', '@av/forecast/refinement'],
+        paths: ['@av/contracts', '@av/contracts/models', '@av/forecast', '@av/forecast/frame', '@av/forecast/refinement'],
         patterns: ['**/apps/batch/**', '**/apps/api/**', '**/models.json']
       }]
     }

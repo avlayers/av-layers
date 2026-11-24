@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as contracts from '@av/contracts';
 import { CELL_BYTES, MAX_PROFILE_LEVELS, LAYER_IDS, layerSurface, profileResponseSchema, sampleResponseV5Schema, type LayerId } from '@av/contracts';
-import { dewpointFromGfsV16RhC, dewpointFromTempAndRhC } from '@av/thermodynamics';
+import { dewpointFromGfsV16RhC } from '@av/thermodynamics';
 import { nativeColumnCloudDiagnostics } from '@av/soaring';
 import { prepareShardedSamplePackLayout, profileRecordBytes } from '@av/forecast';
 import { coverageMemory } from '../src/coverage';
@@ -58,10 +58,8 @@ function splitLastNativePacks(f: Fixture) {
     });
   };
   const samples = surface.samples;
-  if (samples.format === 'frame-group-block-shards-v1') {
-    const last = samples.shards[samples.shards.length - 1]!, start = samples.shards.findIndex(shard => shard.group === last.group);
-    samples.shards.splice(start, samples.shards.length - start, ...split(samples.shards.slice(start), last.frameCount * surface.layers.length, CELL_BYTES));
-  } else samples.shards = split(samples.shards, samples.channelCount, CELL_BYTES);
+  const lastSample = samples.shards[samples.shards.length - 1]!, start = samples.shards.findIndex(shard => shard.group === lastSample.group);
+  samples.shards.splice(start, samples.shards.length - start, ...split(samples.shards.slice(start), lastSample.frameCount * surface.layers.length, CELL_BYTES));
   const profiles = surface.profiles!, last = profiles.groups[profiles.groups.length - 1]!;
   last.shards = split(last.shards, last.frameCount, profiles.recordBytes);
   f.objects.set(`builds/${f.manifest.model}/${f.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(f.manifest)));
@@ -483,7 +481,7 @@ describe('native profile API', () => {
     assertReleased(f);
   });
 
-  it('returns matching derived usableLiftTopV2M and overdeveloped for equivalent retained vs liquid-vapor-pressure GFS columns and bypasses profile-v3 cache', async () => {
+  it('returns derived usableLiftTopV2M and overdeveloped for liquid-vapor-pressure GFS columns and bypasses profile-v3 cache', async () => {
     const columnScalars = (layer: LayerId, frame: number, x: number): number | null => {
       if (layer === 'sfc-temp-c') return -2;
       if (layer === 'sfc-dewpoint-c') return -16;
@@ -492,50 +490,40 @@ describe('native profile API', () => {
       if (layer === 'thermal-velocity') return 2.6;
       return nativeValue(layer, frame, x);
     };
-    const buildWithEncoding = (liquidVaporRef: boolean) => {
-      const f = attachNativeProfiles(
-        createV5Fixture({ nativeLayers: layers, nativeValue: columnScalars }),
-        {
-          levels: 2,
-          profile: () => ({
-            modelTerrainM: 200,
-            surfacePressureHpa: 990,
-            status: 'valid',
-            levels: [
-              {
-                pressureHpa: 880,
-                heightM: 1000,
-                temperatureC: -18,
-                dewPointC: liquidVaporRef ? dewpointFromGfsV16RhC(-18, 98) : dewpointFromTempAndRhC(-18, 98),
-                uWindMps: 6,
-                vWindMps: 0,
-                omegaPaS: null,
-              },
-              {
-                pressureHpa: 790,
-                heightM: 2000,
-                temperatureC: -19,
-                dewPointC: liquidVaporRef ? dewpointFromGfsV16RhC(-19, 98) : dewpointFromTempAndRhC(-19, 98),
-                uWindMps: 8,
-                vWindMps: 0,
-                omegaPaS: null,
-              },
-            ],
-          }),
-        },
-      );
-      if (liquidVaporRef) {
-        f.manifest.tool = { ...f.manifest.tool, profileDewpointReference: 'liquid-vapor-pressure' };
-        f.objects.set(`builds/gfs/${f.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(f.manifest)));
-      }
-      return f;
-    };
-
-    const retained = buildWithEncoding(false);
-    const normalized = buildWithEncoding(true);
+    const normalized = attachNativeProfiles(
+      createV5Fixture({ nativeLayers: layers, nativeValue: columnScalars }),
+      {
+        levels: 2,
+        profile: () => ({
+          modelTerrainM: 200,
+          surfacePressureHpa: 990,
+          status: 'valid',
+          levels: [
+            {
+              pressureHpa: 880,
+              heightM: 1000,
+              temperatureC: -18,
+              dewPointC: dewpointFromGfsV16RhC(-18, 98),
+              uWindMps: 6,
+              vWindMps: 0,
+              omegaPaS: null,
+            },
+            {
+              pressureHpa: 790,
+              heightM: 2000,
+              temperatureC: -19,
+              dewPointC: dewpointFromGfsV16RhC(-19, 98),
+              uWindMps: 8,
+              vWindMps: 0,
+              omegaPaS: null,
+            },
+          ],
+        }),
+      },
+    );
 
     // Seed a stale profile-v3 cache entry to verify cache representation bump to profile-v4
-    const staleKey = new URL(`https://api.test${path(retained, 'lat=8.8&lon=-115.3125&frame=h001')}`);
+    const staleKey = new URL(`https://api.test${path(normalized, 'lat=8.8&lon=-115.3125&frame=h001')}`);
     staleKey.searchParams.set('__representation', 'profile-v3');
     const cache = {
       match: vi.fn(async (req: Request) =>
@@ -547,15 +535,11 @@ describe('native profile API', () => {
     };
     vi.stubGlobal('caches', { default: cache });
 
-    const oldBody = await read(await retained.request(path(retained, 'lat=8.8&lon=-115.3125&frame=h001')));
     const newBody = await read(await normalized.request(path(normalized, 'lat=8.8&lon=-115.3125&frame=h001')));
 
-    expect(oldBody.frames[0]!.derived.overdeveloped).toBe(false);
     expect(newBody.frames[0]!.derived.overdeveloped).toBe(false);
-    expect(oldBody.frames[0]!.derived.usableLiftTopV2M!).toBeGreaterThan(1800);
-    expect(oldBody.frames[0]!.derived.usableLiftTopV2M!).toBeCloseTo(newBody.frames[0]!.derived.usableLiftTopV2M!, 0);
-    expect(oldBody.frames[0]!.derived.mixedLayerLclM!).toBeCloseTo(newBody.frames[0]!.derived.mixedLayerLclM!, 0);
-    assertReleased(retained);
+    expect(newBody.frames[0]!.derived.usableLiftTopV2M!).toBeGreaterThan(1800);
+    expect(newBody.frames[0]!.derived.mixedLayerLclM!).toBeGreaterThan(0);
     assertReleased(normalized);
   });
 });

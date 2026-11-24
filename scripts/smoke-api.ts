@@ -218,10 +218,8 @@ export async function probeApi(options: {
   await probeWeatherScalars(client, build, options.signal);
   const provenancePath = `/v1/models/${options.model}/runs/${manifest.buildId}/provenance`;
   const provenance = parseProvenance(await json(provenancePath, MAX_PROVENANCE_BYTES), manifest);
-  if (provenance.version === 2) {
-    const reference = provenance.frames[0]!;
-    parseFrameProvenance(await json(`${provenancePath}?frame=${encodeURIComponent(reference.frame)}`, reference.bytes), manifest, manifest.frames[0]!);
-  }
+  const reference = provenance.frames[0]!;
+  parseFrameProvenance(await json(`${provenancePath}?frame=${encodeURIComponent(reference.frame)}`, reference.bytes), manifest, manifest.frames[0]!);
   const tileLayer = renderedLayers(manifest.layers, manifest.descriptors.layers)[0];
   invariant(tileLayer, 'Publication has no rendered layer');
   const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${tileLayer}/${frame}/0/0/0.webp`, 'image/webp');
@@ -255,7 +253,7 @@ async function verifyTileCache(baseUrl: string, manifest: ManifestV5, request: t
   }, { retries: 2, delayMs: 1000, signal });
 }
 
-/** Deployment checks every registered model, accepting absent event-driven publications. */
+/** Deployment checks every registered model, accepting absent or expired event-driven publications. */
 export async function verifyApiDeployment(options: {
   baseUrl: string; expectedDeploymentId: string; signal?: AbortSignal; fetchImpl?: typeof fetch;
 }): Promise<void> {
@@ -268,9 +266,9 @@ export async function verifyApiDeployment(options: {
     const entry = catalog.find(entry => entry.model === product.modelId);
     invariant(entry, `Catalog omitted registered forecast model ${product.modelId}`);
     if (entry.available) return true;
-    invariant(product.execution.schedule.length === 0 && entry.error === 'publication-unavailable',
+    invariant(product.execution.schedule.length === 0 && (entry.error === 'publication-unavailable' || entry.error === 'not-retained'),
       `Catalog reports no publication for ${product.modelId}: ${entry.error ?? 'unknown error'}`);
-    console.log(`Deployment: ${product.modelId} has no publication; awaiting an external forecast cycle`);
+    console.log(`Deployment: ${product.modelId} has no active publication (${entry.error}); awaiting an external forecast cycle`);
     return false;
   });
   for (const product of published) {

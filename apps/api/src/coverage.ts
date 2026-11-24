@@ -15,14 +15,14 @@ export interface ResolvedSparseCoverage {
   mask: SparseCoverageMask;
   layouts: ReadonlyMap<number, ShardedSamplePackLayout>;
   profileLayouts: ReadonlyMap<string, ShardedSamplePackLayout>;
-  groups: readonly FrameGroup[] | null;
+  groups: readonly FrameGroup[];
 }
 interface SparseTiles { descriptor: SparseCoverageDescriptor; tiles: Uint8Array }
 const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedSparseCoverage | SparseTiles>>();
 const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedSparseCoverage | SparseTiles>>();
 const scalarBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
 const profileBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
-const surfaceGroups = new WeakMap<ForecastSurfaceV5, readonly FrameGroup[] | null>();
+const surfaceGroups = new WeakMap<ForecastSurfaceV5, readonly FrameGroup[]>();
 const tileFlights = new WeakMap<R2Bucket, MaterializedReads<SparseTiles>>();
 const COVERAGE_CACHE_BYTES = 24 * 1024 * 1024;
 // Each configured native/fine surface retains a mask and tile entry; the byte cap stays fixed.
@@ -151,12 +151,9 @@ function bindLayout(coverage: ResolvedSparseCoverage, surface: ForecastSurfaceV5
   admitted.add(surface);
 }
 
-function frameGroups(surface: ForecastSurfaceV5): readonly FrameGroup[] | null {
-  if (surfaceGroups.has(surface)) return surfaceGroups.get(surface)!;
-  if (surface.samples.format !== 'frame-group-block-shards-v1') {
-    surfaceGroups.set(surface, null);
-    return null;
-  }
+function frameGroups(surface: ForecastSurfaceV5): readonly FrameGroup[] {
+  const cached = surfaceGroups.get(surface);
+  if (cached) return cached;
   const shards = surface.samples.shards;
   const grouped = new Map<number, { firstFrame: number; frameCount: number; channelCount: number; shards: FrameGroupShard[] }>();
   for (const shard of shards) {
@@ -209,7 +206,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
       signal.throwIfAborted();
       if (descriptor.files.sparse.bytes > MAX_API_SPARSE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
       const groups = frameGroups(surface);
-      const channelCounts = [...new Set(groups ? groups.map(group => group.channelCount) : [surface.samples.channelCount])];
+      const channelCounts = [...new Set(groups.map(group => group.channelCount))];
       const blocks = (descriptor.files.sparse.bytes - 60) / 72;
       const blockBytes = 289 * Math.max(...channelCounts) * 5;
       const maxShards = Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1;
@@ -226,7 +223,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
         assertSparseCoverageHalo(coverage);
         const mask: SparseCoverageMask = { grid: descriptor.grid, bounds: descriptor.bounds, maxZoom: descriptor.maxZoom, coverage, tiles };
         const layouts = new Map(channelCounts.map(count => [count, prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, count)]));
-        const result: ResolvedSparseCoverage = { descriptor, mask, layouts, profileLayouts: new Map(), groups: null };
+        const result: ResolvedSparseCoverage = { descriptor, mask, layouts, profileLayouts: new Map(), groups: [] };
         const actual = sparseRetainedBytes(result);
         if (actual > retained) throw new CoverageError('Sparse coverage exceeds serving byte budget');
         signal.throwIfAborted();
@@ -265,7 +262,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
   };
   if (!scalarBindings.get(resolved)?.has(surface)) {
     const layouts = resolved.layouts as Map<number, ShardedSamplePackLayout>;
-    const channelCounts = groups ? [...new Set(groups.map(group => group.channelCount))] : [surface.samples.channelCount];
+    const channelCounts = [...new Set(groups.map(group => group.channelCount))];
     for (const count of channelCounts) {
       const blocks = mask.coverage.blockIds.length, blockBytes = 289 * count * 5;
       const maximum = blocks * 8 + (Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1) * 64;

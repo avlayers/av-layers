@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { readLocalFile } from './local-file.js';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertCoverageBinding, assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, encodeSparseCoverage, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
+import { assertSparseCoverageHalo, canonicalGridJson, coverageDescriptorSchema, sparseCoverageDescriptorSchema, coveragePrefix, decodeSparseCoverage, encodeSparseCoverage, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_COVERAGE_BITSET_BYTES, MAX_SPARSE_COVERAGE_BYTES, parseBoundedJson, sameGrid, SAMPLE_BLOCK_SIZE, type CoverageDescriptor, type CoverageMask, type ProductDefinition, type SparseCoverageDescriptor, type SparseCoverageMask } from '@av/contracts';
 
 const hash = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const names = ['output', 'halo', 'tiles'] as const;
@@ -35,9 +35,8 @@ export async function writeCoverage(root: string, mask: CoverageMask, product: C
   return description.hash;
 }
 
-async function readCoverageDirectory(dir: string, expectedHash?: string): Promise<{ mask: CoverageMask; descriptor: CoverageDescriptor }> {
-  const bytes = await readLocalFile(join(dir, 'manifest.json'), MAX_COVERAGE_DESCRIPTOR_BYTES), descriptorHash = hash(bytes);
-  if (expectedHash && descriptorHash !== expectedHash) throw new Error('Coverage descriptor hash mismatch');
+async function readCoverageDirectory(dir: string): Promise<{ mask: CoverageMask; descriptor: CoverageDescriptor }> {
+  const bytes = await readLocalFile(join(dir, 'manifest.json'), MAX_COVERAGE_DESCRIPTOR_BYTES);
   const descriptor = coverageDescriptorSchema.parse(parseBoundedJson(bytes));
   const files = await Promise.all(names.map(async name => {
     const expected = descriptor.files[name], data = await readLocalFile(join(dir, `${name}.bin`), MAX_COVERAGE_BITSET_BYTES, expected.bytes);
@@ -57,16 +56,6 @@ export async function loadCoverage(product: ProductDefinition): Promise<Coverage
     throw new Error('Coverage does not match the trusted product');
   }
   if (!sameGrid(result.mask.grid, product.grid) || result.mask.maxZoom < product.maxNativeZoom || JSON.stringify(result.mask.bounds) !== JSON.stringify(product.bounds) || JSON.stringify(describeCoverage(result.mask, product).descriptor) !== JSON.stringify(result.descriptor)) throw new Error('Coverage does not match the trusted product');
-  return result.mask;
-}
-
-export async function readCoverage(root: string, coverageHash: string): Promise<CoverageMask> {
-  return (await readCoverageDirectory(join(root, coveragePrefix(coverageHash)), coverageHash)).mask;
-}
-
-export async function readGridCoverage(root: string, grid: Parameters<typeof assertCoverageBinding>[1]): Promise<CoverageMask> {
-  const result = await readCoverageDirectory(join(root, coveragePrefix(grid.coverage.hash)), grid.coverage.hash);
-  assertCoverageBinding(result.descriptor, grid);
   return result.mask;
 }
 

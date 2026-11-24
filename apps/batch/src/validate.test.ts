@@ -26,7 +26,16 @@ describe('build provenance validation', () => {
     for (const surface of manifest.surfaces) surface.coverage.maxZoom = mask.maxZoom;
     const root = await mkdtemp(join(tmpdir(), 'av-validate-'));
     const key = `builds/${manifest.model}/${manifest.buildId}/provenance.json`;
-    const receipt = { version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [] };
+    const frames = await Promise.all(manifest.frames.map(async frame => {
+      const hour = Number(frame.id.slice(1)), frameKey = `builds/${manifest.model}/${manifest.buildId}/provenance/${frame.id}.json`;
+      const window = { start: frame.intervalStart, end: frame.intervalEnd };
+      const chunk = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+        frame, hour, intervals: { profileTime: frame.validTime, fluxWindow: window, precipitationWindow: window }, receipt: {} }));
+      await mkdir(dirname(join(root, frameKey)), { recursive: true });
+      await writeFile(join(root, frameKey), chunk);
+      return { frame: frame.id, hour, key: frameKey, bytes: chunk.byteLength, sha256: sha256(chunk) };
+    }));
+    const receipt = { version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames };
     const bytes = Buffer.from(JSON.stringify(receipt));
     manifest.source = { provider: 'fixture', provenanceKey: key, provenanceSha256: sha256(bytes) };
     await mkdir(dirname(join(root, key)), { recursive: true });
@@ -153,11 +162,11 @@ describe('packed sample and concurrent archive validation', () => {
       expect(() => validateSampleFlags(bytes, width * height * CELL_BYTES, 'precip-rate', mask, path)).not.toThrow();
       const restored = unpackCells(bytes), lat = INDEXED_GRID.lat0 + Math.floor(output / width) * INDEXED_GRID.dy, lon = INDEXED_GRID.lon0 + (output % width) * INDEXED_GRID.dx;
       expect(isCovered(mask, lat, lon + 0.1)).toBe(true);
-      const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask, false);
+      const sample = sampleGrid(INDEXED_GRID, restored, lat, lon + 0.1, 'precip-rate', mask);
       expect(sample).toMatchObject({ status: STATUS_VALID, interpolated: true });
       expect(sample.value).toBeCloseTo(2.8);
       expect(isCovered(mask, lat, lon + 0.25)).toBe(false);
-      expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
+      expect(sampleGrid(INDEXED_GRID, restored, lat, lon + 0.25, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
       bytes[outside * CELL_BYTES + 4] = STATUS_VALID;
       expect(() => validateSampleFlags(bytes, width * height * CELL_BYTES, 'precip-rate', mask, path)).toThrow('Sample coverage mismatch');
       bytes[outside * CELL_BYTES + 4] = STATUS_OUTSIDE;

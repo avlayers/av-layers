@@ -9,8 +9,26 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 const deploymentId = `${'a'.repeat(40)}-12345-2`;
 
-function inlineProvenance(manifest: ManifestV5): Response {
-  return Response.json({ version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [] });
+function inlineProvenance(manifest: ManifestV5, input?: RequestInfo | URL): Response {
+  const frameId = input ? new URL(String(input)).searchParams.get('frame') : null;
+  if (frameId) {
+    const frame = manifest.frames.find(item => item.id === frameId) ?? manifest.frames[0]!;
+    const hour = Math.max(1, Math.round((Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000));
+    const window = { start: frame.intervalStart, end: frame.intervalEnd };
+    return Response.json({
+      version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+      frame, hour,
+      intervals: { profileTime: frame.validTime, fluxWindow: window, ...(manifest.layers.includes('precip-rate') ? { precipitationWindow: window } : {}) },
+      receipt: {}
+    });
+  }
+  return Response.json({
+    version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle,
+    frames: manifest.frames.map(frame => ({
+      frame: frame.id, hour: Math.max(1, Math.round((Date.parse(frame.validTime) - Date.parse(manifest.cycle)) / 3_600_000)),
+      key: `builds/${manifest.model}/${manifest.buildId}/provenance/${frame.id}.json`, bytes: 4096, sha256: 'a'.repeat(64)
+    }))
+  });
 }
 
 describe('Worker deployment identity smoke check', () => {
@@ -153,7 +171,7 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
     if (path === '/healthz') return Response.json({ ok: true, deploymentId });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-    if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+    if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     expect(path).toBe(`/tiles/${manifest.model}/${manifest.buildId}/${manifest.layers[0]}/${manifest.frames[0].id}/0/0/0.webp`);
     return new Response(corruptTile ? 'corrupt' : 'RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
   });
@@ -201,7 +219,7 @@ describe('deployment publication readiness', () => {
       const model = path.startsWith('/tiles/') ? path.split('/')[2]! : path.split('/')[3]!;
       const { manifest } = builds.get(model)!;
       if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-      if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+      if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
       expect(path).toMatch(/^\/tiles\//);
       return new Response('RIFF1234WEBP0000000000000000', { headers: {
         'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
@@ -211,8 +229,10 @@ describe('deployment publication readiness', () => {
     return { latest, sample, options: { baseUrl: 'https://api.example', expectedDeploymentId: deploymentId, fetchImpl } };
   }
 
-  it.each([false, true])('probes published models when the event-driven model is available=%s', async available => {
-    const models = catalog().map(entry => entry.model === eventModel && available ? { model: eventModel, available } : entry);
+  it.each(['publication-unavailable', 'not-retained', true] as const)('probes published models when the event-driven model status is %s', async state => {
+    const models = catalog().map(entry => entry.model === eventModel
+      ? (state === true ? { model: eventModel, available: true } : { model: eventModel, available: false, error: state })
+      : entry);
     const { latest, options } = fixture(models);
     await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
     expect(latest.mock.calls.map(([model]) => model)).toEqual(models.filter(entry => entry.available).map(entry => entry.model));
@@ -278,14 +298,14 @@ describe('deployment publication readiness', () => {
     await result;
   });
 
-  it.each(['publication-invalid', 'publication-incomplete', 'not-retained', undefined])('rejects event-driven publication error %s', async error => {
+  it.each(['publication-invalid', 'publication-incomplete', undefined])('rejects event-driven publication error %s', async error => {
     const { latest, options } = fixture(catalog().map(entry => entry.model === eventModel ? { ...entry, error } : entry));
     await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
     expect(latest).not.toHaveBeenCalled();
   });
 
-  it('requires scheduled publications and keeps explicit forecast probes strict', async () => {
-    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error: 'publication-unavailable' } : entry));
+  it.each(['publication-unavailable', 'not-retained'] as const)('requires scheduled publications (%s) and keeps explicit forecast probes strict', async error => {
+    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error } : entry));
     await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${scheduledModel}`);
     await expect(probeApi({ ...options, model: eventModel })).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
   });
@@ -322,7 +342,7 @@ it('samples every v5 surface through one, listed and all frame selections', asyn
     if (path === '/healthz') return Response.json({ ok: true });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-    if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+    if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
   });
   await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl });
@@ -349,7 +369,7 @@ it('uses a bounded covered land candidate when the descriptor center is outside 
     if (path === '/healthz') return Response.json({ ok: true });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-    if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+    if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
   });
   await probeApi({ baseUrl: 'https://api.example', model: manifest.model, fetchImpl });
@@ -371,7 +391,7 @@ it('fails clearly when every bounded candidate is outside coverage', async () =>
     if (path === '/healthz') return Response.json({ ok: true });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-    if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+    if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     tileRequests.push(path);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
   });
@@ -400,7 +420,7 @@ it.each([false, true])('pages native profiles and records tile metrics with fron
     if (path === '/healthz') return Response.json({ ok: true });
     if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
-    if (path.endsWith('/provenance')) return inlineProvenance(manifest);
+    if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
       'server-timing': 'worker;dur=18.25, admit;dur=2.00, r2;dur=7.50', 'x-av-r2-reads': '2',
       'x-av-response-cache': frontHit ? 'not-applicable' : 'miss', 'cf-cache-status': frontHit ? 'HIT' : 'MISS', age: '4' } });

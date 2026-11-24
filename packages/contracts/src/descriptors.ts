@@ -3,7 +3,6 @@ import { LIFT_METHOD, LIFT_METHODS_BY_VERTICAL_COORDINATE, METHODS, terrainColum
 import { weatherFieldDefinition } from './field-definitions.js';
 import { LAYERS, PALETTES, renderedLayers, layerPalette, type LayerId } from './layers.js';
 import type { ProductDefinition } from './product.js';
-import type { GeographicBounds } from './geometry.js';
 import { descriptorSchema, recipeIdentitySchema } from './publication.js';
 import { methodDescriptorSchema } from './method-schemas.js';
 import { MAX_SAMPLE_VALUES } from './format.js';
@@ -42,27 +41,18 @@ export function createProductDescriptors(product: ProductDefinition): z.infer<ty
   });
 }
 
-export function createRefinementDescriptors(product: ProductDefinition, bounds: GeographicBounds): z.infer<typeof descriptorSchema> {
+export function createWholeDomainDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
   const base = createProductDescriptors(product);
   const msl = base.layers['usable-lift-msl'], agl = base.layers['usable-lift-agl'];
   if (!msl || !agl) throw new Error('Terrain refinement requires native MSL and AGL layers');
   const method = terrainColumnMethodForProduct(product);
-  return descriptorSchema.parse({ ...base, bounds: [...bounds],
-    coverageDescription: 'Polygon-owned terrain-column refinement inside the model coverage, with interpolation halos excluded.',
-    layers: {
-      [msl.id]: { ...msl, verticalReference: 'MSL', methodId: method.id },
-      [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: method.id }
-    },
-    methods: { [method.id]: method },
-    palettes: base.palettes.filter(palette => palette.id === agl.palette)
-  });
-}
-
-export function createWholeDomainDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
-  const base = createProductDescriptors(product), fine = createRefinementDescriptors(product, product.bounds);
-  const layers = product.layers.map(id => fine.layers[id] ?? base.layers[id]);
+  const fineLayers: Record<string, typeof msl> = {
+    [msl.id]: { ...msl, verticalReference: 'MSL', methodId: method.id },
+    [agl.id]: { ...agl, label: 'Usable lift depth (terrain AGL)', verticalReference: 'terrain-AGL', methodId: method.id }
+  };
+  const layers = product.layers.map(id => fineLayers[id] ?? base.layers[id]);
   return descriptorSchema.parse({ ...base,
     layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
-    methods: Object.fromEntries(layers.map(layer => [layer.methodId, fine.methods[layer.methodId] ?? base.methods[layer.methodId]]))
+    methods: Object.fromEntries(layers.map(layer => [layer.methodId, layer.methodId === method.id ? method : base.methods[layer.methodId]]))
   });
 }

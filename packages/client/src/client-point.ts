@@ -49,7 +49,7 @@ function profileSeriesPages(
   const profileGroups = surface.profiles?.groups ?? [];
   if (profileGroups.length <= MAX_PROFILE_GROUPS_PER_PAGE) return fieldSeriesPages(frameIds, 1, pageSize);
   const indexById = new Map(manifest.frames.map((frame, index) => [frame.id, index]));
-  const shards = surface.samples.format === 'frame-group-block-shards-v1' ? surface.samples.shards : null;
+  const shards = surface.samples.shards;
   const buckets = new Map<number, string[][]>();
   let covered = 0;
   for (const group of profileGroups) {
@@ -59,7 +59,7 @@ function profileSeriesPages(
     });
     if (!selected.length) continue;
     covered += selected.length;
-    const scalarGroup = shards?.find(s => group.firstFrame >= s.firstFrame && group.firstFrame < s.firstFrame + s.frameCount)?.group ?? 0;
+    const scalarGroup = shards.find(s => group.firstFrame >= s.firstFrame && group.firstFrame < s.firstFrame + s.frameCount)?.group ?? 0;
     const bucket = buckets.get(scalarGroup) ?? [];
     bucket.push(...fieldSeriesPages(selected, 1, pageSize));
     buckets.set(scalarGroup, bucket);
@@ -95,14 +95,7 @@ function pointSelection(build: PinnedBuild) {
 }
 
 function pointFrames(manifest: ManifestV5, horizon: PointHorizon) {
-  let frames = manifest.frames;
-  if (horizon !== 'forecast') {
-    if (manifest.mapFrameCount !== undefined) frames = renderedFrames(manifest);
-    else {
-      const until = Date.parse(frames[0].validTime) + 24 * 3600000;
-      frames = frames.filter(frame => Date.parse(frame.validTime) < until);
-    }
-  }
+  const frames = horizon === 'forecast' ? manifest.frames : renderedFrames(manifest);
   return frames.map(frame => frame.id);
 }
 

@@ -117,7 +117,7 @@ export function ThemeGlyph({ theme }: { theme: MapTheme }) {
           <path d="M12 2.5v2.6M12 18.9v2.6M2.5 12h2.6M18.9 12h2.6M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M18.7 5.3l-1.8 1.8M7.1 16.9l-1.8 1.8" />
         </svg>
       );
-    case 'xcskies':
+    case 'classic':
       return (
         <svg {...common}>
           <path d="M2.5 9.5 12 5.5l9.5 4-9.5-1.6-9.5 1.6Z" />

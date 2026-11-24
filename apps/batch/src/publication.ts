@@ -8,8 +8,7 @@ import type { ObjectStorage } from './storage.js';
 import { assertTerrainManifestBinding, assertValidatedBuild, localPath, sha256, validateBuild, type ValidatedBuild } from './validate.js';
 import { BUILD_BUDGETS, isForecastPlanDeadline, MAX_BUILD_LIFETIME_MS } from './capacity.js';
 import { loadCoverage, readSparseCoverage } from './coverage.js';
-import { validateSparsePreparedTerrain } from './terrain/sparse.js';
-import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES } from './terrain/prepare.js';
+import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES, validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { assertAuthority, type PublicationAuthority } from './authority.js';
 import { putImmutable, putImmutableReceipt, uploadBounded, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import { readLocalFile } from './local-file.js';
@@ -215,11 +214,9 @@ async function verifyV5Dependencies(store: ObjectStorage, manifest: ManifestV5, 
     const binding = { grid: descriptor.grid, gridHash: descriptor.gridHash, coverageHash: surface.coverage.hash, blockIds: coverage.blockIds };
     assertSampleLayoutBindingV5(surface, binding);
     if (surface.profiles) assertProfileLayoutBindingV5(surface, binding);
-    const groups = surface.samples.format === 'cell-major-block-shards-v1'
-      ? [{ channels: surface.samples.channelCount, shards: surface.samples.shards }]
-      : surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
-        channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => 'group' in shard && shard.group === first.group)
-      }));
+    const groups = surface.samples.shards.filter(shard => shard.blockShard === 0).map(first => ({
+      channels: first.frameCount * surface.layers.length, shards: surface.samples.shards.filter(shard => shard.group === first.group)
+    }));
     const packedGroups = [...groups.map(group => ({ ...group, recordBytes: CELL_BYTES })),
       ...(surface.profiles?.groups.map(group => ({
         channels: group.frameCount, recordBytes: surface.profiles!.recordBytes, shards: group.shards

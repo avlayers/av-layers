@@ -157,8 +157,7 @@ export function createPointSession(options: PointSessionOptions): PointSession {
     setStatus('');
     if (body()) { windgram?.disposePointWindgram(body()!); body()!.replaceChildren(); }
     updatePointSeries = selection = lastRendered = null;
-    options.publish.horizon(pointSeriesSelection(build).frames.length !== build.manifest.frames.length,
-      build.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours');
+    options.publish.horizon(pointSeriesSelection(build).frames.length !== build.manifest.frames.length, 'Map forecast');
     await loadRange();
   }
 

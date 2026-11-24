@@ -1,7 +1,7 @@
 import { INDEXED_PRODUCT, SPLIT_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { getProduct } from './products.js';
-import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createRefinementDescriptors, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema } from './index.js';
+import { LIFT_METHOD, LIFT_METHOD_PARAMETERS, METHODS, MODEL_LEVEL_LIFT_METHOD, PRECIPITATION_ALL_HOURS_METHOD, TERRAIN_CLEARANCE_METHOD, TERRAIN_COLUMN_PARAMETERS, TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE, terrainColumnMethodForProduct, createProductDescriptors, createProductMethodId, createWholeDomainDescriptors, descriptorSchema, nativeMethodForLayer, NATIVE_METHODS_BY_VERTICAL_COORDINATE, NATIVE_METHOD_PARAMETERS, NORMALIZED_INPUTS, methodDescriptorSchema } from './index.js';
 import { deriveSoaringViews, NATIVE_DIAGNOSTIC_PARAMETERS } from '@av/soaring';
 
 describe('implemented method snapshots', () => {
@@ -32,22 +32,20 @@ describe('implemented method snapshots', () => {
   });
 
   it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('describes $modelId terrain-column refinement separately from its native atmospheric method and legacy clearance', product => {
-    const base = createProductDescriptors(product), patch = createRefinementDescriptors(product, [1, 2, 3, 4]);
+    const base = createProductDescriptors(product), whole = createWholeDomainDescriptors(product);
     const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
     const native = base.methods[base.layers['usable-lift-msl'].methodId];
     const pressureInput = product.capabilities.verticalCoordinate === 'model-levels' ? 'pressurePa' : 'pressureLevelsHpa';
     const otherPressureInput = pressureInput === 'pressurePa' ? 'pressureLevelsHpa' : 'pressurePa';
-    expect(Object.keys(patch.layers)).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(patch.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
-    expect(patch.layers['usable-lift-agl']).toMatchObject({ methodId: method.id, verticalReference: 'terrain-AGL' });
-    expect(patch.methods).toEqual({ [method.id]: method });
+    expect(whole.layers['usable-lift-msl']).toMatchObject({ methodId: method.id, verticalReference: 'MSL' });
+    expect(whole.layers['usable-lift-agl']).toMatchObject({ methodId: method.id, verticalReference: 'terrain-AGL' });
+    expect(whole.methods[method.id]).toEqual(method);
     expect(method.spatialSupport).toBe('bilinear-neighborhood');
     expect(method.outputs).toEqual(['usable-lift-msl', 'usable-lift-agl']);
-    expect(patch.bounds).toEqual([1, 2, 3, 4]);
     expect(base.layers['usable-lift-agl'].verticalReference).toBe('model-AGL');
     expect(native.id).not.toBe(method.id);
     expect(method.id).not.toBe(TERRAIN_CLEARANCE_METHOD.id);
-    expect(method.requiredInputs).toEqual([...native.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs]);
+    expect(method.requiredInputs).toEqual([...native.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs, 'nativeCloudSupport']);
     expect(method.requiredInputs).toContain(pressureInput);
     expect(method.requiredInputs).not.toContain(otherPressureInput);
     expect(method.inputs[pressureInput]).toEqual(native.inputs[pressureInput]);
@@ -144,7 +142,7 @@ describe('implemented method snapshots', () => {
     };
     invalid(value => { delete value.methods; });
     invalid(value => { delete value.methods[LIFT_METHOD.id]; });
-    invalid(value => { value.layers['usable-lift-msl'].methodId = PRECIPITATION_METHOD.id; });
+    invalid(value => { value.layers['usable-lift-msl'].methodId = PRECIPITATION_ALL_HOURS_METHOD.id; });
     invalid(value => { value.methods[LIFT_METHOD.id].requiredInputs.pop(); });
     invalid(value => { value.methods[LIFT_METHOD.id].requiredInputs[1] = value.methods[LIFT_METHOD.id].requiredInputs[0]; });
     invalid(value => { delete value.methods[LIFT_METHOD.id].inputs.surfacePressurePa; });
@@ -219,11 +217,8 @@ describe('native method metadata', () => {
     expect(NORMALIZED_INPUTS.capeJkg.verticalReference).toBe('source parcel declared in provenance');
   });
 
-  it('retains the old precipitation snapshot and declares the all-hour method separately', () => {
-    expect(METHODS[PRECIPITATION_METHOD.id]).toBe(PRECIPITATION_METHOD);
-    expect(PRECIPITATION_METHOD.id).toBe('trailing-precipitation-rate-v1');
-    expect(PRECIPITATION_METHOD.parameters).toHaveProperty('minimumSolarElevationDeg');
-    expect(PRECIPITATION_METHOD.caveats[1]).toContain('daylight');
+  it('declares the all-hour precipitation method', () => {
+    expect(METHODS[PRECIPITATION_ALL_HOURS_METHOD.id]).toBe(PRECIPITATION_ALL_HOURS_METHOD);
     expect(PRECIPITATION_ALL_HOURS_METHOD.id).toBe('trailing-precipitation-rate-v2');
     expect(PRECIPITATION_ALL_HOURS_METHOD.parameters).not.toHaveProperty('minimumSolarElevationDeg');
     expect(PRECIPITATION_ALL_HOURS_METHOD.caveats[1]).toContain('every retained forecast time');
@@ -231,17 +226,13 @@ describe('native method metadata', () => {
   });
 });
 
-
-it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('versions native cloud support for $modelId while retaining the legacy terrain method', product => {
-  const coordinate = product.capabilities.verticalCoordinate, legacy = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[coordinate];
-  const method = TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE[coordinate];
-  expect(terrainColumnMethodForProduct(product)).toBe(legacy);
-  expect(terrainColumnMethodForProduct({ ...product, layers: [...product.layers, 'thermal-velocity'] })).toBe(method);
-  expect(legacy.requiredInputs).not.toContain('nativeCloudSupport');
-  expect(method.requiredInputs).toEqual([...legacy.requiredInputs, 'nativeCloudSupport']);
+it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('includes native cloud support on the $modelId terrain-column method', product => {
+  const coordinate = product.capabilities.verticalCoordinate;
+  const method = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[coordinate];
+  expect(terrainColumnMethodForProduct(product)).toBe(method);
+  expect(method.requiredInputs).toContain('nativeCloudSupport');
   expect(method.inputs.nativeCloudSupport).toMatchObject({ quantity: 'native-cloud-support-flags', units: 'code', verticalReference: 'native model column' });
   expect(method.caveats).toContain('Cloud support flags combine available positive-weight native-column diagnostics.');
   expect(methodDescriptorSchema.safeParse(method).success).toBe(true);
-  expect(method.parameters).toBe(legacy.parameters);
   expect(METHODS[method.id]).toBe(method);
 });

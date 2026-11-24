@@ -28,8 +28,7 @@ missingness mask.
 across each cell's trailing interval and valid time using
 [`@av/solar/grid`](../packages/solar/src/grid.ts) (`minimumSolarElevationDeg = -0.833°`).
 Dark lift cells with known ground elevation emit `STATUS_NO_LIFT`.
-Current precipitation uses the trailing interval at all hours. Retained
-precipitation v1 builds mark dark cells unavailable. For `regional-daylight`
+Precipitation uses the trailing interval at all hours. For `regional-daylight`
 products, [daylight frame selection](../packages/forecast/src/daylight.ts) keeps
 hours with daylight in the covered grid and keeps the full candidate list when
 none qualify, including polar night.
@@ -102,9 +101,9 @@ crossing with `sinkRateMps` sets the usable thermal depth ([column.ts](../packag
 
 ## Terrain clearance
 
-Method `native-lift-terrain-clearance-v2` supplies unsupported-valley fallback
-and evaluation controls. [`prepareTerrainClearance`](../packages/forecast/src/refinement.ts)
-compiles native neighbors and weights once per target grid. Each target cell
+Method `native-lift-terrain-clearance-v2` supplies unsupported-valley fallback.
+[`clearanceCell`](../packages/forecast/src/clearance-cell.ts) evaluates native
+neighbors and weights at each unsupported target cell. Each target cell
 requires complete native diagnostics. Every positive-weight neighbor must have
 positive convective depth for interpolation. The method interpolates convective-depth
 top MSL and buoyancy $B=w_*^3/\mathrm{depth}$, sets local depth to
@@ -119,13 +118,14 @@ terrain and complete native geometric support emits no lift without evaluating
 the atmospheric values. Missing terrain or geometric support stays unavailable.
 The method returns MSL as DEM elevation plus usable clearance and AGL as that
 clearance. Valleys inherit the parent model's convective top and buoyancy
-forcing over a deeper local layer. Each patch records the DEM datum and surface
-type. The calculation applies no vertical-datum transformation.
+forcing over a deeper local layer. The fine surface's `terrain` metadata records
+the DEM datum and surface type. The calculation applies no vertical-datum
+transformation.
 
 ## Terrain columns
 
 Production uses [`preparePackedTerrainColumns`](../packages/forecast/src/terrain-column.ts)
-(and [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts) in regional patch evaluation)
+(and [`prepareTerrainColumns`](../packages/forecast/src/terrain-column.ts) on dense masks)
 to reconstruct an environmental profile at each DEM cell from native donors.
 [Method descriptors](../packages/contracts/src/methods.ts) select the configured
 isobaric or per-column model-level pressure axis. Surface
@@ -162,8 +162,6 @@ describes regime-dependent terrain relationships. The donor anomaly, support
 selection and clearance fallback here are project numerical rules requiring
 local validation.
 
-The [evaluation command](../apps/batch/src/refinement/README.md#evaluation)
-records paired fields, status/support changes and station comparisons.
 [Whole-domain admission](../apps/batch/src/whole-domain/capacity.ts) accounts
 for the retained mappings, solver workspace and fallback fields.
 
@@ -174,9 +172,8 @@ membership, snaps coordinates within $10^{-10}$ grid steps, wraps periodic
 longitudes, and ignores zero-weight neighbors. No-lift contributors store zero
 AGL and surface elevation in MSL. When no-lift weights exceed half the total,
 the result uses the public [no-lift values](data.md#layers-and-missing-values).
-Otherwise, known contributors interpolate bilinearly. New builds mark
-`tool.useStoredMslNoLift` and use the stored MSL elevations throughout. Earlier
-builds renormalize the MSL weights over valid cells in a four-cell mix. If a
+Otherwise, known contributors interpolate bilinearly using the stored MSL
+elevations. If a
 contributor is unavailable or outside the domain, the nearest contributing cell
 supplies the value and status.
 

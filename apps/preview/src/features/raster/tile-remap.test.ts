@@ -13,14 +13,14 @@ function hexPixel(hex: string, alpha = 255): [number, number, number, number] {
 }
 
 describe('remapRgbaInPlace', () => {
-  it('leaves Classic XC Skies pixels completely unremapped so original duckies colors render verbatim', () => {
+  it('leaves Classic Soaring pixels completely unremapped so 22-step colors render verbatim', () => {
     const src = new Uint8ClampedArray([
       ...hexPixel(LIFT_COLORS[0]!),
       ...hexPixel(LIFT_COLORS[7]!),
       ...hexPixel(LIFT_COLORS[16]!)
     ]);
     const copy = new Uint8ClampedArray(src);
-    remapRgbaInPlace(copy, 3, 1, 'lift', 'xcskies');
+    remapRgbaInPlace(copy, 3, 1, 'lift', 'classic');
     expect([...copy]).toEqual([...src]);
   });
 

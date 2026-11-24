@@ -22,21 +22,15 @@ reuses verified upload receipts across retries. [repack.py](repack.py) losslessl
 repacks each source tile into a 512×512-tiled Cloud-Optimized GeoTIFF via `uv`
 ([ingest.ts](ingest.ts)).
 
-## Read and prepare a region
+## Inspect a region
 
 ```sh
 pnpm terrain inspect --catalog-ref output/terrain-catalog-ref.json \
   --bounds 43.99,40.49,44.01,40.51 --out output/terrain-read.json
-pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json \
-  --grid scripts/fixtures/terrain-grid.json --out output/terrain-prepared-ref.json
-pnpm terrain stage --prepared-ref output/terrain-prepared-ref.json \
-  --grid scripts/fixtures/terrain-grid.json --out output
 ```
 
 `--bounds` takes `west,south,east,north` (with `west > east` crossing the
-dateline). `prepare` bilinearly samples native GLO-90 elevations at target cell
-centres and writes little-endian `Float32` elevations plus a 1-byte validity
-mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
+dateline).
 
 ## Use in forecasts
 
@@ -49,7 +43,6 @@ The [whole-domain producer](../whole-domain/prepare.ts) stages cached values in
 sparse coverage offset order with coverage files in the frozen plan. Shards
 validate their identities and load them before weather acquisition. Local
 forecast builds prepare a missing cache on first use.
-[Regional evaluation](../refinement/README.md) replays saved polygon-grid terrain.
 
 Prepare a configured model locally and upload its verified arrays to R2:
 
@@ -69,10 +62,6 @@ retain the existing terrain identity.
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
 covers local builds with `--terrain-catalog-ref PATH`.
 
-Legacy native-grid builds accept `--terrain-ref PATH` and the hosted
-`terrain-inputs` model map. Those references keep their own recipe identity and
-must match the forecast product's grid.
-
 ```mermaid
 flowchart LR
   source[Native GLO-90] --> ingest[Verify and repack once]
@@ -89,7 +78,7 @@ flowchart LR
 - [contract.ts](contract.ts): schemas, digests, and bounds validation.
 - [source.ts](source.ts), [ingest.ts](ingest.ts), [repack.py](repack.py): upstream inventory, resumable R2 import, and COG repacking.
 - [reader.ts](reader.ts): bounded COG range reads, tile seam stitching, and block cache.
-- [prepare.ts](prepare.ts), [sparse.ts](sparse.ts), [staging.ts](staging.ts): grid resampling, packed coverage-bound terrain, and local shard staging.
+- [sparse.ts](sparse.ts), [staging.ts](staging.ts): packed coverage-bound DEM preparation and local shard staging.
 - [cli.ts](cli.ts) & [local-store.ts](local-store.ts): CLI entry point and filesystem storage backend.
 
 Run tests:

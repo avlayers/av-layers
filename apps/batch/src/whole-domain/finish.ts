@@ -8,6 +8,7 @@ import { failureReason } from '../failure.js';
 import { checkPerformance } from '../capacity.js';
 import { RASTER_SAMPLING } from '../raster.js';
 import { finalizeValidatedMetrics, localPath, sha256, validateBuild, type ValidatedBuild } from '../validate.js';
+import { writeServingGroups } from '../serving-groups.js';
 import type { WholeDomainFrameResult } from './frames.js';
 import type { WholeDomainPrepared } from './prepare.js';
 import type { ObjectStorage } from '../storage.js';
@@ -22,7 +23,7 @@ export interface FinishWholeDomainOptions extends ForecastInputs, BuildStamp {
   identity: { recipe: ManifestV5['recipe']; scienceHash: string; components: Record<string, string> };
   preparation?: { elapsedMs: number; peakRssBytes: number };
   assemblyStartedAt?: number;
-  sampleGroups?: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>>;
+  sampleGroups?: Partial<Record<'native' | 'fine', ManifestV5['surfaces'][number]['samples']['shards']>>;
   profileGroups?: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'];
   mapData?: ManifestV5['mapData'];
   remote?: { store: ObjectStorage; objects: ObjectReceipt[]; signal?: AbortSignal };
@@ -58,15 +59,19 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
     const descriptors = createWholeDomainDescriptors(product);
     const mapFrames = result.frames.filter(frame => product.mapEndHour === undefined || Date.parse(frame.validTime) - Date.parse(result.cycle) <= product.mapEndHour * 3_600_000).length;
     const refinementMethod = terrainColumnMethodForProduct(product);
-    const surfaces = result.surfaces.map(surface => {
-      const layout = surface.layout, channelCount = (surface.kind === 'fine' ? mapFrames : result.frames.length) * surface.layers.length;
+    const surfaces = await Promise.all(result.surfaces.map(async surface => {
+      const surfaceFrames = surface.kind === 'fine' ? mapFrames : result.frames.length;
+      const layout = surface.layout, channelCount = surfaceFrames * surface.layers.length;
       const baseSamples = { blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer' as const,
         channelCount, coverageHash: surface.coverage.hash, blockCount: layout.blockCount, storedCells: layout.storedCells };
-      const groups = options.sampleGroups?.[surface.id];
-      const samples = groups ? { ...baseSamples, format: 'frame-group-block-shards-v1' as const, shards: groups }
-        : { ...baseSamples, format: 'cell-major-block-shards-v1' as const,
-          shards: surface.shards!.map(shard => ({ firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.storedCells,
-            bytes: shard.bytes, key: shard.key, sha256: shard.sha256 })) };
+      const groups = options.sampleGroups?.[surface.id] ?? (surfaceFrames > 24
+        ? (await writeServingGroups({ root, model: product.modelId, buildId, surfaceId: surface.id, grid: surface.grid,
+            blockIds: (surface.kind === 'native' ? prepared.native : prepared.fine).mask.coverage.blockIds, layers: surface.layers.length,
+            parts: [{ firstFrame: 0, frameCount: surfaceFrames, shards: surface.shards! }], signal: options.signal })).shards
+        : surface.shards!.map((shard, blockShard) => ({ group: 0, firstFrame: 0, frameCount: surfaceFrames, blockShard,
+            firstBlock: shard.firstBlock, blockCount: shard.blockCount, storedCells: shard.storedCells,
+            bytes: shard.bytes, key: shard.key, sha256: shard.sha256 })));
+      const samples = { ...baseSamples, format: 'frame-group-block-shards-v1' as const, shards: groups };
       return { id: surface.id, kind: surface.kind, grid: surface.grid, gridHash: surface.gridHash,
         coverage: { ...surface.coverage }, layers: [...surface.layers], samples,
         ...(surface.profiles ? { profiles: { format: PROFILE_PACK_FORMAT, blockSize: SAMPLE_BLOCK_SIZE,
@@ -76,7 +81,7 @@ export async function finishWholeDomain(options: FinishWholeDomainOptions): Prom
         ...(surface.terrain ? { terrain: { dataId: surface.terrain.dataId, key: surface.terrain.ref.key, sha256: surface.terrain.ref.sha256,
           verticalDatum: surface.terrain.verticalDatum, surface: surface.terrain.surface, gridHash: surface.gridHash,
           coverageHash: surface.coverage.hash, layoutVersion: 1 as const } } : {}) };
-    });
+    }));
     const base = {
       version: 5 as const, descriptors, recipe: options.identity.recipe, model: product.modelId, buildId, cycle: result.cycle, createdAt,
       expiresAt: new Date(started + RETENTION_DAYS * 86400000).toISOString(),

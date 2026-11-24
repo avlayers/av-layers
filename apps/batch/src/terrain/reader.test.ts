@@ -2,13 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { encodeSparseCoverage, gridSchema, sparseCoverageFromDense, sparseCoverageLookup, type SparseCoverage } from '@av/contracts';
+import { encodeSparseCoverage, gridSchema, sparseCoverageFromDense, type SparseCoverage } from '@av/contracts';
 import { createTerrainReadBudget, createTerrainReader, TERRAIN_READ_LIMITS } from './reader';
 import * as terrainReader from './reader';
 import { ASSET_MAX_BYTES, dataIdentity, encodeJson, sha256, TERRAIN_BATCH_POINTS, TERRAIN_PACKING, TERRAIN_SOURCE, type TerrainCatalog, type TerrainGeometry, type TerrainTile } from './contract';
 import { TerrainTestStorage } from './test-fixtures';
-import { PREPARED_TERRAIN_METHOD, prepareTerrain, readPreparedTerrain } from './prepare';
-import { prepareSparseTerrain, readSparsePreparedTerrain, validateSparsePreparedTerrain } from './sparse';
+import { PREPARED_TERRAIN_METHOD, prepareSparseTerrain, readSparsePreparedTerrain, validateSparsePreparedTerrain } from './sparse';
 import { loadSparsePreparedTerrain, stageSparsePreparedTerrain } from './staging';
 import * as terrainSource from './source.js';
 import { localTerrainStorage } from './local-store.js';
@@ -334,24 +333,6 @@ describe('native terrain reader', () => {
     } finally { reader.close(); }
   });
 
-  it('prepares and reloads real seam samples in target-grid order', async () => {
-    const input = setup({ west: 179, value: () => 10 }, { west: -180, value: () => 30 });
-    const grid = { kind: 'regular-latlon' as const, width: 3, height: 2, earthRadiusM: 6371229, lon0: 179.75, lat0: 0.75, dx: 0.125, dy: -0.25, wrapLongitude: false };
-    const report = vi.fn();
-    const ref = await prepareTerrain({ ...input, grid, onReport: report });
-    const prepared = await readPreparedTerrain(ref, async asset => (await input.storage.get(asset.key, undefined, asset.bytes))!.bytes, grid);
-    expect([...prepared.elevationM]).toEqual([10, 20, 30, 10, 20, 30]);
-    expect([...prepared.valid]).toEqual([1, 1, 1, 1, 1, 1]);
-    expect(report.mock.calls[0][0].reader).toMatchObject({ outputPixels: 6, decodedPixels: 2 * 512 * 512 });
-  });
-
-  it('charges point budgets across multiple preparation batches', async () => {
-    const input = setup();
-    const grid = { kind: 'regular-latlon' as const, width: TERRAIN_BATCH_POINTS + 1, height: 1, earthRadiusM: 6371229, lon0: 0.25, lat0: 0.75, dx: 0.00001, dy: -0.25, wrapLongitude: false };
-    await expect(prepareTerrain({ ...input, grid, limits: { reader: { maxOutputPixels: TERRAIN_BATCH_POINTS } } })).rejects.toThrow('outputPixels budget');
-    expect([...input.storage.objects.keys()].filter(key => key.includes('/prepared/'))).toHaveLength(0);
-  });
-
   it('prepares packed output and halo terrain, stages and reuses verified v2 assets', async () => {
     const input = setup({ west: 179, value: () => 10 }, { west: -180, value: () => 30 });
     const grid = { kind: 'regular-latlon' as const, width: 3, height: 2, earthRadiusM: 6371229, lon0: 179.75, lat0: 0.75, dx: 0.125, dy: -0.25, wrapLongitude: false };
@@ -363,16 +344,11 @@ describe('native terrain reader', () => {
     const coverageDescriptor = descriptorFor(coverage);
     const report = vi.fn(), out = await mkdtemp(join(tmpdir(), 'av-sparse-terrain-'));
     try {
-      const denseRef = await prepareTerrain({ ...input, grid });
-      const dense = await readPreparedTerrain(denseRef, async asset => (await input.storage.get(asset.key, undefined, asset.bytes))!.bytes, grid);
       const ref = await prepareSparseTerrain({ ...input, grid, coverage, coverageDescriptor, onReport: report, limits: { reader: { maxOutputPixels: 2 } } });
       const packed = await readSparsePreparedTerrain(ref, async asset => (await input.storage.get(asset.key, undefined, asset.bytes))!.bytes, grid, coverage, coverageDescriptor);
       expect(packed.descriptor).toMatchObject({ version: 2, layoutVersion: 1, cells: 5 });
-      for (let y = 0; y < grid.height; y++) for (let x = 0; x < grid.width; x++) {
-        const found = sparseCoverageLookup(coverage, x, y);
-        if (found) { expect(packed.elevationM[found.offset]).toBe(dense.elevationM[y * grid.width + x]); expect(packed.valid[found.offset]).toBe(dense.valid[y * grid.width + x]); }
-      }
       expect([...packed.elevationM]).toEqual([10, 20, 30, 20, 30]);
+      expect([...packed.valid]).toEqual([1, 1, 1, 1, 1]);
       expect(report.mock.calls[0][0]).toMatchObject({ cells: 5, sourceBlocks: 2, sourceAssets: 2, totalLimits: { maxOutputPixels: 5 }, reader: { outputPixels: 5, decodedPixels: 2 * 512 * 512 } });
       const oldPrefix = `terrain/prepared/${sha256(encodeJson({ dataId: input.catalog.dataId, gridHash: coverage.gridHash, method: PREPARED_TERRAIN_METHOD, coverageHash: sha256(coverageDescriptor), layoutVersion: 1, oceanCoverage: 'verified' }))}`;
       const { sourceIntegrity: _, ...oldDescriptor } = structuredClone(packed.descriptor);

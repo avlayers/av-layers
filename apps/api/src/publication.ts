@@ -1,5 +1,5 @@
 import { getProduct } from '@av/contracts/models';
-import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, PRECIPITATION_METHOD, PRECIPITATION_ALL_HOURS_METHOD, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, matchesHistoricalDescriptors, storedModelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type StoredModelPointer as ModelPointer, type ProductDefinition } from '@av/contracts';
+import { MAX_POINTER_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, canonicalGridJson, createWholeDomainDescriptors, getProvenanceReference, manifestV5Schema, storedModelPointerSchema, parseProvenance, parseFrameProvenance, planWholeDomainGrid, sameGrid, sameJsonValue, type LayerId, type ManifestV5, type ModelId, type StoredModelPointer as ModelPointer, type ProductDefinition } from '@av/contracts';
 import { sha256 } from './coverage';
 import { matchStorageBytes, storeStorageBytes } from './storage-cache';
 import { Problem, fail, validateId, ensureLive } from './http';
@@ -209,13 +209,7 @@ async function checkProduct(m: ManifestV5, product: ProductDefinition): Promise<
   const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
   // Display labels are immutable publication metadata.
   for (const layer of m.layers) expected.layers[layer].label = m.descriptors.layers[layer].label;
-  if (m.descriptors.layers['precip-rate']?.methodId === PRECIPITATION_METHOD.id) {
-    expected.layers['precip-rate']!.methodId = PRECIPITATION_METHOD.id;
-    expected.methods = Object.fromEntries(Object.entries(expected.methods).map(([id, method]) => id === PRECIPITATION_ALL_HOURS_METHOD.id ? [PRECIPITATION_METHOD.id, PRECIPITATION_METHOD] : [id, method]));
-  }
-  // Retained manifests match the frozen descriptors from before field definitions.
-  const matchesCurrent = sameJsonValue(m.descriptors, expected);
-  if (product.terrainSubdivisionFactor === undefined || (!matchesCurrent && !matchesHistoricalDescriptors(product, m))) fail(503, 'publication-invalid', 'Publication does not match admitted product');
+  if (product.terrainSubdivisionFactor === undefined || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
   let plan: ReturnType<typeof planWholeDomainGrid>;
   try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }
   catch { return fail(503, 'publication-invalid', 'Invalid product grid'); }
@@ -240,9 +234,8 @@ export function servedSource(m: ManifestV5, origin: string): ManifestV5['source'
   return { ...m.source, provenanceUrl: `${origin}/v1/models/${m.model}/runs/${m.buildId}/provenance` };
 }
 
-/** Copy a retained wind reference onto a manifest published before that field was written. */
-export function publicManifest(m: ManifestV5, entry: { mapData?: ManifestV5['mapData'] }, origin: string): ManifestV5 {
-  return { ...m, ...(m.mapData || !entry.mapData ? {} : { mapData: entry.mapData }), source: servedSource(m, origin) };
+export function publicManifest(m: ManifestV5, origin: string): ManifestV5 {
+  return { ...m, source: servedSource(m, origin) };
 }
 
 export function artifact(m: ManifestV5, layer: LayerId, frame: string) {
@@ -265,7 +258,6 @@ export async function readProvenanceFrame(bucket: R2Bucket, m: ManifestV5, frame
   let reference;
   try {
     const value = parseProvenance(parseBoundedJson(index, MAX_PROVENANCE_JSON_TOKENS), m);
-    if (value.version !== 2) return fail(409, 'provenance-frame-unavailable', 'This build publishes inline provenance');
     reference = value.frames.find(reference => reference.frame === frameId)!;
   } finally { release(); }
   const bytes = await readVerifiedProvenance(bucket, reference, raw => {

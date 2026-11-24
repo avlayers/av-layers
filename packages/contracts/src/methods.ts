@@ -48,8 +48,7 @@ export const LIFT_METHOD_PARAMETERS = Object.freeze({
   gribQuantizationRelativeHumidityLimit: 1.05
 });
 export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
-  minimumRateMmPerHour: 0,
-  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG
+  minimumRateMmPerHour: 0
 } as const);
 
 const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readonly NormalizedInputId[];
@@ -78,23 +77,13 @@ function defineLiftMethod<const Id extends string>(id: Id, pressureInput: 'press
 export const LIFT_METHOD = defineLiftMethod(LIFT_METHOD_ID, 'pressureLevelsHpa');
 export const MODEL_LEVEL_LIFT_METHOD = defineLiftMethod('dry-lenschow-1p2-model-levels-v2', 'pressurePa');
 
-export const PRECIPITATION_METHOD = Object.freeze({
-  id: 'trailing-precipitation-rate-v1',
+export const PRECIPITATION_ALL_HOURS_METHOD = Object.freeze({
+  id: ALL_HOURS_PRECIP_METHOD_ID,
   requiredInputs: Object.freeze(precipitationInputs),
   inputs: Object.freeze(Object.fromEntries(precipitationInputs.map(id => [id, NORMALIZED_INPUTS[id]]))),
   outputs: Object.freeze(['precip-rate'] as const),
   spatialSupport: 'column',
   parameters: PRECIPITATION_METHOD_PARAMETERS,
-  caveats: Object.freeze([
-    'The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.',
-    'Evaluated only for cells in daylight across the trailing interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells are marked unavailable and skipped.',
-    'Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.'
-  ])
-} as const);
-export const PRECIPITATION_ALL_HOURS_METHOD = Object.freeze({
-  ...PRECIPITATION_METHOD,
-  id: ALL_HOURS_PRECIP_METHOD_ID,
-  parameters: Object.freeze({ minimumRateMmPerHour: PRECIPITATION_METHOD_PARAMETERS.minimumRateMmPerHour }),
   caveats: Object.freeze([
     'The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including accumulation differencing.',
     'Evaluated at every retained forecast time. Negative, non-finite or explicitly missing rates are unavailable.'
@@ -126,10 +115,12 @@ export const TERRAIN_COLUMN_PARAMETERS = Object.freeze({
 } as const);
 
 function defineTerrainColumnMethod<const Id extends string>(id: Id, nativeMethod: typeof LIFT_METHOD | typeof MODEL_LEVEL_LIFT_METHOD) {
+  const nativeCloudSupport = Object.freeze({ id: 'nativeCloudSupport', quantity: 'native-cloud-support-flags', units: 'code',
+    dimensions: 'cell', verticalReference: 'native model column', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' } as const);
   return Object.freeze({
     id,
-    requiredInputs: Object.freeze([...nativeMethod.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs]),
-    inputs: Object.freeze(Object.fromEntries([...Object.entries(nativeMethod.inputs), ...Object.entries(TERRAIN_CLEARANCE_METHOD.inputs)])),
+    requiredInputs: Object.freeze([...nativeMethod.requiredInputs, ...TERRAIN_CLEARANCE_METHOD.requiredInputs, nativeCloudSupport.id]),
+    inputs: Object.freeze({ ...Object.fromEntries([...Object.entries(nativeMethod.inputs), ...Object.entries(TERRAIN_CLEARANCE_METHOD.inputs)]), nativeCloudSupport }),
     outputs: Object.freeze(['usable-lift-msl', 'usable-lift-agl'] as const),
     spatialSupport: 'bilinear-neighborhood',
     parameters: TERRAIN_COLUMN_PARAMETERS,
@@ -138,32 +129,19 @@ function defineTerrainColumnMethod<const Id extends string>(id: Id, nativeMethod
       'Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.',
       'Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.',
       'When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.',
-      'Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.'
+      'Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.',
+      'Cloud support flags combine available positive-weight native-column diagnostics.'
     ])
   } as const);
 }
-export const TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-v1', LIFT_METHOD);
-export const MODEL_LEVEL_TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-model-levels-v1', MODEL_LEVEL_LIFT_METHOD);
+export const TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-v2', LIFT_METHOD);
+export const MODEL_LEVEL_TERRAIN_COLUMN_METHOD = defineTerrainColumnMethod('supported-terrain-column-1p2-model-levels-v2', MODEL_LEVEL_LIFT_METHOD);
 export const TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: TERRAIN_COLUMN_METHOD,
   'model-levels': MODEL_LEVEL_TERRAIN_COLUMN_METHOD
 } as const);
-function defineCloudTerrainColumnMethod<const Id extends string>(id: Id, base: typeof TERRAIN_COLUMN_METHOD | typeof MODEL_LEVEL_TERRAIN_COLUMN_METHOD) {
-  const nativeCloudSupport = Object.freeze({ id: 'nativeCloudSupport', quantity: 'native-cloud-support-flags', units: 'code',
-    dimensions: 'cell', verticalReference: 'native model column', timeSupport: 'valid-time', missingness: 'explicit-cell-mask' } as const);
-  return Object.freeze({ ...base, id,
-    requiredInputs: Object.freeze([...base.requiredInputs, nativeCloudSupport.id]),
-    inputs: Object.freeze({ ...base.inputs, nativeCloudSupport }),
-    caveats: Object.freeze([...base.caveats, 'Cloud support flags combine available positive-weight native-column diagnostics.'])
-  });
-}
-export const TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
-  isobaric: defineCloudTerrainColumnMethod('supported-terrain-column-1p2-v2', TERRAIN_COLUMN_METHOD),
-  'model-levels': defineCloudTerrainColumnMethod('supported-terrain-column-1p2-model-levels-v2', MODEL_LEVEL_TERRAIN_COLUMN_METHOD)
-});
-export function terrainColumnMethodForProduct(product: Pick<ProductDefinition, 'layers' | 'capabilities'>) {
-  const methods = product.layers.includes('thermal-velocity') ? TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE : TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE;
-  return methods[product.capabilities.verticalCoordinate];
+export function terrainColumnMethodForProduct(product: Pick<ProductDefinition, 'capabilities'>) {
+  return TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
 }
 const nativeInputs = {
   soaring: ['terrainM', 'surfacePressurePa', 'temp2mK', 'specificHumidity2mKgKg', 'sensibleHeatFluxWm2', 'latentHeatFluxWm2', 'hgtM', 'tempK', 'pblHeightM', 'spfhKgKg', 'rhPercent'],
@@ -213,13 +191,10 @@ const nativeMethods = Object.fromEntries(Object.values(NATIVE_METHODS_BY_VERTICA
 export const METHODS = Object.freeze({
   [LIFT_METHOD.id]: LIFT_METHOD,
   [MODEL_LEVEL_LIFT_METHOD.id]: MODEL_LEVEL_LIFT_METHOD,
-  [PRECIPITATION_METHOD.id]: PRECIPITATION_METHOD,
   [PRECIPITATION_ALL_HOURS_METHOD.id]: PRECIPITATION_ALL_HOURS_METHOD,
   [TERRAIN_CLEARANCE_METHOD.id]: TERRAIN_CLEARANCE_METHOD,
   [TERRAIN_COLUMN_METHOD.id]: TERRAIN_COLUMN_METHOD,
   [MODEL_LEVEL_TERRAIN_COLUMN_METHOD.id]: MODEL_LEVEL_TERRAIN_COLUMN_METHOD,
-  [TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE.isobaric.id]: TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE.isobaric,
-  [TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE['model-levels'].id]: TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE['model-levels'],
   ...nativeMethods
 });
 export const LIFT_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({

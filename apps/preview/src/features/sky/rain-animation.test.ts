@@ -35,7 +35,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     const dryPixels = new Uint8ClampedArray(16 * 16 * 4);
     const field = decodePrecipRgbaToField(dryPixels, 16, 16, { west: -60, south: -25, east: -45, north: -10 }, 'dry');
     const cuff = new Uint8ClampedArray(16 * 16 * 4);
-    const styles = resolveChannelStyles('xcskies');
+    const styles = resolveChannelStyles('classic');
 
     expect(field.maxMmh).toBe(0);
     expect(field.wetIndices.length).toBe(0);
@@ -44,7 +44,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(buildRainContourGeoJson(field, 'vignette-cuff', 15).features).toHaveLength(0);
   });
 
-  it('short-circuits cuff upload when 100% of crop cells are uniformly inside a rain shield (no dry edge)', () => {
+  it('short-circuits cuff upload when 100% of crop cells are uniformly inside a rain shield', () => {
     const size = 24;
     const pixels = new Uint8ClampedArray(size * size * 4);
     const squall = hexPixel(RAIN_COLORS[5]!);
@@ -52,10 +52,10 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
 
     const field = decodePrecipRgbaToField(pixels, size, size, { west: 43, south: 39, east: 46, north: 42 }, 'all-wet');
     const cuff = new Uint8ClampedArray(size * size * 4);
-    expect(renderRainInnerVignetteRgba(field, resolveChannelStyles('xcskies'), cuff)).toBe(false);
+    expect(renderRainInnerVignetteRgba(field, resolveChannelStyles('classic'), cuff)).toBe(false);
   });
 
-  it('never closes an ImageBitmap while MapLibre ImageSource still has _imageDirty = true (preventing black-screen crash)', () => {
+  it('retires replaced ImageBitmaps only after MapLibre ImageSource finishes uploading', () => {
     const retirer = new OwnedImageBitmapRetirer();
     const closeA = vi.fn();
     const closeB = vi.fn();
@@ -69,18 +69,15 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
       once: (_event: string, cb: () => void) => { renderCbs.push(cb); }
     };
 
-    // Presenting bmpA must NOT close bmpA while MapLibre awaits gl.texImage2D!
     retirer.present(fakeMap as never, 'av-rain-cuff', bmpA);
     expect(closeA).not.toHaveBeenCalled();
 
-    // Replacing with bmpB before render finishes: if source still points to bmpB with _imageDirty=true, bmpA is safe to close once source.image !== bmpA!
     imageSource.image = bmpB;
     imageSource._imageDirty = true;
     retirer.present(fakeMap as never, 'av-rain-cuff', bmpB);
     expect(closeA).toHaveBeenCalledTimes(1);
     expect(closeB).not.toHaveBeenCalled();
 
-    // Even after render fires, currently displayed bmpB stays alive until source removal!
     imageSource._imageDirty = false;
     for (const cb of renderCbs) cb();
     expect(closeB).not.toHaveBeenCalled();
@@ -89,15 +86,14 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(closeB).toHaveBeenCalledTimes(1);
   });
 
-  it('anchors clouds & rain cuffs strictly above av-hillshade-top (never buried by lift) and below vector roads & labels', () => {
-    const layers = new Set(['av-hillshade-top', 'coastline', 'road_major', 'aero-strip', 'place-city']);
+  it('anchors clouds and rain cuffs above av-hillshade-top and below vector lines and labels', () => {
+    const layers = new Set(['av-hillshade-top', 'waterway', 'road_major_motorway', 'aero-strip', 'place-city']);
     const fakeMap = { getLayer: (id: string) => (layers.has(id) ? { id } : undefined) };
 
-    expect(cloudRasterBeforeId(fakeMap as never)).toBe('coastline');
-    expect(rainCuffBeforeId(fakeMap as never)).toBe('coastline');
+    expect(cloudRasterBeforeId(fakeMap as never)).toBe('waterway');
+    expect(rainCuffBeforeId(fakeMap as never)).toBe('waterway');
     expect(weatherContourBeforeId(fakeMap as never)).toBe('aero-strip');
 
-    // Once av-rain-cuff is mounted, clouds insert directly below av-rain-cuff (still above av-hillshade-top!)
     layers.add('av-rain-cuff');
     expect(cloudRasterBeforeId(fakeMap as never)).toBe('av-rain-cuff');
   });
@@ -107,7 +103,6 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
       for (const rainStyle of ['vignette-cuff', 'sigwx-scallop', 'inward-comb', 'wet-lens'] as const) {
         const styles = resolveChannelStyles(theme, { rainStyle });
         const pair = rainContourStrokePair(styles);
-        // Outer halo casing and inner shower stroke must never collapse to identical colors!
         expect(pair.haloColor).not.toBe(pair.showerColor);
       }
     }
@@ -142,7 +137,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     const bounds = { west: -60, south: -26, east: -44, north: -10 };
     const field = decodePrecipRgbaToField(pixels, size, size, bounds, 'storm');
     const cuff = new Uint8ClampedArray(size * size * 4);
-    const styles = resolveChannelStyles('xcskies');
+    const styles = resolveChannelStyles('classic');
 
     expect(renderRainInnerVignetteRgba(field, styles, cuff)).toBe(true);
     expect(cuff[(2 * size + 2) * 4 + 3]).toBe(0);
@@ -182,7 +177,7 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(tiers.has('squall')).toBe(true);
   });
 
-  it('renders low overcast as neutral shadow while keeping 100% high thin cirrus airy and bright over XC Skies lift', () => {
+  it('renders low overcast as neutral shadow while keeping 100% high thin cirrus airy and bright over Classic lift', () => {
     const cols = 16, rows = 16;
     const total = new Float32Array(cols * rows);
     const low = new Float32Array(cols * rows);
@@ -220,7 +215,6 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(rgba[centerOff + 3]!).toBeGreaterThan(60);
     expect(Math.abs(rgba[centerOff + 3]! - rgba[centerOff + 7]!)).toBeLessThan(25);
 
-    // High-only cirrus (total = 95%, low = 0%): bright white-silver veil capped <= 54 alpha (never dark grey!)
     const cirrusField: SynopticField = {
       ...lowOvcField,
       id: 'yerevan-high-cirrus',

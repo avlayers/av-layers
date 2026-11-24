@@ -243,10 +243,7 @@ export function createPointForecast(build: PinnedBuild, point: GeoPoint, options
         isUtcFallback: options.timeZone === 'UTC' || options.timeZone === 'Etc/UTC',
       }
     : resolveSiteTimeZone(lat, lon);
-  const upperAirDewpointReference = resolveUpperAirMoistureReference(
-    build.manifest.model,
-    build.manifest.tool.profileDewpointReference,
-  );
+  const upperAirDewpointReference = resolveUpperAirMoistureReference();
   const fineSurface = build.manifest.surfaces.find(surface => surface.kind === 'fine');
   const fineLocated = fineSurface
     ? locateSampleCell(fineSurface.grid, lat, lon, prepareGridGeometry(fineSurface.grid))

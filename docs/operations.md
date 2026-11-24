@@ -172,11 +172,11 @@ gh workflow run deploy.yml --ref main -f environment=staging
 Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
 the clients, deploys the API Worker, and checks the complete model catalog.
 Scheduled models require a publication. Event-driven models may report
-`publication-unavailable` until an external cycle is published. Hourly health
-checks only models enrolled for that environment, so a new model can stay
-registered before its first publication. Every available
+`publication-unavailable` or `not-retained` until an external cycle is
+published. Hourly health checks only models enrolled for that environment, so a
+new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
-tile routes; invalid, incomplete and expired publications fail deployment.
+tile routes; invalid or incomplete publications fail deployment.
 After Cloudflare Pages deploys, the job checks the revision marker.
 
 Deployment checks each available model's tile front cache with bounded repeated
@@ -204,9 +204,7 @@ gh workflow run maintenance.yml --ref main -f environment=staging -f model=gfs \
   -f action=rollback -f build-id=RETAINED_BUILD_ID
 ```
 
-While a build marked `tool.useStoredMslNoLift` remains retained, use a Worker
-revision that recognizes the marker. Pointer rollback leaves retained builds
-readable by ID.
+Pointer rollback leaves retained builds readable by ID.
 
 Delete unreferenced build prefixes whose newest object is at least seven days old:
 
@@ -224,8 +222,7 @@ preparations.
 
 Production forecasts use the catalog pinned in the
 [model workflow](../.github/workflows/forecast-model.yml). All configured weather models
-use this catalog for whole-domain terrain preparation (and the shared
-[polygon configuration](../packages/contracts/config/refinement.json) for regional patch evaluation).
+use this catalog for whole-domain terrain preparation.
 
 The Forecast workflow's `terrain-catalog-ref` input overrides the environment's
 `TERRAIN_CATALOG_REF`, which overrides the production pin. For staging, set the

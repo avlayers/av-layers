@@ -1,6 +1,6 @@
-import { INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
-import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, createProductDescriptors, createRecipeIdentity, computeFreshness, validateArtifactRecords, modelPointerSchema, PALETTES, PRECIPITATION_ALL_HOURS_METHOD, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask, type Manifest } from './index.js';
+import { getBit, setBit, coverageIndices, isCovered, isTileCovered, expectedTiles, paletteColor, paletteBinLabel, isPaletteId, normalizeLon, computeFreshness, validateArtifactRecordsV5, modelPointerSchema, PALETTES, STATUS_NO_LIFT, STATUS_VALID, STATUS_UNAVAILABLE, STATUS_OUTSIDE, SUPPORT_MASK, type CoverageMask } from './index.js';
+import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 
 describe('contracts', () => {
   it('uses LSB-first bitsets and output, not halo, for coverage with sampler-matched half-cell tie-breaking', () => {
@@ -82,42 +82,29 @@ describe('contracts', () => {
       intervalStart: new Date(Date.parse(cycle) + (hour - 1) * 3600000).toISOString(), intervalEnd: new Date(Date.parse(cycle) + hour * 3600000).toISOString() }));
     const build = { cycle, createdAt: cycle, expiresAt: '2026-11-13T00:00:00.000Z', frames };
     const now = Date.parse(cycle) + 25 * 3600000;
-    expect(computeFreshness({ ...build, version: 5, mapFrameCount: 2 }, now)).toMatchObject({
+    expect(computeFreshness({ ...build, mapFrameCount: 2 }, now)).toMatchObject({
       latestValidTime: frames[1]!.validTime, horizonRemainingSeconds: 0, horizonExhausted: true
     });
     expect(computeFreshness(build, now)).toMatchObject({ latestValidTime: frames[3]!.validTime, horizonExhausted: false });
   });
   it('validates artifact records dynamically against declared frames × layers', () => {
-    const hash = 'a'.repeat(64);
-    const twoFrameManifest = {
-      model: 'gfs',
-      descriptors: createProductDescriptors({ ...INDEXED_PRODUCT, layers: ['precip-rate'] }),
-      recipe: createRecipeIdentity(INDEXED_PRODUCT, hash),
-      method: { id: PRECIPITATION_ALL_HOURS_METHOD.id, hash },
-      buildId: 'b1',
+    const twoFrameManifest = fixtureManifestV5({
+      layers: ['precip-rate'],
       frames: [
         { id: 'f003', validTime: '2026-10-30T03:00:00Z', intervalStart: '2026-10-30T00:00:00Z', intervalEnd: '2026-10-30T03:00:00Z' },
         { id: 'f006', validTime: '2026-10-30T06:00:00Z', intervalStart: '2026-10-30T03:00:00Z', intervalEnd: '2026-10-30T06:00:00Z' }
-      ],
-      layers: ['precip-rate'],
-      samples: { format: 'cell-major-blocks-v1', blockSize: 16, storedCells: 1, channelCount: 2, bytes: 10, key: 'builds/gfs/b1/samples.bin', sha256: hash },
-      artifacts: ['f003', 'f006'].map(frame => ({
-        layer: 'precip-rate',
-        frame,
-        tilesKey: `builds/gfs/b1/precip-rate/${frame}.pmtiles`,
-        tilesSha256: hash
-      }))
-    } as unknown as Manifest;
-    expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
+      ]
+    });
+    expect(() => validateArtifactRecordsV5(twoFrameManifest)).not.toThrow();
     twoFrameManifest.method.id = 'unrelated-method-v1';
-    expect(() => validateArtifactRecords(twoFrameManifest)).toThrow('published descriptor snapshots');
+    expect(() => validateArtifactRecordsV5(twoFrameManifest)).toThrow('published descriptor snapshots');
     twoFrameManifest.method.id = 'retained-precipitation-rate-v0';
     const stored = twoFrameManifest.descriptors.methods[twoFrameManifest.descriptors.layers['precip-rate']!.methodId]!;
     delete twoFrameManifest.descriptors.methods[stored.id];
     stored.id = twoFrameManifest.method.id;
     twoFrameManifest.descriptors.methods[stored.id] = stored;
     twoFrameManifest.descriptors.layers['precip-rate'].methodId = stored.id;
-    expect(() => validateArtifactRecords(twoFrameManifest)).not.toThrow();
+    expect(() => validateArtifactRecordsV5(twoFrameManifest)).not.toThrow();
   });
   it('requires latest membership and caps retained builds', () => {
     const item = { buildId: 'one', manifestKey: 'key', cycle: '2026-10-30T00:00:00Z', expiresAt: '2026-11-06T00:00:00Z' };

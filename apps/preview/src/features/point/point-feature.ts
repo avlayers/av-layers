@@ -129,7 +129,7 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
         await session?.open(point);
         if (disposed || openIntent !== intent) return;
         const horizon = options.getBuild() ? pointSeriesSelection(options.getBuild()!).frames.length !== options.getBuild()!.manifest.frames.length : false;
-        options.publish.horizon(horizon, options.getBuild()?.manifest.mapFrameCount !== undefined ? 'Map forecast' : '24 hours');
+        options.publish.horizon(horizon, 'Map forecast');
       } finally { if (openIntent === intent) openIntent = null; }
     },
     close() {

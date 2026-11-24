@@ -8,9 +8,9 @@ describe('scalar sampling', () => {
     const flags = Uint8Array.of(SUPPORT_PARCEL_CROSSING, STATUS_NO_LIFT | SUPPORT_PROFILE_TOP, STATUS_NO_LIFT, STATUS_NO_LIFT);
     const agl = { values: Float32Array.of(310, 0, 0, 0), flags };
     const msl = { values: Float32Array.of(410, 100, 100, 100), flags };
-    expect(sampleGrid(grid, agl, 1, 0.5, 'usable-lift-agl', undefined, false)).toMatchObject({ value: 155, status: 0, support: SUPPORT_PARCEL_CROSSING | SUPPORT_PROFILE_TOP, interpolated: true });
-    expect(sampleGrid(grid, msl, 1, 0.5, 'usable-lift-msl', undefined, true).value).toBe(255);
-    expect(sampleGrid(grid, msl, 0, 0.5, 'usable-lift-msl', undefined, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    expect(sampleGrid(grid, agl, 1, 0.5, 'usable-lift-agl')).toMatchObject({ value: 155, status: 0, support: SUPPORT_PARCEL_CROSSING | SUPPORT_PROFILE_TOP, interpolated: true });
+    expect(sampleGrid(grid, msl, 1, 0.5, 'usable-lift-msl').value).toBe(255);
+    expect(sampleGrid(grid, msl, 0, 0.5, 'usable-lift-msl')).toMatchObject({ value: null, status: STATUS_NO_LIFT });
   });
   it.each(['dense-grid', 'packed-grid', 'dense-points', 'packed-points'])('retains terrain MSL for rendering while preserving statuses and public samples (%s)', mode => {
     const mask = { grid, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
@@ -23,7 +23,7 @@ describe('scalar sampling', () => {
         ? preparePointSampling(samplingMask, Float64Array.of(lat), Float64Array.of(lon))
         : prepareGridSampling(samplingMask, Float64Array.of(lat), Float64Array.of(lon));
       const result = { value: null as number | null, status: 3, support: 0, interpolated: false };
-      prepared.bind(field, layer, true, retain)(0, 0, result);
+      prepared.bind(field, layer, retain)(0, 0, result);
       return result;
     };
     expect(sample(1, 0)).toEqual({ value: 100, status: STATUS_NO_LIFT, support: 4, interpolated: false });
@@ -32,7 +32,7 @@ describe('scalar sampling', () => {
     expect(sample(0.5, 0.5)).toMatchObject({ value: 250, status: 0 });
     expect(sample(0.5, 0.75)).toMatchObject({ value: 300, status: 0 });
     expect(sample(0.5, 0.25, 'usable-lift-msl', false)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
-    expect(sampleGrid(grid, field, 0.5, 0.25, 'usable-lift-msl', undefined, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    expect(sampleGrid(grid, field, 0.5, 0.25, 'usable-lift-msl')).toMatchObject({ value: null, status: STATUS_NO_LIFT });
     expect(sample(0.5, 0.25, 'usable-lift-agl')).toMatchObject({ value: 0, status: STATUS_NO_LIFT });
     field.flags.fill(STATUS_NO_LIFT);
     expect(sample(0.5, 0.5)).toMatchObject({ value: 250, status: STATUS_NO_LIFT });
@@ -46,40 +46,40 @@ describe('scalar sampling', () => {
   });
   it('ignores zero-weight neighbors and snaps close to nodes', () => {
     const field = { values: Float32Array.of(4, NaN, NaN, NaN), flags: Uint8Array.of(0, 2, 2, 2) };
-    expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'precip-rate', undefined, false)).toMatchObject({ value: 4, interpolated: false });
+    expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'precip-rate')).toMatchObject({ value: 4, interpolated: false });
   });
   it('uses immutable supplied layer semantics instead of the current global registry', () => {
     const field = { values: Float32Array.of(100, 300, 100, 300), flags: Uint8Array.of(STATUS_NO_LIFT, 0, STATUS_NO_LIFT, 0) };
     const spec = { ...LAYERS['usable-lift-msl'], noLiftSampleValue: 17, zeroOnNoLiftInterpolation: true };
-    expect(sampleGrid(grid, field, 1, 0, spec, undefined, true).value).toBe(17);
-    expect(sampleGrid(grid, field, 1, 0.5, spec, undefined, true).value).toBe(150);
-    expect(sampleGrid(grid, field, 1, 0.5, 'usable-lift-msl', undefined, true).value).toBe(200);
+    expect(sampleGrid(grid, field, 1, 0, spec).value).toBe(17);
+    expect(sampleGrid(grid, field, 1, 0.5, spec).value).toBe(150);
+    expect(sampleGrid(grid, field, 1, 0.5, 'usable-lift-msl').value).toBe(200);
     const mask = { grid, output: Uint8Array.of(15), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 };
     const prepared = prepareGridSampling(mask, Float64Array.of(1), Float64Array.of(0.5));
     const result = { value: null as number | null, status: 3, support: 0, interpolated: false };
-    prepared.bind(field, spec, true)(0, 0, result);
-    expect(result).toEqual(sampleGrid(grid, field, 1, 0.5, spec, undefined, true));
+    prepared.bind(field, spec)(0, 0, result);
+    expect(result).toEqual(sampleGrid(grid, field, 1, 0.5, spec));
   });
   it('falls back to nearest contributor without renormalizing, row then column on ties', () => {
     const field = { values: Float32Array.of(10, 20, 30, 40), flags: Uint8Array.of(0, STATUS_UNAVAILABLE, 0, 0) };
-    expect(sampleGrid(grid, field, 0.5, 0.5, 'precip-rate', undefined, false)).toMatchObject({ value: 10, interpolated: false });
-    expect(sampleGrid(grid, field, 0.9, 0.9, 'precip-rate', undefined, false)).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
+    expect(sampleGrid(grid, field, 0.5, 0.5, 'precip-rate')).toMatchObject({ value: 10, interpolated: false });
+    expect(sampleGrid(grid, field, 0.9, 0.9, 'precip-rate')).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
     field.flags[0] = STATUS_OUTSIDE;
-    expect(sampleGrid(grid, field, 0.9, 0.1, 'precip-rate', undefined, false).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(grid, field, 0.9, 0.1, 'precip-rate').status).toBe(STATUS_OUTSIDE);
   });
   it('returns null for unavailable and outside exact nodes across layer semantics', () => {
     for (const layer of ['usable-lift-agl', 'usable-lift-msl', 'precip-rate'] as const) {
       for (const status of [STATUS_UNAVAILABLE, STATUS_OUTSIDE]) {
         const field = { values: Float32Array.of(0, 1, 2, 3), flags: Uint8Array.of(status, 0, 0, 0) };
-        expect(sampleGrid(grid, field, 1, 0, layer, undefined, true)).toEqual({ value: null, status, support: 0, interpolated: false });
-        expect(sampleCells(planSample(grid, 1, 0)!, [{ value: 0, flags: status }], layer, true)).toEqual({ value: null, status, support: 0, interpolated: false });
+        expect(sampleGrid(grid, field, 1, 0, layer)).toEqual({ value: null, status, support: 0, interpolated: false });
+        expect(sampleCells(planSample(grid, 1, 0)!, [{ value: 0, flags: status }], layer)).toEqual({ value: null, status, support: 0, interpolated: false });
       }
     }
   });
   it('uses wrapped column as tie-breaker', () => {
     const g = { ...grid, wrapLongitude: true };
     const f = { values: Float32Array.of(8, 9, 0, 0), flags: Uint8Array.of(0, STATUS_UNAVAILABLE, 0, 0) };
-    expect(sampleGrid(g, f, 1, 1.5, 'precip-rate', undefined, false)).toMatchObject({ value: 8, status: 0 });
+    expect(sampleGrid(g, f, 1, 1.5, 'precip-rate')).toMatchObject({ value: 8, status: 0 });
     expect(planSample(g, 1, 2)?.contributors[0].column).toBe(0);
     expect(planSample(grid, 1, -0.1)).toBeNull();
   });
@@ -106,7 +106,7 @@ describe('scalar sampling', () => {
       byteRange: { offset: 0, length: 10 }
     });
     const field = { values: Float32Array.of(10, 30), flags: new Uint8Array(2) };
-    expect(sampleGrid(singleColumn, field, 0.25, 0.5, 'precip-rate', undefined, false)).toEqual({ value: 25, status: 0, support: 0, interpolated: true });
+    expect(sampleGrid(singleColumn, field, 0.25, 0.5, 'precip-rate')).toEqual({ value: 25, status: 0, support: 0, interpolated: true });
     expect(planSample(singleColumn, 1, 0)?.contributors).toEqual([{ row: -0, column: 0, index: 0, weight: 1 }]);
   });
   it('packs little-endian independent layer cells and enforces range length', () => {
@@ -116,12 +116,12 @@ describe('scalar sampling', () => {
     const plan = planSample(grid, 1, 0.5)!;
     expect(cellsFromRange(plan, bytes)).toEqual([{ value: 1, flags: 4 }, { value: -2, flags: 8 }]);
     expect(() => cellsFromRange(plan, bytes.subarray(1))).toThrow(); expect(() => unpackCells(bytes.subarray(1))).toThrow();
-    expect(sampleCells(plan, cellsFromRange(plan, bytes), 'usable-lift-agl', false).value).toBe(-0.5);
+    expect(sampleCells(plan, cellsFromRange(plan, bytes), 'usable-lift-agl').value).toBe(-0.5);
   });
   it('rejects lift-only rain flags and corrupt nearest values', () => {
     const plan = planSample(grid, 1, 0.5)!;
-    expect(() => sampleCells(plan, [{ value: 1, flags: 4 }, { value: 2, flags: 0 }], 'precip-rate', false)).toThrow();
-    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: 0, flags: STATUS_UNAVAILABLE }], 'precip-rate', false)).toThrow();
+    expect(() => sampleCells(plan, [{ value: 1, flags: 4 }, { value: 2, flags: 0 }], 'precip-rate')).toThrow();
+    expect(() => sampleCells(plan, [{ value: NaN, flags: 0 }, { value: 0, flags: STATUS_UNAVAILABLE }], 'precip-rate')).toThrow();
   });
   it('coalesces interior and dateline two-row reads', () => {
     expect(planSample(INDEXED_GRID, 10.125, 0.125)?.byteRange.length).toBe(7210);
@@ -142,10 +142,10 @@ describe('point sampling', () => {
     const field = { values: Float32Array.of(410, 100, 300, 200), flags: Uint8Array.of(0, STATUS_NO_LIFT | SUPPORT_PROFILE_TOP, 0, 0) };
     const bytes = packCells(field), lats = Float64Array.of(0.5, 1 - 1e-8, 1), lons = Float64Array.of(0.5);
     const gridSampler = prepareGridSampling(mask, lats, lons), pointSampler = preparePointSampling(mask, lats, Float64Array.of(0.5, 0.5, 0.5));
-    const gridSample = gridSampler.bind(field, layer, true), pointSample = pointSampler.bind(field, layer, true);
+    const gridSample = gridSampler.bind(field, layer), pointSample = pointSampler.bind(field, layer);
     for (const [index, lat] of lats.entries()) {
       const plan = planSample(grid, lat, 0.5)!;
-      const packed = sampleCells(plan, cellsFromRange(plan, bytes.subarray(plan.byteRange.offset, plan.byteRange.offset + plan.byteRange.length)), layer, true);
+      const packed = sampleCells(plan, cellsFromRange(plan, bytes.subarray(plan.byteRange.offset, plan.byteRange.offset + plan.byteRange.length)), layer);
       const prepared = result(), paired = result();
       gridSample(0, index, prepared); pointSample(index, 0, paired);
       expect(packed).toMatchObject({ status: 0, support: SUPPORT_PROFILE_TOP, interpolated: true });
@@ -153,16 +153,12 @@ describe('point sampling', () => {
       expect(prepared).toEqual(packed);
       expect(paired).toEqual(packed);
     }
-    const retained = result();
-    gridSampler.bind(field, layer, false)(0, 0, retained);
-    expect(retained).toEqual(sampleGrid(grid, field, 0.5, 0.5, layer, undefined, false));
-    expect(retained.value).toBeCloseTo(303.333333);
 
     const majority = result();
-    prepareGridSampling(mask, Float64Array.of(0.9), Float64Array.of(0.9)).bind(field, layer, true)(0, 0, majority);
+    prepareGridSampling(mask, Float64Array.of(0.9), Float64Array.of(0.9)).bind(field, layer)(0, 0, majority);
     expect(majority).toMatchObject({ value: null, status: STATUS_NO_LIFT });
     const agl = result();
-    gridSampler.bind(field, 'usable-lift-agl', true)(0, 0, agl);
+    gridSampler.bind(field, 'usable-lift-agl')(0, 0, agl);
     expect(agl).toMatchObject({ value: 227.5, status: 0 });
   });
 
@@ -176,10 +172,10 @@ describe('point sampling', () => {
     expect(prepared.height).toBe(1);
     for (let i = 0; i < latitudes.length; i++) {
       const out = result();
-      prepared.bind(field, layer, true)(i, 0, out);
-      expect(out).toEqual(sampleGrid(grid, field, latitudes[i], longitudes[i], layer, mask, true));
+      prepared.bind(field, layer)(i, 0, out);
+      expect(out).toEqual(sampleGrid(grid, field, latitudes[i], longitudes[i], layer, mask));
     }
-    expect(sampleGrid(grid, field, 1.5, 0, layer, mask, true).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(grid, field, 1.5, 0, layer, mask).status).toBe(STATUS_OUTSIDE);
   });
   it('validates paired lengths, the sample budget, grid and coverage bytes', () => {
     const mask = coverage(grid), lats = Float64Array.of(1), lons = Float64Array.of(0.5);
@@ -201,8 +197,8 @@ describe('point sampling', () => {
     const prepared = preparePointSampling(mask, Float64Array.from(latitudes), Float64Array.from(longitudes));
     for (let i = 0; i < latitudes.length; i++) {
       const out = result();
-      prepared.bind(field, 'precip-rate', false)(i, 0, out);
-      expect(out).toEqual(sampleGrid(lambert, field, latitudes[i], longitudes[i], 'precip-rate', mask, false));
+      prepared.bind(field, 'precip-rate')(i, 0, out);
+      expect(out).toEqual(sampleGrid(lambert, field, latitudes[i], longitudes[i], 'precip-rate', mask));
     }
   });
   it('refreshes Lambert geometry when the grid origin changes', () => {
@@ -258,13 +254,13 @@ describe('point sampling', () => {
         flags: Uint8Array.from({ length: 36 }, (_, i) => i % 7 === 0 ? STATUS_UNAVAILABLE : i % 11 === 0 ? STATUS_NO_LIFT : 0),
         ...('coverage' in samplingMask ? { coverage: samplingMask.coverage } : {}) };
       for (const layer of ['usable-lift-msl', 'usable-lift-agl'] as const) {
-        const sample = prepared.bind(field, layer, true), point = paired.bind(field, layer, true);
+        const sample = prepared.bind(field, layer), point = paired.bind(field, layer);
         for (let round = 0; round < 2; round++) {
           field.values[8] += 1;
           for (let i = 0; i < pairedLatitudes.length; i++) {
             const actual = result(), pair = result();
             sample(i % longitudes.length, Math.floor(i / longitudes.length), actual); point(i, 0, pair);
-            expect(actual).toEqual(sampleGrid(grid, field, pairedLatitudes[i], pairedLongitudes[i], layer, samplingMask, true));
+            expect(actual).toEqual(sampleGrid(grid, field, pairedLatitudes[i], pairedLongitudes[i], layer, samplingMask));
             expect(pair).toEqual(actual);
           }
         }
@@ -278,18 +274,18 @@ describe('point sampling', () => {
     for (const [column, row] of [[0, 0], [2, 3], [6, 6], [7, 7]]) {
       const point = geometry.gridToGeographic(column + 0.5, row + 0.5)!;
       const projected = result(), paired = result();
-      prepareGridSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate', false)(0, 0, projected);
-      preparePointSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate', false)(0, 0, paired);
+      prepareGridSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate')(0, 0, projected);
+      preparePointSampling(mask, Float64Array.of(point.lat), Float64Array.of(point.lon)).bind(field, 'precip-rate')(0, 0, paired);
       expect(projected).toEqual(paired);
-      expect(paired).toEqual(sampleGrid(lambert, field, point.lat, point.lon, 'precip-rate', mask, false));
+      expect(paired).toEqual(sampleGrid(lambert, field, point.lat, point.lon, 'precip-rate', mask));
     }
     const wrap: Grid = { kind: 'regular-latlon', earthRadiusM: 6371229, width: 4, height: 4, lon0: 0, lat0: 3, dx: 1, dy: -1, wrapLongitude: true };
     const wrapMask = coverage(wrap), wrapField = { values: Float32Array.from({ length: 16 }, (_, i) => i + 1), flags: new Uint8Array(16) };
     wrapMask.output.fill(0); for (const index of [0, 4]) setBit(wrapMask.output, index);
     for (const [lat, lon] of [[2.5, 0.5], [1.5, 3.5]]) {
       const prepared = result(), paired = result();
-      prepareGridSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate', false)(0, 0, prepared);
-      preparePointSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate', false)(0, 0, paired);
+      prepareGridSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate')(0, 0, prepared);
+      preparePointSampling(wrapMask, Float64Array.of(lat), Float64Array.of(lon)).bind(wrapField, 'precip-rate')(0, 0, paired);
       expect(prepared).toEqual(paired);
       expect(prepared.status).not.toBe(STATUS_OUTSIDE);
     }
@@ -299,9 +295,9 @@ describe('point sampling', () => {
 describe('stored weather scalars', () => {
   it('returns the stored cloud and CAPE value at a native grid node', () => {
     const field = { values: Float32Array.of(0, 100, 250, Number.NaN), flags: Uint8Array.of(0, 0, 0, STATUS_UNAVAILABLE) };
-    expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'cloud-cover-total', undefined, false)).toMatchObject({ value: 0, status: STATUS_VALID, interpolated: false });
-    expect(sampleGrid(grid, field, 1 - 1e-11, 1 - 1e-11, 'cloud-cover-low', undefined, false)).toMatchObject({ value: 100, status: STATUS_VALID, interpolated: false });
-    expect(sampleGrid(grid, field, 1e-11, 1e-11, 'cape-jkg', undefined, false)).toMatchObject({ value: 250, status: STATUS_VALID, interpolated: false });
-    expect(sampleGrid(grid, field, 1e-11, 1 - 1e-11, 'cape-jkg', undefined, false)).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
+    expect(sampleGrid(grid, field, 1 - 1e-11, 1e-11, 'cloud-cover-total')).toMatchObject({ value: 0, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1 - 1e-11, 1 - 1e-11, 'cloud-cover-low')).toMatchObject({ value: 100, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1e-11, 1e-11, 'cape-jkg')).toMatchObject({ value: 250, status: STATUS_VALID, interpolated: false });
+    expect(sampleGrid(grid, field, 1e-11, 1 - 1e-11, 'cape-jkg')).toMatchObject({ value: null, status: STATUS_UNAVAILABLE });
   });
 });

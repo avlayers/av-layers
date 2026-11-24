@@ -5,8 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { CELL_BYTES, SAMPLE_BLOCK_SIZE, STATUS_OUTSIDE, setBit, sparseCoverageFromDense, sparseCoverageLookup, type RegularLatLonGrid } from '@av/contracts';
-import { packedCellsFromRange, packedRecordsFromRange, profileRecordBytes, readProfileRecord, validateProfileRecord, writeProfileRecord, planSample, planShardedPackedSample, prepareSamplePackLayout, prepareShardedSamplePackLayout, type GridField } from '@av/forecast';
-import { createSamplePackBuilder } from './sample-pack.js';
+import { packedCellsFromRange, packedRecordsFromRange, profileRecordBytes, readProfileRecord, validateProfileRecord, writeProfileRecord, planSample, planShardedPackedSample, prepareShardedSamplePackLayout, SAMPLE_SHARD_TARGET_BYTES, type GridField } from '@av/forecast';
 import { createShardedSamplePackWriter, mergeShardedSamplePacks, samplePackAssemblyBufferBytes, samplePackWriterBufferBytes, sampleShardKey } from './sample-pack-v5.js';
 import { localPath } from './validate.js';
 
@@ -50,16 +49,6 @@ function coverageFor(grid: RegularLatLonGrid, blocks: readonly number[]) {
     setBit(output, row * width + column);
   }
   return sparseCoverageFromDense({ width, height, wrapLongitude: grid.wrapLongitude, gridHash: 'a'.repeat(64), output, halo });
-}
-
-function denseMasks(grid: RegularLatLonGrid, coverage: ReturnType<typeof coverageFor>) {
-  const cells = grid.width * grid.height, output = new Uint8Array(Math.ceil(cells / 8)), halo = new Uint8Array(output.length);
-  for (let i = 0; i < cells; i++) {
-    const lookup = sparseCoverageLookup(coverage, i % grid.width, Math.floor(i / grid.width));
-    if (lookup?.output) setBit(output, i);
-    if (lookup?.halo) setBit(halo, i);
-  }
-  return { output, halo };
 }
 
 function denseFields(grid: RegularLatLonGrid, coverage: ReturnType<typeof coverageFor>, channels: number): GridField[] {
@@ -338,7 +327,7 @@ it('preserves existing shard objects and sentinel when a writer publication conf
     await expect(writer.finish()).rejects.toThrow();
     expect(await readFile(conflict, 'utf8')).toBe('existing shard');
     expect(await readFile(sentinel, 'utf8')).toBe('sentinel');
-    expect(await readdir(dirname(conflict))).toEqual(expect.arrayContaining(['1.bin', 'other-worker']));
+    expect(await readdir(dirname(conflict))).toEqual(expect.arrayContaining(['g0-b1.bin', 'other-worker']));
     expect(await readdir(dirname(conflict))).toHaveLength(2);
     await writer.close();
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -390,7 +379,7 @@ it('preserves pre-existing objects when merger publication conflicts', async () 
     await writeFile(join(dir, 'sentinel'), 'other worker');
     await expect(mergeShardedSamplePacks(layout, [{ root: source, channelCount: 1, shards }], target(out))).rejects.toThrow();
     expect(await readFile(conflict, 'utf8')).toBe('existing shard');
-    expect(await readdir(dir)).toEqual(['1.bin', 'sentinel']);
+    expect(await readdir(dir)).toEqual(['g0-b1.bin', 'sentinel']);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -437,12 +426,12 @@ it.each([false, true])('writes bounded v5 shards equal to the dense pack, includ
     for (const channel of [2, 0, 1]) await writer.writeChannel(channel, fields[channel]);
     const shards = await writer.finish();
 
-    const masks = denseMasks(g, coverage), denseLayout = prepareSamplePackLayout(g, masks.output, masks.halo);
-    const reference = createSamplePackBuilder(denseLayout, fields.length);
-    fields.forEach((field, channel) => reference.writeChannel(channel, field));
-    const referencePath = join(root, 'dense.bin'), expected = await reference.finish(referencePath);
+    const singleLayout = prepareShardedSamplePackLayout(g, coverage.blockIds, fields.length, SAMPLE_SHARD_TARGET_BYTES);
+    const reference = createShardedSamplePackWriter(singleLayout, coverage, target(join(root, 'single')));
+    for (let channel = 0; channel < fields.length; channel++) await reference.writeChannel(channel, fields[channel]);
+    const [expected] = await reference.finish();
 
-    expect(await combined(root, shards)).toEqual(await readFile(referencePath));
+    expect(await combined(root, shards)).toEqual(await readFile(localPath(join(root, 'single'), expected.key)));
     expect(shards.reduce((sum, shard) => sum + shard.bytes, 0)).toBe(expected.bytes);
     expect(shards.length).toBeGreaterThan(1);
     for (let index = 0; index < shards.length; index++) {
@@ -519,13 +508,12 @@ it('merges worker packs with different shard boundaries by block and channel ord
     const layout = prepareShardedSamplePackLayout(g, coverage.blockIds, 3, 5000);
     const merged = await mergeShardedSamplePacks(layout, [first, second], target(join(root, 'final')));
 
-    const masks = denseMasks(g, coverage), denseLayout = prepareSamplePackLayout(g, masks.output, masks.halo);
-    const reference = createSamplePackBuilder(denseLayout, 3);
-    fields.forEach((field, channel) => reference.writeChannel(channel, field));
-    const expectedPath = join(root, 'expected.bin');
-    await reference.finish(expectedPath);
+    const singleLayout = prepareShardedSamplePackLayout(g, coverage.blockIds, 3, SAMPLE_SHARD_TARGET_BYTES);
+    const reference = createShardedSamplePackWriter(singleLayout, coverage, target(join(root, 'single')));
+    for (let channel = 0; channel < 3; channel++) await reference.writeChannel(channel, fields[channel]);
+    const [expected] = await reference.finish();
 
-    expect(await combined(join(root, 'final'), merged)).toEqual(await readFile(expectedPath));
+    expect(await combined(join(root, 'final'), merged)).toEqual(await readFile(localPath(join(root, 'single'), expected.key)));
     expect(merged.reduce((sum, shard) => sum + shard.storedCells, 0)).toBe(layout.storedCells);
     expect(merged.map(shard => shard.firstBlock)).toEqual(layout.shards.map(shard => shard.firstBlock));
     for (const [index, shard] of merged.entries()) {

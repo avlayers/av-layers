@@ -114,11 +114,7 @@ function invMercY(my: number): number {
   return Math.atan(Math.sinh(my)) / DEG;
 }
 
-/**
- * Pure cloud pixel encoder separating boundary-layer cumulus/overcast (`low`) from thin upper
- * cirrus (`Math.max(0, total - low)`) so sunny high-cirrus thermal days stay bright and legible
- * across Classic XC Skies, Daylight Stone, High-Sun Cockpit, and dark radar themes alike.
- */
+/** Encodes low boundary-layer cloud cover and upper cirrus into an RGBA viewport buffer. */
 export function renderSmoothCloudRgba(
   field: SynopticField,
   style: CloudStyleId,
@@ -176,7 +172,6 @@ export function renderSmoothCloudRgba(
       }
 
       if (style === 'nephanalysis') {
-        // Whisper-soft neutral atmospheric wash; crisp vector contours carry the structure!
         const lum = darkChrome ? 212 : 54;
         outData[off] = lum;
         outData[off + 1] = lum + 4;
@@ -186,7 +181,6 @@ export function renderSmoothCloudRgba(
       }
 
       if (style === 'satellite-ir') {
-        // Cold upper cloud tops (high cirrus / anvil) render bright icy-white; warm shallow low stratus renders mid-slate gray.
         const upperShare = tot > 0.05 ? Math.min(1, highOnly / Math.max(0.20, tot * 0.75)) : 0;
         const warmBase = 136 + 24 * billow + 12 * sunRelief;
         const coldTop = 224 + 20 * billow + 10 * sunRelief;
@@ -202,7 +196,6 @@ export function renderSmoothCloudRgba(
 
       if (style === 'cu-overcast') {
         if (lo < 0.64) {
-          // Fair-weather cumulus puffs or high cirrus veil: sunlit alabaster tops with soft SE relief
           const lit = Math.round(238 + 16 * sunRelief);
           outData[off] = lit;
           outData[off + 1] = Math.min(255, lit + 2);
@@ -211,7 +204,6 @@ export function renderSmoothCloudRgba(
           const rawA = puffMask * (36 + 104 * cuPuff);
           outData[off + 3] = Math.min(lo < 0.18 ? 52 : 124, Math.round(rawA));
         } else {
-          // Boundary-layer overcast ground shadow shutting down insolation
           const shade = Math.round(66 + 26 * billow + 12 * sunRelief);
           outData[off] = shade;
           outData[off + 1] = shade + 5;
@@ -221,7 +213,6 @@ export function renderSmoothCloudRgba(
         continue;
       }
 
-      // Default 'sunlit-veil' (Daylight Stone & Classic XC Skies):
       const lowOvercast = Math.max(0, (lo - 0.56) / 0.34);
       const deepMultiLayer = Math.max(0, (opticalCover - 0.70) / 0.28) * (lo > 0.28 ? 1 : 0.35);
       const overcastBlend = Math.min(1, Math.max(lowOvercast, deepMultiLayer));
