@@ -29,8 +29,8 @@ The [terrain example](docs/development.md#terrain-refinement) uses
 ## Development checks
 
 Complete [setup](docs/development.md#setup) in each new worktree.
-Run `pnpm test` while working. `pnpm test:integration` exercises local workerd,
-PMTiles, and the Windy bundle. Run `pnpm verify` for both suites and app builds.
+Run `pnpm test` while working. `pnpm test:integration` exercises local workerd
+and PMTiles. Run `pnpm verify` for both suites and app builds.
 
 [Local development](docs/development.md) covers test data and server options.
 
@@ -39,7 +39,6 @@ PMTiles, and the Windy bundle. Run `pnpm verify` for both suites and app builds.
 - [apps/batch](apps/batch/README.md): adapts weather sources and builds forecast files.
 - [apps/api](apps/api/README.md): serves forecast manifests, tiles, and point samples.
 - [apps/preview](apps/preview/README.md): standalone map.
-- [apps/windy-plugin](apps/windy-plugin/README.md): Windy integration.
 - [packages/contracts](packages/contracts/README.md): wire schemas and shared forecast definitions.
 - [packages/client](packages/client/README.md): pinned API requests and map transport.
 - [packages/forecast](packages/forecast/README.md): frame derivation, grid sampling, and sample-pack layout.

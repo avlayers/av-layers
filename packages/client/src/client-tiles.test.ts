@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clampOpacity, frameTileUrl, previewRasterLayer, previewRasterSource, windyTileOptions } from './index';
+import { clampOpacity, frameTileUrl, previewRasterLayer, previewRasterSource } from './index';
 
 describe('tile template and options', () => {
   it('substitutes only the pinned frame into a server template', () => {
@@ -22,23 +22,9 @@ describe('tile template and options', () => {
     expect(Object.keys(layer.paint).filter(key => key.includes('opacity'))).toEqual(['raster-opacity']);
   });
 
-  it('pins supported LeafletGL tile options and disables retina requests', () => {
-    const options = windyTileOptions(5, 0.5, 'Test attribution');
-    expect(options).toMatchObject({
-      tileSize: 256,
-      detectRetina: false,
-      minZoom: 0,
-      maxZoom: 18,
-      maxNativeZoom: 5,
-      minNativeZoom: 0,
-      opacity: 0.5
-    });
-  });
-
-  it('clamps opacity and rejects invalid source zoom', () => {
+  it('clamps opacity', () => {
     expect(clampOpacity(2)).toBe(1);
     expect(clampOpacity(-1)).toBe(0);
     expect(clampOpacity(Number.NaN)).toBe(0.5);
-    expect(() => windyTileOptions(5.5, 0.5, 'Test attribution')).toThrow(RangeError);
   });
 });

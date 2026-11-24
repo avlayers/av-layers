@@ -90,7 +90,7 @@ Check that terrain-based lift uses the fine DEM.
 ## 5. Catalog and automatic selection
 
 Add domain bounds, tier, and nominal grid spacing to the catalog and the
-browser-safe model options. Add opt-in Auto in Preview and Windy. Keep explicit
+browser-safe model options. Add opt-in Auto in Preview. Keep explicit
 model selection, existing defaults, and pinned URLs.
 
 Use bounds to shortlist available builds, then check expiry, requested time,

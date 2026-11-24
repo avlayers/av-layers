@@ -116,8 +116,7 @@ pnpm verify
 ```
 
 `pnpm test` runs the unit project. `pnpm test:integration` runs tests that
-start local workerd, package PMTiles, or build the Windy plugin. Either
-command accepts a path filter. `pnpm smoke:wind --fixture` generates an offline
+start local workerd or package PMTiles. Either command accepts a path filter. `pnpm smoke:wind --fixture` generates an offline
 numeric-wind build, boots local API and preview servers, and runs the headless
 Chromium smoke suite across trails, barbs, heights, units, time changes, and
 mobile/desktop viewports (`pnpm smoke:wind --url http://127.0.0.1:5173` targets

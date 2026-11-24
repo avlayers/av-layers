@@ -63,16 +63,15 @@ the baseline revision. [Architecture](architecture.md) maps the workspace.
 
 ## 3. Shorten the test loop
 
-- Keep pure and in-memory tests in `pnpm test`. Put real Worker/R2, PMTiles
-  subprocess, and Windy bundle checks in `pnpm test:integration` and run both
-  through `pnpm verify` and CI. Classify suites by the resources they start,
-  including [sample preview](../scripts/sample-preview.test.ts),
-  [rendering](../apps/batch/src/render.test.ts), and the
-  [Windy bundle test](../apps/windy-plugin/src/bundle.test.ts). Preserve both
-  API base cases in the bundle test. Check that every existing suite has one
-  project and that new root `tests/*.test.ts` files are discovered if used.
-  Compare worker pools and worker counts on the same runner before changing
-  defaults. [Vitest config](../vitest.config.ts) owns discovery and concurrency.
+- Keep pure and in-memory tests in `pnpm test`. Put real Worker/R2 and PMTiles
+  subprocess checks in `pnpm test:integration` and run both through
+  `pnpm verify` and CI. Classify suites by the resources they start,
+  including [sample preview](../scripts/sample-preview.test.ts) and
+  [rendering](../apps/batch/src/render.test.ts). Check that every existing
+  suite has one project and that new root `tests/*.test.ts` files are
+  discovered if used. Compare worker pools and worker counts on the same
+  runner before changing defaults. [Vitest config](../vitest.config.ts) owns
+  discovery and concurrency.
 - Bound boot, requests, and shutdown in the
   [Worker runtime test](../apps/api/test/runtime.test.ts). Surface startup
   errors promptly. Synchronize the disconnect case on the test Worker's read
@@ -168,17 +167,16 @@ per-frame receipts also have independent versions.
 
 ## 5. Narrow imports and consolidate current ownership
 
-- Measure actual preview startup and first-point chunks and the Windy
-  production bundle. Record compressed transfer size and which inputs land
-  in each bundle. Move model/source configuration behind a server-side
-  entry point once browser callers are migrated. Use catalog metadata for
-  model choices or a generated lightweight projection if startup needs
-  synchronous defaults. Preserve default selection, offline mode and behavior
-  when catalog requests fail. Update both apps and
-  [`populateModelOptions`](../packages/client/src/client-view.ts). Windgram
-  gust and CAPE labels currently look up the live registry. Prefer labels
-  supported by the pinned build descriptors, with generic labels when those
-  descriptors lack source semantics. Test an older pinned build.
+- Measure actual preview startup and first-point chunks. Record compressed
+  transfer size and which inputs land in each bundle. Move model/source
+  configuration behind a server-side entry point once browser callers are
+  migrated. Use catalog metadata for model choices or a generated lightweight
+  projection if startup needs synchronous defaults. Preserve default
+  selection, offline mode and behavior when catalog requests fail. Update
+  preview and [`populateModelOptions`](../packages/client/src/client-view.ts).
+  Windgram gust and CAPE labels currently look up the live registry. Prefer
+  labels supported by the pinned build descriptors, with generic labels when
+  those descriptors lack source semantics. Test an older pinned build.
   [Windgram view](../packages/windgram/src/windgram-view.ts)
 - Keep runtime response validation at the client boundary. Route browser-only
   constants and helpers through narrow entry points with current callers.
@@ -203,8 +201,7 @@ per-frame receipts also have independent versions.
   in [parallel builds](../apps/batch/src/parallel.ts), and preview URL/frame
   state versus MapLibre and popup lifecycle in [main.ts](../apps/preview/src/app/create-preview-app.ts).
   Keep the existing raster controller and Windgram scene and panel seams.
-  Preserve the Windy pane/overlay lifecycle and point updates while changing
-  either app. [Raster overlay](../apps/preview/src/features/raster/raster-overlay.ts) ·
+  [Raster overlay](../apps/preview/src/features/raster/raster-overlay.ts) ·
   [Windgram entry point](../packages/windgram/src/index.ts)
 - Use the existing [provider contract](../apps/batch/src/provider.ts).
   Share HTTP mechanics only where indexed and split GRIB have the same

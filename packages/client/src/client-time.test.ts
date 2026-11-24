@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatPlaceTime, formatPointMapTimes, formatViewerTime, mapForecastHorizonNotice, buildAgeMs, datasetRange, frameBadge, hostTimestampMs, longitudeOffsetHours, matchHostFrame, placeDateKey, selectExplicitFrame, selectHostFrame, syncTimestampForFrame, watchBuildExpiry } from './index';
+import { formatPlaceTime, formatPointMapTimes, formatViewerTime, mapForecastHorizonNotice, buildAgeMs, longitudeOffsetHours, placeDateKey, selectExplicitFrame, selectHostFrame, watchBuildExpiry } from './index';
 
 afterEach(() => vi.useRealTimers());
 
@@ -69,20 +69,6 @@ describe('frame selection', () => {
     expect(selectExplicitFrame(frames, 'f007')).toBeNull();
   });
 
-  it('matches a host timestamp only when it equals a frame', () => {
-    expect(matchHostFrame(frames, Date.parse('2026-10-30T06:00:00.400Z'))?.id).toBe('f006');
-    expect(matchHostFrame(frames, Date.parse('2026-10-30T04:00:00.000Z'))).toBeNull();
-  });
-
-  it('never substitutes the nearest frame for an off-frame host time', () => {
-    const selected = selectExplicitFrame(frames, 'f003');
-    const host = Date.parse('2026-10-30T04:59:00.000Z');
-    expect(matchHostFrame(frames, host)).toBeNull();
-    const badge = frameBadge(selected, null, host);
-    expect(badge.kind).toBe('off-frame');
-    expect(badge.text).toContain('f003');
-  });
-
   it('follows the latest frame at or before the host time', () => {
     const at = (value: string) => Date.parse(value);
     expect(selectHostFrame(frames, at('2026-10-30T04:59:00.000Z'))?.id).toBe('f003');
@@ -91,50 +77,6 @@ describe('frame selection', () => {
     expect(selectHostFrame(frames, at('2026-10-30T18:00:00.000Z'))?.id).toBe('f009');
     expect(selectHostFrame([], at('2026-10-30T06:00:00.000Z'))).toBeNull();
     expect(selectHostFrame(frames, Number.NaN)).toBeNull();
-  });
-
-  it('reads host timestamps from milliseconds, seconds, numeric strings and Dates', () => {
-    const ms = Date.parse('2026-10-30T06:00:00.000Z');
-    expect(hostTimestampMs(ms)).toBe(ms);
-    expect(hostTimestampMs(ms / 1000)).toBe(ms);
-    expect(hostTimestampMs(String(ms / 1000))).toBe(ms);
-    expect(hostTimestampMs(new Date(ms))).toBe(ms);
-    expect(hostTimestampMs('  ')).toBeNull();
-    expect(hostTimestampMs('soon')).toBeNull();
-    expect(hostTimestampMs(Number.MAX_VALUE)).toBeNull();
-    expect(hostTimestampMs(null)).toBeNull();
-  });
-
-  it('reports an in-frame host badge and an explicit badge without host time', () => {
-    const selected = selectExplicitFrame(frames, 'f009');
-    expect(frameBadge(selected, selected, Date.parse('2026-10-30T09:00:00.000Z')).kind).toBe('in-frame');
-    expect(frameBadge(selected, null, null).kind).toBe('explicit');
-  });
-});
-
-describe('host timestamp synchronization', () => {
-  it('derives the plugin frame interval range', () => {
-    expect(datasetRange(frames)).toEqual({
-      startMs: Date.parse('2026-10-30T00:00:00.000Z'),
-      endMs: Date.parse('2026-10-30T12:00:00.000Z')
-    });
-  });
-
-  it('returns no range for missing or invalid frames', () => {
-    expect(datasetRange([])).toBeNull();
-    expect(datasetRange([{ ...frames[0], intervalEnd: frames[0].intervalStart }])).toBeNull();
-  });
-
-  it('syncs an explicit frame timestamp only inside the verified range', () => {
-    const range = datasetRange(frames);
-    expect(syncTimestampForFrame(frames[1], range)).toBe(Date.parse('2026-10-30T06:00:00.000Z'));
-    expect(syncTimestampForFrame({ ...frames[1], validTime: '2026-10-30T18:00:00.000Z' }, range)).toBeNull();
-  });
-
-  it('does not sync when the dataset range is unavailable', () => {
-    expect(syncTimestampForFrame(frames[0], null)).toBeNull();
-    expect(syncTimestampForFrame(frames[0], { startMs: NaN, endMs: Infinity })).toBeNull();
-    expect(syncTimestampForFrame(frames[0], { startMs: 2, endMs: 1 })).toBeNull();
   });
 });
 

@@ -8,18 +8,6 @@ export interface FrameLike {
   intervalEnd: string;
 }
 
-export interface DatasetRange {
-  startMs: number;
-  endMs: number;
-}
-
-export interface FrameBadge {
-  kind: 'explicit' | 'in-frame' | 'off-frame' | 'expired';
-  text: string;
-}
-
-export const HOST_MATCH_TOLERANCE_MS = 1000;
-
 /** Approximate local clock offset from longitude, in whole hours. */
 export function longitudeOffsetHours(lon: number): number {
   return Math.round(normalizeLon(lon) / 15);
@@ -122,33 +110,6 @@ export function selectExplicitFrame<T extends FrameLike>(frames: readonly T[], i
   return frames.find(frame => frame.id === id) ?? null;
 }
 
-export function matchHostFrame<T extends FrameLike>(frames: readonly T[], timestampMs: number, toleranceMs = HOST_MATCH_TOLERANCE_MS): T | null {
-  if (!Number.isFinite(timestampMs)) return null;
-  let best: T | null = null;
-  let bestDistance = Number.POSITIVE_INFINITY;
-  for (const frame of frames) {
-    const distance = Math.abs(frameTime(frame.validTime) - timestampMs);
-    if (distance <= toleranceMs && distance < bestDistance) {
-      best = frame;
-      bestDistance = distance;
-    }
-  }
-  return best;
-}
-
-/** Windy's store uses epoch milliseconds, and some hosts emit seconds, numeric strings, or Dates. */
-export function hostTimestampMs(value: unknown): number | null {
-  if (value instanceof Date) return hostTimestampMs(value.getTime());
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed === '') return null;
-    return hostTimestampMs(Number(trimmed));
-  }
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const milliseconds = Math.abs(value) < 1e12 ? value * 1000 : value;
-  return Math.abs(milliseconds) <= 8.64e15 ? milliseconds : null;
-}
-
 /** Latest frame whose valid time is at or before the host instant, or the earliest frame when the host is earlier than all of them. */
 export function selectHostFrame<T extends FrameLike>(frames: readonly T[], timestampMs: number): T | null {
   if (!Number.isFinite(timestampMs) || frames.length === 0) return null;
@@ -168,41 +129,6 @@ export function selectHostFrame<T extends FrameLike>(frames: readonly T[], times
     }
   }
   return covered ?? earliest;
-}
-
-export function datasetRange(frames: readonly FrameLike[]): DatasetRange | null {
-  if (frames.length === 0) return null;
-  let start = Number.POSITIVE_INFINITY;
-  let end = Number.NEGATIVE_INFINITY;
-  for (const frame of frames) {
-    const intervalStart = Date.parse(frame.intervalStart);
-    const intervalEnd = Date.parse(frame.intervalEnd);
-    if (!Number.isFinite(intervalStart) || !Number.isFinite(intervalEnd) || intervalEnd <= intervalStart) return null;
-    start = Math.min(start, intervalStart);
-    end = Math.max(end, intervalEnd);
-  }
-  return Number.isFinite(start) && Number.isFinite(end) && end > start ? { startMs: start, endMs: end } : null;
-}
-
-export function syncTimestampForFrame(frame: FrameLike, range: DatasetRange | null): number | null {
-  if (!range || !Number.isFinite(range.startMs) || !Number.isFinite(range.endMs) || range.endMs < range.startMs) return null;
-  const timestamp = frameTime(frame.validTime);
-  if (timestamp < range.startMs || timestamp > range.endMs) return null;
-  return timestamp;
-}
-
-export function frameBadge(selected: FrameLike | null, hostMatch: FrameLike | null, hostTimestampMs: number | null, expired = false): FrameBadge {
-  if (expired) return { kind: 'expired', text: 'Build expired — overlay removed' };
-  if (!selected) return { kind: 'explicit', text: 'No frame selected' };
-  const interval = ` · interval ${selected.intervalStart} → ${selected.intervalEnd}`;
-  if (hostMatch && hostMatch.id === selected.id) {
-    return { kind: 'in-frame', text: `Host frame ${selected.id} · ${selected.validTime}${interval}` };
-  }
-  if (hostTimestampMs !== null) {
-    const time = new Date(hostTimestampMs).toISOString();
-    return { kind: 'off-frame', text: `Windy time ${time} · showing ${selected.id} · ${selected.validTime}${interval}` };
-  }
-  return { kind: 'explicit', text: `Explicit frame ${selected.id} · ${selected.validTime}${interval}` };
 }
 
 export function formatDuration(ms: number): string {

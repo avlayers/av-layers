@@ -12,7 +12,7 @@ import { MAX_FORECAST_SHARDS, readBuildPlan } from '../apps/batch/src/parallel.j
 import { assertBuildBucketLock, r2ShardStorage, sealShardCredentials } from '../apps/batch/src/storage.js';
 import { uploadForecastControlPlan } from './forecast-control.js';
 import { assertCurrentMain, planForecast, runForecastShard } from './publication-workflow.js';
-import { forecastPlanReport, deploymentMarker, verifyPagesRevision, verifyWindyPluginBundle, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, validateShardEnvironment, verifyPagesProduction, runOperation, type WranglerConfig } from './operations';
+import { forecastPlanReport, deploymentMarker, verifyPagesRevision, validateOperationInputs, loadWranglerConfig, validateCiEnvironment, validatePublicationEnvironment, validateShardEnvironment, verifyPagesProduction, runOperation, type WranglerConfig } from './operations';
 
 vi.mock('../apps/batch/src/parallel.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/parallel.js')>(), readBuildPlan: vi.fn() }));
 vi.mock('node:fs/promises', async importOriginal => {
@@ -303,22 +303,6 @@ describe('Pages deployment revision verification', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it('verifies deployed Windy plugin bundle, CORS header and embedded API base URL on Pages', async () => {
-    const ok = vi.fn(async () => new Response('export const name="windy-plugin-av-layer",base="https://api.example";', {
-      headers: { 'access-control-allow-origin': 'https://www.windy.com' }
-    }));
-    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', expectedApiBaseUrl: 'https://api.example', fetchImpl: ok, retries: 0 })).resolves.toBeUndefined();
-    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', expectedApiBaseUrl: 'https://other.example', fetchImpl: ok, retries: 0 })).rejects.toThrow(/expected API base URL/);
-    const missingCors = vi.fn(async () => new Response('export const name="windy-plugin-av-layer";'));
-    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', fetchImpl: missingCors, retries: 0 })).rejects.toThrow(/CORS header/);
-  });
-
-  it('cancels an unread plugin body when the CORS check fails', async () => {
-    const cancel = vi.fn();
-    const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ cancel })));
-    await expect(verifyWindyPluginBundle({ url: 'https://preview.example/', fetchImpl, retries: 0 })).rejects.toThrow(/CORS header/);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
 });
 
 it('lists exact model-specific hour batches and UTC times, including gaps and omitted nights', () => {

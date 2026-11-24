@@ -39,7 +39,7 @@
     "smoke:wind": "node --import tsx scripts/wind-feature-smoke.ts",
     "health": "node --import tsx scripts/monitor-health.ts",
     "verify": "node scripts/setup-pmtiles.mjs --check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm docs:check && pnpm build && git diff --check",
-    "test:frontend": "vitest run --project unit apps/preview apps/windy-plugin packages/client packages/windgram",
+    "test:frontend": "vitest run --project unit apps/preview packages/client packages/windgram",
     "check:frontend": "pnpm lint && pnpm typecheck && pnpm test:frontend && pnpm --filter @av/preview build"
   },
   "devDependencies": {

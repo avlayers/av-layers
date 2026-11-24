@@ -92,7 +92,6 @@ Measured with zlib gzip, matching the build checker.
 | Lazy JS (aggregate) | 27,336 B | 30,066 B |
 | Worker JS | 150,556 B | 146,638 B |
 | CSS | 14,641 B | 15,212 B |
-| Windy plugin | 97,775 B | 97,775 B |
 
 The existing gates (400,000 B startup, 32,000 B aggregate lazy) pass unchanged.
 

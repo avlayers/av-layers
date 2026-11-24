@@ -1,7 +1,6 @@
 # Deployments
 
-Live applications: [production map](https://windy-av-preview.pages.dev/),
-[Windy plugin](https://www.windy.com/dev/windy-av-preview.pages.dev/windy-plugin/plugin.min.js),
+Live applications: [production map](https://windy-av-preview.pages.dev/)
 and [API documentation](https://windy-av-api-production.jdorrance.workers.dev/docs).
 
 The API model catalog lists published models. Each expanded latest-build response
