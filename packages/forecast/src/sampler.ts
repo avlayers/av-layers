@@ -79,7 +79,7 @@ function quadOffsets(field: GridField, width: number) {
  * Keep both the weight products and the accumulation order identical to reduceCells.
  * Missing contributors, invalid flags and non-finite values use that reference path.
  */
-function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: ReductionSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): boolean {
+function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: number, fx: number, fy: number, spec: ReductionSpec, out: Sample, retainNoLiftValue = false): boolean {
   const { flags, values } = field;
   const fa = flags[a], fb = flags[b], fc = flags[c], fd = flags[d], combined = fa | fb | fc | fd;
   if ((combined & STATUS_MASK) >= STATUS_UNAVAILABLE || (!spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0)
@@ -91,20 +91,14 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
     out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
   }
   const left = 1 - fx, top = 1 - fy;
-  let w00 = top * left, w10 = top * fx, w01 = fy * left, w11 = fy * fx, noLiftWeight = 0;
+  const w00 = top * left, w10 = top * fx, w01 = fy * left, w11 = fy * fx;
+  let noLiftWeight = 0;
   if (spec.supportsNoLift && (combined & STATUS_NO_LIFT) !== 0) {
     const na = (fa & STATUS_MASK) === STATUS_NO_LIFT, nb = (fb & STATUS_MASK) === STATUS_NO_LIFT;
     const nc = (fc & STATUS_MASK) === STATUS_NO_LIFT, nd = (fd & STATUS_MASK) === STATUS_NO_LIFT;
     noLiftWeight = (na ? w00 : 0) + (nb ? w10 : 0) + (nc ? w01 : 0) + (nd ? w11 : 0);
     if (!retainNoLiftValue && noLiftWeight > 0.5) {
       out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return true;
-    }
-    if (!useStoredMslNoLift && !spec.zeroOnNoLiftInterpolation) {
-      const validWeight = 1 - noLiftWeight;
-      w00 = na ? 0 : w00 / validWeight;
-      w10 = nb ? 0 : w10 / validWeight;
-      w01 = nc ? 0 : w01 / validWeight;
-      w11 = nd ? 0 : w11 / validWeight;
     }
   }
   if (spec.zeroOnNoLiftInterpolation) {
@@ -122,7 +116,7 @@ function reduceKnownQuad(field: GridField, a: number, b: number, c: number, d: n
   return true;
 }
 
-function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: ReductionSpec, useStoredMslNoLift: boolean, out: Sample, retainNoLiftValue = false): void {
+function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, spec: ReductionSpec, out: Sample, retainNoLiftValue = false): void {
   const { values, flags, weights, rows, columns } = cells;
   let missing = false, finite = true, allNoLift = true, support = 0, noLiftWeight = 0;
   for (let i = 0; i < count; i++) {
@@ -159,16 +153,10 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   out.support = support; out.interpolated = true;
   const noLift = spec.supportsNoLift && (allNoLift || noLiftWeight > 0.5);
   if (noLift && !retainNoLiftValue) { out.value = spec.noLiftSampleValue; out.status = STATUS_NO_LIFT; return; }
-  const renormalizeMsl = !useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation && count === 4 && noLiftWeight > 0;
-  const validWeight = 1 - noLiftWeight;
   let value = 0;
   for (let i = 0; i < count; i++) {
     const isNoLift = (flags[i] & STATUS_MASK) === STATUS_NO_LIFT;
-    if (renormalizeMsl) {
-      value += isNoLift ? 0 : values[i] * (weights[i] / validWeight);
-    } else {
-      value += (spec.zeroOnNoLiftInterpolation && isNoLift ? 0 : values[i]) * weights[i];
-    }
+    value += (spec.zeroOnNoLiftInterpolation && isNoLift ? 0 : values[i]) * weights[i];
   }
   out.value = value; out.status = noLift ? STATUS_NO_LIFT : STATUS_VALID;
 }
@@ -225,8 +213,7 @@ export function cellsFromRange(plan: SamplePlan, bytes: Uint8Array): Cell[] {
   });
 }
 
-/** The build's sampling marker selects the no-lift interpolation used by its tiles. */
-export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | ReductionSpec, useStoredMslNoLift: boolean): Sample {
+export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | ReductionSpec, _useStoredMslNoLift = true): Sample {
   if (!plan.contributors.length || cells.length !== plan.contributors.length) throw new RangeError('cell count does not match sample plan');
   const scratch = reductionBuffer(cells.length);
   for (let i = 0; i < cells.length; i++) {
@@ -236,9 +223,11 @@ export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: Lay
     scratch.weights[i] = contributor.weight; scratch.rows[i] = contributor.row; scratch.columns[i] = contributor.column;
   }
   const result: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
-  reduceCells(scratch, cells.length, typeof layer === 'string' ? LAYERS[layer] : layer, useStoredMslNoLift, result);
+  reduceCells(scratch, cells.length, typeof layer === 'string' ? LAYERS[layer] : layer, result);
   return result;
 }
+
+export const sampleFromContributors = sampleCells;
 
 export function samplingCovered(mask: SamplingMask, lat: number, lon: number): boolean {
   if (!('coverage' in mask)) return isCovered(mask, lat, lon);
@@ -252,13 +241,13 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
 }
 
-export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | ReductionSpec, mask: SamplingMask | undefined, useStoredMslNoLift: boolean): Sample {
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | ReductionSpec, mask?: SamplingMask, _useStoredMslNoLift = true): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
   if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
   if (!plan) return outside;
   validateSamplingField(grid, field, mask);
-  return sampleCells(plan, plan.contributors.map(c => { const i = fieldOffset(field, c.index, grid.width); return { value: field.values[i], flags: field.flags[i] }; }), layer, useStoredMslNoLift);
+  return sampleCells(plan, plan.contributors.map(c => { const i = fieldOffset(field, c.index, grid.width); return { value: field.values[i], flags: field.flags[i] }; }), layer);
 }
 
 /** Build-owned geometry for a Cartesian set of coordinates. No field values are retained. */
@@ -268,7 +257,7 @@ export interface PreparedGridSampling {
   readonly height: number;
   readonly contributors: Uint32Array;
   /** Retain stored no-lift MSL heights for rendering; public samples keep their descriptor value. */
-  bind(field: GridField, layer: LayerId | ReductionSpec, useStoredMslNoLift: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
+  bind(field: GridField, layer: LayerId | ReductionSpec, useStoredMslNoLift?: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
 }
 
 export interface PreparedGridAxis {
@@ -365,10 +354,10 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   const contributors = Uint32Array.from(contributorSet);
   return {
     width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift, retainNoLiftMsl = false) {
+    bind(field, layer, _useStoredMslNoLift = true, retainNoLiftMsl = false) {
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
-      const retainNoLiftValue = retainNoLiftMsl && useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
+      const retainNoLiftValue = retainNoLiftMsl && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
       const packed = 'coverage' in field;
       const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
@@ -379,11 +368,11 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
         if (fx !== 0 && fy !== 0) {
           const r0 = rows.lower[y] * grid.width, r1 = rows.upper[y] * grid.width, c0 = columns.lower[x], c1 = columns.upper[x];
           if (!packed) {
-            if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
+            if (reduceKnownQuad(field, r0 + c0, r0 + c1, r1 + c0, r1 + c1, fx, fy, spec, out, retainNoLiftValue)) return;
           } else {
             const start = quads!.locate(r0, c0, r1, c1), offsets = quads!.offsets;
             cachedQuad = start;
-            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, out, retainNoLiftValue)) return;
           }
         }
         let count = 0;
@@ -395,7 +384,7 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
           scratch.weights[count] = (dy === 0 ? 1 - fy : fy) * (dx === 0 ? 1 - fx : fx);
           scratch.rows[count] = row; scratch.columns[count] = column; count++;
         }
-        reduceCells(scratch, count, spec, useStoredMslNoLift, out, retainNoLiftValue);
+        reduceCells(scratch, count, spec, out, retainNoLiftValue);
       };
     }
   };
@@ -523,10 +512,10 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
   return {
     width, height: total / width, contributors,
     byteLength: total * (2 * Uint32Array.BYTES_PER_ELEMENT + 2 * Float64Array.BYTES_PER_ELEMENT) + covered.byteLength + contributors.byteLength,
-    bind(field, layer, useStoredMslNoLift, retainNoLiftMsl = false) {
+    bind(field, layer, _useStoredMslNoLift = true, retainNoLiftMsl = false) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
-      const retainNoLiftValue = retainNoLiftMsl && useStoredMslNoLift && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
+      const retainNoLiftValue = retainNoLiftMsl && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
       const packed = 'coverage' in field;
       const quads = packed ? quadOffsets(field, grid.width) : undefined;
       return (x, y, out) => {
@@ -539,11 +528,11 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
         if (fx !== 0 && fy !== 0) {
           const r0 = row * grid.width, r1 = nextRow * grid.width;
           if (!packed) {
-            if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
+            if (reduceKnownQuad(field, r0 + column, r0 + nextColumn, r1 + column, r1 + nextColumn, fx, fy, spec, out, retainNoLiftValue)) return;
           } else {
             const start = quads!.locate(r0, column, r1, nextColumn), offsets = quads!.offsets;
             cachedQuad = start;
-            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, useStoredMslNoLift, out, retainNoLiftValue)) return;
+            if (start >= 0 && reduceKnownQuad(field, offsets[start], offsets[start + 1], offsets[start + 2], offsets[start + 3], fx, fy, spec, out, retainNoLiftValue)) return;
           }
         }
         let count = 0;
@@ -555,7 +544,7 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
           scratch.weights[count] = (dy ? fy : 1 - fy) * (dx ? fx : 1 - fx);
           scratch.rows[count] = sourceRow; scratch.columns[count] = sourceColumn; count++;
         }
-        reduceCells(scratch, count, spec, useStoredMslNoLift, out, retainNoLiftValue);
+        reduceCells(scratch, count, spec, out, retainNoLiftValue);
       };
     }
   };

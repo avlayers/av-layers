@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
-import { dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
+import { dewpointFromGfsV16RhC, dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
 import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
@@ -1445,41 +1445,7 @@ describe('Windgram data', () => {
     expect(hazardEl.textContent).toBe('Shear 5.1 mph/kft');
   });
 
-  it('Finding 1: keeps retained GFS cold-air levels free of double ice conversion while converting liquid-vapor-pressure builds and preserving 2 m and positive-control clouds', () => {
-    const cascades = { lat: 47.5, lon: -121.5 };
-    const { build: retainedBuild, profile: retainedProfile } = fixture([18, 42], 2);
-    // Retained GFS build omits manifest.tool.profileDewpointReference: stored upper-air Td came from GFS mixed-phase RH (71.7% @ 450 hPa, 67.0% @ 400 hPa)
-    delete retainedBuild.manifest.tool.profileDewpointReference;
-    for (const f of retainedProfile.frames) {
-      f.layers['sfc-temp-c']!.value = -25;
-      f.layers['sfc-dewpoint-c'] = { ...f.layers['sfc-temp-c']!, value: -27.4 }; // 2 m SPFH liquid dewpoint (~78.6% liquid RH -> ~100% ice RH)
-      f.profile.modelTerrainM = 1200;
-      f.profile.levels = [
-        { pressureHpa: 850, heightM: 1500, temperatureC: -8, dewPointC: -18, uWindMps: 5, vWindMps: 0, omegaPaS: 0 },
-        { pressureHpa: 450, heightM: 6200, temperatureC: -34.406195, dewPointC: dewpointFromTempAndRhC(-34.406195, 71.7), uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
-        { pressureHpa: 400, heightM: 7050, temperatureC: -41.870703, dewPointC: dewpointFromTempAndRhC(-41.870703, 67.0), uWindMps: 16, vWindMps: 0, omegaPaS: 0 },
-      ];
-    }
-    const retainedSite = createPointForecast(retainedBuild, cascades)(retainedBuild.manifest.frames, new Map(retainedProfile.frames.map(f => [f.id, f])));
-    expect(retainedSite.hours[0]!.upperAirDewpointReference).toBe('gfs-v16-mixed');
-    const retainedDay = buildWindgramView(retainedSite, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: retainedSite.site.timeZone, hours: [retainedSite.hours[0]!] });
-    const retainedStitched = buildStitchedWindgramView(retainedSite, {
-      unitSystem: 'metric', compact: true, heightRange: 'full', timeZone: retainedSite.site.timeZone,
-      dateKeys: [...new Set(retainedSite.hours.map(h => h.validAt.slice(0, 10)))],
-    });
-    for (const scene of [retainedDay, retainedStitched]) {
-      const r450 = readWindgram(scene, 0, 6200);
-      const r400 = readWindgram(scene, 0, 7050);
-      expect(r450.cloud).toBeNull();
-      expect(r400.cloud).toBeNull();
-      expect(r450.cloudHumidityPercent).toBeCloseTo(71.7, 0);
-      expect(r400.cloudHumidityPercent).toBeCloseTo(67.0, 0);
-      // 2 m anchor (1202 m) still applies mixed-phase conversion to its SPFH liquid dewpoint
-      const r2m = readWindgram(scene, 0, 1202);
-      expect(r2m.cloudHumidityPercent!).toBeGreaterThan(95);
-    }
-
-    // Normalized GFS build with manifest.tool.profileDewpointReference = 'liquid-vapor-pressure'
+  it('Finding 1: converts liquid-vapor-pressure builds and preserves 2 m and positive-control clouds', () => {
     const { build: normBuild, profile: normProfile } = fixture([18, 20], 2);
     normBuild.manifest.tool.profileDewpointReference = 'liquid-vapor-pressure';
     // Hour 0: Cascades SPFH liquid dewpoints (q = 2.3565e-4 @ 450 hPa, q = 1.0778e-4 @ 400 hPa -> 71.53% / 66.79% mixed-phase RH, no cloud)
@@ -1935,24 +1901,23 @@ describe('Windgram data', () => {
     );
   });
 
-  it('recovers physical liquid RH and dewpoint on retained GFS cold clouds without false Icing risk, and leaves liquid quantities unknown for unsupported model-rh', () => {
+  it('recovers physical liquid RH and dewpoint on GFS cold clouds without false Icing risk', () => {
     const cascades = { lat: 47.25, lon: -121.75 };
     const { build: retainedBuild, profile: retainedProfile } = fixture([18, 21], 2);
-    delete retainedBuild.manifest.tool.profileDewpointReference;
 
-    // Frame 0: Nov 22 18Z GFS f018 at 600 hPa (4,159 m): stored -17.72 °C / -17.77 °C (99.58% GFS RH -> 85.41% liquid RH)
+    // Frame 0: Nov 22 18Z GFS f018 at 600 hPa (4,159 m): liquid-vapor-pressure dewpoint from 99.58% GFS RH (~85.41% liquid RH)
     retainedProfile.frames[0]!.profile.modelTerrainM = 1200;
     retainedProfile.frames[0]!.layers['sfc-temp-c']!.value = 2;
     retainedProfile.frames[0]!.layers['sfc-dewpoint-c'] = { ...retainedProfile.frames[0]!.layers['sfc-temp-c']!, value: -2 };
     retainedProfile.frames[0]!.profile.levels = [
       { pressureHpa: 850, heightM: 1500, temperatureC: -2, dewPointC: dewpointFromTempAndRhC(-2, 70), uWindMps: 6, vWindMps: 0, omegaPaS: 0 },
-      { pressureHpa: 600, heightM: 4159, temperatureC: -17.72, dewPointC: -17.77, uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 600, heightM: 4159, temperatureC: -17.72, dewPointC: dewpointFromGfsV16RhC(-17.72, 99.58), uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
     ];
     // Frame 1: Cascades -19.82 °C with 95.12% GFS RH -> 78.29% liquid RH
     retainedProfile.frames[1]!.profile.modelTerrainM = 1200;
     retainedProfile.frames[1]!.profile.levels = [
       { pressureHpa: 850, heightM: 1500, temperatureC: -3, dewPointC: dewpointFromTempAndRhC(-3, 70), uWindMps: 6, vWindMps: 0, omegaPaS: 0 },
-      { pressureHpa: 600, heightM: 4170, temperatureC: -19.82, dewPointC: dewpointFromTempAndRhC(-19.82, 95.12), uWindMps: 15, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 600, heightM: 4170, temperatureC: -19.82, dewPointC: dewpointFromGfsV16RhC(-19.82, 95.12), uWindMps: 15, vWindMps: 0, omegaPaS: 0 },
     ];
 
     const retainedSite = createPointForecast(retainedBuild, cascades)(
@@ -1984,24 +1949,6 @@ describe('Windgram data', () => {
       expect(cloudText.textContent).toContain('☁ Cold cloud');
       expect(hazardEl.textContent).not.toContain('Icing');
     }
-
-    // Unsupported model-rh reports model RH while leaving liquid RH and dewpoint unknown
-    const unsupportedBuild = structuredClone(retainedBuild);
-    unsupportedBuild.manifest.model = 'custom-nwp';
-    const unsupportedSite = createPointForecast(unsupportedBuild, cascades)(
-      unsupportedBuild.manifest.frames,
-      new Map(retainedProfile.frames.map(f => [f.id, f])),
-    );
-    expect(unsupportedSite.hours[0]!.upperAirDewpointReference).toBe('model-rh');
-    const unsupportedView = buildWindgramView(unsupportedSite, {
-      unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: unsupportedSite.site.timeZone, hours: unsupportedSite.hours,
-    });
-    const unsupported600 = readWindgram(unsupportedView, 0, 4159);
-    expect(unsupported600.dewPointC).toBeNull();
-    expect(unsupported600.relativeHumidityPercent).toBeNull();
-    expect(unsupported600.cloudHumidityPercent!).toBeCloseTo(99.58, 1);
-    // Separate 2 m surface dewpoint remains physical
-    expect(readWindgram(unsupportedView, 0, 1202).dewPointC).toBeCloseTo(-2, 5);
   });
 
   it('prevents a weather donor from becoming site ground across mixed contributors, absence, outside-domain, loading-order reversal, and SVG footer', async () => {

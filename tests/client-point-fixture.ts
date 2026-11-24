@@ -3,7 +3,7 @@ import { PROFILE_HEADER_BYTES, PROFILE_LEVEL_BYTES, PROFILE_PACK_FORMAT, SAMPLE_
   type LayerId, type ManifestV5, type ProfileResponse } from '@av/contracts';
 import type { PinnedBuild, SamplePayload } from '@av/client';
 import { deriveSoaringViews } from '@av/soaring';
-import { fixtureBuild, fixtureManifest } from './forecast-fixture';
+import { fixtureBuild, fixtureManifestV5 } from './forecast-fixture';
 
 const PROFILE_LEVELS = 4;
 interface PointBuildOptions {
@@ -16,7 +16,7 @@ interface PointBuildOptions {
 
 /** GFS fields on a tiny grid with selectable surfaces and frame axes. */
 export function fixturePointBuild(options: PointBuildOptions = {}): PinnedBuild {
-  const product = getProduct('gfs')!, cycle = Date.parse(fixtureManifest().cycle);
+  const product = getProduct('gfs')!, cycle = Date.parse(fixtureManifestV5().cycle);
   const frameHours = options.frameHours ?? product.frameHours;
   const count = options.mapFrameCount ?? mapFrameCount({ frameHours, mapEndHour: product.mapEndHour });
   const frames = frameHours.map(hour => ({ id: `f${String(hour).padStart(3, '0')}`,
@@ -63,14 +63,7 @@ export function retainedPointBuild(): PinnedBuild {
 
 /** Retained GFS publication whose native surface also serves column profiles. */
 export function retainedProfileBuild(): PinnedBuild {
-  const build = fixtureProfileBuild({ frameHours: retainedHours, mapFrameCount: 24 });
-  delete build.manifest.tool.profileDewpointReference;
-  return build;
-}
-
-/** Older v5 publication without an explicit map prefix. */
-export function retainedUnprefixedPointBuild(): PinnedBuild {
-  return fixtureBuild({ layers: ['usable-lift-agl'], frames: retainedPointBuild().manifest.frames });
+  return fixtureProfileBuild({ frameHours: retainedHours, mapFrameCount: 24 });
 }
 
 /** Reply only with requested cells; fine fields become unavailable outside the map prefix. */

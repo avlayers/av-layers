@@ -44,7 +44,6 @@ export async function verifyPublicationReceipts(options: {
   if (!sameJsonValue(manifest.surfaces.map(surface => surface.id), receipts[0].surfaces.map(surface => surface.id))
       || manifest.surfaces.some(surface => surface.coverage.maxZoom !== product.maxNativeZoom)) throw new Error('Manifest surface receipt mismatch');
   for (const surface of manifest.surfaces) {
-    if (surface.samples.format !== 'frame-group-block-shards-v1') throw new Error('Receipt build requires grouped samples');
     const info = surface.kind === 'native' ? whole.native : whole.fine;
     const expected = servingSampleShards({ model: plan.model, buildId: plan.buildId, surfaceId: surface.id,
       grid: surface.kind === 'native' ? whole.plan.native : whole.plan.fine, blockIds: info.mask.coverage.blockIds, layers: surface.layers.length,

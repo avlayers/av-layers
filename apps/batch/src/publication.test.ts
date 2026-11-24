@@ -33,7 +33,7 @@ vi.mock('./validate.js', async importOriginal => {
 import { assertUsefulHorizon, buildIdTime, cleanup, MAX_UPLOAD_ARTIFACT_BYTES, publish, rollback, type CleanupSummary } from './publication.js';
 import { forecastObjects, provenanceObjects } from './publication-objects.js';
 import { localPath, sha256 } from './validate.js';
-import { fixtureManifest } from '../../../tests/forecast-fixture.js';
+import { fixtureManifestV5 } from '../../../tests/forecast-fixture.js';
 
 class MemoryStore implements ObjectStorage {
   objects = new Map<string, { bytes: Uint8Array; etag: string; lastModified: Date; metadata?: Record<string, string> }>();
@@ -87,42 +87,51 @@ async function fixture(): Promise<{ root: string; manifest: ManifestV5 }> {
     lat0: 0, lon0: 0, dx: 1, dy: -1, wrapLongitude: false };
   const product = { ...INDEXED_PRODUCT, grid, layers: [...layers] };
   const coverage = await writeNativeCoverage(root, { grid, bounds: product.bounds, output: Uint8Array.of(7), halo: Uint8Array.of(0), tiles: Uint8Array.of(1), maxZoom: 0 }, product);
-  const { gridHash } = coverage.descriptor, samplesKey = `${prefix}/surfaces/native/samples/0.bin`;
+  const { gridHash } = coverage.descriptor, samplesKey = `${prefix}/surfaces/native/samples/g0-b0.bin`;
   const descriptors = createWholeDomainDescriptors({ ...product, layers: INDEXED_PRODUCT.layers });
   const artifacts = frames.map(frame => ({ layer: layers[0], frame: frame.id, tilesKey: `${prefix}/${layers[0]}/${frame.id}.pmtiles`, tilesSha256: hash }));
+  const provenanceFrames = await Promise.all(frames.map(async frame => {
+    const hour = Number(frame.id.slice(1)), key = `${prefix}/provenance/${frame.id}.json`;
+    const window = { start: frame.intervalStart, end: frame.intervalEnd };
+    const chunk = Buffer.from(JSON.stringify({ version: 1, model: 'gfs', buildId: id, cycle, frame, hour,
+      intervals: { profileTime: frame.validTime, fluxWindow: window, precipitationWindow: window }, receipt: {} }));
+    const path = localPath(root, key);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, chunk);
+    return { frame: frame.id, hour, key, bytes: chunk.byteLength, sha256: sha256(chunk) };
+  }));
   for (const key of [...artifacts.map(a => a.tilesKey), samplesKey]) {
     const path = localPath(root, key);
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, bytes);
   }
-  const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 1, model: 'gfs', buildId: id, cycle, frames: [{ hour: 3 }] }));
+  const provenanceKey = `${prefix}/provenance.json`, receipt = Buffer.from(JSON.stringify({ version: 2, model: 'gfs', buildId: id, cycle, provider: 'NOAA', frames: provenanceFrames }));
   await writeFile(localPath(root, provenanceKey), receipt);
   const manifest: ManifestV5 = { version: 5, descriptors, recipe: createRecipeIdentity(product, hash), model: 'gfs', buildId: id,
     cycle, createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: descriptors.layers[layers[0]]!.methodId, hash },
     frames, layers: [...layers], artifacts, source: { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) }, tool: {}, palettes: ['lift'], metrics: {},
     surfaces: [{ id: 'native', kind: 'native', grid, gridHash, layers: [...layers], coverage: { id: product.coverageId, hash: coverage.hash, maskKey: `coverage/${coverage.hash}/manifest.json`, maxZoom: 0, gridHash },
-      samples: { format: 'cell-major-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', blockCount: 1, storedCells: 3,
+      samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', blockCount: 1, storedCells: 3,
         channelCount: frames.length, coverageHash: coverage.hash,
-        shards: [{ firstBlock: 0, blockCount: 1, storedCells: 3, bytes: bytes.byteLength, key: samplesKey, sha256: hash }] } }] };
+        shards: [{ group: 0, firstFrame: 0, frameCount: frames.length, blockShard: 0, firstBlock: 0, blockCount: 1, storedCells: 3, bytes: bytes.byteLength, key: samplesKey, sha256: hash }] } }] };
   return { root, manifest };
 }
 
 describe('immutable publication', () => {
   it('rejects a legacy manifest before accessing storage', async () => {
     const store = new MemoryStore();
-    await expect(publish(store, '.', fixtureManifest(), { authority, now: () => now })).rejects.toThrow(/version/);
+    await expect(publish(store, '.', { ...fixtureManifestV5(), version: 4 }, { authority, now: () => now })).rejects.toThrow(/version/);
     expect(store.gets).toEqual([]);
     expect(store.objects.size).toBe(0);
   });
 
   it('lists indexed provenance objects with their lengths and JSON media type', () => {
-    const manifest = fixtureManifest(), { model, buildId, cycle } = manifest;
+    const manifest = fixtureManifestV5(), { model, buildId, cycle } = manifest;
     const identity = { model, buildId, cycle };
     const frames = [3, 6].map(hour => {
       const frame = `f00${hour}`;
       return { hour, frame, key: `builds/${model}/${buildId}/provenance/${frame}.json`, bytes: 100 + hour, sha256: 'a'.repeat(64) };
     });
-    expect(provenanceObjects({ ...identity, version: 1, frames })).toEqual([]);
     expect(provenanceObjects({ ...identity, version: 2, frames })).toEqual(frames.map(frame => ({ ...frame, contentType: 'application/json' })));
   });
 
@@ -328,7 +337,8 @@ it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before
   });
   it.each(['wrong cycle', 'wrong schema'])('does not commit a hash-matching %s provenance receipt', async defect => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    const receipt = Buffer.from(JSON.stringify({ version: defect === 'wrong schema' ? 99 : 1, model: manifest.model, buildId: manifest.buildId, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
+    const existing = JSON.parse(await readFile(localPath(root, manifest.source.provenanceKey as string), 'utf8'));
+    const receipt = Buffer.from(JSON.stringify({ ...existing, version: defect === 'wrong schema' ? 99 : 2, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle }));
     manifest.source.provenanceSha256 = sha256(receipt);
     await writeFile(localPath(root, manifest.source.provenanceKey as string), receipt);
     await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow(/provenance|version/i);
@@ -337,12 +347,13 @@ it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before
   });
   it('publishes only after artifact and manifest verification', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
+    const expectedFiles = forecastObjects(manifest).length + manifest.frames.length;
     await publish(store, root, manifest, { authority, now: () => now });
     expect(JSON.parse(Buffer.from((await store.get('catalog/gfs/latest.json'))!.bytes).toString()).latestBuildId).toBe(id);
-    expect(store.objects.size).toBe(forecastObjects(manifest).length + 6);
-    expect(store.checksums).toHaveLength(forecastObjects(manifest).length + 5);
+    expect(store.objects.size).toBe(expectedFiles + 6);
+    expect(store.checksums).toHaveLength(expectedFiles + 5);
     const artifactGets = store.gets.filter(call => call.key.startsWith(`builds/gfs/${id}/`) && !call.key.endsWith('/manifest.json') && !call.key.endsWith('/provenance.json'));
-    expect(artifactGets).toHaveLength(forecastObjects(manifest).length);
+    expect(artifactGets).toHaveLength(expectedFiles);
     expect(artifactGets.every(call => call.range?.length === 32)).toBe(true);
     await expect(publish(store, root, manifest, { authority, now: () => now })).resolves.toBeUndefined();
   });
@@ -379,7 +390,7 @@ it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before
     release();
     await result;
     expect(maximum).toBe(4);
-    expect(store.checksums).toHaveLength(forecastObjects(manifest).length + 5);
+    expect(store.checksums).toHaveLength(forecastObjects(manifest).length + manifest.frames.length + 5);
   });
   it('drains active uploads after failure without admitting more files or committing', async () => {
     const { root, manifest } = await fixture(), store = new MemoryStore();
@@ -648,7 +659,8 @@ it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before
       if (defect === 'wrong key') manifest.source.provenanceKey = 'builds/gfs/another/provenance.json';
       if (defect === 'invalid hash') manifest.source.provenanceSha256 = 'invalid';
       if (['wrong cycle', 'wrong model', 'wrong build', 'wrong schema'].includes(defect)) {
-        const receipt = Buffer.from(JSON.stringify({ version: defect === 'wrong schema' ? 99 : 1, model: defect === 'wrong model' ? 'hrrr' : manifest.model, buildId: defect === 'wrong build' ? 'another' : manifest.buildId, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle, frames: [] }));
+        const existing = JSON.parse(Buffer.from(store.objects.get(provenanceKey)!.bytes).toString());
+        const receipt = Buffer.from(JSON.stringify({ ...existing, version: defect === 'wrong schema' ? 99 : 2, model: defect === 'wrong model' ? 'hrrr' : manifest.model, buildId: defect === 'wrong build' ? 'another' : manifest.buildId, cycle: defect === 'wrong cycle' ? '2026-10-29T00:00:00.000Z' : manifest.cycle }));
         store.objects.get(provenanceKey)!.bytes = receipt;
         manifest.source.provenanceSha256 = sha256(receipt);
       }
@@ -757,7 +769,7 @@ it.each(['old cycle', 'short horizon'])('refuses latest promotion with %s before
 it('refuses unservable provenance bytes or structure before committing a manifest or pointer', async () => {
   for (const receipt of [{ padding: 'x'.repeat(MAX_PROVENANCE_BYTES) }, { fields: Array(257).fill(0) }]) {
     const { root, manifest } = await fixture(), store = new MemoryStore();
-    const bytes = Buffer.from(JSON.stringify({ version: 1, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [receipt] }));
+    const bytes = Buffer.from(JSON.stringify({ version: 2, model: manifest.model, buildId: manifest.buildId, cycle: manifest.cycle, frames: [receipt] }));
     await writeFile(localPath(root, manifest.source.provenanceKey), bytes);
     manifest.source.provenanceSha256 = sha256(bytes);
     await expect(publish(store, root, manifest, { authority, now: () => now })).rejects.toThrow(/budget|limit|large/);

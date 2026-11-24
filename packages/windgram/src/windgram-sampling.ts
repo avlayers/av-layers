@@ -153,15 +153,10 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       altitudeM: p.altitudeM,
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
     })),
-    cloudHumidityPercent: moistureRef === 'model-rh'
-      ? anchorNodes(
-          interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.cloudRhPercent })),
-          sfcTemp !== null && sfcTd !== null ? effectiveCloudHumidityPercent(sfcTemp, sfcTd) : null,
-        )
-      : temperatureC.map((p, i) => ({
-          altitudeM: p.altitudeM,
-          value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
-        })),
+    cloudHumidityPercent: temperatureC.map((p, i) => ({
+      altitudeM: p.altitudeM,
+      value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
+    })),
     windU: winds.map(p => ({ altitudeM: p.altitudeM, value: p.uMps })),
     windV: winds.map(p => ({ altitudeM: p.altitudeM, value: p.vMps })),
     verticalVelocityPaS: withHeightGaps(levels.map((l) => ({

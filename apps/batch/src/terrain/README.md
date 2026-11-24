@@ -22,21 +22,15 @@ reuses verified upload receipts across retries. [repack.py](repack.py) losslessl
 repacks each source tile into a 512×512-tiled Cloud-Optimized GeoTIFF via `uv`
 ([ingest.ts](ingest.ts)).
 
-## Read and prepare a region
+## Inspect a region
 
 ```sh
 pnpm terrain inspect --catalog-ref output/terrain-catalog-ref.json \
   --bounds 43.99,40.49,44.01,40.51 --out output/terrain-read.json
-pnpm terrain prepare --catalog-ref output/terrain-catalog-ref.json \
-  --grid scripts/fixtures/terrain-grid.json --out output/terrain-prepared-ref.json
-pnpm terrain stage --prepared-ref output/terrain-prepared-ref.json \
-  --grid scripts/fixtures/terrain-grid.json --out output
 ```
 
 `--bounds` takes `west,south,east,north` (with `west > east` crossing the
-dateline). `prepare` bilinearly samples native GLO-90 elevations at target cell
-centres and writes little-endian `Float32` elevations plus a 1-byte validity
-mask for any [`Grid`](../../../../packages/contracts/src/geometry.ts).
+dateline).
 
 ## Use in forecasts
 
@@ -49,7 +43,6 @@ The [whole-domain producer](../whole-domain/prepare.ts) stages cached values in
 sparse coverage offset order with coverage files in the frozen plan. Shards
 validate their identities and load them before weather acquisition. Local
 forecast builds prepare a missing cache on first use.
-[Regional evaluation](../refinement/README.md) replays saved polygon-grid terrain.
 
 Prepare a configured model locally and upload its verified arrays to R2:
 

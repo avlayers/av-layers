@@ -56,14 +56,7 @@ function pointSelection(build: PinnedBuild) {
 }
 
 function pointFrames(manifest: ManifestV5, horizon: PointHorizon) {
-  let frames = manifest.frames;
-  if (horizon !== 'forecast') {
-    if (manifest.mapFrameCount !== undefined) frames = renderedFrames(manifest);
-    else {
-      const until = Date.parse(frames[0].validTime) + 24 * 3600000;
-      frames = frames.filter(frame => Date.parse(frame.validTime) < until);
-    }
-  }
+  const frames = horizon === 'forecast' ? manifest.frames : renderedFrames(manifest);
   return frames.map(frame => frame.id);
 }
 

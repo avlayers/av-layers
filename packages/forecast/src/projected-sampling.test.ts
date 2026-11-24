@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import fixture from '../../contracts/src/fixtures/lambert.json';
-import { gridSchema, isCovered, setBit, STATUS_UNAVAILABLE, type CoverageMask, type LambertConformalGrid } from '@av/contracts';
+import { gridSchema, isCovered, setBit, sparseCoverageFromDense, STATUS_UNAVAILABLE, type CoverageMask, type LambertConformalGrid } from '@av/contracts';
 import { MAX_PREPARED_SAMPLES, planSample, prepareGridSampling, sampleGrid, type Sample } from './sampler.js';
-import { packedCellsFromRange, planPackedSample, prepareSamplePackLayout } from './sample-pack.js';
+import { packedCellsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout } from './sample-pack.js';
 
 const grid = gridSchema.parse(fixture.grid) as LambertConformalGrid;
 const count = grid.width * grid.height;
@@ -41,15 +41,16 @@ describe('offline projected-grid scalar fixture', () => {
   });
 
   it('reuses index-space scalar packing without changing the wire record or doing geographic regridding', () => {
-    const layout = prepareSamplePackLayout(grid, mask.output, mask.halo), bytes = new Uint8Array(layout.storedCells * 5), view = new DataView(bytes.buffer);
-    for (let slot = 0; slot < layout.blockSlots; slot++) {
-      const block = layout.block(slot)!;
+    const coverage = sparseCoverageFromDense({ width: grid.width, height: grid.height, wrapLongitude: grid.wrapLongitude, gridHash: 'a'.repeat(64), output: mask.output, halo: mask.halo });
+    const layout = prepareShardedSamplePackLayout(grid, coverage.blockIds, 1), bytes = new Uint8Array(layout.byteLength), view = new DataView(bytes.buffer);
+    for (let ordinal = 0; ordinal < layout.blockCount; ordinal++) {
+      const block = layout.block(ordinal);
       for (let y = 0; y < block.height; y++) for (let x = 0; x < block.width; x++) {
         const index = (block.row + y) * grid.width + block.column + x;
-        view.setFloat32((block.cellOffset + y * block.width + x) * 5, field.values[index], true);
+        view.setFloat32(block.byteOffset + (y * block.width + x) * 5, field.values[index], true);
       }
     }
-    const plan = planSample(grid, 45, -90)!, packed = planPackedSample(layout, plan, 1, [0]);
+    const plan = planSample(grid, 45, -90)!, packed = planShardedPackedSample(layout, plan, [0]);
     const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
     expect(packedCellsFromRange(packed, body, 0)).toEqual(plan.contributors.map(c => ({ value: field.values[c.index], flags: 0 })));
     expect(packed.byteRange.length).toBeLessThanOrEqual(19 * 5);

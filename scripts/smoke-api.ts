@@ -218,10 +218,8 @@ export async function probeApi(options: {
   await probeWeatherScalars(client, build, options.signal);
   const provenancePath = `/v1/models/${options.model}/runs/${manifest.buildId}/provenance`;
   const provenance = parseProvenance(await json(provenancePath, MAX_PROVENANCE_BYTES), manifest);
-  if (provenance.version === 2) {
-    const reference = provenance.frames[0]!;
-    parseFrameProvenance(await json(`${provenancePath}?frame=${encodeURIComponent(reference.frame)}`, reference.bytes), manifest, manifest.frames[0]!);
-  }
+  const reference = provenance.frames[0]!;
+  parseFrameProvenance(await json(`${provenancePath}?frame=${encodeURIComponent(reference.frame)}`, reference.bytes), manifest, manifest.frames[0]!);
   const tileLayer = renderedLayers(manifest.layers, manifest.descriptors.layers)[0];
   invariant(tileLayer, 'Publication has no rendered layer');
   const { response, bytes } = await get(`/tiles/${options.model}/${manifest.buildId}/${tileLayer}/${frame}/0/0/0.webp`, 'image/webp');

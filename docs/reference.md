@@ -28,9 +28,7 @@ Source: [terrain commands](../apps/batch/src/terrain/cli.ts).
 - `inventory`: `--store-dir <string>`, `--out <string>`.
 - `sync`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`, `--shard <string>`, `--shards <string>`, `--concurrency <string>`.
 - `finalize`: `--store-dir <string>`, `--out <string>`, `--inventory <string>`.
-- `prepare`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--grid <string>`.
 - `prepare-model`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--model <string>`, `--source-cache-dir <string>`.
-- `stage`: `--store-dir <string>`, `--out <string>`, `--prepared-ref <string>`, `--grid <string>`.
 - `inspect`: `--store-dir <string>`, `--out <string>`, `--catalog-ref <string>`, `--bounds <string>`.
 
 Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
@@ -41,13 +39,6 @@ Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
 - `maxOutputPixels`: `4000000`.
 - `maxRangeBytes`: `8388608`.
 - `maxReadBytes`: `268435456`.
-
-## Refinement grids
-
-Run `pnpm refinement --model MODEL` to inspect the configured grids. See [refinement](../apps/batch/src/refinement/README.md).
-
-- `--model <string>`.
-- `--zones <string>`.
 
 ## Configured models
 
@@ -814,53 +805,6 @@ Caveats:
 - Input dependencies describe the output group. Missing optional source fields leave only their dependent outputs unavailable.
 - Earth-relative vectors integrate from model ground to resolved thermal top or model PBL top, with the 10 m vector anchored at ground; missing segments remain unavailable.
 
-### supported-terrain-column-1p2-model-levels-v1
-
-- Outputs: `usable-lift-msl`, `usable-lift-agl`.
-- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressurePa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
-- Spatial support: `bilinear-neighborhood`.
-
-Parameters:
-
-- `crossingEpsilonMultiplier`: `8`.
-- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
-- `dryAirGasConstantJkgK`: `287.05`.
-- `dryAirHeatCapacityJkgK`: `1004`.
-- `dryLapseRateKperM`: `0.0098`.
-- `gravityMps2`: `9.80665`.
-- `gribQuantizationRelativeHumidityLimit`: `1.05`.
-- `kelvinOffset`: `273.15`.
-- `latentHeatVaporizationJkg`: `2501000`.
-- `lenschowPeakZeta`: `0.3125`.
-- `lenschowScale`: `4`.
-- `lenschowShape`: `0.8`.
-- `maximumBelowGroundExtrapolationM`: `1000`.
-- `maximumBisectionIterations`: `60`.
-- `maximumProfileGapM`: `1000`.
-- `maximumProfileTemperatureC`: `60`.
-- `maximumSurfacePressureHpa`: `1100`.
-- `maximumSurfaceTemperatureC`: `60`.
-- `minimumProfileTemperatureC`: `-120`.
-- `minimumSolarElevationDeg`: `-0.833`.
-- `minimumSurfacePressureHpa`: `100`.
-- `minimumSurfaceTemperatureC`: `-100`.
-- `minimumThermalVelocityMps`: `0`.
-- `pascalsPerHectopascal`: `100`.
-- `saturationExponent`: `17.67`.
-- `saturationRelativeTolerance`: `0.000001`.
-- `saturationTemperatureOffsetC`: `243.5`.
-- `saturationVaporPressureScaleHpa`: `6.112`.
-- `sinkRateMps`: `1.2`.
-- `waterDryAirMolarMassRatio`: `0.622`.
-
-Caveats:
-
-- Reconstructs environmental temperature profiles at each DEM cell over height-supported bilinear donor columns (up to maximumBelowGroundExtrapolationM below native ground) and transfers horizontal donor-ground surface anomalies.
-- Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.
-- Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.
-- When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.
-- Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
-
 ### supported-terrain-column-1p2-model-levels-v2
 
 - Outputs: `usable-lift-msl`, `usable-lift-agl`.
@@ -909,53 +853,6 @@ Caveats:
 - Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
 - Cloud support flags combine available positive-weight native-column diagnostics.
 
-### supported-terrain-column-1p2-v1
-
-- Outputs: `usable-lift-msl`, `usable-lift-agl`.
-- Required inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`.
-- Spatial support: `bilinear-neighborhood`.
-
-Parameters:
-
-- `crossingEpsilonMultiplier`: `8`.
-- `crossingFloat32UnitRoundoff`: `5.960464477539063e-8`.
-- `dryAirGasConstantJkgK`: `287.05`.
-- `dryAirHeatCapacityJkgK`: `1004`.
-- `dryLapseRateKperM`: `0.0098`.
-- `gravityMps2`: `9.80665`.
-- `gribQuantizationRelativeHumidityLimit`: `1.05`.
-- `kelvinOffset`: `273.15`.
-- `latentHeatVaporizationJkg`: `2501000`.
-- `lenschowPeakZeta`: `0.3125`.
-- `lenschowScale`: `4`.
-- `lenschowShape`: `0.8`.
-- `maximumBelowGroundExtrapolationM`: `1000`.
-- `maximumBisectionIterations`: `60`.
-- `maximumProfileGapM`: `1000`.
-- `maximumProfileTemperatureC`: `60`.
-- `maximumSurfacePressureHpa`: `1100`.
-- `maximumSurfaceTemperatureC`: `60`.
-- `minimumProfileTemperatureC`: `-120`.
-- `minimumSolarElevationDeg`: `-0.833`.
-- `minimumSurfacePressureHpa`: `100`.
-- `minimumSurfaceTemperatureC`: `-100`.
-- `minimumThermalVelocityMps`: `0`.
-- `pascalsPerHectopascal`: `100`.
-- `saturationExponent`: `17.67`.
-- `saturationRelativeTolerance`: `0.000001`.
-- `saturationTemperatureOffsetC`: `243.5`.
-- `saturationVaporPressureScaleHpa`: `6.112`.
-- `sinkRateMps`: `1.2`.
-- `waterDryAirMolarMassRatio`: `0.622`.
-
-Caveats:
-
-- Reconstructs environmental temperature profiles at each DEM cell over height-supported bilinear donor columns (up to maximumBelowGroundExtrapolationM below native ground) and transfers horizontal donor-ground surface anomalies.
-- Interpolates donor relative humidity and surface heat fluxes over height-supported weights, then reconstructs specific humidity at the fine temperature and hypsometric pressure. Clamps native supersaturation up to gribQuantizationRelativeHumidityLimit to saturation.
-- Applies harmonic below-ground depth damping to the surface-environment ground diagnostic while lifting the dry parcel through the reconstructed profile.
-- When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.
-- Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
-
 ### supported-terrain-column-1p2-v2
 
 - Outputs: `usable-lift-msl`, `usable-lift-agl`.
@@ -1003,23 +900,6 @@ Caveats:
 - When fine terrain lies below every donor support bound (beyond maximumBelowGroundExtrapolationM), falls back to valid same-frame native-lift-terrain-clearance-v2 fields without inventing a local surface state.
 - Uses the parent frame daylight interval; DEM vertical datum and surface type are recorded in each patch with no vertical-datum conversion.
 - Cloud support flags combine available positive-weight native-column diagnostics.
-
-### trailing-precipitation-rate-v1
-
-- Outputs: `precip-rate`.
-- Required inputs: `precipitationMmPerHour`.
-- Spatial support: `column`.
-
-Parameters:
-
-- `minimumRateMmPerHour`: `0`.
-- `minimumSolarElevationDeg`: `-0.833`.
-
-Caveats:
-
-- The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including any accumulation differencing.
-- Evaluated only for cells in daylight across the trailing interval or valid time (solar elevation above minimumSolarElevationDeg); nighttime cells are marked unavailable and skipped.
-- Negative, non-finite or explicitly missing rates are unavailable; no temporal interpolation is implied.
 
 ### trailing-precipitation-rate-v2
 

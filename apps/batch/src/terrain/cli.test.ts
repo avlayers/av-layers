@@ -2,8 +2,8 @@ import { expect, it } from 'vitest';
 import { terrainArguments } from './cli';
 
 it('requires command-specific inputs and rejects unsupported commands and options', () => {
-  for (const command of ['unknown', 'constructor', '__proto__']) expect(() => terrainArguments([command, '--out', 'output'])).toThrow(/Usage/);
-  expect(() => terrainArguments(['prepare', '--out', 'output', '--catalog-ref', 'catalog.json'])).toThrow(/grid is required/);
+  for (const command of ['unknown', 'constructor', '__proto__', 'prepare', 'stage']) expect(() => terrainArguments([command, '--out', 'output'])).toThrow(/Usage/);
+  expect(() => terrainArguments(['inspect', '--out', 'output', '--catalog-ref', 'catalog.json'])).toThrow(/bounds is required/);
   expect(() => terrainArguments(['prepare-model', '--out', 'output', '--catalog-ref', 'catalog.json'])).toThrow(/model is required/);
   expect(() => terrainArguments(['inventory', '--out', 'output', '--concurrency', '2'])).toThrow(/Unknown option/);
   expect(() => terrainArguments(['inventory', '--out', 'output', 'extra'])).toThrow();

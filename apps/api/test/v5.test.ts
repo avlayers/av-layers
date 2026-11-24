@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { canonicalGridJson, gridSchema, gridToGeographic, MAX_NATIVE_ZOOM, MAX_SAMPLE_RANGE_BYTES, PRECIPITATION_ALL_HOURS_METHOD, PRECIPITATION_METHOD, sampleResponseV5Schema } from '@av/contracts';
+import { canonicalGridJson, gridSchema, gridToGeographic, MAX_NATIVE_ZOOM, MAX_SAMPLE_RANGE_BYTES, PRECIPITATION_ALL_HOURS_METHOD, sampleResponseV5Schema } from '@av/contracts';
 import { ApiClient } from '@av/client';
 import { coverageMemory, resolveSparseCoverage } from '../src/coverage';
 import { inFlightAllocationBytes } from '../src/resources';
@@ -241,20 +241,13 @@ describe('API v5 metadata', () => {
 });
 
 describe('API v5 sampling', () => {
-  it('serves retained v1 precipitation metadata and stored day and night values', async () => {
+  it('serves v2 precipitation metadata and stored day and night values', async () => {
     const fixture = createV5Fixture({ frameHours: [1, 12], nativeValue: (_layer, frame) => frame === 0 ? null : 7 });
-    const { manifest } = fixture, current = PRECIPITATION_ALL_HOURS_METHOD.id, retained = PRECIPITATION_METHOD.id;
-    manifest.descriptors.layers['precip-rate'].methodId = retained;
-    manifest.descriptors.methods = Object.fromEntries(Object.entries(manifest.descriptors.methods)
-      .map(([id, method]) => id === current ? [retained, PRECIPITATION_METHOD] : [id, method]));
-    manifest.method.id = manifest.method.id.replace(current, retained);
-    fixture.objects.set(`builds/gfs/${fixture.buildId}/manifest.json`, new TextEncoder().encode(JSON.stringify(manifest)));
-
     const point = nativePoint(16, 8);
     const response = await fixture.sample(point.lat, point.lon, '&frame=all&layers=precip-rate');
     expect(response.status).toBe(200);
     const body = sampleResponseV5Schema.parse(await response.json());
-    expect(body.method.id.split('+')).toContain(retained);
+    expect(body.method.id.split('+')).toContain(PRECIPITATION_ALL_HOURS_METHOD.id);
     expect(body.frames.map(frame => frame.layers['precip-rate'])).toMatchObject([
       { status: 'unavailable', value: null }, { status: 'valid', value: 7 }
     ]);

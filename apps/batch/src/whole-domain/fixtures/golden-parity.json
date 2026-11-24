@@ -23,7 +23,7 @@
         "precip-rate",
         "sfc-temp-c"
       ],
-      "descriptorSha256": "30ece074e0b34e753d2f9ab2afd10634c9449dcb535f9335fb62de6932dab89f",
+      "descriptorSha256": "3aeebf5f3b3b0a12d77d7a2d4ec37d2797b08afa5e8dcf708b6d5c700d877053",
       "storedMsl": true,
       "surfaces": [
         {
@@ -74,7 +74,7 @@
         "precip-rate",
         "sfc-temp-c"
       ],
-      "descriptorSha256": "c9811e1ca33edf61fca5abde473f4512d5b0d461746fb86d25ddf0aaf5c12e35",
+      "descriptorSha256": "b02f471310a18200ae429159b9386c5f393ee7121c4211b408e1e8e5ea5bab00",
       "storedMsl": true,
       "surfaces": [
         {
@@ -125,7 +125,7 @@
         "precip-rate",
         "sfc-temp-c"
       ],
-      "descriptorSha256": "1015fa56a80684a14e0fa108084428f9675b6b65ed3d66d7780fc0286c31bdb6",
+      "descriptorSha256": "6bbbd27b7ec09b4bd84ef0dad63b293553569b8944573b2b226d5a7b1d5dee34",
       "storedMsl": true,
       "surfaces": [
         {

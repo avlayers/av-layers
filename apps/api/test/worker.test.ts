@@ -33,10 +33,14 @@ function publication(id: string, expiry = new Date(now + 60_000).toISOString(), 
 }
 
 function sidecar(pub: ReturnType<typeof publication>, payload: unknown = {
-  version: 1, model: 'gfs', buildId: pub.manifest.buildId, cycle, provider: 'NOAA', frames: [{ hour: 3, inputs: ['profile.grib2'] }]
+  version: 2, model: 'gfs', buildId: pub.manifest.buildId, cycle, provider: 'NOAA',
+  frames: pub.manifest.frames.map(frame => ({
+    frame: frame.id, hour: Number(frame.id.slice(1)),
+    key: `builds/gfs/${pub.manifest.buildId}/provenance/${frame.id}.json`, bytes: 1, sha256: hash
+  }))
 }) {
   const key = `builds/gfs/${pub.manifest.buildId}/provenance.json`;
-  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  const bytes = payload instanceof Uint8Array ? payload : new TextEncoder().encode(JSON.stringify(payload));
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   pub.manifest.source = { provider: 'NOAA', provenanceKey: key, provenanceSha256: sha256 };
   return { key, bytes, sha256, payload };
@@ -196,7 +200,13 @@ async function realPublication(product: ProductDefinition, buildId: string) {
     intervalStart: new Date(now + (hour - sourceIntervalHours(product, hour)) * 3_600_000).toISOString(), intervalEnd: new Date(now + hour * 3_600_000).toISOString()
   }));
   const artifacts: ManifestV5['artifacts'] = frames.slice(0, mapFrameCount(product)).flatMap(frame => renderedLayers(product.layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'f'.repeat(64) })));
-  const provenanceKey = `${prefix}/provenance.json`, provenance = new TextEncoder().encode(JSON.stringify({ version: 1, model: product.modelId, buildId, cycle, frames: [] }));
+  const provenanceKey = `${prefix}/provenance.json`, provenance = new TextEncoder().encode(JSON.stringify({
+    version: 2, model: product.modelId, buildId, cycle,
+    frames: frames.map(frame => ({
+      frame: frame.id, hour: Number(frame.id.slice(1)),
+      key: `${prefix}/provenance/${frame.id}.json`, bytes: 1, sha256: hash
+    }))
+  }));
   const manifest = manifestV5Schema.parse({
     version: 5, model: product.modelId, buildId, cycle, createdAt: cycle, expiresAt,
     descriptors: createWholeDomainDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
@@ -274,8 +284,14 @@ describe('read-only worker', () => {
 
   it('bounds outgoing copies for coalesced large provenance waiters before constructing their responses', async () => {
     const pub = publication(primary);
-    const payload = { version: 1, model: 'gfs', buildId: primary, cycle, frames: [{ pad: '' }] };
-    payload.frames[0].pad = 'x'.repeat(1024 * 1024 - new TextEncoder().encode(JSON.stringify(payload)).length);
+    const json = JSON.stringify({
+      version: 2, model: 'gfs', buildId: primary, cycle,
+      frames: pub.manifest.frames.map(frame => ({
+        frame: frame.id, hour: Number(frame.id.slice(1)),
+        key: `builds/gfs/${primary}/provenance/${frame.id}.json`, bytes: 1, sha256: hash
+      }))
+    });
+    const payload = new TextEncoder().encode(`${json}${' '.repeat(1024 * 1024 - json.length)}`);
     const receipt = sidecar(pub, payload);
     bucket.install(pub); bucket.objects.set(receipt.key, receipt.bytes);
     const results = await Promise.all(Array.from({ length: 20 }, () => app.fetch(new Request(`https://api.example/v1/models/gfs/runs/${primary}/provenance`), {
@@ -298,16 +314,20 @@ describe('read-only worker', () => {
 
   it('serves a multi-megabyte 24-frame provenance sidecar within MAX_PROVENANCE_BYTES', async () => {
     const pub = publication(primary, new Date(now + 60_000).toISOString(), 24);
-    const payload = {
-      version: 1,
+    const json = JSON.stringify({
+      version: 2,
       model: 'gfs',
       buildId: primary,
       cycle,
-      frames: Array.from({ length: 24 }, (_, index) => ({
-        hour: index + 1,
-        pad: 'x'.repeat(64 * 1024)
+      frames: pub.manifest.frames.map(frame => ({
+        frame: frame.id,
+        hour: Number(frame.id.slice(1)),
+        key: `builds/gfs/${primary}/provenance/${frame.id}.json`,
+        bytes: 1,
+        sha256: hash
       }))
-    };
+    });
+    const payload = new TextEncoder().encode(`${json}${' '.repeat(24 * 64 * 1024)}`);
     const receipt = sidecar(pub, payload);
     expect(receipt.bytes.byteLength).toBeGreaterThan(1024 * 1024);
     bucket.install(pub);

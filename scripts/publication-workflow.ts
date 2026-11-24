@@ -168,7 +168,6 @@ async function publishedTerrainRef(store: ObjectStorage, model: string, signal?:
   }
   const raw = record(parseBoundedJson(object.bytes, MAX_MANIFEST_JSON_TOKENS), 'Published terrain manifest');
   if (raw.model !== model || raw.buildId !== latest.buildId || raw.cycle !== latest.cycle || raw.expiresAt !== latest.expiresAt) throw new Error('Published terrain manifest identity mismatch');
-  if (raw.version === 3 || raw.version === 4) return;
   const manifest = manifestV5Schema.parse(raw);
   const terrain = manifest.surfaces.find(surface => surface.id === 'fine')?.terrain;
   return terrain ? { key: terrain.key, sha256: terrain.sha256 } : undefined;
@@ -376,7 +375,6 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
       throw error;
     });
     const raw = record(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS), 'Resume manifest');
-    if (raw.version === 3 || raw.version === 4) throw new Error('Resume requires a whole-domain v5 build; start a fresh forecast without resume-run-id');
     const manifest = manifestV5Schema.parse(raw);
     if (manifest.model !== model || manifest.buildId !== builds[0].name) throw new Error('Resume manifest differs from its artifact path');
     if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '') || manifest.recipe.sourceRevision !== sourceRevision || manifest.recipe.sourceDirty) throw new Error('Resume source does not match the verified workflow artifact');
@@ -401,33 +399,16 @@ export async function resumePublication(sourceRevision: string, store?: ObjectSt
     const deadline = committedOnly ? Date.now() + 5 * 60_000 : planDeadline;
     const deadlineAt = new Date(deadline).toISOString();
     const deadlineSignal = AbortSignal.any([signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]);
-    const grouped = manifest.surfaces.some(surface => surface.samples.format === 'frame-group-block-shards-v1');
     let receiptsOnly = false;
-    if (grouped) {
-      try {
-        for (const object of await buildObjects(root, manifest)) {
-          try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
-          catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
-          if (receiptsOnly) break;
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
-        receiptsOnly = true;
+    try {
+      for (const object of await buildObjects(root, manifest)) {
+        try { if (!(await stat(localPath(root, object.key))).isFile()) receiptsOnly = true; }
+        catch (error) { if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error; receiptsOnly = true; }
+        if (receiptsOnly) break;
       }
-    } else if (manifest.mapData) {
-      const objects = await buildObjects(root, manifest).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
-          throw new Error('Resume artifact is incomplete: missing numeric wind descriptor; start a fresh forecast without resume-run-id', { cause: error });
-        }
-        throw error;
-      });
-      for (const object of objects) {
-        try { if (!(await stat(localPath(root, object.key))).isFile()) throw new Error(`Resume artifact is incomplete: missing ${object.key}`); }
-        catch (error) {
-          if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') throw new Error(`Resume artifact is incomplete: missing ${object.key}; start a fresh forecast without resume-run-id`, { cause: error });
-          throw error;
-        }
-      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error;
+      receiptsOnly = true;
     }
     await assertV5ResumeIdentity(manifest, plan, root, deadlineSignal, receiptsOnly);
     deadlineSignal.throwIfAborted();

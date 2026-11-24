@@ -185,7 +185,7 @@ async function readSamples(request: Request, bucket: R2Bucket, ctx: WaitContext,
     for (const { point, surface, jobs, plan, packed, cells } of plans) for (const job of jobs) {
       const contributors = cells.get(job.channel);
       if (packed && (!contributors || packed.contributorRanks.some((_, index) => !contributors[index]))) fail(503, 'publication-invalid', 'Sample range lacks a contributor');
-      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer], m.tool.useStoredMslNoLift === true)
+      const value = plan && contributors ? sampleCells(plan, contributors, m.descriptors.layers[job.layer])
         : { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
       values[point]!.set(`${job.frameId}/${job.layer}`, { ...value, surfaceId: surface.id });
     }

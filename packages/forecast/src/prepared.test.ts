@@ -8,9 +8,7 @@ for (const layer of LAYER_IDS) {
   const policy = JSON.stringify([spec.supportsNoLift, spec.supportsLiftFlags, spec.noLiftSampleValue, spec.zeroOnNoLiftInterpolation]);
   if (!representativeLayers.has(policy)) representativeLayers.set(policy, layer);
 }
-const samplingPolicies = [...representativeLayers.values()].flatMap(layer =>
-  (LAYERS[layer].supportsNoLift && !LAYERS[layer].zeroOnNoLiftInterpolation ? [false, true] : [true])
-    .map(storedMsl => ({ layer, storedMsl })));
+const samplingPolicies = [...representativeLayers.values()].map(layer => ({ layer, storedMsl: true }));
 
 function outcome<T>(fn: () => T): T | { error: string } {
   try { return fn(); } catch (error) { return { error: (error as Error).message }; }

@@ -52,23 +52,20 @@ apply daylight gating when deriving target clearance.
   sampling and Web Mercator tile sampling plans.
 - [`@av/forecast/intervals`](src/intervals.ts): `recoverTrailingWindow` for
   cumulative and run-averaged model fields.
-- [`@av/forecast/sample-pack`](src/sample-pack.ts): block layouts and one-range
-  point-query plans for legacy packs and bounded version-5 shards.
+- [`@av/forecast/sample-pack`](src/sample-pack.ts): sparse block-shard layouts
+  and bounded point-query range plans.
 - [`@av/forecast/support`](src/support.ts): grid neighbor lookup.
 - [`resolveProductFrameHours`](src/daylight.ts): pre-acquisition daylight frame
   filter, exported from `@av/forecast`.
 
 ## Terrain clearance
 
-`prepareTerrainClearance` compiles native-to-target weights. Its `derive` method
-reads caller-owned diagnostics, native support flags, DEM arrays and a UTC
-interval, returning new MSL and AGL fields. `byteLength` reports retained mapping bytes. Missing
-terrain or native support produces unavailable cells.
-
-Terrain clearance supplies unsupported-valley fallback and evaluation controls.
-It requires complete native diagnostics; mixed convective and non-convective
-neighbors are unavailable. See [terrain clearance](../../docs/science.md#terrain-clearance)
-for the calculation.
+[`clearanceCell`](src/clearance-cell.ts) evaluates native-to-target weights over
+caller-owned diagnostics, native support flags, and DEM elevations when a fine
+cell lies below every donor's below-ground extrapolation bound. Missing terrain
+or native support produces unavailable cells; mixed convective and
+non-convective neighbors are unavailable. See
+[terrain clearance](../../docs/science.md#terrain-clearance) for the calculation.
 
 ## Terrain columns
 
@@ -89,7 +86,6 @@ checks. `preparePackedTerrainColumns` derives whole-domain fields in sparse
 active-cell offset order. `PackedGridField` shares immutable coverage with the sampler and
 raster consumers. Native-grid donor support comes from
 [`planWholeDomainGrid`](../contracts/src/whole-domain-grid.ts).
-`prepareTerrainColumns` retains the regional mapping path for evaluation.
 
 Surface excess is evaluated at each donor's native terrain and interpolated with
 the original horizontal weights. Environmental weights are renormalized among

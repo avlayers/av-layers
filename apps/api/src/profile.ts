@@ -60,7 +60,7 @@ export async function serveProfile(request: Request, bucket: R2Bucket, ctx: Wait
           const packed = planShardedPackedSample(layout, plan, channels, shards), shard = shards[packed.shard]!;
           jobs.push({ shard, ...packed.byteRange, apply(bytes) {
             for (const { frameId, layer, channel } of samples) {
-              const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer], m.tool.useStoredMslNoLift === true);
+              const sample = sampleCells(plan, packedCellsFromRange(packed, bytes, channel), m.descriptors.layers[layer]);
               const formatted = { ...sample, status: SAMPLE_STATUSES[sample.status], surfaceId: surface.id };
               allValues.get(frameId)![layer] = formatted;
               if (layers.includes(layer)) values.get(frameId)![layer] = formatted;

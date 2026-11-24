@@ -2,16 +2,16 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { dirname } from 'node:path';
 import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseBoundedJson, parseFrameProvenance,
-  getProvenanceReference, parseProvenance, provenanceFrameReferenceSchema, type Manifest, type ProvenanceFrameReference } from '@av/contracts';
+  getProvenanceReference, parseProvenance, provenanceFrameReferenceSchema, type ManifestV5, type ProvenanceFrameReference } from '@av/contracts';
 import { localPath, readLocalFile } from './local-file.js';
 import type { ObjectStorage } from './storage.js';
 
-type Identity = Pick<Manifest, 'model' | 'buildId' | 'cycle'>;
-type Frame = Manifest['frames'][number];
+type Identity = Pick<ManifestV5, 'model' | 'buildId' | 'cycle'>;
+type Frame = ManifestV5['frames'][number];
 const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const frameKey = (identity: Identity, frame: Frame): string => `builds/${identity.model}/${identity.buildId}/provenance/${frame.id}.json`;
 
-export async function readLocalProvenance(root: string, manifest: Identity & Pick<Manifest, 'source' | 'frames'>) {
+export async function readLocalProvenance(root: string, manifest: Identity & Pick<ManifestV5, 'source' | 'frames'>) {
   const reference = getProvenanceReference(manifest);
   const bytes = await readLocalFile(localPath(root, reference.key), MAX_PROVENANCE_BYTES);
   if (digest(bytes) !== reference.sha256) throw new Error(`Invalid provenance hash ${reference.key}`);

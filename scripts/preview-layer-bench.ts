@@ -85,7 +85,7 @@ function summarize(samples: Sample[]) {
   return { inputs: samples.length, targetReady: ready.length, targetCold: samples.length - ready.length, timeouts: samples.filter(sample => sample.outcome === 'timeout').length, superseded: samples.filter(sample => sample.outcome === 'superseded').length,
     sceneDelivery: times('sceneMs'), firstCorrectViewport: times('firstCorrectMs'), detailedViewport: times('detailedMs'), combinedInstalled: times('combinedMs'), readyCombinedInstalled: times('combinedMs', ready), maxSources: Math.max(0, ...samples.map(sample => sample.sources)) };
 }
-const harnessInputs = ['scripts/preview-layer-bench.ts', 'scripts/preview-pixels.ts', 'scripts/preview-wind.ts', 'scripts/preview-hash.ts', 'scripts/preview-observe.ts', 'apps/preview/bench.ts', 'apps/preview/gpu-buffers.ts', 'apps/batch/src/webp.ts', 'tests/client-point-fixture.ts', 'tests/forecast-fixture.ts', 'scripts/fixtures/manifest.contract.json', 'scripts/fixtures/gfs-wind-layout.json', 'scripts/fixtures/rrfs-wind-layout.json', 'package.json', 'pnpm-lock.yaml'];
+const harnessInputs = ['scripts/preview-layer-bench.ts', 'scripts/preview-pixels.ts', 'scripts/preview-wind.ts', 'scripts/preview-hash.ts', 'scripts/preview-observe.ts', 'apps/preview/bench.ts', 'apps/preview/gpu-buffers.ts', 'apps/batch/src/webp.ts', 'tests/client-point-fixture.ts', 'tests/forecast-fixture.ts', 'scripts/fixtures/gfs-wind-layout.json', 'scripts/fixtures/rrfs-wind-layout.json', 'package.json', 'pnpm-lock.yaml'];
 async function harnessHash() {
   const hash = createHash('sha256');
   for (const file of harnessInputs) hash.update(file).update(await readFile(join(root, file)));
