@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 export default defineConfig({
   envPrefix: ['VITE_', 'AV_API_BASE'],
   // Startup budget includes MapLibre GL plus the pinned @deck.gl/* and @luma.gl/* wind renderer.
-  plugins: [preact(), browserBundleBudget(1_200_000, 300_000), {
+  plugins: [preact(), browserBundleBudget(735_000, 120_000), {
     name: 'emit-notices',
     apply: 'build',
     async generateBundle() {
