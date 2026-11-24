@@ -1,12 +1,11 @@
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
-import { Worker } from 'node:worker_threads';
+import type { Worker } from 'node:worker_threads';
 import { STATUS_OUTSIDE, type SparseCoverage, type WholeDomainGrid } from '@av/contracts';
 import type { GridField } from '@av/forecast';
 import type { NormalizedFrame } from '@av/forecast/inputs';
 import type { PreparedPackedTerrainColumns, TerrainColumnDerivation, TerrainColumnNativeClearance } from '@av/forecast/refinement';
 import { MAX_PACKED_COLUMN_BYTES } from './capacity.js';
-import { MAX_RASTER_WORKERS, RASTER_WORKER_RESOURCE_LIMITS } from '../raster-pool.js';
+import { MAX_RASTER_WORKERS } from '../raster-pool.js';
+import { startTsWorker } from '../ts-worker.js';
 
 type Output = { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField };
 interface DerivePoolInput {
@@ -77,13 +76,8 @@ export async function createWholeDomainDerivePool(input: DerivePoolInput) {
   try {
     await Promise.all(Array.from({ length: count }, (_, index) => new Promise<void>((resolve, reject) => {
       ready.set(index, { resolve, reject });
-      const worker = new Worker('import("node:worker_threads").then(async ({workerData}) => { const {tsImport} = await import(workerData.loader); await tsImport(workerData.entry, workerData.entry); })', {
-        eval: true, resourceLimits: { ...RASTER_WORKER_RESOURCE_LIMITS },
-        workerData: { ...data, index, count, maxBytes: MAX_PACKED_COLUMN_BYTES, loader: pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm/api')).href, entry: new URL('./derive-worker.ts', import.meta.url).href }
-      });
+      const worker = startTsWorker(new URL('./derive-worker.ts', import.meta.url), { ...data, index, count, maxBytes: MAX_PACKED_COLUMN_BYTES }, 'Derive', fail, () => Boolean(closing));
       workers.push(worker);
-      worker.on('error', fail);
-      worker.on('exit', code => { if (!closing) fail(new Error(`Derive worker unexpectedly exited ${code}`)); });
       worker.on('message', (message: DeriveWorkerMessage) => {
         if ('ready' in message) { ready.get(index)?.resolve(); ready.delete(index); return; }
         if (!active || message.phase !== 'derive' || message.generation !== nextGeneration || message.jobId !== jobId || !pending.has(index)) {
