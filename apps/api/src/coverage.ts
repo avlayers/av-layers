@@ -14,6 +14,7 @@ export interface ResolvedSparseCoverage {
   descriptor: SparseCoverageDescriptor;
   mask: SparseCoverageMask;
   layouts: ReadonlyMap<number, ShardedSamplePackLayout>;
+  profileLayouts: ReadonlyMap<string, ShardedSamplePackLayout>;
   groups: readonly FrameGroup[];
 }
 interface SparseTiles { descriptor: SparseCoverageDescriptor; tiles: Uint8Array }
@@ -21,6 +22,7 @@ const caches = new WeakMap<R2Bucket, ByteCache<string, ResolvedSparseCoverage | 
 const flights = new WeakMap<R2Bucket, MaterializedReads<ResolvedSparseCoverage | SparseTiles>>();
 const scalarBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
 const profileBindings = new WeakMap<ResolvedSparseCoverage, WeakSet<ForecastSurfaceV5>>();
+const surfaceGroups = new WeakMap<ForecastSurfaceV5, readonly FrameGroup[]>();
 const tileFlights = new WeakMap<R2Bucket, MaterializedReads<SparseTiles>>();
 const COVERAGE_CACHE_BYTES = 24 * 1024 * 1024;
 // Each configured native/fine surface retains a mask and tile entry; the byte cap stays fixed.
@@ -149,7 +151,9 @@ function bindLayout(coverage: ResolvedSparseCoverage, surface: ForecastSurfaceV5
   admitted.add(surface);
 }
 
-function frameGroups(surface: ForecastSurfaceV5): FrameGroup[] {
+function frameGroups(surface: ForecastSurfaceV5): readonly FrameGroup[] {
+  const cached = surfaceGroups.get(surface);
+  if (cached) return cached;
   const shards = surface.samples.shards;
   const grouped = new Map<number, { firstFrame: number; frameCount: number; channelCount: number; shards: FrameGroupShard[] }>();
   for (const shard of shards) {
@@ -161,8 +165,10 @@ function frameGroups(surface: ForecastSurfaceV5): FrameGroup[] {
       group.shards.push(shard);
     }
   }
-  return [...grouped.entries()].sort(([left], [right]) => left - right)
+  const result = [...grouped.entries()].sort(([left], [right]) => left - right)
     .map(([group, value]) => ({ group, ...value, shards: value.shards.slice().sort((left, right) => left.blockShard - right.blockShard) }));
+  surfaceGroups.set(surface, result);
+  return result;
 }
 
 export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastSurfaceV5, ctx?: WaitContext, bounds?: readonly number[], waiterSignal?: AbortSignal, kind: 'sample' | 'profile' = 'sample'): Promise<{ coverage: ResolvedSparseCoverage; release: () => void }> {
@@ -217,7 +223,7 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
         assertSparseCoverageHalo(coverage);
         const mask: SparseCoverageMask = { grid: descriptor.grid, bounds: descriptor.bounds, maxZoom: descriptor.maxZoom, coverage, tiles };
         const layouts = new Map(channelCounts.map(count => [count, prepareShardedSamplePackLayout(mask.grid, coverage.blockIds, count)]));
-        const result: ResolvedSparseCoverage = { descriptor, mask, layouts, groups: [] };
+        const result: ResolvedSparseCoverage = { descriptor, mask, layouts, profileLayouts: new Map(), groups: [] };
         const actual = sparseRetainedBytes(result);
         if (actual > retained) throw new CoverageError('Sparse coverage exceeds serving byte budget');
         signal.throwIfAborted();
@@ -236,26 +242,44 @@ export async function resolveSparseCoverage(bucket: R2Bucket, surface: ForecastS
   }
   const { mask } = resolved;
   assertSurfaceCoverage(resolved.descriptor, surface, bounds);
-  bindLayout(resolved, surface, 'sample');
-  if (kind === 'profile') bindLayout(resolved, surface, kind);
   const groups = frameGroups(surface);
-  const layouts = resolved.layouts as Map<number, ShardedSamplePackLayout>;
-  const channelCounts = [...new Set(groups.map(group => group.channelCount))];
-  for (const count of channelCounts) if (!layouts.has(count)) {
-    const blocks = mask.coverage.blockIds.length, blockBytes = 289 * count * 5;
-    const maximum = blocks * 8 + (Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1) * 64;
-    if (sparseRetainedBytes(resolved) + maximum > COVERAGE_CACHE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
-    const releaseExtra = reserveAllocation(maximum);
+  const addLayout = <K>(map: Map<K, ShardedSamplePackLayout>, key: K, maximum: number, count: number, recordBytes?: number) => {
+    if (map.has(key)) return;
+    if (sparseRetainedBytes(resolved!) + maximum > COVERAGE_CACHE_BYTES) throw new CoverageError('Sparse coverage exceeds serving byte budget');
+    let releaseExtra = reserveAllocation(maximum);
     try {
-      const added = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, count);
+      const added = prepareShardedSamplePackLayout(mask.grid, mask.coverage.blockIds, count, undefined, recordBytes);
       const actual = added.indexBytes + added.shards.length * 64;
       if (actual > maximum) throw new CoverageError('Sparse coverage exceeds serving byte budget');
-      layouts.set(count, added);
+      releaseExtra();
+      releaseExtra = reserveAllocation(actual);
+      map.set(key, added);
       const previous = state.release;
       state.release = () => { previous?.(); releaseExtra(); };
-      state.bytes += maximum;
-      cache.set(cacheKey, resolved, sparseRetainedBytes(resolved), Date.now() + 3_600_000);
+      state.bytes += actual;
+      cache!.set(cacheKey, resolved!, sparseRetainedBytes(resolved!), Date.now() + 3_600_000);
     } catch (error) { releaseExtra(); throw error; }
+  };
+  if (!scalarBindings.get(resolved)?.has(surface)) {
+    const layouts = resolved.layouts as Map<number, ShardedSamplePackLayout>;
+    const channelCounts = [...new Set(groups.map(group => group.channelCount))];
+    for (const count of channelCounts) {
+      const blocks = mask.coverage.blockIds.length, blockBytes = 289 * count * 5;
+      const maximum = blocks * 8 + (Math.ceil(blocks * blockBytes / (SAMPLE_SHARD_TARGET_BYTES - blockBytes)) + 1) * 64;
+      addLayout(layouts, count, maximum, count);
+    }
+    bindLayout(resolved, surface, 'sample');
+  }
+  if (kind === 'profile' && !profileBindings.get(resolved)?.has(surface)) {
+    if (surface.profiles) {
+      const profiles = surface.profiles;
+      const profileLayouts = resolved.profileLayouts as Map<string, ShardedSamplePackLayout>;
+      for (const group of profiles.groups) {
+        const maximum = mask.coverage.blockIds.length * 8 + group.shards.length * 64;
+        addLayout(profileLayouts, `${group.frameCount}:${profiles.recordBytes}`, maximum, group.frameCount, profiles.recordBytes);
+      }
+    }
+    bindLayout(resolved, surface, kind);
   }
   return { coverage: { ...resolved, groups }, release };
   } catch (error) { release(); throw error; }
@@ -266,5 +290,6 @@ function sparseRetainedBytes(value: ResolvedSparseCoverage): number {
   let bytes = coverage.blockIds.byteLength + coverage.offsets.byteLength + coverage.output.byteLength + coverage.halo.byteLength
     + tiles.byteLength + estimateJsonBytes(value.descriptor) + 2048;
   for (const layout of value.layouts.values()) bytes += layout.indexBytes + layout.shards.length * 64;
+  for (const layout of value.profileLayouts.values()) bytes += layout.indexBytes + layout.shards.length * 64;
   return bytes;
 }

@@ -284,6 +284,71 @@ describe('cached point forecast pages', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
+  it('prioritizes the selected hour and fetches remaining multi-group native profiles in one parallel wave', async () => {
+    const hours = [...Array.from({ length: 24 }, (_, i) => i + 1), ...Array.from({ length: 16 }, (_, i) => 27 + i * 3)];
+    const build = fixtureProfileBuild({ frameHours: hours, mapFrameCount: 40 });
+    const native = build.manifest.surfaces.find(surface => surface.kind === 'native')!;
+    const scalarShard = native.samples.shards[0]!;
+    native.samples = {
+      ...native.samples,
+      format: 'frame-group-block-shards-v1',
+      shards: [
+        { ...scalarShard, group: 0, firstFrame: 0, frameCount: 24, blockShard: 0 },
+        { ...scalarShard, group: 1, firstFrame: 24, frameCount: 16, blockShard: 0 },
+      ],
+    };
+    const profileShard = native.profiles!.groups[0]!.shards[0]!;
+    native.profiles!.groups = hours.map((_, index) => ({
+      group: index,
+      firstFrame: index,
+      frameCount: 1,
+      shards: [{ ...profileShard, group: index, firstFrame: index, frameCount: 1, key: `builds/${build.manifest.model}/${build.manifest.buildId}/profiles/g${index}/b0.pack` }],
+    }));
+    let activeProfiles = 0, peakProfiles = 0, releaseRest!: () => void;
+    const restGate = new Promise<void>(resolve => { releaseRest = resolve; });
+    const profilePages: string[][] = [];
+    const fetchImpl = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/profile')) {
+        const page = url.searchParams.get('frame')!.split(',');
+        profilePages.push(page);
+        if (page.length === 1) return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+        activeProfiles++; peakProfiles = Math.max(peakProfiles, activeProfiles);
+        try {
+          await restGate;
+          return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+        } finally { activeProfiles--; }
+      }
+      return new Response(JSON.stringify(fixturePointSample(build, String(input))));
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const progress = vi.fn(), loader = api.pointSeries(build, point);
+    const pending = loader.load('day', undefined, { frameId: 'f008', onProgress: progress });
+    try { await vi.waitFor(() => expect(activeProfiles).toBe(7)); }
+    finally { releaseRest(); }
+    const series = await pending;
+    expect(peakProfiles).toBe(7);
+    expect(profilePages[0]).toEqual(['f008']);
+    expect(profilePages.slice(1).map(page => page.length)).toEqual([5, 6, 6, 6, 5, 5, 6]);
+    expect(series.frames).toHaveLength(40);
+    expect(series.frames.every(frame => frame.profile?.status === 'valid')).toBe(true);
+
+    // Disposing on the selected hour's progress callback never starts the parallel rest wave.
+    const closePages: string[][] = [];
+    const closeFetch = vi.fn<typeof fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/profile')) closePages.push(url.searchParams.get('frame')!.split(','));
+      return new Response(JSON.stringify(fixturePointFetch(build, String(input))));
+    });
+    const closeApi = new ApiClient({ baseUrl: 'https://api.test', fetchImpl: closeFetch, now: () => Date.parse(build.manifest.createdAt) });
+    const closeLoader = closeApi.pointSeries(build, point);
+    await expect(closeLoader.load('day', undefined, {
+      frameId: 'f008',
+      onProgress: () => closeLoader.dispose(),
+    })).rejects.toThrow();
+    expect(closePages).toEqual([['f008']]);
+  });
+
   it('prioritizes a late native hour and stops further progress after close', async () => {
     const { fetchImpl, loader } = setup(), onProgress = vi.fn((_series: PointSeries, _total: number) => loader.dispose());
     await expect(loader.load('forecast', undefined, { frameId: 'f384', onProgress })).rejects.toThrow();

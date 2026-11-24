@@ -332,7 +332,7 @@ describe('native profile API', () => {
     expect(ranges(f)).toHaveLength(0); assertReleased(f);
   });
 
-  it('bounds profile and scalar concurrency together at four reads', async () => {
+  it('bounds profile and scalar concurrency together at eight reads and coalesces scalar group spans across pages', async () => {
     const f = attachNativeProfiles(createGroupedV5Fixture({ groups: [[1], [2], [3], [4], [5], [6]], nativeLayers: layers, nativeValue }), { groupSize: 1 });
     const original = f.get.getMockImplementation()!;
     let active = 0, peak = 0, release!: () => void;
@@ -343,11 +343,60 @@ describe('native profile API', () => {
       try { await gate; return await original(key, options); } finally { active--; }
     });
     const pending = f.request(path(f, 'lat=8.8&lon=-115.3125&frame=all'));
-    try { await vi.waitFor(() => expect(active).toBe(4)); } finally { release(); }
+    try { await vi.waitFor(() => expect(active).toBe(8)); } finally { release(); }
     expect((await read(await pending)).frames).toHaveLength(6);
-    expect(peak).toBe(4);
+    expect(peak).toBe(8);
     expect(peak).toBeLessThanOrEqual(MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST);
     expect(active).toBe(0); assertReleased(f);
+
+    const shared = attachNativeProfiles(createGroupedV5Fixture({ groups: [[1, 2, 3, 4]], nativeLayers: layers, nativeValue }), { groupSize: 1 });
+    const sharedOriginal = shared.get.getMockImplementation()!;
+    let releaseShared!: () => void, scalarCalls = 0;
+    const sharedGate = new Promise<void>(resolve => { releaseShared = resolve; });
+    shared.get.mockImplementation(async (key, options) => {
+      if (options?.range && key.includes('/samples/')) {
+        scalarCalls++;
+        await sharedGate;
+      }
+      return sharedOriginal(key, options);
+    });
+    const first = shared.request(path(shared, 'lat=8.8&lon=-115.3125&frame=h001,h002'));
+    const second = shared.request(path(shared, 'lat=8.8&lon=-115.3125&frame=h003,h004'));
+    try { await vi.waitFor(() => expect(scalarCalls).toBe(1)); } finally { releaseShared(); }
+    const [firstRes, secondRes] = await Promise.all([first, second]);
+    expect((await read(firstRes)).frames.map(frame => frame.id)).toEqual(['h001', 'h002']);
+    expect((await read(secondRes)).frames.map(frame => frame.id)).toEqual(['h003', 'h004']);
+    expect(scalarCalls).toBe(1);
+    assertReleased(shared);
+
+    // Near-limit requests fall back to narrow scalar channel spans instead of exceeding MAX_SAMPLE_RANGE_BYTES.
+    const grid = { kind: 'regular-latlon' as const, width: 1, height: 18, lon0: -180, lat0: 17, dx: 360, dy: -1, wrapLongitude: true, earthRadiusM: 6371229 };
+    const nearLimit = attachNativeProfiles(createGroupedV5Fixture({
+      grid,
+      groups: [Array.from({ length: 24 }, (_, i) => i + 1), Array.from({ length: 49 }, (_, i) => 25 + i)],
+      nativeLayers: layers,
+      nativeValue,
+    }), {
+      levels: 255,
+      profile: () => ({
+        modelTerrainM: 100,
+        surfacePressureHpa: 987.6,
+        status: 'valid',
+        levels: Array.from({ length: 255 }, (_, index) => ({
+          pressureHpa: 1000 - index * 2,
+          heightM: 600 + index * 50,
+          temperatureC: 15,
+          dewPointC: 10,
+          uWindMps: 2,
+          vWindMps: -3,
+          omegaPaS: 0.1,
+        })),
+      }),
+    });
+    const nearRes = await nearLimit.request(path(nearLimit, 'lat=9&lon=-180&frame=h001,h073'));
+    expect(nearRes.status).toBe(200);
+    expect((await read(nearRes)).frames.map(frame => frame.id)).toEqual(['h001', 'h073']);
+    assertReleased(nearLimit);
   });
 
   it('releases an aborted profile request while its R2 owner drains', async () => {

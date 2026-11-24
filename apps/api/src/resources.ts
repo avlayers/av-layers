@@ -372,9 +372,12 @@ export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQ
 }
 
 const binaryReads = new WeakMap<R2Bucket, MaterializedReads<Uint8Array>>();
-export const MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST = 4;
+export const MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST = 8;
+export const MAX_BINARY_READ_CONCURRENCY = 32;
+export const MAX_BINARY_READ_WAITERS = 192;
+export const MAX_BINARY_READ_QUEUED = 128;
 export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   let reads = binaryReads.get(bucket);
-  if (!reads) { reads = new MaterializedReads(8, DEFAULT_REQUEST_TIMEOUT_MS, 96); binaryReads.set(bucket, reads); }
+  if (!reads) { reads = new MaterializedReads(MAX_BINARY_READ_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT_MS, MAX_BINARY_READ_WAITERS, MAX_BINARY_READ_QUEUED); binaryReads.set(bucket, reads); }
   return reads.run(key, load, ctx, waiterSignal);
 }

@@ -142,7 +142,7 @@ it('shares the binary read budget and drops canceled queued wind reads', async (
   await windChunk(shared, local.manifest, entry(), frame, 'wind', 0, ctx, signal);
   await windChunk(shared, local.manifest, entry(), frame, 'fine', 0, ctx, signal);
   holding = true;
-  const occupied = Array.from({ length: 7 }, (_, i) => binaryRead(shared, `other-${i}`, async () => {
+  const occupied = Array.from({ length: 31 }, (_, i) => binaryRead(shared, `other-${i}`, async () => {
     active++; peak = Math.max(peak, active);
     try { await gate; return Uint8Array.of(1); } finally { active--; }
   }, ctx));
@@ -152,7 +152,7 @@ it('shares the binary read budget and drops canceled queued wind reads', async (
   const queued = windChunk(shared, local.manifest, entry(), frame, 'fine', 0, queueContext, canceled.signal);
   const results = Promise.allSettled([...occupied, ...pending, queued]);
   try {
-    await vi.waitFor(() => expect(active).toBe(8));
+    await vi.waitFor(() => expect(active).toBe(32));
     await vi.waitFor(() => expect(queueContext.waitUntil).toHaveBeenCalledOnce());
     canceled.abort(new Error('canceled queued chunk'));
     canceledOwner.abort(new Error('canceled waiter'));
@@ -160,9 +160,9 @@ it('shares the binary read budget and drops canceled queued wind reads', async (
     await expect(pending[0]).rejects.toThrow('canceled waiter');
   } finally { release(); }
   const settled = await results;
-  expect(settled.slice(0, 7).every(result => result.status === 'fulfilled')).toBe(true);
-  expect(settled.slice(8, 19).every(result => result.status === 'fulfilled')).toBe(true);
-  expect(peak).toBe(8);
+  expect(settled.slice(0, 31).every(result => result.status === 'fulfilled')).toBe(true);
+  expect(settled.slice(32, 43).every(result => result.status === 'fulfilled')).toBe(true);
+  expect(peak).toBe(32);
   expect(store.reads.filter(read => read.length)).toHaveLength(3);
 });
 
@@ -210,11 +210,11 @@ it('rejects excess coalesced wind waiters during a burst', async () => {
   await windChunk(shared, local.manifest, entry(), frame, 'wind', 0, ctx, signal);
   holding = true;
   const metrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 }, context = { waitUntil() {}, metrics };
-  const results = Promise.allSettled(Array.from({ length: 110 }, () => windChunk(shared, local.manifest, entry(), frame, 'wind', 0, context, signal)));
-  try { await vi.waitFor(() => expect(metrics.coalesced).toBe(95)); }
+  const results = Promise.allSettled(Array.from({ length: 206 }, () => windChunk(shared, local.manifest, entry(), frame, 'wind', 0, context, signal)));
+  try { await vi.waitFor(() => expect(metrics.coalesced).toBe(191)); }
   finally { release(); }
   const settled = await results;
-  expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(96);
+  expect(settled.filter(result => result.status === 'fulfilled')).toHaveLength(192);
   const rejected = settled.filter(result => result.status === 'rejected');
   expect(rejected).toHaveLength(14);
   expect(rejected.every(result => result.status === 'rejected' && /waiters/.test(String(result.reason)))).toBe(true);
