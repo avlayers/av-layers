@@ -37,9 +37,8 @@ MapLibre's WebGL2 context (`MapLibreOverlay`, interleaved) and re-attach on
 The basemap combines AWS Terrarium DEM color-relief and multidirectional
 hillshade with OpenFreeMap vector roads, borders, airfields, peaks, and place
 labels across four map themes (Stone, Slate, Chart and Classic). Each theme
-fixes its own lift palette, cloud and rain styling, so there are no separate
-style pickers; retired theme ids in old links fall back to the nearest kept
-theme.
+fixes its own lift palette and cloud and rain styling. Retired theme ids in old
+links fall back to the nearest kept theme.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.
@@ -49,9 +48,8 @@ replace a complete overview.
 
 The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
-[Build checks](vite.config.ts) bound startup (`1,200,000 B` gzip) and lazy
-(`300,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
-The startup cap reserves the pinned `@deck.gl/*` and `@luma.gl/*` renderer set.
+[Build checks](vite.config.ts) bound startup and lazy JavaScript transfer (see
+[preview performance](../../docs/preview-performance.md)) and reject server modules in the browser output.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. The km/mi control sets units.
@@ -68,7 +66,7 @@ scalar chart covers builds that publish no native profiles.
 - [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
 - [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the store and API client, creates the map channels, routes commands and forecast events, and shuts down.
 - [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
-- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
 - [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
@@ -92,7 +90,9 @@ values and typed commands. URL/history behavior is tested through
 
 To change a control, update its store intent, command and component; leave the
 graphics engine alone. To add a map layer group, implement `MapChannel` and add
-it to the root's channel list, which updates, clears and destroys every channel;
+it to the root's channel list, which updates, clears and destroys every channel.
+A group that loads forecast data also needs a select call where the root selects
+the raster and sky frames;
 to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 

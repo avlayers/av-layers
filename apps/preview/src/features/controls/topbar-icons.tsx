@@ -213,7 +213,7 @@ export function ThemeIconPicker(props: {
             <kbd class="hover-card-kbd">[ / ]</kbd>
           </div>
 
-          <div class="theme-icon-grid">
+          <div class="theme-icon-grid" style={{ "--av-theme-count": THEME_OPTIONS.length }}>
             {THEME_OPTIONS.map(option => {
               const selected = option.id === props.theme;
               return (

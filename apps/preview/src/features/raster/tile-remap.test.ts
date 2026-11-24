@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LIFT_COLORS, RAIN_COLORS } from '@av/contracts/layers';
-import { remapRgbaInPlace, remapTileToBitmap } from './tile-remap';
+import { remapTileToBitmap } from './tile-remap';
+import { remapRgbaInPlace } from './tile-remap-core';
 
 function hexPixel(hex: string, alpha = 255): [number, number, number, number] {
   const clean = hex.slice(1);

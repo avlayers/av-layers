@@ -13,6 +13,6 @@ server palette unchanged).
 
 To add a theme, add a file and one entry in `registry.ts`, then record its
 fingerprint with `UPDATE_THEME_GOLDEN=1 pnpm vitest run theme-golden`. Code
-outside this folder reads record fields and `DEFAULT_THEME`, and never compares
-theme ids. `features/map/theme-golden.test.ts` fingerprints every registered
+outside this folder reads record fields and `DEFAULT_THEME`.
+`features/map/theme-golden.test.ts` fingerprints every registered
 theme; regenerate it only for an intended visual change.

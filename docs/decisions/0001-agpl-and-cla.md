@@ -24,7 +24,7 @@ the maintainer the right to relicense them.
   commercial licences or ship future parts under other terms.
 - Some companies avoid AGPL code, so corporate contributions and embedding are
   less likely.
-- Runtime dependencies are MIT, ISC, BSD or Apache-2.0, all compatible.
+- Runtime dependencies are MIT, ISC, BSD, BlueOak-1.0.0 or Apache-2.0, all compatible.
   Forecast data licences (DWD CC BY 4.0, Copernicus, OpenStreetMap ODbL) apply
   to data and stay as attribution in `THIRD_PARTY_NOTICES.txt`.
 

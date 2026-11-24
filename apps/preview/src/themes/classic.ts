@@ -23,8 +23,8 @@ export const classic: ThemeRecord<'classic'> = {
     cuffRgb: [18, 28, 44], cuffMaxAlpha: 108
   },
   liftDetail: 'Usable thermal ceiling in classic 22-step soaring palette',
-  // Classic draws the published palette unchanged (remap: false), so these ramps
-  // are never sampled; they are Stone's to keep the record complete.
+  // Classic draws the published palette unchanged (remap: false); the record type
+  // still requires ramps, so it carries Stone's.
   liftStops: stone.liftStops,
   rainStops: stone.rainStops,
   cloudLegend: [

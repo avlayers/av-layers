@@ -100,8 +100,8 @@ export class WindOverlay implements MapChannel {
 
   private applyOptions(options: WindOverlayOptions): void {
     if (this.destroyed) return;
-    // Kept only once the renderer accepts them, so a failed apply is retried on the next update.
-    try { this.deck.setOptions(options); this.options = options; } catch { /* the map is replacing its style */ }
+    this.options = options;
+    try { this.deck.setOptions(options); } catch { /* the map is replacing its style; the next map sync re-applies them */ }
   }
 
   clear(): void { this.install(null, null, 'replace', null); }

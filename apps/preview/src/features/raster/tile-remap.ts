@@ -3,13 +3,10 @@ import {
   createBitmapWorkspace,
   decodeAndRemapBitmap,
   needsRemap,
-  remapRgbaInPlace,
   type RemapBitmapWorkspace,
   type RemapKind
 } from './tile-remap-core';
 import type { WorkerRemapRequest, WorkerRemapResponse } from './tile-remap.worker';
-
-export { remapRgbaInPlace,  };
 
 let remapSupported: boolean | null = null;
 

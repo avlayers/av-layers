@@ -1,6 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { addAbortSignal, Readable } from 'node:stream';
-import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, paginateListObjectsV2, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import pRetry from 'p-retry';
 import { BUILD_BUDGETS, forecastPlanDeadline } from './capacity.js';
 import type { BuildPlan } from './parallel.js';
@@ -212,18 +212,20 @@ export function r2Storage(env: NodeJS.ProcessEnv = process.env): ObjectStorage {
   const config = r2ClientOptions(env), client = new S3Client(config);
   let getClient: S3Client | undefined;
   async function* listing(prefix: string, signal: AbortSignal | undefined, budget: { pages: number }, delimiter?: string) {
-    let token: string | undefined;
     const seen = new Set<string>();
-    do {
+    const overBudget = () => { if (budget.pages >= 1000) throw new Error('Object listing exceeds page budget'); };
+    overBudget();
+    for await (const page of paginateListObjectsV2({ client }, { Bucket: R2_BUCKET, Prefix: prefix, Delimiter: delimiter }, { abortSignal: signal })) {
       signal?.throwIfAborted();
-      if (++budget.pages > 1000) throw new Error('Object listing exceeds page budget');
-      const page = await client.send(new ListObjectsV2Command({ Bucket: R2_BUCKET, Prefix: prefix, ContinuationToken: token, Delimiter: delimiter }), { abortSignal: signal });
-      signal?.throwIfAborted();
-      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      budget.pages++;
+      const token = page.IsTruncated ? page.NextContinuationToken : undefined;
       if (page.IsTruncated && (!token || seen.has(token))) throw new Error('Invalid or repeated listing continuation token');
       if (token) seen.add(token);
       yield page;
-    } while (token);
+      // The paginator follows any NextContinuationToken; IsTruncated ends the listing.
+      if (!token) return;
+      overBudget();
+    }
   }
   function listed(contents: Array<{ Key?: string; LastModified?: Date; Size?: number }>, prefix: string): ListedObject[] {
     return contents.map(object => {

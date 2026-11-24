@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import pRetry from 'p-retry';
+import { retriable } from '../retriable.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS, sourceIntervalHours } from '@av/contracts';
 import type { ModelLevelFrame } from '@av/forecast';
 import { readLocalFile } from '../local-file.js';
@@ -152,14 +153,16 @@ async function loadSplitGribField(
   const buffer = await pRetry(async attempt => {
     if (attempt > 1) stats.retries += 1;
     const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
-    const response = await fetchFn(url, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => {});
-      const message = `HTTP ${response.status} for ${url}`;
-      if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
-      throw new Error(message);
-    }
-    return readObjectBody(response);
+    try {
+      const response = await fetchFn(url, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        const message = `HTTP ${response.status} for ${url}`;
+        if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
+        throw new Error(message);
+      }
+      return await readObjectBody(response);
+    } catch (error) { throw retriable(error); }
   }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
     shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
   options.signal?.throwIfAborted();

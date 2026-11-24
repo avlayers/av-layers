@@ -1,5 +1,6 @@
 import { ASSET_MAX_BYTES, TERRAIN_SOURCE, sha256, terrainInventorySchema, type TerrainCatalog, type TerrainInventory, type TerrainStorage, type TerrainTileSource } from './contract.js';
 import pRetry from 'p-retry';
+import { retriable } from '../retriable.js';
 
 const SOURCE_ORIGIN = 'https://copernicus-dem-90m.s3.amazonaws.com';
 export const INVENTORY_MAX_BYTES = 4 * 1024 * 1024;
@@ -53,32 +54,34 @@ class SourceResponseError extends Error {
 async function fetchBytes(url: string, limit: number, { fetch: request = globalThis.fetch, signal }: SourceOptions): Promise<Uint8Array> {
   return pRetry(async () => {
     const deadline = AbortSignal.timeout(60_000), combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
-    const response = await request(url, { signal: combined, headers: { 'accept-encoding': 'identity' }, redirect: 'error' });
-    if (response.status !== 200) {
-      await response.body?.cancel();
-      throw new SourceResponseError(`Terrain source returned HTTP ${response.status}: ${url}`, response.status === 429 || response.status >= 500);
-    }
-    const declared = response.headers.get('content-length');
-    if (!response.body || (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit))) {
-      await response.body?.cancel();
-      throw new SourceResponseError(`Terrain source exceeds byte budget: ${url}`, false);
-    }
-    const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-    let length = 0;
     try {
-      for (;;) {
-        combined.throwIfAborted();
-        const result = await reader.read();
-        if (result.done) break;
-        length += result.value.byteLength;
-        if (length > limit) throw new SourceResponseError(`Terrain source exceeds byte budget: ${url}`, false);
-        chunks.push(result.value);
+      const response = await request(url, { signal: combined, headers: { 'accept-encoding': 'identity' }, redirect: 'error' });
+      if (response.status !== 200) {
+        await response.body?.cancel();
+        throw new SourceResponseError(`Terrain source returned HTTP ${response.status}: ${url}`, response.status === 429 || response.status >= 500);
       }
-      if (!length || (declared !== null && Number(declared) !== length)) throw new SourceResponseError(`Terrain source response length mismatch: ${url}`, true);
-      return Buffer.concat(chunks, length);
-    } finally {
-      await reader.cancel().catch(() => {});
-      reader.releaseLock();
-    }
+      const declared = response.headers.get('content-length');
+      if (!response.body || (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > limit))) {
+        await response.body?.cancel();
+        throw new SourceResponseError(`Terrain source exceeds byte budget: ${url}`, false);
+      }
+      const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+      let length = 0;
+      try {
+        for (;;) {
+          combined.throwIfAborted();
+          const result = await reader.read();
+          if (result.done) break;
+          length += result.value.byteLength;
+          if (length > limit) throw new SourceResponseError(`Terrain source exceeds byte budget: ${url}`, false);
+          chunks.push(result.value);
+        }
+        if (!length || (declared !== null && Number(declared) !== length)) throw new SourceResponseError(`Terrain source response length mismatch: ${url}`, true);
+        return Buffer.concat(chunks, length);
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    } catch (error) { throw retriable(error); }
   }, { retries: 2, minTimeout: 500, signal, shouldRetry: ({ error }) => !(error instanceof SourceResponseError) || error.retryable });
 }

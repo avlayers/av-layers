@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
 import { byteRange, parseIdx, type IdxRecord } from '@azohra/meteo.grib';
 import pRetry from 'p-retry';
+import { retriable } from '../retriable.ts';
 import { IndexedGribError } from './errors.ts';
 import type { IndexedR2Object, IndexedR2Run } from './ready.ts';
 import type { IndexedGribDuplicateVerification, SelectedIdxRecord, SourceAssetReceipt, IndexedGribFetchOptions } from './types.ts';
@@ -316,7 +317,7 @@ export class IndexedGribTransport {
           await response?.body?.cancel().catch(() => {});
           this.abort();
           timedOut = timeout.aborted;
-          throw error;
+          throw retriable(error);
         }
       }, {
         retries: maxAttempts - 1, minTimeout: baseDelayMs / 2, maxTimeout: maxDelayMs, randomize: true, maxRetryTime: deadlineMs, signal: this.signal,

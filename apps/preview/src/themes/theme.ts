@@ -80,8 +80,8 @@ interface GlyphShape {
 }
 
 /**
- * Everything that makes a map theme look the way it does. A theme is data: code
- * outside `themes/` reads these fields and never branches on a theme id.
+ * Everything that makes a map theme look the way it does. Code outside `themes/`
+ * reads these fields.
  */
 export interface ThemeRecord<Id extends string = string> {
   readonly id: Id;

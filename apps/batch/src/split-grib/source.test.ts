@@ -687,7 +687,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     tempDirs.push(cacheDir);
     const good = syntheticFetch(cycle, []);
     const fetchImpl = vi.fn(good).mockResolvedValueOnce(new Response('busy', { status: 503 }))
-      .mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('terminated')); } })));
+      .mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('connection reset')); } })));
     const session = await createSplitGribAcquisitionSession(shortProfile, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     try {
       await session.acquire(4);

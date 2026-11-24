@@ -96,8 +96,6 @@ export function createPreviewApp(): PreviewApp {
   function syncRootTheme(): void {
     if (!appRoot?.dataset) return;
     const cur = intent();
-    appRoot.dataset.theme = cur.theme;
-    appRoot.dataset.dock = cur.dockView;
     appRoot.dataset.chrome = themeOption(cur.theme).darkChrome ? 'dark' : 'light';
   }
 
@@ -383,7 +381,6 @@ export function createPreviewApp(): PreviewApp {
       if (intent().dockView === dockView) return;
       writer.intent({ dockView });
       preferences.setDockView(dockView);
-      syncRootTheme();
       timeline?.setVariant?.(dockView);
       writeUrl('replace');
     },
