@@ -184,3 +184,44 @@ it('pins live GFS without a sample when the location is missing', async () => {
   expect(empty).toBeNull();
   expect(unavailable.mock.calls.map(([input]) => new URL(String(input)).pathname)).toEqual(['/v1/catalog']);
 });
+
+it('selects GFS on a globe view over unmasked coordinates and falls back to camera viewport bounds offshore', async () => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(autoTime(0)));
+  const builds = new Map([fine, regionA, regional, global].map(build => [build.manifest.model, build]));
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input)), model = url.pathname.split('/')[3];
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models });
+    const build = builds.get(model)!;
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    const payload = fixturePointSample(build, String(input));
+    for (const frame of payload.frames) for (const layer of Object.values(frame.layers)) {
+      layer.status = 'outside-domain'; layer.value = null;
+    }
+    return Response.json(payload);
+  });
+  const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl });
+  const signal = new AbortController().signal;
+
+  // Startup globe view centered at (20, 0) in the Sahara Desert selects GFS without calling /sample.
+  const globeSelection = await resolveAutoBuild(api, {
+    lat: 20, lon: 0, globe: true, bounds: [-180, -60, 180, 75],
+    layers: ['usable-lift-agl'], validTimeMs: Date.parse(autoTime(18)), signal
+  });
+  expect(globeSelection?.build.manifest.model).toBe('gfs');
+  expect(fetchImpl.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith('/sample'))).toBe(false);
+
+  // Regional view where the center is over water (all /sample calls return outside-domain) selects the finest model covering the viewport.
+  const offshoreSelection = await resolveAutoBuild(api, {
+    ...REGION_A_POINT, globe: false, bounds: REGION_A_BOUNDS,
+    layers: ['usable-lift-agl'], validTimeMs: Date.parse(autoTime(18)), signal
+  });
+  expect(offshoreSelection?.build.manifest.model).toBe(fine.manifest.model);
+
+  // Stale requested time outside all model windows clamps to a valid frame when camera viewport bounds are present.
+  const clampedSelection = await resolveAutoBuild(api, {
+    ...REGION_A_POINT, globe: false, bounds: REGION_A_BOUNDS,
+    layers: ['usable-lift-agl'], validTimeMs: Date.parse(autoTime(0)), signal
+  });
+  expect(clampedSelection?.build.manifest.model).toBe(fine.manifest.model);
+  expect(clampedSelection?.frame.id).toBe('f001');
+});

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import {
   cleanModelDisplayLabel,
   DOCK_CHANNELS,
   formatModelResolutionKm,
   formatWindLevelLabel,
   modelApproxKm,
+  modelRegionSubtitle,
   THEME_CHIP_LABELS,
   WIND_ENCODING_OPTIONS
 } from './topbar-model';
@@ -30,7 +32,12 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     expect(formatModelResolutionKm('av-wrf')).toBe('3 km');
     expect(formatModelResolutionKm('wrf-va-1km')).toBe('1 km');
     expect(formatModelResolutionKm(null)).toBeNull();
-    expect(cleanModelDisplayLabel('WRF northern Virginia 1 km (RRFS)')).toBe('WRF northern Virginia (RRFS)');
+    expect(cleanModelDisplayLabel('RRFS (CONUS)')).toBe('RRFS');
+    expect(cleanModelDisplayLabel('WRF-NOVA 1 km (RRFS)')).toBe('WRF-NOVA');
+    expect(cleanModelDisplayLabel('WRF-NOVA')).toBe('WRF-NOVA');
+    for (const option of MODEL_OPTIONS) {
+      expect(modelRegionSubtitle(option.modelId)?.length).toBeGreaterThan(3);
+    }
   });
 
   it('normalizes lift, wind, clouds, rain, isobars, and peek in the unified channel dock', () => {

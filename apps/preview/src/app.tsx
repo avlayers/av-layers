@@ -6,7 +6,7 @@ import type { PreviewCommands } from './app/preview-commands';
 import type { PreviewStore } from './stores/app-store';
 import { BottomDock } from './features/controls/bottom-dock';
 import { ModelEmblem, ThemeIconPicker, WeatherChannelDock } from './features/controls/topbar-icons';
-import { cleanModelDisplayLabel, formatModelResolutionKm } from './features/controls/topbar-model';
+import { cleanModelDisplayLabel, formatModelResolutionKm, modelRegionSubtitle } from './features/controls/topbar-model';
 
 export interface AppProps {
   readonly store: PreviewStore;
@@ -26,16 +26,17 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
 
   const frames = forecast.build ? renderedFrames(forecast.build.manifest).flatMap(frame => frame.id ? [{ id: frame.id, validTime: frame.validTime }] : []) : [];
   const build = forecast.build;
+  const activeBuild = build && !forecast.expired ? build : null;
 
-  const isAutoModel = intent.model === AUTO_MODEL_ID;
-  const effectiveModelId = isAutoModel ? (build?.manifest.model ?? null) : intent.model;
+  const isAutoModel = !offline && intent.model === AUTO_MODEL_ID;
+  const effectiveModelId = isAutoModel ? (activeBuild?.manifest.model ?? null) : intent.model;
   const resolvedOption = effectiveModelId ? MODEL_OPTIONS.find(option => option.modelId === effectiveModelId) : undefined;
   const rawLabel = isAutoModel
-    ? (build ? `Auto · ${resolvedOption ? cleanModelDisplayLabel(resolvedOption.label) : build.manifest.model}` : 'Auto')
+    ? (activeBuild ? `Auto · ${resolvedOption ? cleanModelDisplayLabel(resolvedOption.label) : activeBuild.manifest.model}` : 'Auto')
     : (resolvedOption ? cleanModelDisplayLabel(resolvedOption.label) : intent.model);
   const name = offline ? 'Synthetic fixture' : rawLabel;
   const activeModelKm = offline ? null : formatModelResolutionKm(effectiveModelId);
-  const emblem = isAutoModel ? (build?.manifest.model ?? 'auto') : intent.model;
+  const emblem = offline ? fixtureModel : (isAutoModel ? (activeBuild?.manifest.model ?? 'auto') : intent.model);
 
   const modelChoices: ReadonlyArray<{
     readonly modelId: ModelId;
@@ -56,6 +57,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         ...MODEL_OPTIONS.map(option => ({
           modelId: option.modelId,
           label: cleanModelDisplayLabel(option.label),
+          subtitle: modelRegionSubtitle(option.modelId),
           kmBadge: formatModelResolutionKm(option.modelId)
         }))
       ];
@@ -79,14 +81,14 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
               data-auto={isAutoModel ? 'true' : 'false'}
               title={activeModelKm ? `${name} · Approx. ${activeModelKm} grid spacing` : name}
             >
-              <ModelEmblem isAuto={isAutoModel} />
+              {isAutoModel ? <ModelEmblem isAuto /> : null}
               <span id="model-name">{name}</span>
               {activeModelKm ? <span class="model-res-badge" aria-label={`Approximate resolution ${activeModelKm}`}>{activeModelKm}</span> : null}
               <span class="model-caret" aria-hidden="true">▾</span>
             </summary>
             <div id="models" role="toolbar" aria-label="Forecast model">
               {modelChoices.map(choice => {
-                const isSelected = choice.modelId === intent.model;
+                const isSelected = offline || choice.modelId === intent.model;
                 return (
                   <button
                     key={choice.modelId}

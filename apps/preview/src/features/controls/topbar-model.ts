@@ -53,9 +53,27 @@ export function formatModelResolutionKm(modelId: string | null | undefined): str
   return km !== null ? `${km} km` : null;
 }
 
-/** Strips inline `'1 km'` style duplicates from long model labels when paired with a dedicated km badge. */
+type ConfiguredModelId = (typeof MODEL_OPTIONS)[number]['modelId'];
+
+const MODEL_REGION_SUBTITLES: Readonly<Record<ConfiguredModelId, string>> = {
+  gfs: 'Global',
+  'icon-eu': 'Europe',
+  rrfs: 'North America',
+  'av-wrf': 'Caucasus',
+  'wrf-va-1km': 'Northern Virginia'
+};
+
+/** Returns a concise geographic region subtitle for the model picker menu. */
+export function modelRegionSubtitle(modelId: string | null | undefined): string | undefined {
+  return modelId && modelId in MODEL_REGION_SUBTITLES ? MODEL_REGION_SUBTITLES[modelId as ConfiguredModelId] : undefined;
+}
+
+/** Strips inline `'1 km'` and trailing parenthetical qualifiers from model labels when paired with a dedicated km badge. */
 export function cleanModelDisplayLabel(label: string): string {
-  return label.replace(/\s+\d+(?:\.\d+)?\s*km\b/i, '').trim();
+  return label
+    .replace(/\s+\d+(?:\.\d+)?\s*km\b/i, '')
+    .replace(/\s*\([^)]*\)\s*$/, '')
+    .trim();
 }
 
 export function readThemeInfoOpen(): boolean {

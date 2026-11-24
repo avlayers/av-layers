@@ -3,7 +3,7 @@ import { NORTHERN_LAMBERT, SOUTHERN_LAMBERT } from '../../../tests/lambert-fixtu
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { gridSchema } from './grid-schema.js';
-import { earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import { boundsOverlap, boundsOverlapFraction, earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
 import { isCovered, type CoverageMask } from './index.js';
 import { getProduct } from './products.js';
 
@@ -121,6 +121,13 @@ describe('native spherical grid geometry', () => {
     expect(withinGeographicBounds(0, -179, [170, -10, -170, 10])).toBe(true);
     expect(withinGeographicBounds(0, 0, [170, -10, -170, 10])).toBe(false);
     expect(withinGeographicBounds(0, 180, [-180, -10, -170, 10])).toBe(true);
+    expect(boundsOverlap([-130, 30, -120, 40], [-125, 35, -115, 45])).toBe(true);
+    expect(boundsOverlap([-130, 30, -120, 40], [-119, 35, -115, 45])).toBe(false);
+    expect(boundsOverlap([170, -50, -170, -30], [175, -45, 190, -35])).toBe(true);
+    expect(boundsOverlap([-180, -10, -170, 10], [170, -10, 180, 10])).toBe(true);
+    expect(boundsOverlapFraction([-80, 38, -77, 40], [-79, 38, -78, 39])).toBeCloseTo(1 / 6, 6);
+    expect(boundsOverlapFraction([-189.99999999999997, -50, 170, 50], [-180, -50, 180, 50])).toBeCloseTo(1, 6);
+    expect(boundsOverlapFraction([-100, 40, -100, 40], [-105, 35, -95, 45])).toBe(0);
   });
 
   it('traces cell-center corners and bows a Lambert edge past its corners', () => {

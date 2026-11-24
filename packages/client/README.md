@@ -31,7 +31,7 @@ sampling algorithm and returns cached grids synchronously. Under memory pressure
 the active height. A grid retained with `retain()` stays charged until its caller
 releases it.
 
-The coverage seam follows the cell-center edge of the displayed layer grid, or the coverage parallels when that grid wraps longitude. Auto ranks models by native spacing and keeps a candidate when `locateSampleCell` hits that grid and the sample is `valid` or `no-usable-lift`. `isGlobeView` is zoom 2 or lower, or a longitude span of at least 180°. That view sorts GFS first and still samples the center. Without a finite location, Auto pins GFS when that build is unexpired and covers the requested time, and skips the point sample.
+The coverage seam follows the cell-center edge of the displayed layer grid, or the coverage parallels when that grid wraps longitude. Auto ranks models by match tier (center coverage, then camera viewport coverage of at least 15% via `boundsOverlapFraction`, then the default global model) and native spacing, keeping a center candidate when `locateSampleCell` hits that grid and the sample is `valid` or `no-usable-lift`, or falling back to the finest viewport-covering model when the center is `outside-domain`. When a requested timestamp falls outside all candidates' windows and viewport bounds are provided, Auto clamps to the nearest frame via `selectHostFrame`. `isGlobeView` is zoom 2 or lower, or a longitude span of at least 180°. A globe view, or a request without a finite location, pins GFS when that build is unexpired and covers the view and time without a point sample.
 
 Point requests default to the first published frame. Select frame pages for complete
 timelines within the [serving budgets](../../docs/serving-budgets.md).

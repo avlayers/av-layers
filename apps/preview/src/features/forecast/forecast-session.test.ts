@@ -116,6 +116,31 @@ describe('forecast session', () => {
     expect(mocks.resolveAutoBuild).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ lat: 40, lon: -100, globe: false }));
   });
 
+  it('retains an active build when auto resolution returns null and commits resolved auto switches without clearing build', async () => {
+    const test = harness();
+    const first = test.builds[0]!;
+    const second = fixtureBuild({
+      buildId: '20261030T000000Z-00000000-0000-4000-8000-000000000001',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    mocks.resolveAutoBuild.mockReset().mockResolvedValueOnce({ build: first, frame: first.manifest.frames[0]! });
+    await test.session.load('auto');
+    expect(test.session.build).toBe(first);
+
+    test.calls.length = 0;
+    mocks.resolveAutoBuild.mockResolvedValueOnce(null);
+    await test.session.loadAuto();
+    expect(test.session.build).toBe(first);
+    expect(test.calls.some(call => call.startsWith('cleared:'))).toBe(false);
+
+    test.calls.length = 0;
+    mocks.resolveAutoBuild.mockResolvedValueOnce({ build: second, frame: second.manifest.frames[0]! });
+    await test.session.loadAuto();
+    expect(test.session.build).toBe(second);
+    expect(test.calls).not.toContain('forecast:{"build":null,"selectedFrame":null}');
+  });
+
   it('suspends a pending discovery and resumes it', async () => {
     const test = harness();
     test.latest.mockImplementationOnce(() => new Promise(() => undefined));
