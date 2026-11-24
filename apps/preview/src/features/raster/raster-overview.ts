@@ -734,7 +734,7 @@ export class RasterOverview {
     };
     void Promise.resolve().then(() => {
       if (!this.ownsJob(job, context)) return null;
-      if (theme === 'xcskies' || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
+      if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
       return prepareBitmap();
     }).then(image => {
       if (!image) return;

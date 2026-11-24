@@ -365,7 +365,7 @@ it('settles from the staging source idle event even while unrelated map sources 
   const sourceId = f.stage();
   f.markLoaded(sourceId);
   f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'metadata' });
-  f.emit('sourcedata', { sourceId: 'basemap', isSourceLoaded: true, sourceDataType: 'idle' });
+  f.emit('sourcedata', { sourceId: 'openmaptiles', isSourceLoaded: true, sourceDataType: 'idle' });
   await Promise.resolve();
   expect(f.sources.has(sourceId)).toBe(true);
   f.emit('sourcedata', { sourceId, isSourceLoaded: true, sourceDataType: 'idle' });

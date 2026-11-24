@@ -8,7 +8,7 @@ export const MAP_THEMES = [
   'convergence',
   'blueprint',
   'cockpit',
-  'xcskies'
+  'classic'
 ] as const;
 
 export type MapTheme = (typeof MAP_THEMES)[number];
@@ -18,9 +18,8 @@ export function isMapTheme(value: string | null | undefined): value is MapTheme 
   return typeof value === 'string' && THEME_SET.has(value);
 }
 
-export type LiftEncodingMode = 'smooth' | 'stepped-contour' | 'isoline-wash' | 'core-rim' | 'ink-outline' | 'xcskies-raw';
-export type CloudEncodingMode = 'veil' | 'satellite' | 'stipple' | 'nephanalysis' | 'cu-vs-overcast' | 'chalk-stipple' | 'graphic-shade' | 'xcskies-tint';
-export type RainEncodingMode = 'smooth-iso' | 'radar-glow' | 'hatch' | 'concentric-rings' | 'slant-streaks' | 'blueprint-hatch' | 'ink-hatch' | 'xcskies-raw';
+export type LiftEncodingMode = 'smooth' | 'stepped-contour' | 'isoline-wash' | 'core-rim' | 'ink-outline' | 'classic-raw';
+export type RainEncodingMode = 'smooth-iso' | 'radar-glow' | 'hatch' | 'concentric-rings' | 'slant-streaks' | 'blueprint-hatch' | 'ink-hatch' | 'classic-raw';
 
 export interface RgbaStop {
   readonly at: number;
@@ -59,7 +58,6 @@ export interface ThemeOption {
   readonly darkChrome: boolean;
   readonly liftMode: LiftEncodingMode;
   readonly liftContourStepM: number;
-  readonly cloudMode: CloudEncodingMode;
   readonly rainMode: RainEncodingMode;
   readonly isobar: IsobarThemeTokens;
   readonly rainPerimeter: RainPerimeterTokens;
@@ -77,7 +75,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: false,
     liftMode: 'smooth',
     liftContourStepM: 0,
-    cloudMode: 'veil',
     rainMode: 'smooth-iso',
     isobar: { minorColor: 'rgba(51, 65, 85, 0.56)', majorColor: 'rgba(15, 23, 42, 0.86)', haloColor: 'rgba(250, 248, 243, 0.95)', textColor: '#0f172a', highColor: '#0c4a6e', lowColor: '#581c87' },
     rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.72)', squallColor: 'rgba(15, 23, 42, 0.94)', haloColor: 'rgba(240, 249, 255, 0.92)' }
@@ -91,7 +88,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: true,
     liftMode: 'smooth',
     liftContourStepM: 0,
-    cloudMode: 'satellite',
     rainMode: 'radar-glow',
     isobar: { minorColor: 'rgba(186, 204, 226, 0.44)', majorColor: 'rgba(226, 238, 252, 0.84)', haloColor: 'rgba(11, 16, 24, 0.94)', textColor: '#e2e8f0', highColor: '#7dd3fc', lowColor: '#d8b4fe' },
     rainPerimeter: { showerColor: 'rgba(125, 211, 252, 0.76)', squallColor: 'rgba(224, 242, 254, 0.96)', haloColor: 'rgba(8, 15, 26, 0.92)' }
@@ -105,7 +101,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: false,
     liftMode: 'stepped-contour',
     liftContourStepM: 500,
-    cloudMode: 'stipple',
     rainMode: 'hatch',
     isobar: { minorColor: 'rgba(15, 76, 92, 0.56)', majorColor: 'rgba(11, 56, 68, 0.88)', haloColor: 'rgba(250, 247, 240, 0.96)', textColor: '#0b3844', highColor: '#0c4a6e', lowColor: '#581c87' },
     rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.74)', squallColor: 'rgba(15, 23, 42, 0.95)', haloColor: 'rgba(255, 255, 255, 0.94)' }
@@ -119,7 +114,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: false,
     liftMode: 'isoline-wash',
     liftContourStepM: 750,
-    cloudMode: 'nephanalysis',
     rainMode: 'concentric-rings',
     isobar: { minorColor: 'rgba(71, 85, 105, 0.50)', majorColor: 'rgba(30, 41, 59, 0.84)', haloColor: 'rgba(255, 255, 255, 0.96)', textColor: '#1e293b', highColor: '#0369a1', lowColor: '#6b21a8' },
     rainPerimeter: { showerColor: 'rgba(30, 41, 59, 0.72)', squallColor: 'rgba(15, 23, 42, 0.94)', haloColor: 'rgba(255, 255, 255, 0.94)' }
@@ -133,7 +127,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: false,
     liftMode: 'core-rim',
     liftContourStepM: 1250,
-    cloudMode: 'cu-vs-overcast',
     rainMode: 'slant-streaks',
     isobar: { minorColor: 'rgba(51, 65, 85, 0.52)', majorColor: 'rgba(15, 23, 42, 0.86)', haloColor: 'rgba(241, 245, 249, 0.95)', textColor: '#0f172a', highColor: '#0f766e', lowColor: '#581c87' },
     rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.74)', squallColor: 'rgba(15, 23, 42, 0.95)', haloColor: 'rgba(248, 250, 252, 0.94)' }
@@ -147,7 +140,6 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: true,
     liftMode: 'ink-outline',
     liftContourStepM: 1000,
-    cloudMode: 'chalk-stipple',
     rainMode: 'blueprint-hatch',
     isobar: { minorColor: 'rgba(125, 211, 252, 0.46)', majorColor: 'rgba(224, 242, 254, 0.88)', haloColor: 'rgba(8, 21, 36, 0.95)', textColor: '#e0f2fe', highColor: '#67e8f9', lowColor: '#e9d5ff' },
     rainPerimeter: { showerColor: 'rgba(165, 243, 252, 0.78)', squallColor: 'rgba(236, 254, 255, 0.96)', haloColor: 'rgba(6, 17, 30, 0.92)' }
@@ -161,22 +153,20 @@ export const THEME_OPTIONS: readonly ThemeOption[] = [
     darkChrome: false,
     liftMode: 'ink-outline',
     liftContourStepM: 1000,
-    cloudMode: 'graphic-shade',
     rainMode: 'ink-hatch',
     isobar: { minorColor: 'rgba(15, 23, 42, 0.62)', majorColor: 'rgba(0, 0, 0, 0.92)', haloColor: 'rgba(255, 255, 255, 0.97)', textColor: '#000000', highColor: '#1e3a8a', lowColor: '#581c87' },
     rainPerimeter: { showerColor: 'rgba(0, 0, 0, 0.78)', squallColor: 'rgba(0, 0, 0, 0.96)', haloColor: 'rgba(255, 255, 255, 0.96)' }
   },
   {
-    id: 'xcskies',
-    label: 'Classic XC Skies',
-    shortLabel: 'XC Skies Classic',
-    summary: 'XC Skies Natural relief · 22-step duckies · sunlit cloud veil & cuffed rain',
-    swatch: 'linear-gradient(135deg, #62cbff 0%, #35cd34 35%, #fefa02 68%, #f92d2d 100%)',
+    id: 'classic',
+    label: 'Classic Soaring',
+    shortLabel: 'Classic',
+    summary: 'Natural shaded relief · 22-step classic palette · sunlit cloud veil & cuffed rain',
+    swatch: `linear-gradient(135deg, ${LIFT_COLORS[3]} 0%, ${LIFT_COLORS[7]} 35%, ${LIFT_COLORS[9]} 68%, ${LIFT_COLORS[13]} 100%)`,
     darkChrome: false,
-    liftMode: 'xcskies-raw',
+    liftMode: 'classic-raw',
     liftContourStepM: 0,
-    cloudMode: 'xcskies-tint',
-    rainMode: 'xcskies-raw',
+    rainMode: 'classic-raw',
     isobar: { minorColor: 'rgba(30, 41, 59, 0.58)', majorColor: 'rgba(15, 23, 42, 0.90)', haloColor: 'rgba(255, 255, 255, 0.96)', textColor: '#0f172a', highColor: '#0c4a6e', lowColor: '#581c87' },
     rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.80)', squallColor: 'rgba(15, 23, 42, 0.96)', haloColor: 'rgba(255, 255, 255, 0.95)' }
   }
@@ -340,7 +330,7 @@ function rgbaCss(r: number, g: number, b: number, a = 255): string {
 }
 
 export function themeLiftLegendColors(theme: MapTheme, edges: readonly number[] = LIFT_EDGES, count = 22): string[] {
-  if (theme === 'xcskies') return LIFT_COLORS.slice(0, count);
+  if (theme === 'classic') return LIFT_COLORS.slice(0, count);
   const stops = liftStopsForTheme(theme);
   const opt = themeOption(theme);
   const pixel = new Uint8Array(4);

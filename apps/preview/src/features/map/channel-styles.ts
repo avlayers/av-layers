@@ -78,7 +78,7 @@ export function defaultCloudStyleForTheme(theme: MapTheme): CloudStyleId {
     case 'cockpit':
       return 'nephanalysis';
     case 'stone':
-    case 'xcskies':
+    case 'classic':
     default:
       return 'sunlit-veil';
   }
@@ -128,7 +128,7 @@ export function resolveChannelStyles(
         rimStrokeColor: 'rgba(15, 23, 42, 0.88)',
         coreStrokeColor: 'rgba(15, 23, 42, 0.96)',
         cuffRgb: [18, 28, 44],
-        cuffMaxAlpha: theme === 'xcskies' ? 108 : theme === 'cockpit' ? 102 : 96
+        cuffMaxAlpha: theme === 'classic' ? 108 : theme === 'cockpit' ? 102 : 96
       };
 
   return {
@@ -142,11 +142,7 @@ export function resolveChannelStyles(
   };
 }
 
-/**
- * Resolves dual-polarity outer casing + inner perimeter stroke colors for the active `RainStyleId`
- * so storm boundaries pop cleanly over white paper (`cockpit`), yellow/cyan `xcskies` lift, warm
- * `stone`, and dark `slate` / `blueprint` views alike.
- */
+/** Resolves outer halo casing and inner perimeter stroke colors for the active `RainStyleId`. */
 export function rainContourStrokePair(styles: ResolvedChannelStyles): {
   readonly haloColor: string;
   readonly showerColor: string;
@@ -156,9 +152,7 @@ export function rainContourStrokePair(styles: ResolvedChannelStyles): {
     return { haloColor: re.haloCasingColor, showerColor: re.rimStrokeColor };
   }
   if (styles.rainStyle === 'vignette-cuff' || styles.rainStyle === 'wet-lens') {
-    // Dark slate outer moat + crisp alabaster-white specular inner rim (#1 & #4)
     return { haloColor: re.haloCasingColor, showerColor: re.dryHaloColor };
   }
-  // SIGWX Scallop (#2) & Inward Tick Comb (#3): crisp white halo + dark slate meteorological ink
   return { haloColor: re.dryHaloColor, showerColor: re.rimStrokeColor };
 }

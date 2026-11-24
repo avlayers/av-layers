@@ -182,3 +182,12 @@ Dataset: https://registry.opendata.aws/copernicus-dem/
 License and attribution: https://dataspace.copernicus.eu/explore-data/data-collections/copernicus-contributing-missions/collections-description/COP-DEM
 Native data are retained; Cloud Optimized GeoTIFFs are losslessly repacked.
 Prepared elevation arrays are derived from these data.
+
+OpenFreeMap / OpenMapTiles / OpenStreetMap basemap vector tiles, sprites, and glyphs
+Vector tiles, sprites, and font glyphs for the preview map are served by
+OpenFreeMap (https://openfreemap.org/) using the OpenMapTiles schema
+(https://openmaptiles.org/, CC-BY 4.0) derived from OpenStreetMap data
+(© OpenStreetMap contributors, ODbL 1.0, https://www.openstreetmap.org/copyright).
+Preview DEM hillshade and color-relief tiles use the Mapzen / AWS Terrain Tiles
+Terrarium dataset (https://registry.opendata.aws/terrain-tiles/), which
+aggregates 3DEP (USGS), SRTM (NASA/NGA), GMTED (USGS/NGA), and ETOPO1 (NOAA).

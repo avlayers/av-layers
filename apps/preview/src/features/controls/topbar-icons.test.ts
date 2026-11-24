@@ -56,13 +56,13 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
   });
 
   it('resolves curated auto per-theme defaults while allowing independent cloudStyle and rainStyle overrides', () => {
-    expect(resolveChannelStyles('xcskies').cloudStyle).toBe('sunlit-veil');
-    expect(resolveChannelStyles('xcskies').rainStyle).toBe('vignette-cuff');
+    expect(resolveChannelStyles('classic').cloudStyle).toBe('sunlit-veil');
+    expect(resolveChannelStyles('classic').rainStyle).toBe('vignette-cuff');
     expect(resolveChannelStyles('slate').cloudStyle).toBe('satellite-ir');
     expect(resolveChannelStyles('chart').cloudStyle).toBe('nephanalysis');
     expect(resolveChannelStyles('convergence').cloudStyle).toBe('cu-overcast');
 
-    const overridden = resolveChannelStyles('xcskies', {
+    const overridden = resolveChannelStyles('classic', {
       cloudStyle: 'nephanalysis',
       rainStyle: 'sigwx-scallop'
     });
