@@ -31,7 +31,8 @@ export function windBounds(map: MapBoundsPort, lowMemory: boolean): Bounds {
 
 export function coversBounds(outer: readonly [number, number, number, number], inner: readonly [number, number, number, number]): boolean {
   const span = (w: number, e: number) => (e - w + 360) % 360 || (e === w ? 0 : 360);
-  return inner[1] >= outer[1] && inner[3] <= outer[3] && span(outer[0], inner[0]) + span(inner[0], inner[2]) <= span(outer[0], outer[2]);
+  const outerSpan = span(outer[0], outer[2]);
+  return inner[1] >= outer[1] && inner[3] <= outer[3] && (outerSpan >= 360 || span(outer[0], inner[0]) + span(inner[0], inner[2]) <= outerSpan);
 }
 
 /** Conservative geographic area of a camera rectangle. Returns null for nonfinite or degenerate bounds. */

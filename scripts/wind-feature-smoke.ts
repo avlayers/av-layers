@@ -353,9 +353,9 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.locator('#units-metric').click();
       const map = await page.locator('#map').boundingBox();
       assert(map !== null, 'Map element is missing');
-      await page.mouse.click(map.x + map.width / 2, map.y + map.height / 2);
+      await page.mouse.click(map.x + map.width - 325, map.y + map.height / 2);
       await page.locator('#point-card').waitFor({ state: 'visible', timeout: timeoutMs });
-      await page.waitForFunction(() => (document.querySelector('#point-wind')?.textContent ?? '').trim().length > 0, undefined, { timeout: timeoutMs });
+      await page.waitForFunction(() => (document.querySelector('#point-wind')?.textContent ?? '').includes('km/h'), undefined, { timeout: timeoutMs });
       const metric = (await page.locator('#point-wind').textContent()) ?? '';
       assert(metric.includes('km/h'), `Point wind is not metric: ${metric}`);
       await page.locator('#units-imperial').click();
