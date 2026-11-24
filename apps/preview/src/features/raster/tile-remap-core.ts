@@ -1,6 +1,6 @@
 import { LIFT_COLORS, LIFT_EDGES, paletteValueLut, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
-import { liftStopsForTheme, rainStopsForTheme, sampleStops } from '../../themes/palette';
+import { sampleStops } from '../../themes/palette';
 import { themeOption, type MapTheme } from '../../themes/registry';
 
 export type RemapKind = 'lift' | 'rain';
@@ -27,7 +27,7 @@ function rampLutFor(kind: RemapKind, theme: MapTheme): Uint8Array {
   let ramp = rampCache.get(key);
   if (ramp) return ramp;
   ramp = new Uint8Array(STOP_RAMP_SIZE * 4);
-  const stops = kind === 'rain' ? rainStopsForTheme(theme) : liftStopsForTheme(theme);
+  const stops = kind === 'rain' ? themeOption(theme).rainStops : themeOption(theme).liftStops;
   const maxVal = kind === 'rain' ? MAX_RAIN_VAL : MAX_LIFT_VAL;
   for (let i = 0; i < STOP_RAMP_SIZE; i++) {
     const val = (i / (STOP_RAMP_SIZE - 1)) * maxVal;
@@ -283,6 +283,11 @@ function extractPixels(bitmap: ImageBitmap, canvas: OffscreenCanvas): { ctx: Off
   return { ctx, imageData: ctx.getImageData(0, 0, w, h) };
 }
 
+/** Whether `theme` repaints this tile; tiles of 48 bytes or fewer are empty placeholders. */
+export function needsRemap(theme: MapTheme, data: ArrayBuffer): boolean {
+  return themeOption(theme).remap && data.byteLength > 48;
+}
+
 /** Decodes WebP bytes, remaps pixels in place inside `workspace`, and returns an `ImageBitmap`. */
 export async function decodeAndRemapBitmap(
   workspace: RemapBitmapWorkspace,
@@ -291,7 +296,7 @@ export async function decodeAndRemapBitmap(
   theme: MapTheme,
   maskData?: ArrayBuffer | null
 ): Promise<ImageBitmap> {
-  if (!themeOption(theme).remap || data.byteLength <= 48) {
+  if (!needsRemap(theme, data)) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const [bitmap, maskBitmap] = await Promise.all([

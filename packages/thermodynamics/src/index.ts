@@ -261,14 +261,12 @@ export const dryParcelTemperature = (
 /**
  * Dry-adiabatic parcel temperature in Celsius (°C) at target altitude `zM` (m)
  * given initial parcel temperature `t0C` (°C) at altitude `z0M` (m).
- * @alias
  */
 export const dryParcelTemperatureC = dryParcelTemperature;
 
 /**
  * Dry-adiabatic parcel temperature in Kelvin (K) at target altitude `zM` (m)
  * given initial parcel temperature `t0K` (K) at altitude `z0M` (m).
- * @alias
  */
 export const dryParcelTemperatureK = dryParcelTemperature;
 

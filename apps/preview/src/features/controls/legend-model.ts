@@ -2,7 +2,7 @@ import { activePalettes, type PinnedBuild, type UnitSystem } from '@av/client';
 import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
 import { isLiftLayer, shortLayerName } from '../forecast/forecast-model';
 import { themeLiftLegendColors } from '../../themes/palette';
-import { themeOption, type MapTheme } from '../../themes/registry';
+import { DEFAULT_THEME, themeOption, type MapTheme } from '../../themes/registry';
 
 export interface LegendStop { readonly color: string; readonly label: string }
 export interface LegendModel {
@@ -14,7 +14,7 @@ export interface LegendModel {
   readonly cutoff: string;
 }
 
-export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSystem, theme: MapTheme = 'stone'): LegendModel | null {
+export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSystem, theme: MapTheme = DEFAULT_THEME): LegendModel | null {
   const palette = activePalettes(build.manifest.descriptors.palettes, layer, build.manifest.descriptors.layers)[0];
   if (!palette) return null;
   const descriptor = build.manifest.descriptors.layers[layer], liftLayer = isLiftLayer(layer);

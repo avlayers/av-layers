@@ -15,7 +15,12 @@ export const chart: ThemeRecord<'chart'> = {
   rainMode: 'hatch',
   cloudStyle: 'nephanalysis',
   isobar: { minorColor: 'rgba(15, 76, 92, 0.56)', majorColor: 'rgba(11, 56, 68, 0.88)', haloColor: 'rgba(250, 247, 240, 0.96)', textColor: '#0b3844', highColor: '#0c4a6e', lowColor: '#581c87' },
-  rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.74)', squallColor: 'rgba(15, 23, 42, 0.95)', haloColor: 'rgba(255, 255, 255, 0.94)' },
+  cloudContours: { brokenColor: 'rgba(51, 65, 85, 0.50)', overcastColor: 'rgba(15, 23, 42, 0.82)', haloColor: 'rgba(255, 255, 255, 0.92)' },
+  rainEdge: {
+    haloCasingColor: 'rgba(15, 23, 42, 0.64)', dryHaloColor: 'rgba(255, 255, 255, 0.98)',
+    rimStrokeColor: 'rgba(15, 23, 42, 0.88)', coreStrokeColor: 'rgba(15, 23, 42, 0.96)',
+    cuffRgb: [18, 28, 44], cuffMaxAlpha: 96
+  },
   liftDetail: 'Usable thermal ceiling (Chart Topo palette)',
   liftStops: [
     { at: 0, r: 248, g: 231, b: 180, a: 34 },
@@ -33,7 +38,11 @@ export const chart: ThemeRecord<'chart'> = {
     { color: 'rgba(148, 163, 184, 0.48)', label: '60% BKN' },
     { color: 'rgba(51, 65, 85, 0.64)', label: '85%+ OVC' }
   ],
-  rainCuffMaxAlpha: 96,
+  rainLegend: [
+    { color: 'linear-gradient(90deg, #ffffff 0 22%, rgba(20,29,44,0.48) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },
+    { color: 'repeating-linear-gradient(115deg, #f8fafc 0 2px, #0f172a 2px 4px)', label: 'Falling rain' },
+    { color: 'rgba(15, 23, 42, 0.95)', label: '8+ mm/h squall' }
+  ],
   basemap: {
     ocean: '#9ec2d8',
     relief: [

@@ -9,13 +9,14 @@ export type ChannelView = Pick<PreviewIntent,
 /**
  * A forecast layer group drawn on the map (lift raster, sky weather, wind).
  * The app keeps one list of channels and forwards every display change,
- * playback change and teardown to each; data selection stays per channel.
+ * playback change and teardown to each, tearing down in reverse order;
+ * data selection stays per channel.
  */
 export interface MapChannel {
   /** Applies theme, opacity, visibility and units. Cheap when nothing changed. */
   update(view: ChannelView): void;
   setPlayback?(playing: boolean): void;
-  /** Drops drawn data while keeping the channel attached to the map. */
-  clear(): void;
+  /** Drops drawn data while keeping the channel attached to the map; `release` also frees retained memory. */
+  clear(release?: boolean): void;
   destroy(): void;
 }

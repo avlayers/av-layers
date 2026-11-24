@@ -3,7 +3,7 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../controls/bottom-dock-model';
-import { parseMapTheme, type MapTheme } from '../../themes/registry';
+import { DEFAULT_THEME, parseMapTheme, type MapTheme } from '../../themes/registry';
 
 export type AltitudeReference = 'agl' | 'msl';
 type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
@@ -83,7 +83,7 @@ export function previewUrl(pathname: string, state: {
   });
   if (state.layer && state.layer !== 'usable-lift-agl' && state.layer !== 'usable-lift-msl') params.set('layer', state.layer);
   if (state.validTime) params.set('t', state.validTime);
-  if (state.theme && state.theme !== 'stone') params.set('theme', state.theme);
+  if (state.theme && state.theme !== DEFAULT_THEME) params.set('theme', state.theme);
   if (state.dockView && state.dockView !== DEFAULT_DOCK_VIEW) params.set('dock', state.dockView);
   if (state.liftVisible === false) params.set('lift', '0');
   if (state.cloudsVisible === false) params.set('clouds', '0');

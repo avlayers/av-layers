@@ -14,13 +14,15 @@ export class ByteCache<K extends NonNullable<unknown>, V extends NonNullable<unk
   get bytes(): number { return this.lru.calculatedSize; }
   get(key: K): V | undefined { return this.lru.get(key); }
   delete(key: K): void { this.lru.delete(key); }
+  /** Zero-byte entries count as one byte, and entries due within 2 ms are not stored. */
   set(key: K, value: V, bytes: number, until = Infinity): void {
+    const now = Date.now();
     // lru-cache expires once age exceeds ttl; one millisecond less expires at `until` itself.
-    const ttl = until - Date.now() - 1;
+    const ttl = until - now - 1;
     // Delete first: lru-cache keeps the old size when the same value is set again.
     this.lru.delete(key);
     if (!Number.isSafeInteger(bytes) || bytes < 0 || ttl < 1) return;
-    this.lru.set(key, value, { size: Math.max(1, bytes), ...(Number.isFinite(ttl) ? { ttl } : {}) });
+    this.lru.set(key, value, { size: Math.max(1, bytes), ...(Number.isFinite(ttl) ? { ttl, start: now } : {}) });
   }
 }
 

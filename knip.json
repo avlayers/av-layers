@@ -56,5 +56,16 @@
   },
   "ignoreBinaries": [
     "uv"
-  ]
+  ],
+  "ignore": [
+    ".claude/**"
+  ],
+  "ignoreIssues": {
+    "packages/forecast/src/column-input.ts": [
+      "types"
+    ],
+    "packages/thermodynamics/src/index.ts": [
+      "duplicates"
+    ]
+  }
 }

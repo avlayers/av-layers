@@ -3,7 +3,7 @@ import { classic } from './classic';
 import { slate } from './slate';
 import { stone } from './stone';
 
-/** Every map theme in picker order. The first is the default. Adding a theme is one file plus one entry here. */
+/** Every map theme in picker order. The first is the default. */
 export const THEME_OPTIONS = [stone, slate, chart, classic] as const;
 
 export type MapTheme = (typeof THEME_OPTIONS)[number]['id'];
@@ -27,6 +27,12 @@ export function isMapTheme(value: string | null | undefined): value is MapTheme 
 export function parseMapTheme(value: string | null | undefined): MapTheme | null {
   if (isMapTheme(value)) return value;
   return value ? RETIRED_THEMES.get(value) ?? null : null;
+}
+
+/** The theme `step` places from `theme` in picker order, wrapping at either end. */
+export function stepTheme(theme: MapTheme, step: -1 | 1): MapTheme {
+  const index = Math.max(0, THEME_OPTIONS.findIndex(option => option.id === theme));
+  return THEME_OPTIONS[(index + step + THEME_OPTIONS.length) % THEME_OPTIONS.length]!.id;
 }
 
 export function themeOption(theme: MapTheme): ThemeOption {

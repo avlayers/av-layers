@@ -1,4 +1,4 @@
-import { THEME_OPTIONS } from '../themes/registry';
+import { stepTheme } from '../themes/registry';
 import type { PreviewCommands } from './preview-commands';
 import type { PreviewStore } from '../stores/app-store';
 
@@ -52,9 +52,7 @@ export function installShortcuts(options: ShortcutOptions): void {
     if ((key === '1' || key === '3') && point.isOpen()) { event.preventDefault(); commands.setPointViewMode?.(key === '3' ? '3d' : '1d'); return; }
     if (key === '[' || key === ']') {
       event.preventDefault();
-      const index = THEME_OPTIONS.findIndex(item => item.id === intent().theme);
-      const next = THEME_OPTIONS[(index + (key === ']' ? 1 : -1) + THEME_OPTIONS.length) % THEME_OPTIONS.length];
-      if (next) commands.setTheme(next.id);
+      commands.setTheme(stepTheme(intent().theme, key === ']' ? 1 : -1));
       return;
     }
     if ((key === 'ArrowLeft' || key === 'ArrowRight') && options.stepFrame(key === 'ArrowRight' ? 1 : -1)) event.preventDefault();

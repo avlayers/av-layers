@@ -1,6 +1,6 @@
 import { LIFT_COLORS, LIFT_EDGES } from '@av/contracts/layers';
 import { themeOption, type MapTheme } from './registry';
-import type { MiniScaleStop, RgbaStop } from './theme';
+import type { RgbaStop } from './theme';
 
 /** Colour ramps and legends derived from a theme record. */
 
@@ -29,14 +29,6 @@ export function sampleStops(stops: readonly RgbaStop[], value: number, out: Uint
   }
 }
 
-export function liftStopsForTheme(theme: MapTheme): readonly RgbaStop[] {
-  return themeOption(theme).liftStops;
-}
-
-export function rainStopsForTheme(theme: MapTheme): readonly RgbaStop[] {
-  return themeOption(theme).rainStops;
-}
-
 function rgbaCss(r: number, g: number, b: number, a = 255): string {
   return a >= 254 ? `rgb(${r}, ${g}, ${b})` : `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(2)})`;
 }
@@ -58,23 +50,4 @@ export function themeLiftLegendColors(theme: MapTheme, edges: readonly number[] 
     colors.push(rgbaCss(pixel[0]!, pixel[1]!, pixel[2]!, Math.max(96, pixel[3]!)));
   }
   return colors;
-}
-
-export function themeRainLegendStops(theme: MapTheme): readonly MiniScaleStop[] {
-  const opt = themeOption(theme);
-  const cuffBg = opt.darkChrome
-    ? 'linear-gradient(90deg, #e0f2fe 0 22%, rgba(186,224,248,0.42) 55%, transparent 100%)'
-    : 'linear-gradient(90deg, #ffffff 0 22%, rgba(20,29,44,0.48) 55%, transparent 100%)';
-  const streakBg = opt.darkChrome
-    ? 'repeating-linear-gradient(115deg, #e0f2fe 0 2px, #020814 2px 4px)'
-    : 'repeating-linear-gradient(115deg, #f8fafc 0 2px, #0f172a 2px 4px)';
-  return [
-    { color: cuffBg, label: 'Dry halo + inner cuff' },
-    { color: streakBg, label: 'Falling rain' },
-    { color: opt.rainPerimeter.squallColor, label: '8+ mm/h squall' }
-  ];
-}
-
-export function themeCloudLegendStops(theme: MapTheme): readonly MiniScaleStop[] {
-  return themeOption(theme).cloudLegend;
 }

@@ -1,7 +1,7 @@
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import type { UnitSystem } from '@av/client';
-import { THEME_OPTIONS, themeOption, type MapTheme } from '../../themes/registry';
+import { stepTheme, THEME_OPTIONS, themeOption, type MapTheme } from '../../themes/registry';
 import type { WindHeight, WindStatus, WindStyle } from '../wind/wind-model';
 import {
   DOCK_CHANNELS,
@@ -148,12 +148,8 @@ export function ThemeIconPicker(props: {
   const activeTheme = themeOption(props.theme);
   const activeChipLabel = themeOption(props.theme).chipLabel;
   const inspected = themeOption(hoveredTheme ?? props.theme);
-  const themeIndex = Math.max(0, THEME_OPTIONS.findIndex(item => item.id === props.theme));
 
-  const cycleTheme = (step: -1 | 1) => {
-    const next = THEME_OPTIONS[(themeIndex + step + THEME_OPTIONS.length) % THEME_OPTIONS.length];
-    if (next) props.onSelectTheme(next.id);
-  };
+  const cycleTheme = (step: -1 | 1) => props.onSelectTheme(stepTheme(props.theme, step));
 
   const toggleInfo = () => {
     setInfoOpen(prev => {

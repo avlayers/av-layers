@@ -1,7 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import type { LayerId } from '@av/contracts/layers';
 import type { PinnedBuild, UnitSystem } from '@av/client';
-import { themeCloudLegendStops, themeRainLegendStops } from '../../themes/palette';
 import { themeOption, type MapTheme } from '../../themes/registry';
 import type { AltitudeReference } from '../navigation/url-state';
 import {
@@ -125,8 +124,8 @@ export function DockViewSwitcher(props: {
 }
 
 function LayerKeyBody(props: ResolvedDockProps) {
-  const cloudStops = themeCloudLegendStops(props.theme);
-  const rainStops = themeRainLegendStops(props.theme);
+  const cloudStops = themeOption(props.theme).cloudLegend;
+  const rainStops = themeOption(props.theme).rainLegend;
   const activeTheme = themeOption(props.theme);
   const opacityPct = `${Math.round(props.opacity * 100)}%`;
 

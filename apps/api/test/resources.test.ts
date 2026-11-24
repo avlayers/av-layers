@@ -67,6 +67,12 @@ describe('serving resource bounds', () => {
       expect(cache.bytes).toBe(8);
     } finally { vi.useRealTimers(); }
   });
+  it('re-accounts an entry set again with the same value and a new size', () => {
+    const cache = new ByteCache<string, number>(3, 100);
+    cache.set('a', 1, 10);
+    cache.set('a', 1, 50);
+    expect(cache.bytes).toBe(50);
+  });
   it('coalesces materialized reads, holds the owner context and allows retry after failure', async () => {
     const reads = new MaterializedReads<number>(1, 15_000, 96, 0);
     let release!: (value: number) => void;

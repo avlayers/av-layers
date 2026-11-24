@@ -95,13 +95,13 @@ export class WindOverlay implements MapChannel {
     const current = this.options;
     if (next.style === current.style && next.visible === current.visible && next.paused === current.paused
       && next.units === current.units && next.darkChrome === current.darkChrome) return;
-    this.setOptions(next);
+    this.applyOptions(next);
   }
 
-  setOptions(options: Partial<WindOverlayOptions>): void {
+  private applyOptions(options: WindOverlayOptions): void {
     if (this.destroyed) return;
-    this.options = { ...this.options, ...options };
-    try { this.deck.setOptions(this.options); } catch { /* the map is replacing its style */ }
+    // Kept only once the renderer accepts them, so a failed apply is retried on the next update.
+    try { this.deck.setOptions(options); this.options = options; } catch { /* the map is replacing its style */ }
   }
 
   clear(): void { this.install(null, null, 'replace', null); }

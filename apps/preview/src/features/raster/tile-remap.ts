@@ -1,7 +1,8 @@
-import { themeOption, type MapTheme } from '../../themes/registry';
+import type { MapTheme } from '../../themes/registry';
 import {
   createBitmapWorkspace,
   decodeAndRemapBitmap,
+  needsRemap,
   remapRgbaInPlace,
   type RemapBitmapWorkspace,
   type RemapKind
@@ -11,6 +12,11 @@ import type { WorkerRemapRequest, WorkerRemapResponse } from './tile-remap.worke
 export { remapRgbaInPlace,  };
 
 let remapSupported: boolean | null = null;
+
+/** Whether this tile is repainted for `theme` in this browser. */
+export function shouldRemapTile(theme: MapTheme, data: ArrayBuffer): boolean {
+  return needsRemap(theme, data) && canRemapTiles();
+}
 
 export function canRemapTiles(): boolean {
   if (remapSupported !== null) return remapSupported;
@@ -208,7 +214,7 @@ export function remapTileToBitmap(
   options: RemapTileOptions = {}
 ): Promise<ImageBitmap> {
   if (options.signal?.aborted) return Promise.reject(abortError());
-  if (!themeOption(theme).remap || data.byteLength <= 48 || !canRemapTiles()) {
+  if (!shouldRemapTile(theme, data)) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const slots = ensurePool();

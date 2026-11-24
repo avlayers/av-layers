@@ -152,7 +152,7 @@ describe('wind warming recovery', () => {
     const test = harness();
     await ready(test);
     wind.unavailable.add(test.framesA[1]!.id);
-    test.session.setPlaying(false);
+    test.session.playbackChanged();
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[1]!.id), { timeout: 5_000 });
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[2]!.id), { timeout: 5_000 });
     expect(test.statuses.at(-1)).toBe('ready');
@@ -163,7 +163,7 @@ describe('wind warming recovery', () => {
     const test = harness();
     await ready(test);
     wind.unavailable.add(test.framesA[1]!.id);
-    test.session.setPlaying(false);
+    test.session.playbackChanged();
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[1]!.id), { timeout: 5_000 });
     await vi.waitFor(() => expect(wind.loads).toContain(test.framesA[2]!.id), { timeout: 5_000 });
     wind.unavailable.delete(test.framesA[1]!.id);

@@ -92,7 +92,8 @@ values and typed commands. URL/history behavior is tested through
 
 To change a control, update its store intent, command and component; leave the
 graphics engine alone. To add a map layer group, implement `MapChannel` and add
-it to the root's channel list; to add a theme, add one file under `src/themes/`. To add a behavior, use the existing client/contracts
+it to the root's channel list, which updates, clears and destroys every channel;
+to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 
 ## Layer benchmark

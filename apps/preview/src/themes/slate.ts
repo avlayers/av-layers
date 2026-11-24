@@ -14,7 +14,12 @@ export const slate: ThemeRecord<'slate'> = {
   rainMode: 'radar-glow',
   cloudStyle: 'satellite-ir',
   isobar: { minorColor: 'rgba(186, 204, 226, 0.44)', majorColor: 'rgba(226, 238, 252, 0.84)', haloColor: 'rgba(11, 16, 24, 0.94)', textColor: '#e2e8f0', highColor: '#7dd3fc', lowColor: '#d8b4fe' },
-  rainPerimeter: { showerColor: 'rgba(125, 211, 252, 0.76)', squallColor: 'rgba(224, 242, 254, 0.96)', haloColor: 'rgba(8, 15, 26, 0.92)' },
+  cloudContours: { brokenColor: 'rgba(186, 214, 242, 0.56)', overcastColor: 'rgba(226, 240, 253, 0.88)', haloColor: 'rgba(6, 12, 22, 0.90)' },
+  rainEdge: {
+    haloCasingColor: 'rgba(4, 10, 20, 0.94)', dryHaloColor: 'rgba(4, 10, 20, 0.94)',
+    rimStrokeColor: 'rgba(224, 242, 254, 0.96)', coreStrokeColor: 'rgba(255, 255, 255, 0.99)',
+    cuffRgb: [186, 224, 248], cuffMaxAlpha: 88
+  },
   liftDetail: 'Usable thermal ceiling (Dark Slate palette)',
   liftStops: [
     { at: 0, r: 78, g: 48, b: 24, a: 16 },
@@ -41,7 +46,11 @@ export const slate: ThemeRecord<'slate'> = {
     { color: 'rgba(210, 228, 246, 0.52)', label: '60% BKN' },
     { color: 'rgba(228, 240, 252, 0.78)', label: '85%+ OVC' }
   ],
-  rainCuffMaxAlpha: 96,
+  rainLegend: [
+    { color: 'linear-gradient(90deg, #e0f2fe 0 22%, rgba(186,224,248,0.42) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },
+    { color: 'repeating-linear-gradient(115deg, #e0f2fe 0 2px, #020814 2px 4px)', label: 'Falling rain' },
+    { color: 'rgba(224, 242, 254, 0.96)', label: '8+ mm/h squall' }
+  ],
   basemap: {
     ocean: '#0d1520',
     relief: [

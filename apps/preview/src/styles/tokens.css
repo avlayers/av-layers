@@ -22,12 +22,8 @@
   --av-blur-glass: blur(8px);
 }
 
-#app[data-chrome="dark"],
-#app[data-theme="slate"] {
-  --av-canvas-bg: #141c26;
-}
-
 #app[data-chrome="dark"] {
+  --av-canvas-bg: #141c26;
   --av-surface-glass: #111b27eb;
   --av-surface-popover: #111b27f2;
   --av-surface-subtle: #182535;

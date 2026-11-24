@@ -11,7 +11,7 @@ import { DEFAULT_DOCK_VIEW } from '../features/controls/bottom-dock-model';
 import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createForecastSession } from '../features/forecast/forecast-session';
 import { createLocationController } from '../features/location/location-controller';
-import { applyBasemapTheme } from '../features/map/basemap';
+import { BasemapChannel } from '../features/map/basemap';
 import { CoverageSeam } from '../features/map/coverage-seam';
 import { createMap, createMapCamera, maplibregl, type MapCamera } from '../features/map/map-controller';
 import { createHistoryController } from '../features/navigation/history-controller';
@@ -108,7 +108,7 @@ export function createPreviewApp(): PreviewApp {
   }
 
   function clearForecast(): void {
-    wind?.session.clear(); point?.close(); overlay?.clear(); sky?.clear(); seam?.sync(null, null); updateTimeUi();
+    wind?.session.clear(); point?.close(); for (const channel of [...channels].reverse()) channel.clear(); seam?.sync(null, null); updateTimeUi();
   }
 
   const forecastSession = createForecastSession({
@@ -301,7 +301,6 @@ export function createPreviewApp(): PreviewApp {
       });
       syncRootTheme();
       timeline?.setVariant?.(dockView);
-      applyBasemapTheme(map, theme);
       syncChannels();
       const units: UnitSystem = state.units ?? 'metric';
       if (units !== intent().units) setUnits(units);
@@ -377,7 +376,6 @@ export function createPreviewApp(): PreviewApp {
       writer.intent({ theme });
       preferences.setTheme(theme);
       syncRootTheme();
-      applyBasemapTheme(map, theme);
       syncChannels();
       writeUrl('replace');
     },
@@ -445,7 +443,7 @@ export function createPreviewApp(): PreviewApp {
     setPlaying(playing) {
       writer.forecast({ playing });
       for (const channel of channels) channel.setPlayback?.(playing);
-      wind?.session.setPlaying(playing);
+      wind?.session.playbackChanged();
       updateOverlayStatus();
     },
     locate() { locationController?.locate(); },
@@ -495,7 +493,7 @@ export function createPreviewApp(): PreviewApp {
       fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec)
     });
     seam = new CoverageSeam(liveMap);
-    channels = [overlay, sky, windWiring.overlay];
+    channels = [new BasemapChannel(liveMap, intent().theme), overlay, sky, windWiring.overlay];
     syncChannels();
 
     timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
@@ -616,8 +614,7 @@ export function createPreviewApp(): PreviewApp {
         try { point?.feature.suspend(); }
         finally { writer.point({ open: true, busy: false, status: 'Point request interrupted. Click the map again.' }); }
       },
-      () => sky?.clear(),
-      () => overlay?.clear(true)
+      ...[...channels].reverse().map(channel => () => channel.clear(true))
     ]);
   }
 
@@ -648,8 +645,8 @@ export function createPreviewApp(): PreviewApp {
       () => forecastSession.dispose(), () => lifecycle.abort(),
       () => timeline?.destroy(), () => locationController?.dispose(),
       () => point?.marker.dispose(), () => point?.feature.dispose(), () => pointSeries.close(),
-      () => wind?.destroyControls(), () => wind?.session.destroy(), () => wind?.overlay.destroy(), () => windCache.clear(),
-      () => seam?.destroy(), () => sky?.destroy(), () => overlay?.destroy(),
+      () => wind?.destroyControls(), () => wind?.session.destroy(), () => windCache.clear(), () => seam?.destroy(),
+      ...[...channels].reverse().map(channel => () => channel.destroy()),
       () => forecastScheduler.dispose(), () => map?.remove()
     ]);
     timeline = locationController = point = wind = null;

@@ -14,7 +14,12 @@ export const stone: ThemeRecord<'stone'> = {
   rainMode: 'smooth-iso',
   cloudStyle: 'sunlit-veil',
   isobar: { minorColor: 'rgba(51, 65, 85, 0.56)', majorColor: 'rgba(15, 23, 42, 0.86)', haloColor: 'rgba(250, 248, 243, 0.95)', textColor: '#0f172a', highColor: '#0c4a6e', lowColor: '#581c87' },
-  rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.72)', squallColor: 'rgba(15, 23, 42, 0.94)', haloColor: 'rgba(240, 249, 255, 0.92)' },
+  cloudContours: { brokenColor: 'rgba(51, 65, 85, 0.50)', overcastColor: 'rgba(15, 23, 42, 0.82)', haloColor: 'rgba(255, 255, 255, 0.92)' },
+  rainEdge: {
+    haloCasingColor: 'rgba(15, 23, 42, 0.64)', dryHaloColor: 'rgba(255, 255, 255, 0.98)',
+    rimStrokeColor: 'rgba(15, 23, 42, 0.88)', coreStrokeColor: 'rgba(15, 23, 42, 0.96)',
+    cuffRgb: [18, 28, 44], cuffMaxAlpha: 96
+  },
   liftDetail: 'Usable thermal ceiling (Daylight Stone palette)',
   liftStops: [
     { at: 0, r: 245, g: 222, b: 174, a: 18 },
@@ -41,7 +46,11 @@ export const stone: ThemeRecord<'stone'> = {
     { color: 'rgba(148, 163, 184, 0.48)', label: '60% BKN' },
     { color: 'rgba(51, 65, 85, 0.64)', label: '85%+ OVC' }
   ],
-  rainCuffMaxAlpha: 96,
+  rainLegend: [
+    { color: 'linear-gradient(90deg, #ffffff 0 22%, rgba(20,29,44,0.48) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },
+    { color: 'repeating-linear-gradient(115deg, #f8fafc 0 2px, #0f172a 2px 4px)', label: 'Falling rain' },
+    { color: 'rgba(15, 23, 42, 0.94)', label: '8+ mm/h squall' }
+  ],
   basemap: {
     ocean: '#a6bacb',
     relief: [

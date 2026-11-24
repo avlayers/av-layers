@@ -15,6 +15,7 @@ import { pathToFileURL } from 'node:url';
 import pixelmatch from 'pixelmatch';
 import { PNG } from 'pngjs';
 import { chromium, type Browser } from 'playwright';
+import { MAP_THEMES } from '../apps/preview/src/themes/registry.js';
 import { prepareFixtureData, startFixtureStack } from './fixture-stack.js';
 
 const LAYER_SETS: Readonly<Record<string, string>> = {
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
     alias: { type: 'string', multiple: true }, 'max-diff': { type: 'string' }, keep: { type: 'boolean' }
   } });
   if (!values.baseline) throw new Error('--baseline <checkout> is required');
-  const themes = (values.themes ?? 'stone,slate,chart,classic').split(',');
+  const themes = values.themes?.split(',') ?? [...MAP_THEMES];
   // --alias old=new captures the baseline with `old` and the candidate with `new`.
   const aliases = new Map((values.alias ?? []).map(pair => pair.split('=') as [string, string]));
   const maxDiff = Number(values['max-diff'] ?? '0.002');

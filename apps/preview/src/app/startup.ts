@@ -2,7 +2,7 @@ import { AUTO_MODEL_ID, longitudeOffsetHours, type UnitSystem } from '@av/client
 import type { PointViewMode } from '@av/windgram';
 import type { ModelId } from '@av/contracts/publication';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../features/controls/bottom-dock-model';
-import { parseMapTheme, type MapTheme } from '../themes/registry';
+import { DEFAULT_THEME, parseMapTheme, type MapTheme } from '../themes/registry';
 import { previewQuery } from '../features/navigation/url-state';
 import {
   parseWindPreferences,
@@ -69,7 +69,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initialModel = query.model ?? (offline ? fixtureModel : AUTO_MODEL_ID);
   const initialOpacity = query.opacity ?? preferences.opacity() ?? 0.72;
   const initialUnits: UnitSystem = query.units ?? preferences.units() ?? 'metric';
-  const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? 'stone';
+  const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? DEFAULT_THEME;
   const initialDockView: DockViewId = query.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
   const initialPointViewMode: PointViewMode = preferences.pointViewMode() ?? '3d';
   const initialWindHeight = query.windHeight ?? storedWind?.height ?? 'surface';

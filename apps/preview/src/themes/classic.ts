@@ -16,7 +16,12 @@ export const classic: ThemeRecord<'classic'> = {
   rainMode: 'classic-raw',
   cloudStyle: 'sunlit-veil',
   isobar: { minorColor: 'rgba(30, 41, 59, 0.58)', majorColor: 'rgba(15, 23, 42, 0.90)', haloColor: 'rgba(255, 255, 255, 0.96)', textColor: '#0f172a', highColor: '#0c4a6e', lowColor: '#581c87' },
-  rainPerimeter: { showerColor: 'rgba(15, 23, 42, 0.80)', squallColor: 'rgba(15, 23, 42, 0.96)', haloColor: 'rgba(255, 255, 255, 0.95)' },
+  cloudContours: { brokenColor: 'rgba(51, 65, 85, 0.50)', overcastColor: 'rgba(15, 23, 42, 0.82)', haloColor: 'rgba(255, 255, 255, 0.92)' },
+  rainEdge: {
+    haloCasingColor: 'rgba(15, 23, 42, 0.64)', dryHaloColor: 'rgba(255, 255, 255, 0.98)',
+    rimStrokeColor: 'rgba(15, 23, 42, 0.88)', coreStrokeColor: 'rgba(15, 23, 42, 0.96)',
+    cuffRgb: [18, 28, 44], cuffMaxAlpha: 108
+  },
   liftDetail: 'Usable thermal ceiling in classic 22-step soaring palette',
   // Classic draws the published palette unchanged (remap: false), so these ramps
   // are never sampled; they are Stone's to keep the record complete.
@@ -27,7 +32,11 @@ export const classic: ThemeRecord<'classic'> = {
     { color: 'rgba(148, 163, 184, 0.48)', label: '60% BKN' },
     { color: 'rgba(51, 65, 85, 0.64)', label: '85%+ OVC' }
   ],
-  rainCuffMaxAlpha: 108,
+  rainLegend: [
+    { color: 'linear-gradient(90deg, #ffffff 0 22%, rgba(20,29,44,0.48) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },
+    { color: 'repeating-linear-gradient(115deg, #f8fafc 0 2px, #0f172a 2px 4px)', label: 'Falling rain' },
+    { color: 'rgba(15, 23, 42, 0.96)', label: '8+ mm/h squall' }
+  ],
   basemap: {
     ocean: '#a8c8df',
     relief: [

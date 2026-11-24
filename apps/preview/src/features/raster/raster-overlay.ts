@@ -7,8 +7,8 @@ import { canRetainRasterOverview, MAP_TEXTURE_POOL_RESERVE_BYTES, MAX_RASTER_SOU
 import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
 import { boundsAreaKm2, cameraBounds, createViewportWarmth } from '../map/viewport-policy';
 import type { ChannelView, MapChannel } from '../../channels/channel';
-import { isMapTheme, themeOption, type MapTheme } from '../../themes/registry';
-import { canRemapTiles, remapTileToBitmap } from './tile-remap';
+import { DEFAULT_THEME, isMapTheme, type MapTheme } from '../../themes/registry';
+import { canRemapTiles, remapTileToBitmap, shouldRemapTile } from './tile-remap';
 
 interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
 type Selection = RasterSelection;
@@ -226,7 +226,7 @@ export class RasterOverlay implements MapChannel {
 
   constructor(private readonly map: Map, private readonly baseUrl: string, opacity: number, private readonly onState: (state: OverlayState) => void, private readonly fetchImpl?: typeof fetch, private readonly request?: (spec: ForecastRequestSpec) => ForecastRequestHandle, private readonly options: RasterOverlayOptions = {}) {
     this.opacity = opacity;
-    this.theme = options.theme ?? 'stone';
+    this.theme = options.theme ?? DEFAULT_THEME;
     for (const [ev, fn] of this.events) map.on(ev as never, fn as never);
     this.unsubscribeBudget = options.budget?.onRelease(() => {
       if (this.disposed || !this.limited || !this.requested || this.moving || this.map.isMoving?.()) return;
@@ -354,12 +354,6 @@ export class RasterOverlay implements MapChannel {
     if (coarse) { this.overview?.show(coarse.build, coarse.layer, coarse.frame, eff); return; }
     const visible = this.pendingPaint ?? this.active;
     if (visible) this.map.setPaintProperty(visible.id, 'raster-opacity', eff);
-  }
-
-  setVisible(visible: boolean): void {
-    if (this.visible === visible) return;
-    this.visible = visible;
-    this.setOpacity(this.opacity);
   }
 
   setTheme(theme: MapTheme): void {
@@ -550,7 +544,7 @@ export class RasterOverlay implements MapChannel {
       const hashTheme = hashIdx >= 0 ? params.url.slice(hashIdx + 1) : '';
       const slotTheme: MapTheme = isMapTheme(hashTheme) ? hashTheme : this.theme;
       const response = await this.protocol!.load({ ...params, url: cleanUrl }, controller);
-      if (!themeOption(slotTheme).remap || response.data.byteLength <= 48 || !canRemapTiles()) return response;
+      if (!shouldRemapTile(slotTheme, response.data)) return response;
       const httpIdx = cleanUrl.indexOf('http');
       const rawUrl = httpIdx >= 0 ? cleanUrl.slice(httpIdx) : cleanUrl;
       let maskData: ArrayBuffer | null = null;

@@ -15,7 +15,7 @@ export interface RgbaStop {
   readonly a: number;
 }
 
-export interface MiniScaleStop {
+interface MiniScaleStop {
   readonly color: string;
   readonly label: string;
 }
@@ -29,9 +29,19 @@ export interface IsobarThemeTokens {
   readonly lowColor: string;
 }
 
-interface RainPerimeterTokens {
-  readonly showerColor: string;
-  readonly squallColor: string;
+/** Rain cell edge strokes and the inner cuff drawn by the rain animation. */
+export interface RainEdgeTokens {
+  readonly haloCasingColor: string;
+  readonly dryHaloColor: string;
+  readonly rimStrokeColor: string;
+  readonly coreStrokeColor: string;
+  readonly cuffRgb: readonly [number, number, number];
+  readonly cuffMaxAlpha: number;
+}
+
+export interface CloudContourTokens {
+  readonly brokenColor: string;
+  readonly overcastColor: string;
   readonly haloColor: string;
 }
 
@@ -89,14 +99,14 @@ export interface ThemeRecord<Id extends string = string> {
   readonly rainMode: RainEncodingMode;
   readonly cloudStyle: CloudStyleId;
   readonly isobar: IsobarThemeTokens;
-  readonly rainPerimeter: RainPerimeterTokens;
+  readonly cloudContours: CloudContourTokens;
+  readonly rainEdge: RainEdgeTokens;
   /** Lift channel description in the dock. */
   readonly liftDetail: string;
   readonly liftStops: readonly RgbaStop[];
   readonly rainStops: readonly RgbaStop[];
   readonly cloudLegend: readonly MiniScaleStop[];
-  /** Peak opacity of the inner rain cuff on light themes. */
-  readonly rainCuffMaxAlpha: number;
+  readonly rainLegend: readonly MiniScaleStop[];
   readonly basemap: BasemapTokens;
   readonly glyph: readonly GlyphShape[];
 }

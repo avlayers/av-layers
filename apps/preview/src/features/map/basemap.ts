@@ -2,6 +2,7 @@ import type { ExpressionSpecification, FilterSpecification, LayerSpecification, 
 import { WEATHER_CEILING_ID } from '@av/client';
 import { DEFAULT_THEME, themeOption, type MapTheme } from '../../themes/registry';
 import type { BasemapTokens } from '../../themes/theme';
+import type { ChannelView, MapChannel } from '../../channels/channel';
 
 const DEM_TILES = ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'];
 const DEM_MAX_ZOOM = 12;
@@ -514,4 +515,20 @@ export function applyBasemapTheme(
       if (key in paint) map.setPaintProperty(layer.id, key, paint[key]);
     }
   }
+}
+
+type PaintableMap = Parameters<typeof applyBasemapTheme>[0];
+
+/** The basemap as a map channel: repaints relief, hillshade and vector layers when the theme changes. */
+export class BasemapChannel implements MapChannel {
+  constructor(private readonly map: PaintableMap, private theme: MapTheme) {}
+
+  update(view: ChannelView): void {
+    if (view.theme === this.theme) return;
+    this.theme = view.theme;
+    applyBasemapTheme(this.map, view.theme);
+  }
+
+  clear(): void {}
+  destroy(): void {}
 }

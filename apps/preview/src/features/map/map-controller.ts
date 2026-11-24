@@ -4,7 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { longitudeOffsetHours } from '@av/client';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
-import type { MapTheme } from '../../themes/registry';
+import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -24,7 +24,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
     maxTileCacheZoomLevels: 2,
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
-      : compositeBasemapStyle(options.theme ?? 'stone')
+      : compositeBasemapStyle(options.theme ?? DEFAULT_THEME)
   });
 }
 
