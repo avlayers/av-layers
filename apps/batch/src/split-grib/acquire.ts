@@ -4,6 +4,7 @@ import { recoverTrailingWindow } from '@av/forecast/intervals';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import pRetry from 'p-retry';
 import { DEFAULT_REQUEST_TIMEOUT_MS, sourceIntervalHours } from '@av/contracts';
 import type { ModelLevelFrame } from '@av/forecast';
 import { readLocalFile } from '../local-file.js';
@@ -17,7 +18,6 @@ import {
 import { decodeSplitGribField, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
-import { pause } from '../pause.js';
 import { MAX_NATIVE_MAPPING_DISTANCE_M, prepareNativeMapping } from './native-grid.js';
 
 const DEFAULT_CONCURRENCY = 8;
@@ -149,28 +149,19 @@ async function loadSplitGribField(
   }
 
   const fetchFn = options.fetchImpl ?? fetch;
-  let buffer: Uint8Array;
-  for (let attempt = 1; ; attempt++) {
-    options.signal?.throwIfAborted();
-    try {
-      const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
-      const signal = options.signal ? AbortSignal.any([options.signal, timeout]) : timeout;
-      const response = await fetchFn(url, { signal });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        const message = `HTTP ${response.status} for ${url}`;
-        if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
-        throw new Error(message);
-      }
-      buffer = await readObjectBody(response);
-      break;
-    } catch (error) {
-      options.signal?.throwIfAborted();
-      if (error instanceof InvalidSplitGribResponse || attempt === MAX_TRANSFER_ATTEMPTS) throw error;
-      await pause(Math.ceil(250 * 2 ** (attempt - 1) * (0.5 + Math.random())), options.signal);
-      stats.retries += 1;
+  const buffer = await pRetry(async attempt => {
+    if (attempt > 1) stats.retries += 1;
+    const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
+    const response = await fetchFn(url, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      const message = `HTTP ${response.status} for ${url}`;
+      if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
+      throw new Error(message);
     }
-  }
+    return readObjectBody(response);
+  }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
+    shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
   options.signal?.throwIfAborted();
   stats.downloads += 1;
   stats.downloadedBytes += buffer.byteLength;

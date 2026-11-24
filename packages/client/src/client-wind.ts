@@ -734,7 +734,11 @@ export class WindDataSource {
       attemptSignal.throwIfAborted();
       if (this.cache.failureRemaining(url) > 0) throw new Error('Numeric resource is cooling down');
       const delays = this.options.retryDelaysMs ?? [250, 1000];
-      const sleep = this.options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+      const sleep = this.options.sleep ?? ((ms: number) => new Promise<void>((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); reject(attemptSignal.reason); };
+        const timer = setTimeout(() => { attemptSignal.removeEventListener('abort', abort); resolve(); }, ms);
+        attemptSignal.addEventListener('abort', abort, { once: true });
+      }));
       for (let attempt = 0; ; attempt++) try {
         return await readOnce(url, type, targets, pending);
       } catch (error) {

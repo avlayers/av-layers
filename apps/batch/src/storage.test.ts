@@ -559,7 +559,7 @@ describe('R2 S3 client configuration', () => {
   });
 
   it('returns missing objects without retrying', async () => {
-    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce({ $metadata: { httpStatusCode: 404 } });
+    const send = vi.spyOn(S3Client.prototype, 'send').mockRejectedValueOnce(Object.assign(new Error('NoSuchKey'), { $metadata: { httpStatusCode: 404 } }));
     try {
       const store = r2Storage({ ...env, R2_BUCKET: 'test' });
       await expect(store.get('missing')).resolves.toBeNull();

@@ -55,6 +55,7 @@
     "@types/pngjs": "6.0.5",
     "eslint": "10.14.0",
     "knip": "5.66.0",
+    "p-retry": "9.0.0",
     "pixelmatch": "7.1.0",
     "playwright": "1.64.0",
     "pngjs": "7.0.0",

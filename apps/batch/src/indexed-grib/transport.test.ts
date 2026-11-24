@@ -22,7 +22,7 @@ it('hashes ordered section views exactly without concatenation, including option
 
 it('retries transient status and transport failures with a bounded number of attempts', async () => {
   const fetchImpl = vi.fn<typeof fetch>()
-    .mockRejectedValueOnce(new TypeError('connection reset'))
+    .mockRejectedValueOnce(new TypeError('fetch failed'))
     .mockResolvedValueOnce(new Response('', { status: 429, headers: { 'retry-after': '0' } }))
     .mockResolvedValueOnce(new Response(inventory));
   const transport = new IndexedGribTransport({ fetchImpl, retry });
