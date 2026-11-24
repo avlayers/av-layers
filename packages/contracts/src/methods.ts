@@ -48,8 +48,7 @@ export const LIFT_METHOD_PARAMETERS = Object.freeze({
   gribQuantizationRelativeHumidityLimit: 1.05
 });
 export const PRECIPITATION_METHOD_PARAMETERS = Object.freeze({
-  minimumRateMmPerHour: 0,
-  minimumSolarElevationDeg: DEFAULT_HORIZON_DEG
+  minimumRateMmPerHour: 0
 } as const);
 
 const precipitationInputs = ['precipitationMmPerHour'] as const satisfies readonly NormalizedInputId[];
@@ -84,7 +83,7 @@ export const PRECIPITATION_ALL_HOURS_METHOD = Object.freeze({
   inputs: Object.freeze(Object.fromEntries(precipitationInputs.map(id => [id, NORMALIZED_INPUTS[id]]))),
   outputs: Object.freeze(['precip-rate'] as const),
   spatialSupport: 'column',
-  parameters: Object.freeze({ minimumRateMmPerHour: PRECIPITATION_METHOD_PARAMETERS.minimumRateMmPerHour }),
+  parameters: PRECIPITATION_METHOD_PARAMETERS,
   caveats: Object.freeze([
     'The adapter supplies liquid-water-equivalent rate for the declared trailing interval, including accumulation differencing.',
     'Evaluated at every retained forecast time. Negative, non-finite or explicitly missing rates are unavailable.'

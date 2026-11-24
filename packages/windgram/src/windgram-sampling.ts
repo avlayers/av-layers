@@ -86,15 +86,13 @@ export function hourSampling(hour: ProfileHour): HourSampling {
   const levels = hour.levels.filter(l => l.heightM !== null && (floorM === null || l.heightM > floorM));
   const gaps = profileHeightGaps(hour.levels);
   const missingValue = (altitudeM: number) => ({ altitudeM, value: NaN });
-  const moistureRef = hour.upperAirDewpointReference ?? 'liquid-vapor-pressure';
   const interpretedLevels = levels.map(l => {
     const temp = finiteScalar(l.temperatureC);
-    const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC), moistureRef);
+    const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC));
     return {
       altitudeM: finiteScalar(l.heightM)!,
       temperatureC: temp ?? NaN,
       dewPointC: moisture.dewPointC ?? NaN,
-      cloudRhPercent: moisture.cloudRhPercent ?? NaN,
     };
   });
   const anchorNodes = (values: { altitudeM: number; value: number }[], surfaceVal: number | null) => {

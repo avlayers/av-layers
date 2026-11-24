@@ -228,7 +228,7 @@ export function createGroupedV5Fixture({ groups, ...options }: Omit<FixtureOptio
   for (const surface of manifest.surfaces) {
     const source = surface.kind === 'fine' ? fixture.fine : fixture.native;
     const blockIds = Uint32Array.from({ length: source.layout.blockCount }, (_, i) => source.layout.block(i).slot);
-    const shards: Extract<typeof surface.samples, { format: 'frame-group-block-shards-v1' }>['shards'] = [];
+    const shards: typeof surface.samples.shards = [];
     let firstFrame = 0;
     const count = surface.kind === 'fine' ? manifest.mapFrameCount ?? manifest.frames.length : manifest.frames.length;
     for (const [group, hours] of groups.entries()) {

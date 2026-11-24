@@ -36,11 +36,6 @@ parcel crossing, unresolved profile cap, surface-stable, non-convective and unav
 support. `buoyancyM2S3` records `w*³ / depth`, including convective columns below
 the usable-lift cutoff. Diagnostics preserve the published layer values.
 
-`deriveSelectedFrameDiagnostics(frame, sourceIndices)` computes diagnostics and
-flags for selected global source indices. Its full-grid buffers feed terrain
-clearance at sparse targets; `bufferBytes` counts their typed storage. Callers
-apply daylight gating when deriving target clearance.
-
 ## Entry points
 
 - [`@av/forecast/frame`](src/frame.ts): `deriveFrame` whole-grid calculation.

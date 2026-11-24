@@ -1,3 +1,0 @@
-export const PREPARED_TERRAIN_METHOD = 'bilinear-native-v1';
-export const PREPARED_DESCRIPTOR_MAX_BYTES = 16 * 1024;
-export const PREPARED_TERRAIN_CELL_BYTES = Float32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;

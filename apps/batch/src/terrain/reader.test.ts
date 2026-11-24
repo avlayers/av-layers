@@ -7,8 +7,7 @@ import { createTerrainReadBudget, createTerrainReader, TERRAIN_READ_LIMITS } fro
 import * as terrainReader from './reader';
 import { ASSET_MAX_BYTES, dataIdentity, encodeJson, sha256, TERRAIN_BATCH_POINTS, TERRAIN_PACKING, TERRAIN_SOURCE, type TerrainCatalog, type TerrainGeometry, type TerrainTile } from './contract';
 import { TerrainTestStorage } from './test-fixtures';
-import { PREPARED_TERRAIN_METHOD } from './prepare';
-import { prepareSparseTerrain, readSparsePreparedTerrain, validateSparsePreparedTerrain } from './sparse';
+import { PREPARED_TERRAIN_METHOD, prepareSparseTerrain, readSparsePreparedTerrain, validateSparsePreparedTerrain } from './sparse';
 import { loadSparsePreparedTerrain, stageSparsePreparedTerrain } from './staging';
 import * as terrainSource from './source.js';
 import { localTerrainStorage } from './local-store.js';

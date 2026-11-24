@@ -103,7 +103,7 @@ const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
   coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
   layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  samples: z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1) }),
+  samples: z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) }),
   profiles: profilePackSchema.optional(),
   terrain: z.strictObject({
     dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
@@ -302,7 +302,7 @@ function assertPackedLayoutBindingV5(
       const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
       cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
     }
-    const channels = 'frameCount' in shard ? shard.frameCount * layers : 'channelCount' in pack ? pack.channelCount : 0;
+    const channels = 'frameCount' in shard ? shard.frameCount * layers : pack.channelCount;
     if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * recordBytes)
       || shard.bytes !== cells * channels * recordBytes) throw new Error('Sample block size mismatch');
     nextBlock = end; totalCells += cells;

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { gridSchema } from './grid-schema.js';
 import type { Grid } from './geometry.js';
 import type { CoverageMask } from './coverage-query.js';
-export { isCovered, prepareCoverageTester, type CoverageMask, type SparseCoverageMask } from './coverage-query.js';
+export { isCovered, type CoverageMask, type SparseCoverageMask } from './coverage-query.js';
 export { normalizeLon } from './geometry.js';
 import { MAX_NATIVE_ZOOM, SAMPLE_BLOCK_SIZE } from './format.js';
 import { createSparseCoverage, type SparseCoverage } from './sparse-coverage.js';

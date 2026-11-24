@@ -458,7 +458,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
     coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });
   const surfaces: WholeDomainSurfaceResult[] = [];
-  const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
+  const sampleGroups: Partial<Record<'native' | 'fine', ManifestV5['surfaces'][number]['samples']['shards']>> = {};
   const servingObjects: ObjectReceipt[] = [];
   const scalarPhasesMs = { scalarStageMs: 0, scalarMergeMs: 0, scalarUploadMs: 0 };
   let profileGroups: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'] | undefined;

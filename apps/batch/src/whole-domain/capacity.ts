@@ -5,7 +5,7 @@ import { BUILD_BUDGETS, MAX_V5_SHARD_BYTES, normalizedFrameBytes } from '../capa
 import { rasterWorkerCount, RASTER_WORKER_RESERVE_BYTES } from '../raster-pool.js';
 import { ASSET_MAX_BYTES } from '../terrain/contract.js';
 import { samplePackAssemblyBufferBytes, samplePackWriterBufferBytes } from '../sample-pack-v5.js';
-import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/prepare.js';
+import { PREPARED_TERRAIN_CELL_BYTES } from '../terrain/sparse.js';
 import type { ForecastProvider } from '../provider.js';
 
 export const MAX_PACKED_COLUMN_BYTES = 512 * 1024 * 1024;
