@@ -408,9 +408,9 @@ export function analyzeHourCloudLayers(
         overlappingMoist?.topM ?? -Infinity,
         cuPot !== null && cuPot > 0 ? baseM + cuPot : -Infinity,
       );
-      const minCuThickness = regime === 'od' ? 220 : 120;
-      const topM = Math.max(baseM + minCuThickness, Number.isFinite(candidateTop) ? candidateTop : baseM + 160);
-      const depthM = topM - baseM;
+      const diagnosedTop = Number.isFinite(candidateTop) && candidateTop > baseM ? candidateTop : null;
+      const topM = diagnosedTop ?? baseM;
+      const depthM = diagnosedTop !== null ? Math.max(0, diagnosedTop - baseM) : 0;
       const maxRhAtBase = overlappingMoist?.maxRhPercent
         ?? (rhNodes.length ? Math.round(clamp(sampleHeight(rhNodes, baseM) ?? 0, 0, 100)) || null : null);
       let coverPercent: number;
@@ -420,10 +420,12 @@ export function analyzeHourCloudLayers(
         coverPercent = clamp(Math.round(lowPct), 10, 86);
       } else if (totalPct !== null && totalPct >= 8 && totalPct <= 60) {
         coverPercent = Math.round(totalPct);
-      } else {
+      } else if (depthM > 0) {
         coverPercent = clamp(Math.round(22 + depthM / 32), 20, 50);
+      } else {
+        coverPercent = Math.round(clamp(lowPct ?? totalPct ?? 0, 0, 100));
       }
-      const topTempC = tempAt(topM);
+      const topTempC = depthM > 0 ? tempAt(topM) : null;
       convectiveLayer = {
         kind: regime === 'od' ? 'overdeveloped' : 'cumulus',
         altitudeBand: bandFor(baseM, topM),
@@ -452,9 +454,11 @@ export function analyzeHourCloudLayers(
     .sort((a, b) => a.baseM - b.baseM);
 
   let inDomainMaxRh = 0;
+  let inDomainRhSamples = 0;
   for (const node of rhNodes) {
     if (!Number.isFinite(node.value)) continue;
     if (chartTopM === undefined || node.altitudeM <= chartTopM + 50) {
+      inDomainRhSamples++;
       if (node.value > inDomainMaxRh) inDomainMaxRh = node.value;
     }
   }
@@ -464,7 +468,8 @@ export function analyzeHourCloudLayers(
   const highCloudOnly =
     totalPct !== null &&
     totalPct >= 50 &&
-    (lowPct ?? 0) < 25 &&
+    inDomainRhSamples > 0 &&
+    (lowPct === null ? inDomainMaxRh < 75 : lowPct < 25) &&
     inDomainMaxRh < 86 &&
     !hasSubstantialInDomainLayer &&
     hour.overdeveloped !== true;
@@ -946,12 +951,12 @@ export function buildInversionAndCloudDeckPaths(args: {
           return { altitudeM: l.heightM, value: 0 };
         }
         const localLapse = lapseNodes.length ? sampleHeight(lapseNodes, l.heightM) : null;
-        if (localLapse !== null && Number.isFinite(localLapse) && localLapse <= WAVE_MIN_LAPSE_C_PER_1000FT) {
+        if (localLapse === null || !Number.isFinite(localLapse) || localLapse <= WAVE_MIN_LAPSE_C_PER_1000FT) {
           return { altitudeM: l.heightM, value: 0 };
         }
         const levelWind = windFromComponents(finiteScalar(l.uWindMps), finiteScalar(l.vWindMps));
         const speedKt = levelWind.speedMps === null ? null : mpsToKnots(levelWind.speedMps);
-        if (speedKt !== null && speedKt < WAVE_MIN_WIND_KT) {
+        if (speedKt === null || speedKt < WAVE_MIN_WIND_KT) {
           return { altitudeM: l.heightM, value: 0 };
         }
         const w = omegaToVerticalVelocityMps(l.omegaPaS, l.temperatureC, l.pressureHpa, l.heightM);

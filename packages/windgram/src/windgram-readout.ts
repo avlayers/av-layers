@@ -149,6 +149,32 @@ export function isTolCappedBelowThermalTop(
   return Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
 }
 
+export interface SnappedTolClimbChoice {
+  readonly climbMps: number;
+  readonly stripPrefix: 'Climb' | 'Peak';
+  readonly tileCaption: '▲ Cu base' | '▲ At ceiling' | '▲ Peak lift';
+}
+
+export function resolveSnappedTolClimb(
+  reading: Pick<WindgramReading, 'cloudCapped' | 'nativeThermalTopM' | 'heightM' | 'estimatedClimbMps' | 'peakClimbMps'>,
+): SnappedTolClimbChoice | null {
+  if (isTolCappedBelowThermalTop(reading) && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
+    return {
+      climbMps: reading.estimatedClimbMps,
+      stripPrefix: 'Climb',
+      tileCaption: reading.cloudCapped ? '▲ Cu base' : '▲ At ceiling',
+    };
+  }
+  if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {
+    return {
+      climbMps: reading.peakClimbMps,
+      stripPrefix: 'Peak',
+      tileCaption: '▲ Peak lift',
+    };
+  }
+  return null;
+}
+
 export function buildWindgramTelemetry(
   view: WindgramView,
   reading: WindgramReading,
@@ -185,11 +211,9 @@ export function buildWindgramTelemetry(
   let climbPart: string | null = null;
   let hasPositiveClimb = false;
   if (snappedToTol) {
-    if (isTolCappedBelowThermalTop(reading) && reading.estimatedClimbMps !== null && reading.estimatedClimbMps >= 0.08) {
-      climbPart = `Climb ${formatClimbRate(reading.estimatedClimbMps, system)}`;
-      hasPositiveClimb = true;
-    } else if (reading.peakClimbMps !== null && reading.peakClimbMps > 0) {
-      climbPart = `Peak ${formatClimbRate(reading.peakClimbMps, system)}`;
+    const snappedClimb = resolveSnappedTolClimb(reading);
+    if (snappedClimb) {
+      climbPart = `${snappedClimb.stripPrefix} ${formatClimbRate(snappedClimb.climbMps, system)}`;
       hasPositiveClimb = true;
     }
   } else if (reading.estimatedClimbMps !== null) {

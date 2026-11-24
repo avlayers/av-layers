@@ -32,6 +32,7 @@ export interface WindgramMountOptions {
   onZoomMode?: (direction: 'in' | 'out', dateKey?: string) => void;
   onTelemetry?: (telemetry: WindgramTelemetryStrip | null) => void;
   selectedValidAt?: string | null;
+  offChartReadout?: string | null;
   /** 'magnetic' snaps within 16px of Top of Lift while allowing free-altitude inspection anywhere else. */
   inspectionMode?: WindgramInspectionMode;
   /** Pluggable floating hover callout renderer ('tile-2x2' default, 'classic' fallback). */
@@ -69,6 +70,16 @@ function panelContainingX(panels: readonly WindgramDayPanel[] | undefined, x: nu
   return panels.find(p => x >= p.left && x <= p.left + p.width) ?? null;
 }
 
+export function findVisibleChartHourIndex(view: WindgramView, validAt: string | null): number {
+  if (!validAt) return -1;
+  return view.hours.findIndex((hour, index) => {
+    if (hour.validAt !== validAt) return false;
+    const panel = panelContainingHour(view.dayPanels, index);
+    if (panel) return hour.x >= panel.left - 0.5 && hour.x <= panel.left + panel.width + 0.5;
+    return hour.x >= view.left && hour.x <= view.left + view.plotWidth;
+  });
+}
+
 /** Inspect the published lift ceiling, free physical height, or magnetic Top-of-Lift + free height. */
 function mountWindgramInspector(
   host: HTMLElement,
@@ -84,6 +95,7 @@ function mountWindgramInspector(
     onSelectDay?: (dateKey: string) => void;
     onZoomMode?: (direction: 'in' | 'out', dateKey?: string) => void;
     onTelemetry?: (telemetry: WindgramTelemetryStrip | null) => void;
+    fallbackReadout?: () => string | null;
   } = {},
 ): WindgramInspector {
   const system = view.unitSystem;
@@ -267,7 +279,7 @@ function mountWindgramInspector(
     touchActive = false;
     activeHour = null;
     hideFloatingCursor();
-    writeReadout(instructions);
+    writeReadout(options.fallbackReadout?.() ?? instructions);
     options.onTelemetry?.(null);
   };
 
@@ -795,10 +807,12 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
   let calloutVariant: WindgramCalloutVariant | undefined = options.calloutVariant;
   const calloutTrigger: WindgramCalloutTrigger | undefined = options.calloutTrigger;
   let selectedValidAt = options.selectedValidAt === undefined ? view.hours[view.selectedHourIndex]?.validAt ?? null : options.selectedValidAt;
-  const select = (validAt: string | null) => {
+  let offChartReadout: string | null = options.offChartReadout ?? null;
+  const select = (validAt: string | null, nextOffChartReadout?: string | null) => {
     if (disposed) return;
     selectedValidAt = validAt;
-    const index = validAt ? view.hours.findIndex(hour => hour.validAt === validAt && hour.x >= view.left && hour.x <= view.left + view.plotWidth) : -1;
+    if (nextOffChartReadout !== undefined) offChartReadout = nextOffChartReadout;
+    const index = findVisibleChartHourIndex(view, validAt);
     clearInspector?.select(index >= 0 ? index : null);
     const cursor = host.querySelector?.<SVGRectElement>('[data-selected-hour]') ?? null;
     if (cursor) {
@@ -828,7 +842,8 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
       }
     }
     if (view.dayPanels?.length && typeof host.querySelectorAll === 'function') {
-      const activePanel = index >= 0 ? panelContainingHour(view.dayPanels, index) : null;
+      const rawIndex = index >= 0 ? index : (validAt ? view.hours.findIndex(hour => hour.validAt === validAt) : -1);
+      const activePanel = rawIndex >= 0 ? panelContainingHour(view.dayPanels, rawIndex) : null;
       for (const el of host.querySelectorAll('[data-windgram-day]')) {
         const dayKey = el.getAttribute('data-windgram-day');
         const isBest = Boolean(view.dayPanels.find(p => p.dateKey === dayKey)?.isBestDay);
@@ -840,9 +855,10 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
   const bindInspector = () => {
     clearInspector?.();
     clearInspector = mountWindgramInspector(host, options.readout ?? null, view, validAt => {
-      select(validAt);
+      offChartReadout = null;
+      select(validAt, null);
       options.onSelectHour?.(validAt);
-    }, () => view.hours.findIndex(hour => hour.validAt === selectedValidAt), {
+    }, () => findVisibleChartHourIndex(view, selectedValidAt), {
       mode,
       calloutVariant,
       calloutTrigger,
@@ -850,8 +866,9 @@ export function mountWindgram(host: HTMLElement, options: WindgramMountOptions &
       onSelectDay: options.onSelectDay,
       onZoomMode: options.onZoomMode,
       onTelemetry: options.onTelemetry,
+      fallbackReadout: () => offChartReadout,
     });
-    select(selectedValidAt);
+    select(selectedValidAt, offChartReadout);
   };
   const update = (next: WindgramView) => {
     if (disposed) return;

@@ -96,12 +96,15 @@ function computeMaxDepartureFromSurfaceMps(args: {
   if (layerTopM === null || layerTopM < modelTerrainM) return null;
   if (layerTopM === modelTerrainM) return 0;
 
-  let z = modelTerrainM;
+  const surfaceAnchorM = Math.min(layerTopM, modelTerrainM + 10);
+  if (layerTopM <= surfaceAnchorM) return 0;
+
+  let z = surfaceAnchorM;
   let u = windU10;
   let v = windV10;
   let maxDeparture = 0;
   for (const level of levels) {
-    if (level.heightM !== null && Number.isFinite(level.heightM) && level.heightM <= modelTerrainM + 20) {
+    if (level.heightM !== null && Number.isFinite(level.heightM) && level.heightM <= surfaceAnchorM) {
       continue;
     }
     const upperZ = level.heightM;

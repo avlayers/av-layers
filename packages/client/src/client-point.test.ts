@@ -771,5 +771,86 @@ describe('weather-independent static fine-tile point terrain (Finding 2)', () =>
     const bForecast = await pointBLoader.load('forecast');
     expect(bForecast.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
     switchGates.forEach(release => release());
+
+    // 4) Multi-chunk boundary point: when chunk 293 fails with 503 while chunk 294 is still pending,
+    // chunk 294 is aborted when unshared (so retry recovers cleanly) and preserved when shared by an independent caller.
+    const multiBuild = structuredClone(deadlineBuild);
+    multiBuild.manifest.buildId = '20261123T000000Z-multi-chunk';
+    const multiDesc = {
+      ...descriptor,
+      frame: multiBuild.manifest.frames[0]!.id,
+    };
+    // On GFS 0.125° fine grid (originLat=90, originLon=-180, tilesAcross=45, fineTileSize=64):
+    // lat=40.25 -> row=398 (tile row 6); lon=11.9375 -> col=1535.5 straddles slot 293 (col 1535) and slot 294 (col 1536).
+    const seamPoint = { lat: 40.25, lon: 11.9375 };
+    const slot294OnlyPoint = { lat: 40.25, lon: 12.125 };
+    let slot293Calls = 0;
+    let slot294Calls = 0;
+    const slot294Signals: AbortSignal[] = [];
+    const multiCache = new PointTerrainCache();
+    const multiFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/data/${multiDesc.frame}`)) {
+        return new Response(JSON.stringify(multiDesc), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/fine/293')) {
+        slot293Calls++;
+        if (slot293Calls === 1) return new Response(null, { status: 503 });
+        return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      if (url.pathname.endsWith('/fine/294')) {
+        const callIdx = ++slot294Calls;
+        if (init?.signal) slot294Signals.push(init.signal);
+        if (callIdx === 1) {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          });
+        }
+        return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      throw new Error(`Unexpected URL ${url.pathname}`);
+    });
+    await expect(multiCache.read('https://api.test', multiFetch, multiBuild, seamPoint, { timeoutMs: 200 })).rejects.toThrow(/503/);
+    expect(slot294Signals[0]?.aborted).toBe(true);
+
+    // Retry immediately recovers and resolves both chunks cleanly
+    const recoveredSeam = await multiCache.read('https://api.test', multiFetch, multiBuild, seamPoint, { timeoutMs: 200 });
+    expect(recoveredSeam?.status).toBe('valid');
+    expect(recoveredSeam?.elevationM).toBeCloseTo(2297.272, 3);
+    expect(slot293Calls).toBe(2);
+    expect(slot294Calls).toBe(2);
+
+    // When a second independent caller shares chunk 294, chunk 293 failing for caller 1 does NOT abort chunk 294 for caller 2
+    const sharedMultiCache = new PointTerrainCache();
+    let sharedSlot293Calls = 0;
+    let releaseSharedSlot294!: () => void;
+    const sharedSlot294Gate = new Promise<void>(resolve => { releaseSharedSlot294 = resolve; });
+    let sharedSlot294Signal: AbortSignal | undefined;
+    const sharedMultiFetch = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/data/${multiDesc.frame}`)) {
+        return new Response(JSON.stringify(multiDesc), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.endsWith('/fine/293')) {
+        sharedSlot293Calls++;
+        await new Promise(resolve => setTimeout(resolve, 5));
+        return new Response(null, { status: 503 });
+      }
+      if (url.pathname.endsWith('/fine/294')) {
+        sharedSlot294Signal = init?.signal ?? undefined;
+        await sharedSlot294Gate;
+        init?.signal?.throwIfAborted();
+        return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      throw new Error(`Unexpected URL ${url.pathname}`);
+    });
+    const caller1 = sharedMultiCache.read('https://api.test', sharedMultiFetch, multiBuild, seamPoint, { timeoutMs: 500 });
+    const caller2 = sharedMultiCache.read('https://api.test', sharedMultiFetch, multiBuild, slot294OnlyPoint, { timeoutMs: 500 });
+    await expect(caller1).rejects.toThrow(/503/);
+    expect(sharedSlot293Calls).toBe(1);
+    expect(sharedSlot294Signal?.aborted).toBe(false);
+    releaseSharedSlot294();
+    const caller2Res = await caller2;
+    expect(caller2Res?.status).toBe('valid');
   });
 });

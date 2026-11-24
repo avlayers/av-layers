@@ -305,7 +305,8 @@ export function populateHourColumnMarks(args: {
     const globalIdx = startHourIndex + i;
     const sample = sampling[i]!;
     const x = viewHours[i]!.x;
-    if (!includeBarbAt || includeBarbAt(i)) {
+    const inPanel = x >= panelLeft && x <= panelRight;
+    if (inPanel && (!includeBarbAt || includeBarbAt(i))) {
       const addBarb = (z: number, interpolated: boolean, surface: boolean) => {
         if (z < floorM || z > topM) return;
         const u = sampleHeight(sample.windU, z), v = sampleHeight(sample.windV, z);
@@ -335,18 +336,23 @@ export function populateHourColumnMarks(args: {
       }
     }
     const freeze = crossings(sample.temperatureC, 0)[0];
-    if (freeze !== undefined && freeze >= floorM && freeze <= topM) {
+    if (inPanel && freeze !== undefined && freeze >= floorM && freeze <= topM) {
       freezing.push({ x, y: y(freeze), hourIndex: globalIdx });
     }
     const { left: bLeft, width: bWidth } = bounds[i]!;
+    const clippedLeft = Math.max(panelLeft, bLeft);
+    const clippedRight = Math.min(panelRight, bLeft + bWidth);
+    const clippedWidth = Math.max(0, clippedRight - clippedLeft);
     const moistSource = hybrid
       ? (sample.cloudHumidityPercent ?? sample.relativeHumidityPercent)
       : sample.relativeHumidityPercent;
     for (const layer of moistLayers(moistSource)) {
       if (layer.baseM >= topM || layer.topM <= floorM) continue;
-      clouds.push({ ...layer, hourIndex: globalIdx, x, y: y(layer.baseM), kind: 'humidity' });
-      if (bWidth > 0) {
-        cloudBands.push({ x: bLeft, width: bWidth, y: y(layer.topM), height: y(layer.baseM) - y(layer.topM) });
+      if (inPanel) {
+        clouds.push({ ...layer, hourIndex: globalIdx, x, y: y(layer.baseM), kind: 'humidity' });
+      }
+      if (clippedWidth > 0) {
+        cloudBands.push({ x: clippedLeft, width: clippedWidth, y: y(layer.topM), height: y(layer.baseM) - y(layer.topM) });
       }
     }
     const regime = classifyConvectiveCloudRegime(h);
@@ -356,7 +362,7 @@ export function populateHourColumnMarks(args: {
     const base = activeCu && hybrid
       ? (convLayer?.baseM ?? (cuLimits.length ? Math.min(...cuLimits) : null))
       : h.surfaceLclM;
-    if (base !== null && base >= floorM && base <= topM) {
+    if (inPanel && base !== null && base >= floorM && base <= topM) {
       clouds.push({
         hourIndex: globalIdx,
         x,

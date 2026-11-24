@@ -94,7 +94,16 @@ function sampleGridSmooth(grid: Float32Array, cols: number, rows: number, u: num
   const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
   const v00 = grid[y0 * cols + x0]!, v10 = grid[y0 * cols + x1]!;
   const v01 = grid[y1 * cols + x0]!, v11 = grid[y1 * cols + x1]!;
-  return (v00 * (1 - sx) + v10 * sx) * (1 - sy) + (v01 * (1 - sx) + v11 * sx) * sy;
+  if (Number.isFinite(v00) && Number.isFinite(v10) && Number.isFinite(v01) && Number.isFinite(v11)) {
+    return (v00 * (1 - sx) + v10 * sx) * (1 - sy) + (v01 * (1 - sx) + v11 * sx) * sy;
+  }
+  const w00 = (1 - sx) * (1 - sy), w10 = sx * (1 - sy), w01 = (1 - sx) * sy, w11 = sx * sy;
+  let sum = 0, wSum = 0;
+  if (Number.isFinite(v00)) { sum += v00 * w00; wSum += w00; }
+  if (Number.isFinite(v10)) { sum += v10 * w10; wSum += w10; }
+  if (Number.isFinite(v01)) { sum += v01 * w01; wSum += w01; }
+  if (Number.isFinite(v11)) { sum += v11 * w11; wSum += w11; }
+  return wSum > 0 ? sum / wSum : Number.NaN;
 }
 
 function mercY(lat: number): number {
@@ -136,6 +145,10 @@ export function renderSmoothCloudRgba(
       const u = px / (w - 1);
       const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
       const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
+      if (!Number.isFinite(tot) || !Number.isFinite(lo)) {
+        outData[off + 3] = 0;
+        continue;
+      }
       const highOnly = Math.max(0, tot - lo);
       // Soaring-weighted optical depth for BL modes; satellite-ir weights upper cold decks directly.
       const opticalCover = style === 'satellite-ir'
@@ -254,6 +267,10 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
       const u = x / (CONTOUR_GRID_W - 1);
       const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
       const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
+      if (!Number.isFinite(tot) || !Number.isFinite(lo)) {
+        grid[y * CONTOUR_GRID_W + x] = Number.NaN;
+        continue;
+      }
       const c = style === 'satellite-ir'
         ? Math.min(1, Math.max(lo, tot * 0.88))
         : Math.min(1, Math.max(lo, lo + Math.max(0, tot - lo) * 0.55));
@@ -304,7 +321,10 @@ export class CloudLayerController {
   }
 
   paint(field: SynopticField, styles: ResolvedChannelStyles, opacity: number, visible: boolean): void {
-    if (!this.canvas || !field.hasClouds) return;
+    if (!this.canvas || !field.hasClouds) {
+      this.syncVisibilityAndStyle(styles, opacity, false);
+      return;
+    }
     const bmpKey = `${field.id}:${styles.cloudStyle}:${styles.darkChrome ? 'd' : 'l'}`;
     let entry = this.bitmaps.get(bmpKey);
     if (entry) {

@@ -47,6 +47,7 @@ export class SkyComposite {
   private playing = false;
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
   private warmTimer: ReturnType<typeof setTimeout> | null = null;
+  private synopticSeq = 0;
   private disposed = false;
 
   private readonly onMoveStart = (): void => {
@@ -277,6 +278,7 @@ export class SkyComposite {
 
     let synopticReady = !(showClouds || showIso);
     if (showClouds || showIso) {
+      const seq = ++this.synopticSeq;
       const cached = this.sampler.findCached(build, frame, raw, {
         needClouds: showClouds,
         needMslp: showIso
@@ -285,9 +287,10 @@ export class SkyComposite {
         this.paintSynopticField(cached);
         synopticReady = true;
       } else {
-        void this.refreshSynoptic(build, frame, raw, allowWarm);
+        void this.refreshSynoptic(build, frame, raw, allowWarm, seq);
       }
     } else {
+      this.synopticSeq++;
       this.clouds.syncVisibilityAndStyle(this.styles, this.opacity, false);
       this.isobars.syncStyleAndVisibility(this.styles.isobar, false);
     }
@@ -330,13 +333,19 @@ export class SkyComposite {
     this.rain.repaintCurrent(raw, this.styles, this.opacity, showRain);
   }
 
-  private async refreshSynoptic(build: PinnedBuild, frame: string, raw: ReturnType<typeof rawMapViewBounds>, allowWarm: boolean): Promise<void> {
+  private async refreshSynoptic(
+    build: PinnedBuild,
+    frame: string,
+    raw: ReturnType<typeof rawMapViewBounds>,
+    allowWarm: boolean,
+    seq = ++this.synopticSeq
+  ): Promise<void> {
     if (this.peeking || (!this.cloudsVisible && !this.isobarsVisible)) return;
     const field = await this.sampler.load(build, frame, raw, {
       needClouds: this.cloudsVisible,
       needMslp: this.isobarsVisible
     });
-    if (!field || this.disposed || this.build !== build || this.frame !== frame) return;
+    if (seq !== this.synopticSeq || !field || this.disposed || this.build !== build || this.frame !== frame) return;
     this.paintSynopticField(field);
     if (allowWarm) this.scheduleHorizonWarm();
   }
