@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it, vi } from 'vitest';
 import { PRODUCTS } from '@av/contracts/models';
-import { monitoringEnvironment, selectWorkflowModels } from './workflow-models.js';
+import { monitoringEnvironment, selectWorkflowModels, writeWorkflowModelsOutput } from './workflow-models.js';
 
 it('selects registered models with their fixed configured caps', () => {
   const all = PRODUCTS.map(product => ({ model: product.modelId, parallelism: product.execution.parallelism }));
@@ -63,9 +63,13 @@ it.each([undefined, '', ...new Set(PRODUCTS.flatMap(product => product.execution
   const forecast = schedule !== undefined;
   const root = mkdtempSync(join(tmpdir(), 'av-workflow-models-')), output = join(root, 'github-output');
   try {
-    execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url)), ...(forecast ? ['--forecast'] : [])], {
-      env: { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', TARGET_ENV: 'production', GITHUB_OUTPUT: output }
-    });
+    const argv = ['node', 'workflow-models.ts', ...(forecast ? ['--forecast'] : [])];
+    const env = { ...process.env, MODEL_SELECTION: 'all', MODEL_SCHEDULE: forecast ? schedule : '41 * * * *', TARGET_ENV: 'production', GITHUB_OUTPUT: output };
+    if (schedule === undefined) {
+      execFileSync(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./workflow-models.ts', import.meta.url))], { env });
+    } else {
+      writeWorkflowModelsOutput(argv, env);
+    }
     const models = selectWorkflowModels({ schedule, kind: forecast ? 'forecast' : 'health' });
     expect(readFileSync(output, 'utf8')).toBe(forecast
       ? `matrix=${JSON.stringify({ include: models })}\nmodel-parallelism=${schedule ? models.length : 1}\n`

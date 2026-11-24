@@ -113,6 +113,12 @@ async function readWindCanvas(page: Page): Promise<{
   });
 }
 
+async function settleFrames(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>(resolveFrame => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolveFrame()));
+  }));
+}
+
 async function openWindCard(page: Page): Promise<void> {
   const styleGroup = page.locator('#weather-dock .channel-hover-card').getByRole('group', { name: 'Wind display style' });
   if (!(await styleGroup.isVisible())) {
@@ -147,10 +153,11 @@ async function closePointIfOpen(page: Page): Promise<void> {
 }
 
 async function launchBrowser(options: WindFeatureSmokeOptions): Promise<Browser> {
-  if (options.channel) return chromium.launch({ headless: !options.headed, channel: options.channel });
-  try { return await chromium.launch({ headless: !options.headed }); }
+  const args = process.platform === 'linux' ? ['--no-sandbox'] : undefined;
+  if (options.channel) return chromium.launch({ headless: !options.headed, channel: options.channel, args });
+  try { return await chromium.launch({ headless: !options.headed, args }); }
   catch (error) {
-    try { return await chromium.launch({ headless: !options.headed, channel: 'chrome' }); }
+    try { return await chromium.launch({ headless: !options.headed, channel: 'chrome', args }); }
     catch {
       try { return await chromium.launch({ headless: !options.headed, args: ['--no-sandbox', '--single-process'] }); }
       catch { throw error; }
@@ -232,7 +239,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(await root.getAttribute('data-style') === 'barbs', 'Barbs style did not select');
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
       await waitForMatchingRaster(page, timeoutMs);
-      await page.waitForTimeout(150);
+      await settleFrames(page);
       const canvas = await readWindCanvas(page);
       assert(canvas.canvasCount > 0, 'No map canvas was found');
       assert(canvas.container.width > 100 && canvas.container.height > 100, `Map container is ${canvas.container.width}x${canvas.container.height}`);
@@ -251,8 +258,10 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert(await root.getAttribute('data-style') === 'hybrid', 'Hybrid style did not select');
       await card.getByRole('button', { name: 'Flow', exact: true }).click();
       assert(await root.getAttribute('data-style') === 'trails', 'Trails style did not select');
+      await card.getByRole('button', { name: 'Barbs', exact: true }).click();
+      assert(await root.getAttribute('data-style') === 'barbs', 'Barbs style did not reselect');
       await dismissWindCard(page);
-      await page.waitForTimeout(400);
+      await settleFrames(page);
       assert(numericRequests.length === before, `Style changes made ${numericRequests.length - before} numeric requests`);
     });
 
@@ -278,7 +287,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.getByRole('button', { name: 'Surface', exact: true }).click();
       assert(await range.inputValue() === '0', 'Surface did not park the thumb at the bottom');
       assert(await root.getAttribute('data-visible') === 'true', 'Wind visibility changed with height selection');
-      await page.waitForTimeout(400);
+      await settleFrames(page);
       assert(numericRequests.length === before, `Height changes made ${numericRequests.length - before} numeric requests`);
     });
 
@@ -315,7 +324,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       await page.locator('#point-card').waitFor({ state: 'visible', timeout: timeoutMs });
       assert(await page.locator('.point-marker').isVisible(), 'Selected point marker dot is not visible');
       assert((await page.locator('#point-close').count()) === 0, 'Legacy #point-close header row button should not exist');
-      await page.waitForTimeout(450);
+      await page.waitForFunction(() => (document.querySelector('#point-wind')?.textContent ?? '').trim().length > 0, undefined, { timeout: timeoutMs });
       const btn3d = page.locator('[data-point-view="3d"]');
       if (await btn3d.isVisible()) {
         assert(await btn3d.getAttribute('aria-pressed') === 'true', '3-Day view should be active by default');
@@ -336,7 +345,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       assert((await unit.textContent())?.trim() === 'ft AGL', 'Imperial rail label is not ft AGL');
       assert(await range.inputValue() === metricValue, 'Unit switch changed the physical height');
       assert(await page.locator('#units-imperial').getAttribute('aria-pressed') === 'true', 'Imperial units are not pressed');
-      await page.waitForTimeout(400);
+      await settleFrames(page);
       assert(numericRequests.length === before, `Unit changes made ${numericRequests.length - before} numeric requests`);
     });
 
@@ -358,9 +367,11 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
     await page.locator('#units-metric').click();
 
     await run('time change redraws wind for the selected hour', async () => {
-      await chooseStyle(page, 'Barbs');
+      if (await page.locator('.wind-controls').getAttribute('data-style') !== 'barbs') {
+        await chooseStyle(page, 'Barbs');
+      }
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
-      await page.waitForTimeout(350);
+      await settleFrames(page);
       const mapEl = page.locator('#map');
       const mapBox = await mapEl.boundingBox();
       assert(mapBox !== null && mapBox.width > 200 && mapBox.height > 200, 'Map box is too small');
@@ -383,16 +394,15 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
       }
       await page.waitForFunction(previous => document.querySelector('.ct-track')?.getAttribute('aria-valuenow') !== previous, selected, { timeout: timeoutMs });
       await page.waitForFunction(() => document.querySelector('.wind-controls')?.getAttribute('data-status') === 'ready', undefined, { timeout: timeoutMs });
-      await page.waitForTimeout(350);
+      await settleFrames(page);
       const afterPixels = await page.screenshot({ clip });
       assert(Buffer.compare(beforePixels, afterPixels) !== 0, 'Rendered WebGL map pixels did not update on time change');
-      await chooseStyle(page, 'Flow');
     });
 
     await run('320, 390 and 1200 px keep rail, capsule dock and timeline clear', async () => {
       for (const width of [320, 390, 1200]) {
         await page.setViewportSize({ width, height: viewportHeight(width) });
-        await page.waitForTimeout(300);
+        await settleFrames(page);
         const layout = await page.evaluate(() => {
           // A named function in this callback is rewritten to call __name, which the page does not define.
           const targets = [
@@ -488,7 +498,7 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
 
       // Open the capsule key popover at 1200 px and verify the opacity slider inside it is accessible and bounded.
       await page.setViewportSize({ width: 1200, height: viewportHeight(1200) });
-      await page.waitForTimeout(200);
+      await settleFrames(page);
       await page.locator('#legend-key-toggle').click();
       const opacityBox = await page.locator('#opacity').boundingBox();
       assert(opacityBox !== null && opacityBox.width >= 24, 'Capsule key opacity slider is missing when opened');
@@ -564,13 +574,16 @@ async function runWithOfflineFixture(options: Omit<WindFeatureSmokeOptions, 'bas
       '--ip', '127.0.0.1', '--port', String(apiPort), '--persist-to', seeded.persistTo, '--log-level', 'error', '--show-interactive-dev-session=false'
     ], { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
     children.push(api);
-    await waitForHttp(`http://127.0.0.1:${apiPort}/healthz`, Date.now() + 20_000);
     const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'], {
       cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
       env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${apiPort}`, VITE_MODEL: seeded.manifest.model, VITE_OFFLINE_FIXTURE: 'true', VITE_BUILD_REVISION: 'smoke' }
     });
     children.push(web);
-    await waitForHttp(`http://127.0.0.1:${webPort}/`, Date.now() + 20_000);
+    const deadline = Date.now() + 20_000;
+    await Promise.all([
+      waitForHttp(`http://127.0.0.1:${apiPort}/healthz`, deadline),
+      waitForHttp(`http://127.0.0.1:${webPort}/`, deadline)
+    ]);
     return await runWindFeatureSmoke({ ...options, baseUrl: `http://127.0.0.1:${webPort}` });
   } finally {
     terminate('SIGTERM');

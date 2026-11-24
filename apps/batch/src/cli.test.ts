@@ -137,7 +137,7 @@ it.each(MODEL_IDS)('reports configured %s whole-domain capacity without a terrai
 it('accepts retention overrides and rejects geometry overrides for whole-domain capacity reports', async () => {
   const { readLocalFile } = await vi.importActual<typeof import('./local-file.js')>('./local-file.js');
   fake.read.mockImplementation(readLocalFile);
-  await runBatch(['capacity', '--model', 'rrfs', '--cadence-hours', '12', '--retention-days', '3']);
+  await runBatch(['capacity', '--model', 'av-wrf', '--cadence-hours', '12', '--retention-days', '3']);
   const report = JSON.parse(vi.mocked(console.log).mock.lastCall![0] as string);
   expect(report.retention).toEqual({ cadenceHours: 12, retentionDays: 3, retainedPerModel: 6,
     retentionBasis: 'cadence-override', retainedNumericBytes: 6 * report.capacity.numericBytes });

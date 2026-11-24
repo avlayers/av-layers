@@ -107,6 +107,13 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
   } finally { await session.close(); }
 });
 
+const gribCache = new Map<string, Uint8Array>();
+const shortProfile = splitSource({
+  ...SPLIT_PRODUCT,
+  capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
+  upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74] }
+});
+
 /**
  * Build a minimal valid single-field GRIB2 message encoded with DRT 5.0 (simple packing)
  * on the 1377x657 ICON-EU regular-lat-lon grid for fast unit tests.
@@ -132,6 +139,9 @@ function buildSyntheticSplitGrib2(options: {
   constantValue: number;
   overridePoint?: { sourceRow: number; col: number; value: number };
 }): Uint8Array {
+  const cacheKey = JSON.stringify(options);
+  const cached = gribCache.get(cacheKey);
+  if (cached) return cached;
   const width = profile.grid.width;
   const height = profile.grid.height;
   const pointCount = width * height;
@@ -279,6 +289,7 @@ function buildSyntheticSplitGrib2(options: {
     offset += sec.byteLength;
   }
   out.set([0x37, 0x37, 0x37, 0x37], offset); // "7777"
+  gribCache.set(cacheKey, out);
   return out;
 }
 
@@ -644,7 +655,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       return good(input, init);
     };
     const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
-    const first = await createSplitGribAcquisitionSession(profile, options);
+    const first = await createSplitGribAcquisitionSession(shortProfile, options);
     await first.acquire(4);
     expect(attempts).toBe(1);
     expect(first.stats.retries).toBe(0);
@@ -652,7 +663,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
 
     const name = (await readdir(join(cacheDir, 'objects'))).find(name => name.endsWith('_HSURF.grib2.bz2'))!;
     await writeFile(join(cacheDir, 'objects', name), invalid);
-    const second = await createSplitGribAcquisitionSession(profile, options);
+    const second = await createSplitGribAcquisitionSession(shortProfile, options);
     await second.acquire(5);
     expect(attempts).toBe(2);
     expect(second.stats.cacheHits).toBeGreaterThan(0);
@@ -663,7 +674,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-invalid-'));
     tempDirs.push(cacheDir);
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response('invalid GRIB'));
-    const session = await createSplitGribAcquisitionSession(profile, { cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+    const session = await createSplitGribAcquisitionSession(shortProfile, { cycle: '2026-10-08T00:00:00Z', activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     await expect(session.acquire(4)).rejects.toThrow();
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(await readdir(cacheDir)).toEqual([]);
@@ -676,7 +687,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const good = syntheticFetch(cycle, []);
     const fetchImpl = vi.fn(good).mockResolvedValueOnce(new Response('busy', { status: 503 }))
       .mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.error(new TypeError('connection reset')); } })));
-    const session = await createSplitGribAcquisitionSession(profile, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
+    const session = await createSplitGribAcquisitionSession(shortProfile, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
     try {
       await session.acquire(4);
       expect(session.stats.retries).toBe(2);
@@ -689,14 +700,14 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     tempDirs.push(cacheDir);
     const fetchImpl = vi.fn<typeof fetch>(async () => new Response('missing', { status: 404 }));
     const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
-    const missing = await createSplitGribAcquisitionSession(profile, options);
+    const missing = await createSplitGribAcquisitionSession(shortProfile, options);
     try {
       await expect(missing.acquire(4)).rejects.toThrow('HTTP 404');
       expect(fetchImpl).toHaveBeenCalledOnce();
     } finally { await missing.close(); }
 
     await writeFile(join(cacheDir, 'objects'), 'unexpected cache file');
-    const inaccessible = await createSplitGribAcquisitionSession(profile, options);
+    const inaccessible = await createSplitGribAcquisitionSession(shortProfile, options);
     try {
       await expect(inaccessible.acquire(4)).rejects.toMatchObject({ code: 'ENOTDIR' });
       expect(fetchImpl).toHaveBeenCalledOnce();
@@ -723,7 +734,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       } finally { active--; }
     };
     const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl, concurrency: 2 };
-    const session = await createSplitGribAcquisitionSession(profile, options);
+    const session = await createSplitGribAcquisitionSession(shortProfile, options);
     const frame = session.acquire(4);
     await expect(session.acquire(5)).rejects.toThrow('active frame');
     await occupied;
@@ -734,7 +745,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     expect(active).toBe(0);
     await session.close();
     for (const concurrency of [0, 1.5, 9, NaN]) {
-      await expect(createSplitGribAcquisitionSession(profile, { ...options, concurrency })).rejects.toThrow('concurrency');
+      await expect(createSplitGribAcquisitionSession(shortProfile, { ...options, concurrency })).rejects.toThrow('concurrency');
     }
   });
 

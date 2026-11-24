@@ -30,12 +30,32 @@ it('admits the complete encoded, index and descriptor estimate before creating a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+const cachedSupport = new Map<string, Promise<{
+  mask: Awaited<ReturnType<typeof import('./coverage.js').loadCoverage>>;
+  plan: NonNullable<ReturnType<typeof import('./whole-domain/coverage.js').wholeDomainPlan>>;
+  fine: Awaited<ReturnType<typeof import('./whole-domain/coverage.js').loadBundledFineCoverage>>;
+  active: Uint32Array;
+}>>();
+function loadProductSupport(product: (typeof PRODUCTS)[number]) {
+  let pending = cachedSupport.get(product.modelId);
+  if (!pending) {
+    pending = (async () => {
+      const [{ loadCoverage }, { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport }] = await Promise.all([
+        import('./coverage.js'), import('./whole-domain/coverage.js')
+      ]);
+      const plan = wholeDomainPlan(product)!;
+      const [mask, fine] = await Promise.all([loadCoverage(product), loadBundledFineCoverage(product, plan)]);
+      const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+      return { mask, plan, fine, active };
+    })();
+    cachedSupport.set(product.modelId, pending);
+  }
+  return pending;
+}
+
 it('admits the GFS sparse wind estimate with multi-level headroom alongside existing numeric products', async () => {
-  const product = getProduct('gfs')!, plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor!);
-  const { loadCoverage } = await import('./coverage.js');
-  const { acquisitionSupport, loadBundledFineCoverage } = await import('./whole-domain/coverage.js');
-  const mask = await loadCoverage(product), fine = await loadBundledFineCoverage(product, plan);
-  const { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+  const product = getProduct('gfs')!;
+  const { plan, fine, active } = await loadProductSupport(product);
   const sparsity = { activeIndices: active, fineCoverage: fine.mask.coverage };
   const existing = 11_696_592_960;
   // Admits +15 extra vertical levels within the 64 MiB shard cap while leaving >35 GiB of numericBytes free.
@@ -50,12 +70,11 @@ it.each(PRODUCTS)('admits actual full and partial shard pages for $modelId', pro
 });
 
 it.each(PRODUCTS)('admits sparse wind alongside configured whole-domain and shard capacity for $modelId', async product => {
-  const [{ loadCoverage }, { getForecastProvider }, { wholeDomainPlan, loadBundledFineCoverage, acquisitionSupport, nativeSparseMask }, { packedTerrainColumnBudget }, { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput }] = await Promise.all([
-    import('./coverage.js'), import('./providers.js'), import('./whole-domain/coverage.js'),
+  const [{ getForecastProvider }, { nativeSparseMask }, { packedTerrainColumnBudget }, { admitWholeDomain, MAX_PACKED_COLUMN_BYTES, partitionForecastHours, wholeDomainCapacityInput }] = await Promise.all([
+    import('./providers.js'), import('./whole-domain/coverage.js'),
     import('@av/forecast/refinement'), import('./whole-domain/capacity.js')
   ]);
-  const mask = await loadCoverage(product), plan = wholeDomainPlan(product)!, provider = getForecastProvider(product.modelId);
-  const fine = await loadBundledFineCoverage(product, plan), { active } = acquisitionSupport(plan, fine.mask.coverage, mask);
+  const { mask, plan, fine, active } = await loadProductSupport(product), provider = getForecastProvider(product.modelId);
   const columns = packedTerrainColumnBudget(plan, fine.mask.coverage, active, provider.maxLevels,
     { maxBytes: MAX_PACKED_COLUMN_BYTES, clearanceFallback: 'unsupported', expectedGridHash: fine.descriptor.gridHash });
   const geometry = { plan, native: { mask: nativeSparseMask(mask) }, nativeMask: mask, fine, acquisitionActive: active, columns };
