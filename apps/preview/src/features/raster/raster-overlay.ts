@@ -6,7 +6,7 @@ import { addProtocol, removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAP_TEXTURE_POOL_RESERVE_BYTES, MAX_RASTER_SOURCES, rasterSourceBytes, rasterSourceLimit } from './raster-budget';
 import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
 import { boundsAreaKm2, cameraBounds, createViewportWarmth } from '../map/viewport-policy';
-import { isMapTheme, type MapTheme } from '../map/visual-theme';
+import { isMapTheme, themeOption, type MapTheme } from '../../themes/registry';
 import { canRemapTiles, remapTileToBitmap } from './tile-remap';
 
 interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
@@ -541,7 +541,7 @@ export class RasterOverlay {
       const hashTheme = hashIdx >= 0 ? params.url.slice(hashIdx + 1) : '';
       const slotTheme: MapTheme = isMapTheme(hashTheme) ? hashTheme : this.theme;
       const response = await this.protocol!.load({ ...params, url: cleanUrl }, controller);
-      if (slotTheme === 'classic' || response.data.byteLength <= 48 || !canRemapTiles()) return response;
+      if (!themeOption(slotTheme).remap || response.data.byteLength <= 48 || !canRemapTiles()) return response;
       const httpIdx = cleanUrl.indexOf('http');
       const rawUrl = httpIdx >= 0 ? cleanUrl.slice(httpIdx) : cleanUrl;
       let maskData: ArrayBuffer | null = null;

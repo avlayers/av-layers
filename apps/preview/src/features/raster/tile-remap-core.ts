@@ -1,6 +1,7 @@
 import { LIFT_COLORS, LIFT_EDGES, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
-import { liftStopsForTheme, rainStopsForTheme, sampleStops, themeOption, type MapTheme } from '../map/visual-theme';
+import { liftStopsForTheme, rainStopsForTheme, sampleStops } from '../../themes/palette';
+import { themeOption, type MapTheme } from '../../themes/registry';
 
 export type RemapKind = 'lift' | 'rain';
 
@@ -129,7 +130,7 @@ export function remapRgbaInPlace(
   maskPixels?: Uint8ClampedArray | null,
   scratchArg?: RemapScratch
 ): void {
-  if (theme === 'classic') return;
+  if (!themeOption(theme).remap) return;
   const count = width * height;
   if (count <= 0) return;
   const scratch = scratchArg ?? (defaultScratch ??= createRemapScratch(count));
@@ -265,20 +266,6 @@ export function remapRgbaInPlace(
         if (mode === 'stepped-contour' && invStep > 0 && crossesStep(val, vr, vd, invStep)) {
           r = r > 56 ? r - 56 : 0; g = g > 48 ? g - 48 : 0; b = b > 34 ? b - 34 : 0;
           a = a + 55 > 255 ? 255 : (a + 55 < 195 ? 195 : a + 55);
-        } else if (mode === 'isoline-wash') {
-          if ((invStep > 0 && crossesStep(val, vr, vd, invStep)) || (onOuterEdge && val >= 350)) {
-            r = r > 38 ? r - 38 : 0; g = g > 46 ? g - 46 : 0; b = b > 32 ? b - 32 : 0;
-            a = 238;
-          }
-        } else if (mode === 'core-rim') {
-          if (crossesThreshold(val, vr, vd, 2600) || crossesThreshold(val, vr, vd, 4000)) {
-            r = 255; g = 236; b = 140; a = 246;
-          }
-        } else if (mode === 'ink-outline') {
-          if ((invStep > 0 && crossesStep(val, vr, vd, invStep)) || (onOuterEdge && val >= 450)) {
-            if (dark) { r = 255; g = 244; b = 196; a = 248; }
-            else { r = 28; g = 22; b = 26; a = 242; }
-          }
         }
         pixels[off] = r; pixels[off + 1] = g; pixels[off + 2] = b; pixels[off + 3] = a;
         continue;
@@ -298,38 +285,6 @@ export function remapRgbaInPlace(
           r = r > 18 ? r - 18 : 0; g = g > 14 ? g - 14 : 0; a = a + 44 > 250 ? 250 : a + 44;
         } else {
           a = (a * 0.24) | 0;
-        }
-      } else if (rMode === 'concentric-rings') {
-        if (onOuterEdge || crossesThreshold(val, vr, vd, 1) || crossesThreshold(val, vr, vd, 4) || crossesThreshold(val, vr, vd, 12) || crossesThreshold(val, vr, vd, 25)) {
-          r = r > 28 ? r - 28 : 0; g = g > 24 ? g - 24 : 0; a = 242;
-        } else {
-          a = (a * 0.32) | 0;
-        }
-      } else if (rMode === 'slant-streaks') {
-        const streak = ((x * 2 + y) & 7) < (val >= 2.5 ? 3 : 2);
-        if (crossesThreshold(val, vr, vd, 8)) {
-          r = 103; g = 232; b = 249; a = 248;
-        } else if (val < 8 && !streak) {
-          a = (a * 0.28) | 0;
-        }
-      } else if (rMode === 'blueprint-hatch') {
-        const diagA = ((x + y) & 7) < 2;
-        const diagB = val >= 5 && (((x - y) & 7) < 2);
-        if (onOuterEdge || crossesThreshold(val, vr, vd, 5)) {
-          r = 165; g = 243; b = 252; a = 246;
-        } else if (val >= 14 || diagA || diagB) {
-          a = a + 32 > 252 ? 252 : a + 32;
-        } else {
-          a = (a * 0.20) | 0;
-        }
-      } else if (rMode === 'ink-hatch') {
-        const stripe = ((x + y) & 7) < (val >= 4 ? 4 : 2);
-        if (onOuterEdge || crossesThreshold(val, vr, vd, 8)) {
-          r = 15; g = 23; b = 72; a = 250;
-        } else if (val < 10 && !stripe) {
-          a = (a * 0.22) | 0;
-        } else {
-          a = a + 36 > 255 ? 255 : a + 36;
         }
       } else if (crossesThreshold(val, vr, vd, 10) || crossesThreshold(val, vr, vd, 2)) {
         if (dark) {
@@ -381,7 +336,7 @@ export async function decodeAndRemapBitmap(
   theme: MapTheme,
   maskData?: ArrayBuffer | null
 ): Promise<ImageBitmap> {
-  if (theme === 'classic' || data.byteLength <= 48) {
+  if (!themeOption(theme).remap || data.byteLength <= 48) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const [bitmap, maskBitmap] = await Promise.all([

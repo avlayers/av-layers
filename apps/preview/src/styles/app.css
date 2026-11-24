@@ -7,7 +7,6 @@
 * { box-sizing: border-box; }
 html, body, #app { margin: 0; height: 100%; }
 #app { position: relative; background: var(--av-canvas-bg); color: var(--av-text); }
-#app[data-theme="blueprint"] { color: #e0f2fe; }
 #map { position: absolute; inset: 0; }
 .av-rain-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 
@@ -473,7 +472,6 @@ html, body, #app { margin: 0; height: 100%; }
   cursor: pointer;
 }
 .hover-encoding-pill:hover { background: #eaf1f8; color: #16324f; }
-.hover-encoding-pill.is-auto-target { border-color: #94a3b8; }
 .hover-encoding-pill.is-selected {
   background: #16324f;
   border-color: #16324f;
@@ -1007,7 +1005,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .toast.status { background: #f4f7f8; color: #243140; }
 .toast.error { background: #fff1f1; color: #8d1d1d; }
 
-/* Dark chrome surfaces (Dark Slate & Blueprint Synoptic) */
+/* Dark chrome surfaces (Dark Slate) */
 #app[data-chrome="dark"] #models,
 #app[data-chrome="dark"] #layer-picker,
 #app[data-chrome="dark"] .control-pill,
@@ -1144,7 +1142,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 #app[data-chrome="dark"] .hover-encoding-group { border-color: #283649; }
 #app[data-chrome="dark"] .hover-encoding-pill { background: #192534; border-color: #334155; color: #cbd5e1; }
 #app[data-chrome="dark"] .hover-encoding-pill:hover { background: #243447; color: #f8fafc; }
-#app[data-chrome="dark"] .hover-encoding-pill.is-auto-target { border-color: #64748b; }
 #app[data-chrome="dark"] .layer-button.is-selected,
 #app[data-chrome="dark"] .theme-tile.is-selected,
 #app[data-chrome="dark"] .hover-state-pill.is-on,

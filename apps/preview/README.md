@@ -36,7 +36,10 @@ MapLibre's WebGL2 context (`MapLibreOverlay`, interleaved) and re-attach on
 `style.load`. Speed labels show `km/h` or `mph` at the selected height.
 The basemap combines AWS Terrarium DEM color-relief and multidirectional
 hillshade with OpenFreeMap vector roads, borders, airfields, peaks, and place
-labels across 8 soaring map themes.
+labels across four map themes (Stone, Slate, Chart and Classic). Each theme
+fixes its own lift palette, cloud and rain styling, so there are no separate
+style pickers; retired theme ids in old links fall back to the nearest kept
+theme.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.

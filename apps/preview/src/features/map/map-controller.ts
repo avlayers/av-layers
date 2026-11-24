@@ -4,7 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { longitudeOffsetHours } from '@av/client';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
-import type { MapTheme } from './visual-theme';
+import type { MapTheme } from '../../themes/registry';
 
 maplibregl.setWorkerUrl(workerUrl);
 

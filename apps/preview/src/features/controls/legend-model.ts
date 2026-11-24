@@ -1,7 +1,8 @@
 import { activePalettes, type PinnedBuild, type UnitSystem } from '@av/client';
 import { LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, type LayerId } from '@av/contracts/layers';
 import { isLiftLayer, shortLayerName } from '../forecast/forecast-model';
-import { themeLiftLegendColors, themeOption, type MapTheme } from '../map/visual-theme';
+import { themeLiftLegendColors } from '../../themes/palette';
+import { themeOption, type MapTheme } from '../../themes/registry';
 
 export interface LegendStop { readonly color: string; readonly label: string }
 export interface LegendModel {
@@ -34,14 +35,14 @@ export function legendModel(build: PinnedBuild, layer: LayerId, units: UnitSyste
     const renderStyle = build.manifest.tool.liftRenderStyle;
     const sink = build.manifest.descriptors.methods[descriptor.methodId]?.parameters.sinkRateMps;
     const opt = themeOption(theme);
-    const classicMslGround = theme === 'classic' && layer === 'usable-lift-msl' && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE);
+    const publishedMslGround = !opt.remap && layer === 'usable-lift-msl' && (renderStyle === LIFT_STEP_RENDER_STYLE || renderStyle === LIFT_RENDER_STYLE);
     return {
       title,
       unitLabel: `Lift ${altitudeUnit}`,
       stops,
       reference: `${layer === 'usable-lift-agl' ? 'AGL shows usable lift height above ground.' : 'MSL shows top of usable lift above sea level.'} (${opt.shortLabel}: ${opt.summary})`,
-      noLift: classicMslGround
-        ? 'No usable lift: Classic Soaring MSL colors ground elevation.'
+      noLift: publishedMslGround
+        ? `No usable lift: ${opt.label} MSL colors ground elevation.`
         : 'No usable lift: clear areas over terrain relief.',
       cutoff: Number.isFinite(sink) && sink > 0 ? `Usable lift requires predicted updrafts above ${sink} m/s. Nearby terrain can cross this cutoff.` : 'Usable lift depends on the predicted updraft and terrain.'
     };

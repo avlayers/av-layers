@@ -2,8 +2,7 @@ import { AUTO_MODEL_ID, longitudeOffsetHours, type UnitSystem } from '@av/client
 import type { PointViewMode } from '@av/windgram';
 import type { ModelId } from '@av/contracts/publication';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../features/controls/bottom-dock-model';
-import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleChoice } from '../features/map/channel-styles';
-import { isMapTheme, type MapTheme } from '../features/map/visual-theme';
+import { parseMapTheme, type MapTheme } from '../themes/registry';
 import { previewQuery } from '../features/navigation/url-state';
 import {
   parseWindPreferences,
@@ -31,16 +30,12 @@ interface Preferences {
   theme(): MapTheme | null;
   dockView(): DockViewId | null;
   pointViewMode(): PointViewMode | null;
-  cloudStyle(): CloudStyleChoice | null;
-  rainStyle(): RainStyleChoice | null;
   wind(): StoredWindPreferences | null;
   setUnits(units: UnitSystem): void;
   setOpacity(opacity: number): void;
   setTheme(theme: MapTheme): void;
   setDockView(dockView: DockViewId): void;
   setPointViewMode(mode: PointViewMode): void;
-  setCloudStyle(style: CloudStyleChoice): void;
-  setRainStyle(style: RainStyleChoice): void;
   setWind(state: WindControlState, fixedHeight: number): void;
 }
 
@@ -59,19 +54,15 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const preferences: Preferences = {
     units() { const value = read('preview-units'); return value === 'imperial' ? 'imperial' : value === 'metric' ? 'metric' : null; },
     opacity() { const raw = read('preview-lift-opacity'), value = raw?.trim() ? Number(raw) : Number.NaN; return value >= 0 && value <= 1 ? value : null; },
-    theme() { const value = read('preview-theme'); return isMapTheme(value) ? value : null; },
+    theme() { const value = read('preview-theme'); return parseMapTheme(value); },
     dockView() { const value = read('preview-dock-view'); return isDockViewId(value) ? value : null; },
     pointViewMode() { const value = read('preview-point-view'); return value === '3d' ? '3d' : value === '1d' ? '1d' : null; },
-    cloudStyle() { const value = read('preview-cloud-style'); return value === 'auto' || isCloudStyleId(value) ? value : null; },
-    rainStyle() { const value = read('preview-rain-style'); return value === 'auto' || isRainStyleId(value) ? value : null; },
     wind() { return parseWindPreferences(read(WIND_STORAGE_KEY)); },
     setUnits(units) { write('preview-units', units); },
     setOpacity(opacity) { write('preview-lift-opacity', String(opacity)); },
     setTheme(theme) { write('preview-theme', theme); },
     setDockView(dockView) { write('preview-dock-view', dockView); },
     setPointViewMode(mode) { write('preview-point-view', mode); },
-    setCloudStyle(style) { write('preview-cloud-style', style); },
-    setRainStyle(style) { write('preview-rain-style', style); },
     setWind(state, fixedHeight) { write(WIND_STORAGE_KEY, serializeWindPreferences(state, fixedHeight)); }
   };
   const query = previewQuery(search, offline), storedWind = preferences.wind();
@@ -81,8 +72,6 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? 'stone';
   const initialDockView: DockViewId = query.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
   const initialPointViewMode: PointViewMode = preferences.pointViewMode() ?? '3d';
-  const initialCloudStyle: CloudStyleChoice = query.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
-  const initialRainStyle: RainStyleChoice = query.rainStyle ?? preferences.rainStyle() ?? 'auto';
   const initialWindHeight = query.windHeight ?? storedWind?.height ?? 'surface';
   const initialFixedHeight = typeof initialWindHeight === 'number' ? initialWindHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
   const browserOffsetMinutes = -new Date().getTimezoneOffset();
@@ -90,7 +79,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initial: PreviewInitialState = {
     intent: {
       model: initialModel, reference: query.reference, customLayer: visibleCustomLayer(query.layer), opacity: initialOpacity, units: initialUnits,
-      theme: initialTheme, dockView: initialDockView, cloudStyle: initialCloudStyle, rainStyle: initialRainStyle,
+      theme: initialTheme, dockView: initialDockView,
       liftVisible: query.liftVisible ?? true, cloudsVisible: query.cloudsVisible ?? true, rainVisible: query.rainVisible ?? true, isobarsVisible: query.isobarsVisible ?? false, peeking: false,
       windStyle: query.windStyle ?? storedWind?.style ?? 'trails', windVisible: query.windVisible ?? storedWind?.visible ?? true,
       windVisibleOverride: query.windVisible, windPaused: false, windHeight: initialWindHeight, fixedWindHeight: initialFixedHeight,

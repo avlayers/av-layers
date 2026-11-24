@@ -1,9 +1,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
-import type { RainStyleId, ResolvedChannelStyles } from '../map/channel-styles';
+import type { ResolvedChannelStyles } from '../map/channel-styles';
 import {
-  buildInwardTickSegments,
-  buildScallopedPolyline,
   extractOrientedContours,
   type GeoPt
 } from './contour-rings';
@@ -67,7 +65,7 @@ export interface RainContourGeoJson {
   readonly type: 'FeatureCollection';
   readonly features: Array<{
     readonly type: 'Feature';
-    readonly properties: { readonly tier: 'shower' | 'squall' | 'tick'; readonly mmh: number };
+    readonly properties: { readonly tier: 'shower' | 'squall'; readonly mmh: number };
     readonly geometry: { readonly type: 'LineString'; readonly coordinates: Array<[number, number]> };
   }>;
 }
@@ -316,11 +314,8 @@ export function renderRainInnerVignetteRgba(
   }
 
   const [cr, cg, cb] = styles.rainEdge.cuffRgb;
-  const style = styles.rainStyle;
-  const cuffCells = style === 'vignette-cuff' ? 13.5 : style === 'wet-lens' ? 7.5 : 8.5;
-  const maxAlpha = style === 'vignette-cuff'
-    ? styles.rainEdge.cuffMaxAlpha
-    : Math.round(styles.rainEdge.cuffMaxAlpha * 0.68);
+  const cuffCells = 13.5;
+  const maxAlpha = styles.rainEdge.cuffMaxAlpha;
 
   let maxPlacedAlpha = 0;
   for (let i = 0; i < n; i++) {
@@ -490,17 +485,8 @@ export function samplePrecipMmh(field: PrecipField, lon: number, lat: number, pr
   return (v00 * (1 - fx) + v10 * fx) * (1 - fy) + (v01 * (1 - fx) + v11 * fx) * fy;
 }
 
-/**
- * Extracts oriented storm-cell perimeter contours for the active `RainStyleId`:
- * - `'vignette-cuff'` (#1 default) & `'wet-lens'` (#4): smooth crisp dry-halo perimeter + squall core
- * - `'sigwx-scallop'` (#2): outward-bulging aviation SIGWX scalloped cloud arcs
- * - `'inward-comb'` (#3): perimeter contour + inward-pointing slanted rain-tick hachures
- */
-export function buildRainContourGeoJson(
-  field: PrecipField,
-  rainStyle: RainStyleId = 'vignette-cuff',
-  viewSpanDeg = Math.max(0.2, field.east - field.west)
-): RainContourGeoJson {
+/** Extracts oriented storm-cell perimeter contours: a crisp dry-halo perimeter plus the squall core. */
+export function buildRainContourGeoJson(field: PrecipField): RainContourGeoJson {
   if (field.maxMmh < SHOWER_CONTOUR_MMH || field.cols < 2 || field.rows < 2) {
     return { type: 'FeatureCollection', features: [] };
   }
@@ -528,7 +514,6 @@ export function buildRainContourGeoJson(
   };
 
   const features: RainContourGeoJson['features'] = [];
-  const scaleDeg = Math.max(0.015, viewSpanDeg);
 
   const levels: ReadonlyArray<{ tier: 'shower' | 'squall'; mmh: number }> = [
     { tier: 'shower', mmh: SHOWER_CONTOUR_MMH },
@@ -539,34 +524,11 @@ export function buildRainContourGeoJson(
     if (field.maxMmh < mmh) continue;
     const rings = extractOrientedContours(grid, cols, rows, mmh, toGeo, 4);
     for (const ring of rings) {
-      if (rainStyle === 'sigwx-scallop') {
-        const step = tier === 'squall' ? scaleDeg * 0.018 : scaleDeg * 0.026;
-        const bulge = tier === 'squall' ? step * 0.34 : step * 0.30;
-        features.push({
-          type: 'Feature',
-          properties: { tier, mmh },
-          geometry: { type: 'LineString', coordinates: buildScallopedPolyline(ring, step, bulge) }
-        });
-        continue;
-      }
-
       features.push({
         type: 'Feature',
         properties: { tier, mmh },
         geometry: { type: 'LineString', coordinates: ring }
       });
-
-      if (rainStyle === 'inward-comb') {
-        const spacing = tier === 'squall' ? scaleDeg * 0.013 : scaleDeg * 0.018;
-        const tickLen = tier === 'squall' ? scaleDeg * 0.011 : scaleDeg * 0.0085;
-        for (const [base, tip] of buildInwardTickSegments(ring, spacing, tickLen)) {
-          features.push({
-            type: 'Feature',
-            properties: { tier: 'tick', mmh },
-            geometry: { type: 'LineString', coordinates: [base, tip] }
-          });
-        }
-      }
     }
   }
   return { type: 'FeatureCollection', features };

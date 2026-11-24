@@ -3,13 +3,8 @@ import {
   ApiClient, clampOpacity,
   type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild
 } from '@av/client';
-import {
-  resolveChannelStyles,
-  type CloudStyleChoice,
-  type RainStyleChoice,
-  type ResolvedChannelStyles
-} from '../map/channel-styles';
-import type { MapTheme } from '../map/visual-theme';
+import { resolveChannelStyles, type ResolvedChannelStyles } from '../map/channel-styles';
+import type { MapTheme } from '../../themes/registry';
 import { canRemapTiles } from '../raster/tile-remap';
 import { CloudLayerController } from './cloud-layer';
 import { IsobarLayerController } from './isobar-layer';
@@ -36,8 +31,6 @@ export class SkyComposite {
   private build: PinnedBuild | null = null;
   private frame: string | null = null;
   private theme: MapTheme;
-  private cloudStyle: CloudStyleChoice;
-  private rainStyle: RainStyleChoice;
   private styles: ResolvedChannelStyles;
   private opacity: number;
   private cloudsVisible: boolean;
@@ -74,8 +67,6 @@ export class SkyComposite {
     baseUrl: string,
     options: {
       theme: MapTheme;
-      cloudStyle?: CloudStyleChoice;
-      rainStyle?: RainStyleChoice;
       opacity: number;
       cloudsVisible: boolean;
       rainVisible: boolean;
@@ -85,9 +76,7 @@ export class SkyComposite {
     }
   ) {
     this.theme = options.theme;
-    this.cloudStyle = options.cloudStyle ?? 'auto';
-    this.rainStyle = options.rainStyle ?? 'auto';
-    this.styles = resolveChannelStyles(this.theme, { cloudStyle: this.cloudStyle, rainStyle: this.rainStyle });
+    this.styles = resolveChannelStyles(this.theme);
     this.opacity = options.opacity;
     this.cloudsVisible = options.cloudsVisible;
     this.rainVisible = options.rainVisible;
@@ -156,16 +145,6 @@ export class SkyComposite {
   setTheme(theme: MapTheme): void {
     if (this.theme === theme || !this.supported || this.disposed) return;
     this.theme = theme;
-    this.recomputeStyles();
-  }
-
-  setChannelStyles(patch: { cloudStyle?: CloudStyleChoice; rainStyle?: RainStyleChoice }): void {
-    if (!this.supported || this.disposed) return;
-    const nextCloud = patch.cloudStyle ?? this.cloudStyle;
-    const nextRain = patch.rainStyle ?? this.rainStyle;
-    if (nextCloud === this.cloudStyle && nextRain === this.rainStyle) return;
-    this.cloudStyle = nextCloud;
-    this.rainStyle = nextRain;
     this.recomputeStyles();
   }
 
@@ -315,7 +294,7 @@ export class SkyComposite {
   }
 
   private recomputeStyles(): void {
-    this.styles = resolveChannelStyles(this.theme, { cloudStyle: this.cloudStyle, rainStyle: this.rainStyle });
+    this.styles = resolveChannelStyles(this.theme);
     const showClouds = this.cloudsVisible && !this.peeking;
     const showRain = this.rainVisible && !this.peeking;
     const showIso = this.isobarsVisible && !this.peeking;

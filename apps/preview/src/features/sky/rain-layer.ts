@@ -42,7 +42,6 @@ const RAIN_CONTOUR_SOURCE_ID = 'av-rain-contours';
 const RAIN_CONTOUR_HALO_ID = 'av-rain-contours-halo';
 const RAIN_CONTOUR_SHOWER_ID = 'av-rain-contours-shower';
 const RAIN_CONTOUR_SQUALL_ID = 'av-rain-contours-squall';
-const RAIN_CONTOUR_TICK_ID = 'av-rain-contours-tick';
 
 const RAIN_FIELD_SIZE = 224;
 const MAX_RAIN_FIELD_CACHE = 80;
@@ -283,9 +282,8 @@ export class RainLayerController {
     const re = styles.rainEdge;
     const { haloColor, showerColor } = rainContourStrokePair(styles);
     const alphaScale = clampOpacity(0.66 + opacity * 0.34);
-    const isCuffOrLens = styles.rainStyle === 'vignette-cuff' || styles.rainStyle === 'wet-lens';
 
-    const sig = `${hasCuffLayer}:${hasHaloLayer}:${visible}:${cuffOpacity.toFixed(3)}:${alphaScale.toFixed(3)}:${styles.rainStyle}:${haloColor}:${showerColor}:${re.coreStrokeColor}`;
+    const sig = `${hasCuffLayer}:${hasHaloLayer}:${visible}:${cuffOpacity.toFixed(3)}:${alphaScale.toFixed(3)}:${haloColor}:${showerColor}:${re.coreStrokeColor}`;
     if (sig === this.lastStyleSig) return;
     this.lastStyleSig = sig;
 
@@ -294,32 +292,21 @@ export class RainLayerController {
     }
 
     const vis = visible ? 'visible' : 'none';
-    for (const id of [RAIN_CONTOUR_HALO_ID, RAIN_CONTOUR_SHOWER_ID, RAIN_CONTOUR_SQUALL_ID, RAIN_CONTOUR_TICK_ID]) {
+    for (const id of [RAIN_CONTOUR_HALO_ID, RAIN_CONTOUR_SHOWER_ID, RAIN_CONTOUR_SQUALL_ID]) {
       if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis);
     }
 
     if (hasHaloLayer) {
       this.map.setPaintProperty(RAIN_CONTOUR_HALO_ID, 'line-color', haloColor);
       this.map.setPaintProperty(RAIN_CONTOUR_HALO_ID, 'line-opacity', 0.94 * alphaScale);
-      this.map.setPaintProperty(RAIN_CONTOUR_HALO_ID, 'line-blur', isCuffOrLens ? 0.65 : 0.25);
-      this.map.setPaintProperty(
-        RAIN_CONTOUR_HALO_ID,
-        'line-width',
-        ['case', ['==', ['get', 'tier'], 'squall'], 4.4, isCuffOrLens ? 4.2 : 3.6]
-      );
     }
     if (this.map.getLayer(RAIN_CONTOUR_SHOWER_ID)) {
       this.map.setPaintProperty(RAIN_CONTOUR_SHOWER_ID, 'line-color', showerColor);
       this.map.setPaintProperty(RAIN_CONTOUR_SHOWER_ID, 'line-opacity', 0.96 * alphaScale);
-      this.map.setPaintProperty(RAIN_CONTOUR_SHOWER_ID, 'line-width', isCuffOrLens ? 2.1 : 1.65);
     }
     if (this.map.getLayer(RAIN_CONTOUR_SQUALL_ID)) {
       this.map.setPaintProperty(RAIN_CONTOUR_SQUALL_ID, 'line-color', re.coreStrokeColor);
       this.map.setPaintProperty(RAIN_CONTOUR_SQUALL_ID, 'line-opacity', 0.98 * alphaScale);
-    }
-    if (this.map.getLayer(RAIN_CONTOUR_TICK_ID)) {
-      this.map.setPaintProperty(RAIN_CONTOUR_TICK_ID, 'line-color', re.coreStrokeColor);
-      this.map.setPaintProperty(RAIN_CONTOUR_TICK_ID, 'line-opacity', 0.92 * alphaScale);
     }
   }
 
@@ -335,7 +322,7 @@ export class RainLayerController {
     this.lastStyleSig = '';
     this.animator?.setField(null);
     if (typeof this.map.getLayer === 'function') {
-      for (const id of [RAIN_CONTOUR_TICK_ID, RAIN_CONTOUR_SQUALL_ID, RAIN_CONTOUR_SHOWER_ID, RAIN_CONTOUR_HALO_ID, RAIN_CUFF_SOURCE_ID]) {
+      for (const id of [RAIN_CONTOUR_SQUALL_ID, RAIN_CONTOUR_SHOWER_ID, RAIN_CONTOUR_HALO_ID, RAIN_CUFF_SOURCE_ID]) {
         if (this.map.getLayer(id)) this.map.removeLayer(id);
       }
     }
@@ -486,7 +473,7 @@ export class RainLayerController {
     const canvas = this.cuffCanvas;
     if (!canvas || this.disposed) return;
 
-    const cuffKey = `${field.key}:${styles.rainStyle}:${styles.rainEdge.cuffRgb.join(',')}:${styles.rainEdge.cuffMaxAlpha}`;
+    const cuffKey = `${field.key}:${styles.rainEdge.cuffRgb.join(',')}:${styles.rainEdge.cuffMaxAlpha}`;
     let entry = this.cuffCache.get(cuffKey);
     if (entry) {
       this.cuffCache.delete(cuffKey);
@@ -570,17 +557,14 @@ export class RainLayerController {
   }
 
   private paintContours(field: PrecipField, raw: ViewportBounds, styles: ResolvedChannelStyles, visible: boolean): void {
-    const spanDeg = Math.max(0.05, raw.east - raw.west);
-    const needsScaleQuant = styles.rainStyle === 'sigwx-scallop' || styles.rainStyle === 'inward-comb';
-    const scaleTag = needsScaleQuant ? Math.round(Math.log2(spanDeg) * 4) : 0;
-    const contourKey = `${field.key}:${styles.rainStyle}:${scaleTag}`;
+    const contourKey = field.key;
 
     let geo = this.contourCache.get(contourKey);
     if (geo) {
       this.contourCache.delete(contourKey);
       this.contourCache.set(contourKey, geo);
     } else {
-      geo = buildRainContourGeoJson(field, styles.rainStyle, spanDeg);
+      geo = buildRainContourGeoJson(field);
       if (this.contourCache.size >= MAX_RAIN_CONTOUR_CACHE) {
         const oldest = this.contourCache.keys().next().value;
         if (oldest !== undefined) this.contourCache.delete(oldest);
@@ -599,7 +583,6 @@ export class RainLayerController {
 
     const re = styles.rainEdge;
     const { haloColor, showerColor } = rainContourStrokePair(styles);
-    const isCuffOrLens = styles.rainStyle === 'vignette-cuff' || styles.rainStyle === 'wet-lens';
     const vis = visible ? 'visible' : 'none';
     const beforeId = weatherContourBeforeId(this.map);
     this.lastStyleSig = '';
@@ -613,8 +596,8 @@ export class RainLayerController {
       layout: { 'line-cap': 'round', 'line-join': 'round', visibility: vis },
       paint: {
         'line-color': haloColor,
-        'line-width': ['case', ['==', ['get', 'tier'], 'squall'], 4.4, isCuffOrLens ? 4.2 : 3.6],
-        'line-blur': isCuffOrLens ? 0.65 : 0.25,
+        'line-width': ['case', ['==', ['get', 'tier'], 'squall'], 4.4, 4.2],
+        'line-blur': 0.65,
         'line-opacity': 0.94
       }
     }, beforeId);
@@ -626,7 +609,7 @@ export class RainLayerController {
       layout: { 'line-cap': 'round', 'line-join': 'round', visibility: vis },
       paint: {
         'line-color': showerColor,
-        'line-width': isCuffOrLens ? 2.1 : 1.65
+        'line-width': 2.1
       }
     }, beforeId);
     this.map.addLayer({
@@ -638,17 +621,6 @@ export class RainLayerController {
       paint: {
         'line-color': re.coreStrokeColor,
         'line-width': 2.0
-      }
-    }, beforeId);
-    this.map.addLayer({
-      id: RAIN_CONTOUR_TICK_ID,
-      type: 'line',
-      source: RAIN_CONTOUR_SOURCE_ID,
-      filter: ['==', ['get', 'tier'], 'tick'],
-      layout: { 'line-cap': 'round', 'line-join': 'round', visibility: vis },
-      paint: {
-        'line-color': re.coreStrokeColor,
-        'line-width': 1.35
       }
     }, beforeId);
   }

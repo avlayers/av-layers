@@ -1,5 +1,5 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import type { IsobarThemeTokens } from '../map/visual-theme';
+import type { IsobarThemeTokens } from '../../themes/theme';
 import { buildIsobarGeoJson, type IsobarGeoJson } from './isobars';
 import { isobarLabelBeforeId, weatherContourBeforeId } from './sky-layer-order';
 import type { SynopticField } from './synoptic-sampler';

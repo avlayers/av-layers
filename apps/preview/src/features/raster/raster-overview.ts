@@ -4,7 +4,7 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, requiredSourceZoom, type RasterCrop } from './raster-crop';
-import type { MapTheme } from '../map/visual-theme';
+import { themeOption, type MapTheme } from '../../themes/registry';
 import { canRemapTiles, remapTileToBitmap } from './tile-remap';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
@@ -734,7 +734,7 @@ export class RasterOverview {
     };
     void Promise.resolve().then(() => {
       if (!this.ownsJob(job, context)) return null;
-      if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
+      if (!themeOption(theme).remap || data.byteLength <= 48 || !canRemapTiles()) return createImageBitmap(new Blob([data], { type: 'image/webp' }));
       return prepareBitmap();
     }).then(image => {
       if (!image) return;

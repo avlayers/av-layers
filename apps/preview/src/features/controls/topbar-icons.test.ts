@@ -7,11 +7,10 @@ import {
   formatWindLevelLabel,
   modelApproxKm,
   modelRegionSubtitle,
-  THEME_CHIP_LABELS,
   WIND_ENCODING_OPTIONS
 } from './topbar-model';
 import { resolveChannelStyles } from '../map/channel-styles';
-import { MAP_THEMES, THEME_OPTIONS } from '../map/visual-theme';
+import { MAP_THEMES, THEME_OPTIONS } from '../../themes/registry';
 
 describe('topbar icon controls, model km resolution badges & composable per-channel style resolution', () => {
   it('defines compact unnumbered labels and chip names for all 8 soaring map styles', () => {
@@ -19,8 +18,8 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     for (const option of THEME_OPTIONS) {
       expect(option.label).not.toMatch(/^\d+\s*·/);
       expect(option.summary.length).toBeGreaterThan(20);
-      expect(THEME_CHIP_LABELS[option.id].length).toBeGreaterThan(2);
-      expect(THEME_CHIP_LABELS[option.id].length).toBeLessThanOrEqual(10);
+      expect(option.chipLabel.length).toBeGreaterThan(2);
+      expect(option.chipLabel.length).toBeLessThanOrEqual(10);
     }
   });
 
@@ -42,7 +41,7 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
 
   it('normalizes lift, wind, clouds, rain, isobars, and peek in the unified channel dock', () => {
     expect(DOCK_CHANNELS.map(c => c.key)).toEqual(['lift', 'wind', 'clouds', 'rain', 'isobars', 'peek']);
-    expect(DOCK_CHANNELS.filter(c => c.hasStyles).map(c => c.key)).toEqual(['wind', 'clouds', 'rain']);
+    expect(DOCK_CHANNELS.filter(c => c.hasStyles).map(c => c.key)).toEqual(['wind']);
     expect(WIND_ENCODING_OPTIONS.map(opt => opt.id)).toEqual(['trails', 'barbs', 'hybrid']);
     expect(formatWindLevelLabel('surface', 'metric')).toBe('SFC');
     expect(formatWindLevelLabel('lift', 'imperial')).toBe('TOL');
@@ -55,18 +54,10 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     }
   });
 
-  it('resolves curated auto per-theme defaults while allowing independent cloudStyle and rainStyle overrides', () => {
+  it('binds the cloud style to the theme', () => {
     expect(resolveChannelStyles('classic').cloudStyle).toBe('sunlit-veil');
-    expect(resolveChannelStyles('classic').rainStyle).toBe('vignette-cuff');
+    expect(resolveChannelStyles('stone').cloudStyle).toBe('sunlit-veil');
     expect(resolveChannelStyles('slate').cloudStyle).toBe('satellite-ir');
     expect(resolveChannelStyles('chart').cloudStyle).toBe('nephanalysis');
-    expect(resolveChannelStyles('convergence').cloudStyle).toBe('cu-overcast');
-
-    const overridden = resolveChannelStyles('classic', {
-      cloudStyle: 'nephanalysis',
-      rainStyle: 'sigwx-scallop'
-    });
-    expect(overridden.cloudStyle).toBe('nephanalysis');
-    expect(overridden.rainStyle).toBe('sigwx-scallop');
   });
 });

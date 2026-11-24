@@ -44,7 +44,7 @@ describe('remapRgbaInPlace', () => {
     expect(slate[13]).toBeGreaterThan(slate[5]!);
   });
 
-  it('draws stepped contour lines in Chart Topo and airy isoline washes in Alabaster', () => {
+  it('draws stepped contour lines in Chart Topo', () => {
     // 4x1 gradient jumping from ~450m (bin 1) to ~1950m (bin 6)
     const gradient = new Uint8ClampedArray([
       ...hexPixel(LIFT_COLORS[1]!),
@@ -56,15 +56,6 @@ describe('remapRgbaInPlace', () => {
     remapRgbaInPlace(chart, 4, 1, 'lift', 'chart');
     // Boundary pixel crossing 500m contour step has boosted contour opacity
     expect(chart[7]).toBeGreaterThanOrEqual(195);
-
-    const alabaster = new Uint8ClampedArray([
-      ...hexPixel(LIFT_COLORS[10]!),
-      ...hexPixel(LIFT_COLORS[10]!),
-      ...hexPixel(LIFT_COLORS[10]!)
-    ]);
-    remapRgbaInPlace(alabaster, 3, 1, 'lift', 'alabaster');
-    // Interior fill stays semi-transparent (<= 165) so terrain breathes underneath
-    expect(alabaster[7]).toBeLessThanOrEqual(168);
   });
 
   it('masks usable-lift-msl ground elevation pixels where usable-lift-agl is transparent', () => {

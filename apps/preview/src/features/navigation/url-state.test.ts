@@ -26,6 +26,15 @@ describe('previewQuery', () => {
     expect(previewQuery('?dock=capsule', false).dockView).toBe('capsule');
     expect(previewQuery('?theme=classic', false).theme).toBe('classic');
   });
+
+  it('maps retired theme ids to kept themes and ignores retired style params', () => {
+    expect(previewQuery('?theme=alabaster', false).theme).toBe('stone');
+    expect(previewQuery('?theme=convergence', false).theme).toBe('stone');
+    expect(previewQuery('?theme=blueprint', false).theme).toBe('chart');
+    expect(previewQuery('?theme=cockpit', false).theme).toBe('chart');
+    expect(previewQuery('?theme=toString', false).theme).toBeNull();
+    expect(previewQuery('?cstyle=cu-overcast&rstyle=wet-lens', false)).toEqual(previewQuery('', false));
+  });
 });
 
 describe('previewUrl', () => {

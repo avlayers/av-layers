@@ -20,7 +20,7 @@ function harness() {
   const calls: string[] = [];
   const intent: PreviewIntent = {
     model: 'gfs', reference: 'agl', customLayer: null, opacity: 0.5, units: 'metric',
-    theme: 'stone', dockView: 'capsule', cloudStyle: 'auto', rainStyle: 'auto',
+    theme: 'stone', dockView: 'capsule',
     liftVisible: true, cloudsVisible: true, rainVisible: true, isobarsVisible: false, peeking: false,
     windStyle: 'trails', windVisible: true, windVisibleOverride: null, windPaused: false,
     windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', pointViewMode: '1d', requestedTime: null

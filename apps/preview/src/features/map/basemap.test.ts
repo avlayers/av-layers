@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest';
 import { WEATHER_CEILING_ID } from '@av/client';
 import { applyBasemapTheme, compositeBasemapStyle } from './basemap';
-import { MAP_THEMES } from './visual-theme';
+import { MAP_THEMES } from '../../themes/registry';
 
 it('builds OpenFreeMap vector overlays and DEM terrain relief across all 8 soaring themes', () => {
   for (const theme of MAP_THEMES) {

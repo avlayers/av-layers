@@ -1,4 +1,4 @@
-import type { MapTheme } from '../map/visual-theme';
+import { themeOption, type MapTheme } from '../../themes/registry';
 import {
   createBitmapWorkspace,
   decodeAndRemapBitmap,
@@ -208,7 +208,7 @@ export function remapTileToBitmap(
   options: RemapTileOptions = {}
 ): Promise<ImageBitmap> {
   if (options.signal?.aborted) return Promise.reject(abortError());
-  if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) {
+  if (!themeOption(theme).remap || data.byteLength <= 48 || !canRemapTiles()) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const slots = ensurePool();

@@ -1,6 +1,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { clampOpacity, previewRasterLayer } from '@av/client';
-import type { CloudStyleId, ResolvedChannelStyles } from '../map/channel-styles';
+import type { ResolvedChannelStyles } from '../map/channel-styles';
+import type { CloudStyleId } from '../../themes/theme';
 import { extractOrientedContours, type GeoPt } from './contour-rings';
 import {
   cloudRasterBeforeId,
@@ -191,25 +192,6 @@ export function renderSmoothCloudRgba(
         outData[off + 2] = Math.min(255, lum + coolTint + 1);
         const alphaCap = lo < 0.22 ? 80 : 136;
         outData[off + 3] = Math.min(alphaCap, Math.round(Math.pow(puffMask, 0.88) * (lo < 0.22 ? 86 : 134)));
-        continue;
-      }
-
-      if (style === 'cu-overcast') {
-        if (lo < 0.64) {
-          const lit = Math.round(238 + 16 * sunRelief);
-          outData[off] = lit;
-          outData[off + 1] = Math.min(255, lit + 2);
-          outData[off + 2] = 253;
-          const cuPuff = lo >= 0.14 ? Math.max(0, billow - 0.34) * 1.45 : 0.32;
-          const rawA = puffMask * (36 + 104 * cuPuff);
-          outData[off + 3] = Math.min(lo < 0.18 ? 52 : 124, Math.round(rawA));
-        } else {
-          const shade = Math.round(66 + 26 * billow + 12 * sunRelief);
-          outData[off] = shade;
-          outData[off + 1] = shade + 5;
-          outData[off + 2] = shade + 12;
-          outData[off + 3] = Math.min(138, Math.round(78 + (lo - 0.64) * 175));
-        }
         continue;
       }
 

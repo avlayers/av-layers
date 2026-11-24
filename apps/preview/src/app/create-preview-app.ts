@@ -15,7 +15,7 @@ import { DEFAULT_DOCK_VIEW } from '../features/controls/bottom-dock-model';
 import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createForecastSession } from '../features/forecast/forecast-session';
 import { applyBasemapTheme } from '../features/map/basemap';
-import { THEME_OPTIONS, themeOption } from '../features/map/visual-theme';
+import { THEME_OPTIONS, themeOption } from '../themes/registry';
 import { createMap, createMapCamera, maplibregl, type MapCamera } from '../features/map/map-controller';
 import { RasterOverlay, type OverlayState } from '../features/raster/raster-overlay';
 import { preparationBudgetBytes, WIND_CACHE_CAPACITY_BYTES, windHorizonProtectedBytes } from '../features/raster/raster-budget';
@@ -396,7 +396,7 @@ export function createPreviewApp(): PreviewApp {
     history.write({
       model: cur.model, reference: cur.reference, layer: cur.customLayer, opacity: cur.opacity,
       lat: camera.lat, lon: camera.lng, zoom: map.getZoom(), validTime,
-      theme: cur.theme, dockView: cur.dockView, cloudStyle: cur.cloudStyle, rainStyle: cur.rainStyle,
+      theme: cur.theme, dockView: cur.dockView,
       liftVisible: cur.liftVisible, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
       ...(cur.windVisibleOverride !== null ? { windVisible: cur.windVisible } : {}),
       windStyle: cur.windStyle, windHeight: cur.windHeight, units: cur.units
@@ -446,15 +446,11 @@ export function createPreviewApp(): PreviewApp {
       const requestedLayer = visibleCustomLayer(state.layer);
       const nextTheme = state.theme ?? preferences.theme() ?? 'stone';
       const nextDockView = state.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
-      const nextCloudStyle = state.cloudStyle ?? preferences.cloudStyle() ?? 'auto';
-      const nextRainStyle = state.rainStyle ?? preferences.rainStyle() ?? 'auto';
       writer.intent({
         reference: state.reference,
         customLayer: restoredCustomLayer(build(), requestedLayer, Boolean(state.model && state.model !== intent().model)),
         theme: nextTheme,
         dockView: nextDockView,
-        cloudStyle: nextCloudStyle,
-        rainStyle: nextRainStyle,
         liftVisible: state.liftVisible ?? true,
         cloudsVisible: state.cloudsVisible ?? true,
         rainVisible: state.rainVisible ?? true,
@@ -466,7 +462,6 @@ export function createPreviewApp(): PreviewApp {
       applyBasemapTheme(map, nextTheme);
       overlay?.setTheme?.(nextTheme);
       sky?.setTheme(nextTheme);
-      sky?.setChannelStyles({ cloudStyle: nextCloudStyle, rainStyle: nextRainStyle });
       syncWeatherVisibility();
 
       const nextUnits: UnitSystem = state.units ?? 'metric';
@@ -634,22 +629,6 @@ export function createPreviewApp(): PreviewApp {
       timeline?.setVariant?.(dockView);
       writeUrl('replace');
     },
-    setCloudStyle(cloudStyle) {
-      if (intent().cloudStyle === cloudStyle) return;
-      writer.intent({ cloudStyle, cloudsVisible: true, peeking: false });
-      preferences.setCloudStyle(cloudStyle);
-      sky?.setChannelStyles({ cloudStyle });
-      syncWeatherVisibility();
-      writeUrl('replace');
-    },
-    setRainStyle(rainStyle) {
-      if (intent().rainStyle === rainStyle) return;
-      writer.intent({ rainStyle, rainVisible: true, peeking: false });
-      preferences.setRainStyle(rainStyle);
-      sky?.setChannelStyles({ rainStyle });
-      syncWeatherVisibility();
-      writeUrl('replace');
-    },
     toggleWeatherLayer(channel) {
       const cur = intent();
       if (channel === 'wind') {
@@ -759,8 +738,6 @@ export function createPreviewApp(): PreviewApp {
     });
     sky = new SkyComposite(map, api, apiBaseUrl, {
       theme: intent().theme,
-      cloudStyle: intent().cloudStyle,
-      rainStyle: intent().rainStyle,
       opacity: intent().opacity,
       cloudsVisible: intent().cloudsVisible,
       rainVisible: intent().rainVisible,

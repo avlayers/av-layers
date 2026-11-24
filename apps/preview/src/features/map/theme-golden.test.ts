@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { LIFT_COLORS, RAIN_COLORS } from '@av/contracts/layers';
 import { compositeBasemapStyle } from './basemap';
 import { resolveChannelStyles } from './channel-styles';
-import { liftStopsForTheme, rainStopsForTheme, themeCloudLegendStops, themeLiftLegendColors, themeOption, themeRainLegendStops, type MapTheme } from './visual-theme';
+import { liftStopsForTheme, rainStopsForTheme, themeCloudLegendStops, themeLiftLegendColors, themeRainLegendStops } from '../../themes/palette';
+import { themeOption, type MapTheme } from '../../themes/registry';
 import { remapRgbaInPlace } from '../raster/tile-remap-core';
 
 /**

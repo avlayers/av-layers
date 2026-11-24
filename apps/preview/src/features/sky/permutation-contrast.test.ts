@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LIFT_COLORS, RAIN_COLORS } from '@av/contracts/layers';
-import {
-  CLOUD_STYLES,
-  RAIN_STYLES,
-  rainContourStrokePair,
-  resolveChannelStyles
-} from '../map/channel-styles';
-import { MAP_THEMES, themeOption } from '../map/visual-theme';
+import { rainContourStrokePair, resolveChannelStyles } from '../map/channel-styles';
+import { MAP_THEMES, themeOption } from '../../themes/registry';
 import { remapRgbaInPlace } from '../raster/tile-remap-core';
 import { CloudLayerController, renderSmoothCloudRgba } from './cloud-layer';
 import { IsobarLayerController } from './isobar-layer';
@@ -59,15 +54,11 @@ const TERRAIN_BG_SAMPLE: Record<(typeof MAP_THEMES)[number], [number, number, nu
   stone: [226, 221, 210],
   slate: [34, 43, 55],
   chart: [236, 230, 216],
-  alabaster: [239, 238, 233],
-  convergence: [213, 220, 228],
-  blueprint: [22, 44, 72],
-  cockpit: [248, 246, 240],
   classic: [212, 223, 192]
 };
 
-describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutation audit', () => {
-  it('maintains crisp figure-ground contrast across all 8 views × lift intensities × 4 cloud styles × 4 rain styles', () => {
+describe('4-theme × multi-channel contrast & MapLibre WebGL lifecycle permutation audit', () => {
+  it('maintains crisp figure-ground contrast across all 4 themes × lift intensities × cloud regimes', () => {
     const w = 32, h = 32;
     const representativeLiftIndices = [4, 9, 13, 16];
     const rawLiftTile = new Uint8ClampedArray(w * h * 4);
@@ -102,7 +93,7 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
 
     for (const theme of MAP_THEMES) {
       const terrain = TERRAIN_BG_SAMPLE[theme];
-      const remappedLift = theme === 'classic'
+      const remappedLift = !themeOption(theme).remap
         ? new Uint8ClampedArray(rawLiftTile)
         : (() => {
             const copy = new Uint8ClampedArray(rawLiftTile);
@@ -110,7 +101,8 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
             return copy;
           })();
 
-      for (const cloudStyle of CLOUD_STYLES) {
+      const styles = resolveChannelStyles(theme);
+      {
         for (const regime of cloudRegimes) {
           const synoptic: SynopticField = {
             id: `armenia-${regime.name}`,
@@ -129,10 +121,9 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
             hasMslp: true
           };
           const cloudRgba = new Uint8ClampedArray(w * h * 4);
-          renderSmoothCloudRgba(synoptic, cloudStyle, themeOption(theme).darkChrome, cloudRgba, w, h);
+          renderSmoothCloudRgba(synoptic, styles.cloudStyle, styles.darkChrome, cloudRgba, w, h);
 
-          for (const rainStyle of RAIN_STYLES) {
-            const styles = resolveChannelStyles(theme, { cloudStyle, rainStyle });
+          {
             const cuffRgba = new Uint8ClampedArray(w * h * 4);
             expect(renderRainInnerVignetteRgba(precipField, styles, cuffRgba)).toBe(true);
 
@@ -188,7 +179,7 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
       }
     }
 
-    expect(permutationsVerified).toBe(MAP_THEMES.length * CLOUD_STYLES.length * cloudRegimes.length * RAIN_STYLES.length);
+    expect(permutationsVerified).toBe(MAP_THEMES.length * cloudRegimes.length);
   });
 
   it('maintains strict MapLibre z-order (lift < hillshade-top < clouds < rain-cuff < waterway < contours < aero-strip < isobar-labels) across rapid swaps', () => {

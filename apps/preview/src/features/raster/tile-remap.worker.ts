@@ -1,5 +1,5 @@
 import { createBitmapWorkspace, decodeAndRemapBitmap, type RemapKind } from './tile-remap-core';
-import type { MapTheme } from '../map/visual-theme';
+import type { MapTheme } from '../../themes/registry';
 
 export interface WorkerRemapRequest {
   readonly id: number;

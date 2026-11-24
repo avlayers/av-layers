@@ -3,8 +3,7 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../controls/bottom-dock-model';
-import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleChoice } from '../map/channel-styles';
-import { isMapTheme, type MapTheme } from '../map/visual-theme';
+import { parseMapTheme, type MapTheme } from '../../themes/registry';
 
 export type AltitudeReference = 'agl' | 'msl';
 type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
@@ -37,18 +36,14 @@ export function previewQuery(search: string, offline: boolean) {
   const units = params.get('units');
   const theme = params.get('theme');
   const dock = params.get('dock');
-  const cstyle = params.get('cstyle');
-  const rstyle = params.get('rstyle');
   return {
     model: model && (model === AUTO_MODEL_ID ? !offline : offline || MODEL_OPTIONS.some(option => option.modelId === model)) ? model : null,
     reference,
     layer: layer && layer !== 'usable-lift-agl' && layer !== 'usable-lift-msl' ? layer : null,
     opacity: opacity === null ? null : Math.min(1, Math.max(0, opacity)),
     validTime: params.get('t'),
-    theme: isMapTheme(theme) ? theme : null,
+    theme: parseMapTheme(theme),
     dockView: isDockViewId(dock) ? dock : null,
-    cloudStyle: cstyle === 'auto' || isCloudStyleId(cstyle) ? (cstyle as CloudStyleChoice) : null,
-    rainStyle: rstyle === 'auto' || isRainStyleId(rstyle) ? (rstyle as RainStyleChoice) : null,
     liftVisible: parseFlag(params.get('lift')),
     cloudsVisible: parseFlag(params.get('clouds')),
     rainVisible: parseFlag(params.get('rain')),
@@ -73,8 +68,6 @@ export function previewUrl(pathname: string, state: {
   validTime?: string;
   theme?: MapTheme;
   dockView?: DockViewId;
-  cloudStyle?: CloudStyleChoice;
-  rainStyle?: RainStyleChoice;
   liftVisible?: boolean;
   cloudsVisible?: boolean;
   rainVisible?: boolean;
@@ -92,8 +85,6 @@ export function previewUrl(pathname: string, state: {
   if (state.validTime) params.set('t', state.validTime);
   if (state.theme && state.theme !== 'stone') params.set('theme', state.theme);
   if (state.dockView && state.dockView !== DEFAULT_DOCK_VIEW) params.set('dock', state.dockView);
-  if (state.cloudStyle && state.cloudStyle !== 'auto') params.set('cstyle', state.cloudStyle);
-  if (state.rainStyle && state.rainStyle !== 'auto') params.set('rstyle', state.rainStyle);
   if (state.liftVisible === false) params.set('lift', '0');
   if (state.cloudsVisible === false) params.set('clouds', '0');
   if (state.rainVisible === false) params.set('rain', '0');

@@ -1,7 +1,8 @@
 import type { ComponentChildren } from 'preact';
 import type { LayerId } from '@av/contracts/layers';
 import type { PinnedBuild, UnitSystem } from '@av/client';
-import { themeCloudLegendStops, themeOption, themeRainLegendStops, type MapTheme } from '../map/visual-theme';
+import { themeCloudLegendStops, themeRainLegendStops } from '../../themes/palette';
+import { themeOption, type MapTheme } from '../../themes/registry';
 import type { AltitudeReference } from '../navigation/url-state';
 import {
   DOCK_VIEW_OPTIONS,
