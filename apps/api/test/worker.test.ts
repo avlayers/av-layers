@@ -212,7 +212,7 @@ async function realPublication(product: ProductDefinition, buildId: string) {
     descriptors: createWholeDomainDescriptors(product), recipe: createRecipeIdentity(product, 'a'.repeat(64)),
     method: { id: Object.keys(createWholeDomainDescriptors(product).methods).join('+'), hash: 'a'.repeat(64) }, frames, mapFrameCount: mapFrameCount(product), layers: product.layers, artifacts, surfaces,
     source: { provider: product.source.modelFamily.toUpperCase(), provenanceKey, provenanceSha256: createHash('sha256').update(provenance).digest('hex') },
-    tool: {}, palettes: ['lift', 'rain'], metrics: {}
+    tool: { useStoredMslNoLift: true }, palettes: ['lift', 'rain'], metrics: {}
   });
   const manifestKey = `${prefix}/manifest.json`;
   objects.set(manifestKey, new TextEncoder().encode(JSON.stringify(manifest)));

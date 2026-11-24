@@ -213,7 +213,7 @@ export function cellsFromRange(plan: SamplePlan, bytes: Uint8Array): Cell[] {
   });
 }
 
-export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | ReductionSpec, _useStoredMslNoLift = true): Sample {
+export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: LayerId | ReductionSpec): Sample {
   if (!plan.contributors.length || cells.length !== plan.contributors.length) throw new RangeError('cell count does not match sample plan');
   const scratch = reductionBuffer(cells.length);
   for (let i = 0; i < cells.length; i++) {
@@ -227,8 +227,6 @@ export function sampleCells(plan: SamplePlan, cells: readonly Cell[], layer: Lay
   return result;
 }
 
-export const sampleFromContributors = sampleCells;
-
 export function samplingCovered(mask: SamplingMask, lat: number, lon: number): boolean {
   if (!('coverage' in mask)) return isCovered(mask, lat, lon);
   if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
@@ -241,7 +239,7 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   return outputAt(mask, fx < 0.5 ? column : fx > 0.5 ? next : Math.min(column, next), fy <= 0.5 ? row : Math.min(mask.grid.height - 1, row + 1));
 }
 
-export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | ReductionSpec, mask?: SamplingMask, _useStoredMslNoLift = true): Sample {
+export function sampleGrid(grid: Grid, field: GridField | PackedGridField, lat: number, lon: number, layer: LayerId | ReductionSpec, mask?: SamplingMask): Sample {
   const outside: Sample = { value: null, status: STATUS_OUTSIDE, support: 0, interpolated: false };
   if (mask && !samplingCovered(mask, lat, lon)) return outside;
   const plan = planSample(grid, lat, lon);
@@ -257,7 +255,7 @@ export interface PreparedGridSampling {
   readonly height: number;
   readonly contributors: Uint32Array;
   /** Retain stored no-lift MSL heights for rendering; public samples keep their descriptor value. */
-  bind(field: GridField, layer: LayerId | ReductionSpec, useStoredMslNoLift?: boolean, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
+  bind(field: GridField, layer: LayerId | ReductionSpec, retainNoLiftMsl?: boolean): (x: number, y: number, out: Sample) => void;
 }
 
 export interface PreparedGridAxis {
@@ -354,7 +352,7 @@ function prepareSeparableSampling(mask: SamplingMask, rows: PreparedGridAxis, co
   const contributors = Uint32Array.from(contributorSet);
   return {
     width, height, contributors, byteLength: (width + height) * 3 * Float64Array.BYTES_PER_ELEMENT + covered.byteLength + contributors.byteLength,
-    bind(field, layer, _useStoredMslNoLift = true, retainNoLiftMsl = false) {
+    bind(field, layer, retainNoLiftMsl = false) {
       if (hasCoverage) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const retainNoLiftValue = retainNoLiftMsl && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;
@@ -512,7 +510,7 @@ function preparedFromCells(mask: SamplingMask, width: number, lowerX: Uint32Arra
   return {
     width, height: total / width, contributors,
     byteLength: total * (2 * Uint32Array.BYTES_PER_ELEMENT + 2 * Float64Array.BYTES_PER_ELEMENT) + covered.byteLength + contributors.byteLength,
-    bind(field, layer, _useStoredMslNoLift = true, retainNoLiftMsl = false) {
+    bind(field, layer, retainNoLiftMsl = false) {
       if (contributors.length) validateSamplingField(grid, field, mask);
       const scratch = reductionBuffer(4), spec = typeof layer === 'string' ? LAYERS[layer] : layer;
       const retainNoLiftValue = retainNoLiftMsl && spec.supportsNoLift && !spec.zeroOnNoLiftInterpolation;

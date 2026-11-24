@@ -62,10 +62,6 @@ retain the existing terrain identity.
 catalog pin; [development](../../../../docs/development.md#build-a-real-forecast)
 covers local builds with `--terrain-catalog-ref PATH`.
 
-Legacy native-grid builds accept `--terrain-ref PATH` and the hosted
-`terrain-inputs` model map. Those references keep their own recipe identity and
-must match the forecast product's grid.
-
 ```mermaid
 flowchart LR
   source[Native GLO-90] --> ingest[Verify and repack once]
@@ -82,7 +78,7 @@ flowchart LR
 - [contract.ts](contract.ts): schemas, digests, and bounds validation.
 - [source.ts](source.ts), [ingest.ts](ingest.ts), [repack.py](repack.py): upstream inventory, resumable R2 import, and COG repacking.
 - [reader.ts](reader.ts): bounded COG range reads, tile seam stitching, and block cache.
-- [prepare.ts](prepare.ts), [sparse.ts](sparse.ts), [staging.ts](staging.ts): grid resampling, packed coverage-bound terrain, and local shard staging.
+- [sparse.ts](sparse.ts), [staging.ts](staging.ts): packed coverage-bound DEM preparation and local shard staging.
 - [cli.ts](cli.ts) & [local-store.ts](local-store.ts): CLI entry point and filesystem storage backend.
 
 Run tests:

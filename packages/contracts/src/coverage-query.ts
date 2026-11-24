@@ -1,4 +1,4 @@
-import { geographicToGrid, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid } from './geometry.js';
+import { geographicToGrid, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid } from './geometry.js';
 import { getBit } from './bits.js';
 export { getBit } from './bits.js';
 import { sparseCoverageLookup, type SparseCoverage } from './sparse-coverage.js';
@@ -32,14 +32,4 @@ export function isCovered(mask: CoverageMask | SparseCoverageMask, lat: number, 
     ({ x, y } = point);
   }
   return coveredCoordinate(mask, x, y);
-}
-/** Compile projected coordinates once while preserving the same nearest-cell ownership as isCovered. */
-export function prepareCoverageTester(mask: CoverageMask | SparseCoverageMask): (lat: number, lon: number) => boolean {
-  if (mask.grid.kind === 'regular-latlon') return (lat, lon) => isCovered(mask, lat, lon);
-  const geometry = prepareGridGeometry(mask.grid);
-  return (lat, lon) => {
-    if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
-    const point = geometry.geographicToGrid(lat, lon);
-    return !!point && coveredCoordinate(mask, point.x, point.y);
-  };
 }

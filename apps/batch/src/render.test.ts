@@ -42,7 +42,7 @@ function referenceTileRgba(field: GridField, mask: CoverageMask, layer: LayerId,
     let r = 0, g = 0, b = 0, alpha = 0;
     for (const [dx, dy] of QUAD_OFFSETS) {
       const pt = mercatorPoint(z, x, y, px + 0.25 + dx * 0.5, py + 0.25 + dy * 0.5);
-      const sample = sampleGrid(mask.grid, field, pt.lat, pt.lon, layer, mask, true);
+      const sample = sampleGrid(mask.grid, field, pt.lat, pt.lon, layer, mask);
       const hex = paletteColor(layer, sample.status === STATUS_NO_LIFT ? 0 : sample.value, sample.status);
       if (!hex) continue;
       const opacity = hex.length === 9 ? parseInt(hex.slice(7, 9), 16) : 255;
@@ -129,7 +129,7 @@ describe('rendered WebP and PMTiles fixtures', () => {
     const grid = { kind: 'regular-latlon' as const, earthRadiusM: 6371229, width: 2, height: 2, lon0: a.lon, lat0: a.lat, dx: b.lon - a.lon, dy: b.lat - a.lat, wrapLongitude: false }, mask = maskFor(grid, 5);
     for (let i = 0; i < 4; i++) setBit(mask.output, i);
     const field: GridField = { values: new Float32Array(4).fill(5500), flags: new Uint8Array(4).fill(STATUS_NO_LIFT) };
-    expect(sampleGrid(grid, field, a.lat, a.lon, 'usable-lift-msl', mask, true)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
+    expect(sampleGrid(grid, field, a.lat, a.lon, 'usable-lift-msl', mask)).toMatchObject({ value: null, status: STATUS_NO_LIFT });
     const renderer = createRenderer(mask, { rasterWorkers: 0, liftInterpolation: interpolation });
     expect(pixel({ data: renderer.renderTileRgba(field, 'usable-lift-msl', 5, 16, 16) }, 30, 30)).toEqual([166, 167, 169, 255]);
     expect(renderer.metrics().blankTiles).toBe(0);
@@ -171,8 +171,8 @@ describe('rendered WebP and PMTiles fixtures', () => {
     const field: GridField = { values: new Float32Array([0, 4, 0, 4]), flags: new Uint8Array(4) };
     for (const py of [40.25, 40.75]) {
       const p = mercatorPoint(5, 16, 16, 40.25, py), q = mercatorPoint(5, 16, 16, 40.75, py);
-      expect(sampleGrid(grid, field, p.lat, p.lon, 'precip-rate', mask, false).value).toBeCloseTo(1);
-      expect(sampleGrid(grid, field, q.lat, q.lon, 'precip-rate', mask, false).value).toBeCloseTo(3);
+      expect(sampleGrid(grid, field, p.lat, p.lon, 'precip-rate', mask).value).toBeCloseTo(1);
+      expect(sampleGrid(grid, field, q.lat, q.lon, 'precip-rate', mask).value).toBeCloseTo(3);
     }
     expect(pixel(await decodeWebp(await renderTile(field, mask, 'precip-rate', 5, 16, 16)), 40, 40)).toEqual([50, 143, 149, 255]);
   });
@@ -182,9 +182,9 @@ describe('rendered WebP and PMTiles fixtures', () => {
     const field: GridField = { values: new Float32Array(9).fill(2), flags: new Uint8Array(9).fill(STATUS_OUTSIDE) };
     for (let i = 0; i < 9; i++) if (i % 3 < 2) { setBit(mask.output, i); field.flags[i] = STATUS_VALID; }
     const center = mercatorPoint(5, 16, 16, 11.5, 0.5), inside = mercatorPoint(5, 16, 16, 11.25, 0.25), outside = mercatorPoint(5, 16, 16, 11.75, 0.25);
-    expect(sampleGrid(grid, field, center.lat, center.lon, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
-    expect(sampleGrid(grid, field, inside.lat, inside.lon, 'precip-rate', mask, false).value).toBeCloseTo(2);
-    expect(sampleGrid(grid, field, outside.lat, outside.lon, 'precip-rate', mask, false).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(grid, field, center.lat, center.lon, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
+    expect(sampleGrid(grid, field, inside.lat, inside.lon, 'precip-rate', mask).value).toBeCloseTo(2);
+    expect(sampleGrid(grid, field, outside.lat, outside.lon, 'precip-rate', mask).status).toBe(STATUS_OUTSIDE);
     expect(pixel(await decodeWebp(await renderTile(field, mask, 'precip-rate', 5, 16, 16)), 11, 0)).toEqual([54, 166, 87, 128]);
   });
 

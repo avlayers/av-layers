@@ -3,10 +3,12 @@ import { canonicalGridJson, encodeSparseCoverage, gridSchema, MAX_COVERAGE_DESCR
 import { putImmutable } from '../immutable-upload.js';
 import { ASSET_MAX_BYTES, encodeJson, parseJson, sha256, TERRAIN_BATCH_POINTS, terrainAssetSchema, terrainCatalogSchema, type TerrainAsset, type TerrainCatalog, type TerrainStorage } from './contract.js';
 import { createTerrainReadBudget, createTerrainReader, TERRAIN_READ_LIMITS, type TerrainReadStats } from './reader.js';
-import { PREPARED_DESCRIPTOR_MAX_BYTES, PREPARED_TERRAIN_CELL_BYTES, PREPARED_TERRAIN_METHOD } from './prepare.js';
 import { TERRAIN_INVENTORY_BYTES, verifyTerrainCatalogInventory } from './source.js';
 import { restoreTerrainCheckpoint, writeTerrainCheckpoint, TERRAIN_CHECKPOINT_CELLS as WINDOW_POINTS } from './checkpoint.js';
 
+export const PREPARED_TERRAIN_METHOD = 'bilinear-native-v1';
+export const PREPARED_DESCRIPTOR_MAX_BYTES = 16 * 1024;
+export const PREPARED_TERRAIN_CELL_BYTES = Float32Array.BYTES_PER_ELEMENT + Uint8Array.BYTES_PER_ELEMENT;
 export const MAX_SPARSE_TERRAIN_BYTES = 256 * 1024 * 1024;
 const MAX_ARRAY_BYTES = MAX_SPARSE_TERRAIN_BYTES;
 const CHUNK_CELLS = ASSET_MAX_BYTES / 4;

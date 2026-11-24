@@ -109,7 +109,7 @@ async function fixture(): Promise<{ root: string; manifest: ManifestV5 }> {
   await writeFile(localPath(root, provenanceKey), receipt);
   const manifest: ManifestV5 = { version: 5, descriptors, recipe: createRecipeIdentity(product, hash), model: 'gfs', buildId: id,
     cycle, createdAt: '2026-10-30T06:00:00.000Z', expiresAt: '2026-11-06T06:00:00.000Z', method: { id: descriptors.layers[layers[0]]!.methodId, hash },
-    frames, layers: [...layers], artifacts, source: { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) }, tool: {}, palettes: ['lift'], metrics: {},
+    frames, layers: [...layers], artifacts, source: { provider: 'NOAA', provenanceKey, provenanceSha256: sha256(receipt) }, tool: { useStoredMslNoLift: true }, palettes: ['lift'], metrics: {},
     surfaces: [{ id: 'native', kind: 'native', grid, gridHash, layers: [...layers], coverage: { id: product.coverageId, hash: coverage.hash, maskKey: `coverage/${coverage.hash}/manifest.json`, maxZoom: 0, gridHash },
       samples: { format: 'frame-group-block-shards-v1', blockSize: 16, channelOrder: 'frame-then-layer', blockCount: 1, storedCells: 3,
         channelCount: frames.length, coverageHash: coverage.hash,

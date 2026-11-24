@@ -38,7 +38,7 @@ const manifest: ManifestV5 = manifestV5Schema.parse({
     }
   ],
   source: { provider: 'NOAA', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash('a') },
-  tool: {}, palettes: ['lift', 'rain'], metrics: {}
+  tool: { useStoredMslNoLift: true }, palettes: ['lift', 'rain'], metrics: {}
 });
 
 function latestPayload() {
@@ -88,6 +88,7 @@ function profileLatestPayload(frameCount = 1, levelCount = 3) {
       return { firstFrame: group * 16, frameCount: count, shards: [{ firstBlock: 0, blockCount: 1, storedCells: 1, bytes: count * recordBytes, key: `${prefix}/surfaces/native/profiles/g${group}-b0.bin`, sha256: hash('a') }] };
     })
   };
+  extended.tool = { ...extended.tool, profileDewpointReference: 'liquid-vapor-pressure' };
   payload.manifest = manifestV5Schema.parse(extended);
   return payload;
 }

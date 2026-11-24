@@ -36,11 +36,6 @@ parcel crossing, unresolved profile cap, surface-stable, non-convective and unav
 support. `buoyancyM2S3` records `w*³ / depth`, including convective columns below
 the usable-lift cutoff. Diagnostics preserve the published layer values.
 
-`deriveSelectedFrameDiagnostics(frame, sourceIndices)` computes diagnostics and
-flags for selected global source indices. Its full-grid buffers feed terrain
-clearance at sparse targets; `bufferBytes` counts their typed storage. Callers
-apply daylight gating when deriving target clearance.
-
 ## Entry points
 
 - [`@av/forecast/frame`](src/frame.ts): `deriveFrame` whole-grid calculation.
@@ -97,9 +92,9 @@ weights before conversion to fine-cell specific humidity;
 and publish the shared parameters.
 
 `clearanceFallback: 'unsupported'` accepts same-frame `nativeClearance`
-diagnostics and flags. The shared cell calculation runs when a column exceeds
-the supported below-ground bridge. The regional evaluation path also accepts
-precomputed clearance fields. Both inputs bind the frame, grid and valid time.
+diagnostics and flags (or precomputed `clearance` fields) binding the frame,
+grid and valid time. The shared cell calculation runs when a column exceeds
+the supported below-ground bridge.
 Fallback probes identify their provenance; [science](../../docs/science.md#terrain-clearance)
 owns the calculation.
 

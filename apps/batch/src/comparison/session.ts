@@ -65,7 +65,7 @@ function pipelineMetadata(manifest: ManifestV5) {
   })) as Record<'science' | 'adapter' | 'contracts' | 'configuration', string | null>;
   const metadataComplete = Object.values(components).every(value => value !== null);
   const values = { methodHash: manifest.method.hash, components, lockHash: manifest.recipe.lockHash,
-    useStoredMslNoLift: manifest.tool.useStoredMslNoLift ?? null };
+    useStoredMslNoLift: manifest.tool.useStoredMslNoLift };
   const signatureInput = { ...values, ...(metadataComplete ? {} : { unverifiedBuildId: manifest.buildId }) };
   return { ...values, metadataComplete, pipelineSignature: createHash('sha256').update(JSON.stringify(signatureInput)).digest('hex') };
 }

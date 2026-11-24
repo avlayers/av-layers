@@ -188,8 +188,8 @@ it('rejects prebranch g-key receipts during finalize and receipt-only resume bef
   const put = vi.spyOn(store, 'put');
   const stale = { ...plan, recipe: { ...plan.recipe, hash: '0'.repeat(64), sourceRevision: '93e69f6d8ba9a1a8368d1e8d48d7adecff56a2de', sourceDirty: false } };
   await expect(finalizeBuild({ ...inputs, plan: stale })).rejects.toThrow('recipe or source revision changed; start a fresh forecast');
-  await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('Legacy forecast sample receipts');
-  await expect(verifyBuildReceipts(out, legacy, store, undefined, inputs)).rejects.toThrow('Legacy forecast sample receipts');
+  await expect(finalizeBuild({ ...inputs, plan })).rejects.toThrow('Forecast shard surface key mismatch');
+  await expect(verifyBuildReceipts(out, legacy, store, undefined, inputs)).rejects.toThrow('Forecast shard surface key mismatch');
   expect(put).not.toHaveBeenCalled();
   for (const [key, bytes] of originals) {
     expect(await readFile(join(out, key))).toEqual(Buffer.from(bytes));

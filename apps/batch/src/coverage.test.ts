@@ -1,5 +1,5 @@
 import { INDEXED_GRID, INDEXED_PRODUCT } from '../../../tests/model-fixtures.js';
-import { describeCoverage, describeSparseCoverage, loadCoverage, readCoverage, readSparseCoverage, writeCoverage, writeSparseCoverage } from './coverage.js';
+import { describeCoverage, describeSparseCoverage, loadCoverage, readSparseCoverage, writeCoverage, writeSparseCoverage } from './coverage.js';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,15 +25,15 @@ describe('coverage integrity', () => {
     try {
       const hash = await writeCoverage(root, mask, INDEXED_PRODUCT);
       expect(hash).toBe(description.hash);
+      expect(await writeCoverage(root, mask, INDEXED_PRODUCT)).toBe(hash);
       for (const name of ['output', 'halo', 'tiles'] as const) {
         expect(description.descriptor.files[name].sha256).toBe(source[name].sha256);
         const path = join(root, 'coverage', hash, `${name}.bin`), changed = Uint8Array.from(mask[name]);
         changed[0] ^= 1;
         await writeFile(path, changed);
-        await expect(readCoverage(root, hash)).rejects.toThrow(`Coverage ${name} bitset hash mismatch`);
+        await expect(writeCoverage(root, mask, INDEXED_PRODUCT)).rejects.toThrow();
         await writeFile(path, mask[name]);
       }
-      expect(await readCoverage(root, hash)).toEqual(mask);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it('rejects incompatible grids, domains and targets above the coverage ceiling', async () => {

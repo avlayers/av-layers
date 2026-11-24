@@ -154,10 +154,7 @@ export const dewpointFromGfsV16RhC = (tempC: number, rhPercent: number): number 
 export type UpperAirMoistureReference = 'liquid-vapor-pressure';
 
 /** Resolve the upper-air moisture reference of a published profile build. */
-export function resolveUpperAirMoistureReference(
-  _model?: string,
-  _declared?: UpperAirMoistureReference
-): UpperAirMoistureReference {
+export function resolveUpperAirMoistureReference(): UpperAirMoistureReference {
   return 'liquid-vapor-pressure';
 }
 
@@ -174,8 +171,7 @@ export interface InterpretedUpperAirMoisture {
  */
 export function interpretUpperAirMoisture(
   temperatureC: number | null | undefined,
-  storedDewPointC: number | null | undefined,
-  _reference: UpperAirMoistureReference = 'liquid-vapor-pressure'
+  storedDewPointC: number | null | undefined
 ): InterpretedUpperAirMoisture {
   const hasT = typeof temperatureC === 'number' && Number.isFinite(temperatureC);
   const hasTd = typeof storedDewPointC === 'number' && Number.isFinite(storedDewPointC);

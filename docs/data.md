@@ -106,18 +106,20 @@ for publication and expiry rules.
 ## On-disk format
 
 Each published build writes immutable objects under `builds/{model}/{buildId}/`
-and updates `catalog/{model}/latest.json`.
+and updates `catalog/{model}/latest.json`. Format and descriptor changes follow
+the 7-day `N` / `N-1` retention policy in
+[extensions](extensions.md#change-an-on-disk-format-or-descriptor).
 
 | Object family | R2 key pattern | Version / format | Layout & schema owner |
 | --- | --- | --- | --- |
 | Model pointer | `catalog/{model}/latest.json` | `version: 1` | `latestBuildId` and `retained[]` (`RETENTION_DAYS = 7`); [publication.ts](../packages/contracts/src/publication.ts) |
 | Build manifest | `builds/{model}/{buildId}/manifest.json` | `version: 5` | `frames`, `mapFrameCount`, `surfaces` (`fine`, `native`), `artifacts`, optional `mapData`, `descriptors`; [publication.ts](../packages/contracts/src/publication.ts) |
 | Provenance index & frames | `builds/{model}/{buildId}/provenance.json`, `provenance/{frame}.json` | `version: 2`, frame `version: 1` | Frame index with per-frame `sha256` and `bytes` referencing upstream GRIB2/Zarr receipts; [publication.ts](../packages/contracts/src/publication.ts) |
-| Sparse coverage | `coverage/{coverageHash}/{manifest.json,sparse.bin,tiles.bin}` | `version: 2`, `AVSC` v1 | `16 × 16` block index (`blockIds`, `offsets`) with 32-byte `output` and `halo` bitsets per block, plus packed zoom tile bitsets; [sparse-coverage.ts](../packages/contracts/src/sparse-coverage.ts) |
+| Sparse coverage | `coverage/{coverageHash}/{manifest.json,sparse.bin,tiles.bin}` | `version: 2`, `SCV1` (`0x31564353`) | `16 × 16` block index (`blockIds`, `offsets`) with 32-byte `output` and `halo` bitsets per block, plus packed zoom tile bitsets; [sparse-coverage.ts](../packages/contracts/src/sparse-coverage.ts) |
 | Prepared sparse terrain | `terrain/prepared/{hash}/{manifest.json,elevation-{i}.f32,valid-{i}.u8}` | `version: 2`, `layoutVersion: 1` | Active-cell `Float32` EGM2008 elevations and `Uint8` validity masks in `SparseCoverage` offset order; [sparse.ts](../apps/batch/src/terrain/sparse.ts) |
 | Scalar sample shards | `builds/{model}/{buildId}/surfaces/{surfaceId}/samples/g{group}-b{shard}.bin` | `frame-group-block-shards-v1` | `16 × 16` blocks with `+1` right/bottom seam (`17 × 17` interior cells), 5-byte cell records (`f32 value`, `u8 flags`) across `group.frameCount × surface.layers.length` channels; [sample-pack.ts](../packages/forecast/src/sample-pack.ts) |
-| Native profile shards | `builds/{model}/{buildId}/surfaces/{surfaceId}/profiles/g{group}-b{shard}.bin` | `block-major-cell-major-frame-levels-int16-v1` | Same `16 × 16` block/seam geometry; `4 + 12 × levelCount` bytes per cell-frame (`i16 terrainM`, `u16 sfcPressureDecaPa`, and `levelCount` ascending 12-byte levels); [profile-pack.ts](../packages/forecast/src/profile-pack.ts) |
-| Map raster archives | `builds/{model}/{buildId}/tiles/{layer}/{frame}.pmtiles` | PMTiles v3 (`256 × 256` lossless WebP) | Rendered for `renderedLayers(manifest.layers)` across the `mapFrameCount` prefix; [render.ts](../apps/batch/src/render.ts) |
+| Native profile shards | `builds/{model}/{buildId}/surfaces/{surfaceId}/profiles/g{group}-b{shard}.bin` | `native-column-profile-v1` | Same `16 × 16` block/seam geometry; `8 + 14 × levelCount` bytes per cell-frame (`i16 terrainM`, `u16 count`, `u8 status`, `u8 version = 1`, `u16 sfcPressureDecaPa`, and `levelCount` ascending 14-byte levels); [profile-pack.ts](../packages/forecast/src/profile-pack.ts) |
+| Map raster archives | `builds/{model}/{buildId}/{layer}/{frame}.pmtiles` | PMTiles v3 (`256 × 256` lossless WebP) | Rendered for `renderedLayers(manifest.layers)` across the `mapFrameCount` prefix; [render.ts](../apps/batch/src/render.ts) |
 | Numeric wind map data | `builds/{model}/{buildId}/map-data.json`, `map-data/{frame}.json`, `map-data/{frame}/{kind}-{page}.{bin,idx}` | Root `version: 1`, frame `version: 3` | Equal-sized `wind` (`WND2`), `fine`, and `overview-{2,4,8,16}` chunks with 32-byte SHA-256 index entries; [wind-data.ts](../packages/contracts/src/wind-data.ts) |
 
 ## Numeric wind map data

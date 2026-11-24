@@ -43,7 +43,7 @@ export const publicationShape = {
   artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
   tool: z.looseObject({
-    useStoredMslNoLift: z.literal(true).optional(),
+    useStoredMslNoLift: z.literal(true),
     profileDewpointReference: z.literal('liquid-vapor-pressure').optional()
   }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
 };
@@ -103,7 +103,7 @@ const surfaceV5Schema = z.strictObject({
   id: modelIdSchema, kind: z.enum(['native', 'fine']), grid: gridSchema, gridHash: sha256,
   coverage: coverageReferenceSchema.extend({ gridHash: sha256 }).strict(),
   layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
-  samples: z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1) }),
+  samples: z.strictObject({ ...sampleV5Base, format: z.literal('frame-group-block-shards-v1'), shards: z.array(frameGroupShardSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES) }),
   profiles: profilePackSchema.optional(),
   terrain: z.strictObject({
     dataId: sha256, key: z.string().regex(/^terrain\/prepared\/[a-f0-9]{64}\/manifest\.json$/),
@@ -228,6 +228,7 @@ function validateV5Records(manifest: ManifestV5): void {
     if (surface.profiles) {
       const profiles = surface.profiles;
       if (surface.kind !== 'native' || profiles.coverageHash !== surface.coverage.hash || profiles.blockCount !== samples.blockCount || profiles.storedCells !== samples.storedCells) throw new Error('Profile coverage identity mismatch');
+      if (manifest.tool.profileDewpointReference !== 'liquid-vapor-pressure') throw new Error('Profile pack requires liquid-vapor-pressure dewpoint reference');
       validateProfileShards(profiles, manifest.frames.length, `${prefix}/surfaces/${surface.id}/profiles`, keys);
     }
   }
@@ -301,7 +302,7 @@ function assertPackedLayoutBindingV5(
       const blockWidth = wrapLongitude ? coreWidth + 1 : Math.min(coreWidth + 1, width - column);
       cells += blockWidth * Math.min(SAMPLE_BLOCK_SIZE + 1, height - row);
     }
-    const channels = 'frameCount' in shard ? shard.frameCount * layers : 'channelCount' in pack ? pack.channelCount : 0;
+    const channels = 'frameCount' in shard ? shard.frameCount * layers : pack.channelCount;
     if (!Number.isSafeInteger(cells) || cells !== shard.storedCells || !Number.isSafeInteger(cells * channels * recordBytes)
       || shard.bytes !== cells * channels * recordBytes) throw new Error('Sample block size mismatch');
     nextBlock = end; totalCells += cells;
@@ -363,7 +364,7 @@ export function matchesFrameIntervals(intervals: unknown, frame: ManifestV5['fra
 }
 
 export function computeFreshness(
-  manifest: Pick<ManifestV5, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { version?: number; mapFrameCount?: number },
+  manifest: Pick<ManifestV5, 'createdAt' | 'cycle' | 'expiresAt' | 'frames'> & { mapFrameCount?: number },
   nowMs = Date.now()
 ): Required<FreshnessSummary> {
   const validTimes = renderedFrames(manifest).map(f => Date.parse(f.validTime)).filter(Number.isFinite);
@@ -381,9 +382,9 @@ export function computeFreshness(
   };
 }
 
-/** Raster consumers use the ordered map prefix; legacy manifests expose all frames. */
-export function renderedFrames(manifest: { frames: ManifestV5['frames']; version?: number; mapFrameCount?: number }): ManifestV5['frames'] {
-  return manifest.version === 5 && manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
+/** Raster consumers use the ordered map prefix. */
+export function renderedFrames(manifest: { frames: ManifestV5['frames']; mapFrameCount?: number }): ManifestV5['frames'] {
+  return manifest.mapFrameCount !== undefined ? manifest.frames.slice(0, manifest.mapFrameCount) : manifest.frames;
 }
 
 export function surfaceFrameCount(manifest: ManifestV5, surface: Pick<ForecastSurfaceV5, 'kind'>): number {

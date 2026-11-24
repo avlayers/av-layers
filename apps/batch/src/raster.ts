@@ -100,7 +100,7 @@ function samplePixel(
 
 function raster(field: GridField, mask: SamplingMask, prepared: PreparedGridSampling, layer: LayerId, palette: PaletteColorTable): RasterPixels {
   const rgba = new Uint8Array(256 * 256 * 4);
-  const sampleInto = prepared.bind(field, layer, RASTER_SAMPLING.useStoredMslNoLift, layer === 'usable-lift-msl');
+  const sampleInto = prepared.bind(field, layer, layer === 'usable-lift-msl');
   const noLiftVisible = palette.noLift !== null && palette.noLift[3] !== 0 && LAYERS[layer].supportsNoLift;
   if (!prepared.contributors.some(idx => {
     let offset: number;

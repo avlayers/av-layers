@@ -57,8 +57,7 @@ A failed profile page leaves available lift visible.
 
 Chart times within the map horizon select raster frames. Later point times keep
 the map frame and show both clocks as local time with UTC in parentheses. The
-scalar chart covers builds that publish no native profiles. Builds without a map
-prefix offer a 24-hour point view.
+scalar chart covers builds that publish no native profiles.
 
 ## Source layout
 

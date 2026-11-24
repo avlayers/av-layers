@@ -73,8 +73,8 @@ describe('v5 forecast publications', () => {
   it('pins the stored MSL no-lift rule without restricting other tool metadata', () => {
     const manifest = v5(), tool = { ...manifest.tool, node: 'v22.23.4' };
     expect(manifestV5Schema.parse({ ...manifest, tool }).tool).toEqual(tool);
-    const corrected = { ...tool, useStoredMslNoLift: true };
-    expect(manifestV5Schema.parse({ ...manifest, tool: corrected }).tool).toEqual(corrected);
+    expect(manifestV5Schema.safeParse({ ...manifest, tool: { pmtiles: '1.31.2' } }).success).toBe(false);
+    expect(manifestV5Schema.safeParse({ ...manifest, tool: { ...tool, useStoredMslNoLift: false } }).success).toBe(false);
     expect(manifestV5Schema.safeParse({ ...manifest, tool: { ...tool, useStoredMslNoLift: 'true' } }).success).toBe(false);
   });
 
@@ -241,6 +241,7 @@ describe('v2 terrain references', () => {
 it('binds native profile groups to the scalar coverage block geometry and codec width', () => {
   const manifest = v5(), surface = manifest.surfaces[0], recordBytes = PROFILE_HEADER_BYTES + 3 * PROFILE_LEVEL_BYTES;
   const frames = manifest.frames.length, prefix = `builds/${manifest.model}/${manifest.buildId}/surfaces/native/profiles`;
+  manifest.tool = { ...manifest.tool, profileDewpointReference: 'liquid-vapor-pressure' };
   surface.profiles = { format: PROFILE_PACK_FORMAT, blockSize: 16, levelCount: 3, recordBytes,
     coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells,
     groups: [{ firstFrame: 0, frameCount: frames, shards: surface.samples.shards.map((shard, index) => ({
@@ -248,6 +249,7 @@ it('binds native profile groups to the scalar coverage block geometry and codec 
       bytes: shard.storedCells * frames * recordBytes, key: `${prefix}/g0-b${index}.bin` })) }] };
   const binding = { grid: surface.grid, gridHash: surface.gridHash, coverageHash: surface.coverage.hash, blockIds: [0, 2, 3] };
   expect(() => manifestV5Schema.parse(manifest)).not.toThrow();
+  expect(manifestV5Schema.safeParse({ ...manifest, tool: { useStoredMslNoLift: true } }).success).toBe(false);
   expect(() => assertProfileLayoutBindingV5(surface, binding)).not.toThrow();
   expect(() => assertProfileLayoutBindingV5(surface, { ...binding, blockIds: [0, 1, 3] })).toThrow('size mismatch');
   expect(() => assertProfileLayoutBindingV5(surface, { ...binding, coverageHash: 'f'.repeat(64) })).toThrow('identity mismatch');

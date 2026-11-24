@@ -52,7 +52,6 @@ export interface WholeDomainFrameOptions extends FrameBuildOptions, ForecastInpu
   hours?: readonly number[];
   deadlineAt?: number;
   journalPrefix: string;
-  surfaceTarget?: (surface: 'native' | 'fine') => string;
   sampleGroup?: number;
   onNumericFrame?: (frame: NormalizedFrame, id: string, fine: GridField, prepared: WholeDomainPrepared, terrain: { elevationM: Float32Array; valid: Uint8Array }, signal: AbortSignal) => Promise<void>;
 }
@@ -110,7 +109,7 @@ export async function buildWholeDomainFrames(options: WholeDomainFrameOptions): 
       const surfaceFrames = surface === 'fine' ? mapFrames : hours.length;
       const role = options.sampleGroup !== undefined || surfaceFrames > 24 ? 'hour' as const : 'serving' as const;
       return createShardedSamplePackWriter(layout, coverage, { root, model: product.modelId, buildId,
-        surfaceId: options.surfaceTarget?.(surface) ?? surface, group: options.sampleGroup ?? 0, role }, { signal });
+        surfaceId: surface, group: options.sampleGroup ?? 0, role }, { signal });
     };
     nativeWriter = layouts.native ? writer('native', layouts.native, prepared.native.mask.coverage) : undefined;
     fineWriter = layouts.fine ? writer('fine', layouts.fine, prepared.fine.mask.coverage) : undefined;

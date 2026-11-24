@@ -93,7 +93,7 @@ and [serving budgets](serving-budgets.md):
   positive surface excess by relative direct + diffuse irradiance.
 - **Sub-grid DEM aggregation:** aggregate `90 m` GLO-90 elevations (mean and
   ridge-envelope percentile) and slope vectors per 1 km cell in
-  [`terrain/prepare.ts`](../apps/batch/src/terrain/prepare.ts) to preserve
+  [`terrain/sparse.ts`](../apps/batch/src/terrain/sparse.ts) to preserve
   narrow summits and ridge geometry.
 
 ## 3. Compute and precomputation optimizations

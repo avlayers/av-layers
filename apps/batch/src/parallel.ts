@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import z from 'zod';
 import { profileRecordBytes, prepareShardedSamplePackLayout, resolveProductFrameHours } from '@av/forecast';
 import { getProduct } from '@av/contracts/models';
-import { artifactSchema, assertSampleLayoutBindingV5, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, matchesFrameIntervals, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sameJsonValue, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestV5Schema, parseBoundedJson, SAMPLE_BLOCK_SIZE, type ForecastSurfaceV5, type ManifestV5 } from '@av/contracts';
+import { artifactSchema, CELL_BYTES, coverageAtZoom, createWholeDomainDescriptors, encodeBoundedJson, matchesFrameIntervals, provenanceFrameReferenceSchema, layerSurface, renderedLayers, mapFrameCount, sameJsonValue, sourceIntervalHours, MAX_FORECAST_SHARDS, MAX_MANIFEST_BYTES, MAX_MODEL_WORKERS, MAX_NATIVE_ZOOM, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_SAMPLE_VALUES, manifestV5Schema, parseBoundedJson, type ManifestV5 } from '@av/contracts';
 import { assertForecastInputs, BUILD_BUDGETS, forecastPlanDeadline, isForecastPlanDeadline, MAX_BUILD_LIFETIME_MS, MAX_V5_SHARD_BYTES, MAX_FORECAST_RECEIPT_ENTRIES } from './capacity.js';
 import { createBuildStamp, type BuildOptions } from './build.js';
 import { loadCoverage } from './coverage.js';
@@ -137,20 +137,14 @@ function assertWholeDomainReceipt(receipt: WholeDomainReceipt, plan: BuildPlan, 
       coverageHash: info.hash, blockIds: info.mask.coverage.blockIds };
     if (surface.channelCount !== (id === 'native' ? frames.length : mapped) * layers[id].length) throw new Error('Forecast shard surface channel count mismatch');
     if (surface.shards.some((item, index) => item.key !== sampleShardKey(plan.model, plan.buildId, id, index, shard, 'samples', 'hour'))) {
-      if (surface.shards.every((item, index) => item.key === sampleShardKey(plan.model, plan.buildId, id, index, shard))) {
-        throw new Error('Legacy forecast sample receipts require their original producer; start a fresh forecast');
-      }
       throw new Error('Forecast shard surface key mismatch');
     }
-    const frameCount = id === 'native' ? frames.length : mapped;
-    const candidate: ForecastSurfaceV5 = { id, kind: id, grid: binding.grid, gridHash: binding.gridHash,
-      coverage: { id: info.descriptor.id, hash: info.hash, maskKey: `coverage/${info.hash}/manifest.json`, maxZoom: product.maxNativeZoom, gridHash: info.descriptor.gridHash },
-      layers: layers[id],
-      samples: { format: 'frame-group-block-shards-v1', blockSize: SAMPLE_BLOCK_SIZE, channelOrder: 'frame-then-layer',
-        channelCount: surface.channelCount, coverageHash: info.hash, blockCount: binding.blockIds.length,
-        storedCells: surface.shards.reduce((sum, item) => sum + item.storedCells, 0),
-        shards: surface.shards.map((item, blockShard) => ({ ...item, group: shard, firstFrame: 0, frameCount, blockShard })) } };
-    assertSampleLayoutBindingV5(candidate, binding);
+    const sampleLayout = prepareShardedSamplePackLayout(binding.grid, binding.blockIds, surface.channelCount, MAX_V5_SHARD_BYTES);
+    if (sampleLayout.shards.length !== surface.shards.length || surface.shards.some((item, index) => {
+      const expected = sampleLayout.shards[index]!;
+      return item.firstBlock !== expected.firstBlock || item.blockCount !== expected.blockCount || item.bytes !== expected.byteLength
+        || item.storedCells !== expected.byteLength / (surface.channelCount * CELL_BYTES);
+    })) throw new Error('Forecast shard surface block layout mismatch');
     const requiresProfiles = id === 'native' && renderedLayers(product.layers).length !== product.layers.length;
     if (requiresProfiles !== !!surface.profiles) throw new Error('Forecast shard profile set mismatch');
     if (surface.profiles) {
@@ -464,7 +458,7 @@ export async function finalizeBuild(options: ForecastInputs & { plan: BuildPlan;
   const terrainData = await loadWholeDomainTerrain({ ref: whole.terrain, out: root, grid: whole.plan.fine,
     coverage: whole.fine.mask.coverage, coverageDescriptor: whole.fine.bytes, signal: options.signal, collect: false });
   const surfaces: WholeDomainSurfaceResult[] = [];
-  const sampleGroups: Partial<Record<'native' | 'fine', Extract<ManifestV5['surfaces'][number]['samples'], { format: 'frame-group-block-shards-v1' }>['shards']>> = {};
+  const sampleGroups: Partial<Record<'native' | 'fine', ManifestV5['surfaces'][number]['samples']['shards']>> = {};
   const servingObjects: ObjectReceipt[] = [];
   const scalarPhasesMs = { scalarStageMs: 0, scalarMergeMs: 0, scalarUploadMs: 0 };
   let profileGroups: NonNullable<ManifestV5['surfaces'][number]['profiles']>['groups'] | undefined;

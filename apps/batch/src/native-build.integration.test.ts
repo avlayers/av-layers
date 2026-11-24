@@ -138,7 +138,7 @@ it.each([
     const packed = planShardedPackedSample(layout, point, [channel]);
     const bytes = await readFile(join(serial, surface.samples.shards[packed.shard].key));
     const body = bytes.subarray(packed.byteRange.offset, packed.byteRange.offset + packed.byteRange.length);
-    const sample = sampleCells(point, packedCellsFromRange(packed, body, channel), left.descriptors.layers['precip-rate'], false);
+    const sample = sampleCells(point, packedCellsFromRange(packed, body, channel), left.descriptors.layers['precip-rate']);
     expect(sample.value).toBeCloseTo(point.contributors.reduce((sum, cell) => sum + cell.weight * (1 + (cell.index % grid.width) * 0.25 + Math.floor(cell.index / grid.width) * 0.5), 0), 8);
   }
 }, 60_000);
