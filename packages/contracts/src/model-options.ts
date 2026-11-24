@@ -25,7 +25,7 @@ export const MODEL_OPTIONS = [
   },
   {
     "modelId": "rrfs",
-    "label": "RRFS (CONUS)",
+    "label": "RRFS",
     "nominalDxMeters": 2999,
     "bounds": [
       -134.121428,
@@ -47,7 +47,7 @@ export const MODEL_OPTIONS = [
   },
   {
     "modelId": "wrf-va-1km",
-    "label": "WRF northern Virginia 1 km (RRFS)",
+    "label": "WRF-NOVA",
     "nominalDxMeters": 1000,
     "bounds": [
       -79.405534,

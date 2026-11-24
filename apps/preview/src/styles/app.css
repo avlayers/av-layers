@@ -45,15 +45,16 @@ html, body, #app { margin: 0; height: 100%; }
 .layer-button {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
   color: var(--av-text-muted);
   min-height: 28px;
-  padding: 4px 9px;
-  font-size: 11.5px;
+  padding: 4px 7px;
+  font-size: 11px;
   font-weight: 650;
+  white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
@@ -507,17 +508,17 @@ html, body, #app { margin: 0; height: 100%; }
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-height: 34px;
   overflow: hidden;
   cursor: pointer;
   border-radius: 7px;
-  padding: 4px 8px 4px 7px;
+  padding: 4px 6px 4px 6px;
   background: linear-gradient(135deg, var(--model-color), #162c3f);
   color: #ffffff;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 700;
-  letter-spacing: 0.015em;
+  letter-spacing: 0.01em;
   user-select: none;
 }
 #model-selected[data-model^="av-wrf"], #model-selected[data-model^="wrf-"] { --model-color: #1f7668; }
@@ -526,37 +527,37 @@ html, body, #app { margin: 0; height: 100%; }
 #model-selected[data-auto="true"] { --model-color: #2b547e; }
 .model-emblem {
   flex: none;
-  width: 19px;
-  height: 19px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.65;
+  stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
   opacity: 0.92;
 }
 .model-emblem-auto {
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   opacity: 0.98;
 }
 #model-name {
   white-space: nowrap;
 }
 .model-res-badge {
-  padding: 2px 5px;
+  padding: 1.5px 4px;
   border-radius: 4px;
   background: #ffffff26;
   border: 1px solid #ffffff30;
   color: #f8fafc;
-  font-size: 10px;
+  font-size: 9.5px;
   font-weight: 650;
   letter-spacing: 0.01em;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .model-caret {
-  font-size: 9.5px;
+  font-size: 9px;
   opacity: 0.78;
   margin-left: -1px;
 }
@@ -1313,8 +1314,11 @@ a { color: #1c6b8a; }
   }
 }
 
-@media (max-width: 660px) {
+@media (max-width: 1120px) {
   .dock-group-tag { display: none; }
+}
+
+@media (max-width: 660px) {
   .theme-selected-copy { display: none; }
   #theme-selected { padding: 0 6px; gap: 4px; }
   #theme-menu { width: min(244px, calc(100vw - 24px)); }

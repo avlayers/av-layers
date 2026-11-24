@@ -55,6 +55,47 @@ export function withinGeographicBounds(lat: number, lon: number, bounds?: Geogra
   return lat >= south && lat <= north && (insideLongitude(lon) || (Math.abs(lon) === 180 && insideLongitude(-lon)));
 }
 
+function longitudeIntervals(west: number, east: number): readonly (readonly [number, number])[] {
+  if (!Number.isFinite(west) || !Number.isFinite(east)) return [];
+  if (west < -180 || west > 180 || east < -180 || east > 180) {
+    if (east < west) return [];
+    if (east - west >= 360) return [[-180, 180]];
+    const wRaw = normalizeLon(west), eRaw = normalizeLon(east);
+    const w = east > west && wRaw === 180 ? -180 : wRaw;
+    const e = east > west && eRaw === -180 ? 180 : eRaw;
+    if (east > west && w === e) return [[-180, 180]];
+    return w <= e ? [[w, e]] : [[w, 180], [-180, e]];
+  }
+  if (east - west >= 360) return [[-180, 180]];
+  return west <= east ? [[west, east]] : [[west, 180], [-180, east]];
+}
+
+/** True when two geographic bounding boxes share at least one point, including unwrapped or dateline-crossing longitudes. */
+export function boundsOverlap(a?: GeographicBounds | null, b?: GeographicBounds | null): boolean {
+  if (!a || !b) return false;
+  const [aWest, aSouth, aEast, aNorth] = a, [bWest, bSouth, bEast, bNorth] = b;
+  if (![aWest, aSouth, aEast, aNorth, bWest, bSouth, bEast, bNorth].every(Number.isFinite)) return false;
+  if (aSouth < -90 || aNorth > 90 || aSouth > aNorth || bSouth < -90 || bNorth > 90 || bSouth > bNorth) return false;
+  if (Math.max(aSouth, bSouth) > Math.min(aNorth, bNorth)) return false;
+  const aLon = longitudeIntervals(aWest, aEast), bLon = longitudeIntervals(bWest, bEast);
+  return aLon.some(([aw, ae]) => bLon.some(([bw, be]) =>
+    Math.max(aw, bw) <= Math.min(ae, be) || (aw === -180 && be === 180) || (ae === 180 && bw === -180)
+  ));
+}
+
+/** Fraction [0, 1] of `viewport` degree-area covered by `candidate`. */
+export function boundsOverlapFraction(viewport?: GeographicBounds | null, candidate?: GeographicBounds | null): number {
+  if (!boundsOverlap(viewport, candidate)) return 0;
+  const [vWest, vSouth, vEast, vNorth] = viewport!, [cWest, cSouth, cEast, cNorth] = candidate!;
+  const vLon = longitudeIntervals(vWest, vEast), cLon = longitudeIntervals(cWest, cEast);
+  const vLatSpan = vNorth - vSouth, vLonSpan = vLon.reduce((sum, [w, e]) => sum + (e - w), 0);
+  if (vLatSpan <= 0 || vLonSpan <= 0) return 0;
+  const latOverlap = Math.max(0, Math.min(vNorth, cNorth) - Math.max(vSouth, cSouth));
+  let lonOverlap = 0;
+  for (const [vw, ve] of vLon) for (const [cw, ce] of cLon) lonOverlap += Math.max(0, Math.min(ve, ce) - Math.max(vw, cw));
+  return Math.min(1, (latOverlap * lonOverlap) / (vLatSpan * vLonSpan));
+}
+
 function lambertConstants(grid: LambertConformalGrid) {
   const p1 = grid.standardParallel1Deg * RAD, p2 = grid.standardParallel2Deg * RAD;
   const t1 = Math.tan(Math.PI / 4 + p1 / 2), t2 = Math.tan(Math.PI / 4 + p2 / 2);

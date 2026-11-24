@@ -25,8 +25,8 @@ pnpm --filter @av/preview build
 Reload the page to pick up a newly published build (subject to the API's
 15-second [pointer cache](../../docs/serving-budgets.md)).
 
-Auto selects the finest available forecast covering the map center and time.
-A globe view, or a map without a location, selects GFS when that build is available.
+Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
+A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.
 Builds with numeric wind render GPU particles through `weatherlayers-gl` and
 WMO/ICAO knot-feathered barbs through `@deck.gl/layers` (`IconLayer` in the map
 plane, upright `TextLayer` labels). The barb atlas covers calm plus 5–280 kt in

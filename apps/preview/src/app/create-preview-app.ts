@@ -206,6 +206,11 @@ export function createPreviewApp(): PreviewApp {
   const forecastSession = createForecastSession({
     api, writer, intent,
     center: () => { const center = map!.getCenter(); return normalizePoint(center.lat, center.lng); },
+    bounds: () => {
+      if (!map) return null;
+      const b = map.getBounds();
+      return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()] as const;
+    },
     globe: () => {
       if (!map) return false;
       const bounds = map.getBounds();

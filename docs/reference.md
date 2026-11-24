@@ -129,7 +129,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 - Monitoring: environments `staging`, `production`; cycle age at most 18 hours; remaining horizon at least 48 hours.
 
-### RRFS (CONUS) (rrfs-conus-soaring)
+### RRFS (rrfs-conus-soaring)
 
 - Public model ID: `rrfs`; model family: `rrfs`; source configuration: `noaa-rrfs-conus-3km`; domain: `conus`.
 - Attribution: NOAA RRFS · Aviation Forecast Layers.
@@ -153,7 +153,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Publication timing: cycle age at most 12 hours; remaining horizon at least 48 hours.
 - Monitoring: environments `staging`, `production`; cycle age at most 12 hours; remaining horizon at least 48 hours.
 
-### WRF northern Virginia 1 km (RRFS) (wrf-va-1km-soaring)
+### WRF-NOVA (wrf-va-1km-soaring)
 
 - Public model ID: `wrf-va-1km`; model family: `wrf`; source configuration: `va-1km-v1`; domain: `va-1km-v1`.
 - Attribution: av-wrf · WRF-ARW / NOAA RRFS · Aviation Forecast Layers.

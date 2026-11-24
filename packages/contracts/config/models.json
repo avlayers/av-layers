@@ -287,7 +287,7 @@
       "coverageDir": "coverage/rrfs-conus-land-v1",
       "source": {"modelFamily": "rrfs", "configurationId": "noaa-rrfs-conus-3km", "domainId": "conus"},
       "tier": "medium",
-      "label": "RRFS (CONUS)",
+      "label": "RRFS",
       "attribution": "NOAA RRFS · Aviation Forecast Layers",
       "layers": [
         "usable-lift-msl",
@@ -511,7 +511,7 @@
       "coverageDir": "coverage/wrf-va-1km-land",
       "source": {"modelFamily": "wrf", "configurationId": "va-1km-v1", "domainId": "va-1km-v1"},
       "tier": "high",
-      "label": "WRF northern Virginia 1 km (RRFS)",
+      "label": "WRF-NOVA",
       "attribution": "av-wrf · WRF-ARW / NOAA RRFS · Aviation Forecast Layers",
       "layers": [
         "usable-lift-msl",
