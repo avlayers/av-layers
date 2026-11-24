@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { CELL_BYTES, sparseCoverageFromDense, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_VALID, type CoverageMask, type RegularLatLonGrid } from '@av/contracts';
-import { planSample, sampleFromContributors, sampleGrid, type GridField } from './sampler.js';
+import { planSample, sampleCells, sampleGrid, type GridField } from './sampler.js';
 import { packedCellsFromRange, planShardedPackedSample, prepareShardedSamplePackLayout } from './sample-pack.js';
 
 function packRange(fields: readonly GridField[], layout: ReturnType<typeof prepareShardedSamplePackLayout>, plan: ReturnType<typeof planShardedPackedSample>): Uint8Array {
@@ -63,7 +63,7 @@ it('packs sparse block shards with seam overlap and matches full-grid bilinear s
     const range = packRange(fields, layout, packed);
     for (const channel of [1, 3]) {
       const cells = packedCellsFromRange(packed, range, channel);
-      expect(sampleFromContributors(sample, cells, 'usable-lift-msl')).toEqual(sampleGrid(grid, fields[channel]!, lat, lon, 'usable-lift-msl'));
+      expect(sampleCells(sample, cells, 'usable-lift-msl')).toEqual(sampleGrid(grid, fields[channel]!, lat, lon, 'usable-lift-msl'));
     }
   }
 });

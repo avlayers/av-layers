@@ -35,9 +35,8 @@ export async function writeCoverage(root: string, mask: CoverageMask, product: C
   return description.hash;
 }
 
-async function readCoverageDirectory(dir: string, expectedHash?: string): Promise<{ mask: CoverageMask; descriptor: CoverageDescriptor }> {
-  const bytes = await readLocalFile(join(dir, 'manifest.json'), MAX_COVERAGE_DESCRIPTOR_BYTES), descriptorHash = hash(bytes);
-  if (expectedHash && descriptorHash !== expectedHash) throw new Error('Coverage descriptor hash mismatch');
+async function readCoverageDirectory(dir: string): Promise<{ mask: CoverageMask; descriptor: CoverageDescriptor }> {
+  const bytes = await readLocalFile(join(dir, 'manifest.json'), MAX_COVERAGE_DESCRIPTOR_BYTES);
   const descriptor = coverageDescriptorSchema.parse(parseBoundedJson(bytes));
   const files = await Promise.all(names.map(async name => {
     const expected = descriptor.files[name], data = await readLocalFile(join(dir, `${name}.bin`), MAX_COVERAGE_BITSET_BYTES, expected.bytes);
@@ -58,10 +57,6 @@ export async function loadCoverage(product: ProductDefinition): Promise<Coverage
   }
   if (!sameGrid(result.mask.grid, product.grid) || result.mask.maxZoom < product.maxNativeZoom || JSON.stringify(result.mask.bounds) !== JSON.stringify(product.bounds) || JSON.stringify(describeCoverage(result.mask, product).descriptor) !== JSON.stringify(result.descriptor)) throw new Error('Coverage does not match the trusted product');
   return result.mask;
-}
-
-export async function readCoverage(root: string, coverageHash: string): Promise<CoverageMask> {
-  return (await readCoverageDirectory(join(root, coveragePrefix(coverageHash)), coverageHash)).mask;
 }
 
 export function describeSparseCoverage(mask: SparseCoverageMask, product: CoverageDefinition): { descriptor: SparseCoverageDescriptor; bytes: Uint8Array; sparseBytes: Uint8Array; hash: string } {

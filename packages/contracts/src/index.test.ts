@@ -82,7 +82,7 @@ describe('contracts', () => {
       intervalStart: new Date(Date.parse(cycle) + (hour - 1) * 3600000).toISOString(), intervalEnd: new Date(Date.parse(cycle) + hour * 3600000).toISOString() }));
     const build = { cycle, createdAt: cycle, expiresAt: '2026-11-13T00:00:00.000Z', frames };
     const now = Date.parse(cycle) + 25 * 3600000;
-    expect(computeFreshness({ ...build, version: 5, mapFrameCount: 2 }, now)).toMatchObject({
+    expect(computeFreshness({ ...build, mapFrameCount: 2 }, now)).toMatchObject({
       latestValidTime: frames[1]!.validTime, horizonRemainingSeconds: 0, horizonExhausted: true
     });
     expect(computeFreshness(build, now)).toMatchObject({ latestValidTime: frames[3]!.validTime, horizonExhausted: false });

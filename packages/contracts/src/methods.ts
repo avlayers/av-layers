@@ -141,7 +141,6 @@ export const TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE = Object.freeze({
   isobaric: TERRAIN_COLUMN_METHOD,
   'model-levels': MODEL_LEVEL_TERRAIN_COLUMN_METHOD
 } as const);
-export const TERRAIN_COLUMN_CLOUD_METHODS_BY_VERTICAL_COORDINATE = TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE;
 export function terrainColumnMethodForProduct(product: Pick<ProductDefinition, 'capabilities'>) {
   return TERRAIN_COLUMN_METHODS_BY_VERTICAL_COORDINATE[product.capabilities.verticalCoordinate];
 }

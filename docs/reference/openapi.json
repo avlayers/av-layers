@@ -1243,6 +1243,9 @@
                 "type": "boolean"
               }
             },
+            "required": [
+              "useStoredMslNoLift"
+            ],
             "type": "object"
           },
           "version": {

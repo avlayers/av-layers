@@ -52,7 +52,7 @@ async function realCoverageManifest(product: ProductDefinition, compacted = fals
   const manifest: ManifestV5 = { version: 5, mapFrameCount: maps, descriptors, recipe: createRecipeIdentity(product, hash), model, buildId, cycle, createdAt: cycle, expiresAt: '2026-11-12T00:00:00.000Z',
     method: { id: [...new Set(product.layers.map(layer => descriptors.layers[layer]!.methodId))].join('+'), hash }, frames, layers: [...product.layers], surfaces,
     artifacts: frames.slice(0, maps).flatMap(frame => renderedLayers(product.layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: hash }))),
-    source: { provider: model, provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash }, tool: {}, palettes: descriptors.palettes.map(palette => palette.id), metrics: {} };
+    source: { provider: model, provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash }, tool: { useStoredMslNoLift: true, profileDewpointReference: 'liquid-vapor-pressure' }, palettes: descriptors.palettes.map(palette => palette.id), metrics: {} };
   const bytes = encodeBoundedJson(manifest, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS), decoded = manifestV5Schema.parse(parseBoundedJson(bytes, MAX_MANIFEST_JSON_TOKENS));
   validateArtifactRecordsV5(decoded);
   for (const surface of decoded.surfaces) {

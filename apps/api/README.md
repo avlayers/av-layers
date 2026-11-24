@@ -65,8 +65,8 @@ the number and status. Resolve one build, then keep that `buildId` for the
 series.
 See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.
 
-`/provenance` serves the run receipt or frame index; `?frame=f001` selects a
-verified source receipt from an indexed run.
+`/provenance` serves the run frame index; `?frame=f001` selects a verified
+source receipt from that run.
 
 Latest and retained-run freshness describe the rendered map prefix. Catalog,
 latest and retained-run lists use short edge caching within the
@@ -79,8 +79,8 @@ the Worker executes. Misses validate the retained build and read bounded archive
 ranges. Metadata and point routes keep their request checks.
 
 Version-5 manifests bind each layer to its native or fine surface. The scalar
-reader supports both v5 shard layouts. Profiles are available on builds that
-publish them. See [data](../../docs/data.md) for units and status flags.
+reader reads `frame-group-block-shards-v1` packs. Profiles are available on builds
+that publish them. See [data](../../docs/data.md) for units and status flags.
 
 Set `AV_REQUEST_METRICS=true` to log requests with route, status, publication
 identity and R2 counters. [Serving budgets](../../docs/serving-budgets.md)

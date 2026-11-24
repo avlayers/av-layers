@@ -97,9 +97,9 @@ weights before conversion to fine-cell specific humidity;
 and publish the shared parameters.
 
 `clearanceFallback: 'unsupported'` accepts same-frame `nativeClearance`
-diagnostics and flags. The shared cell calculation runs when a column exceeds
-the supported below-ground bridge. The regional evaluation path also accepts
-precomputed clearance fields. Both inputs bind the frame, grid and valid time.
+diagnostics and flags (or precomputed `clearance` fields) binding the frame,
+grid and valid time. The shared cell calculation runs when a column exceeds
+the supported below-ground bridge.
 Fallback probes identify their provenance; [science](../../docs/science.md#terrain-clearance)
 owns the calculation.
 

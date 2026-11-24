@@ -150,7 +150,7 @@ export function createV5Fixture({ product: base = INDEXED_PRODUCT, grid = NATIVE
     artifacts: frames.slice(0, mapFrameCount ?? frames.length).flatMap(frame => renderedLayers(layers).map(layer => ({ layer, frame: frame.id, tilesKey: `${prefix}/${layer}/${frame.id}.pmtiles`, tilesSha256: 'b'.repeat(64) }))),
     surfaces,
     source: { provider: 'Fixture', provenanceKey: `${prefix}/provenance.json`, provenanceSha256: hash(provenance) },
-    tool: {}, palettes: ['lift', 'rain'], metrics: {}
+    tool: { useStoredMslNoLift: true }, palettes: ['lift', 'rain'], metrics: {}
   });
   const objects = new Map<string, Uint8Array>([
     [`${prefix}/manifest.json`, json(manifest)], [`${prefix}/provenance.json`, provenance],
@@ -216,6 +216,7 @@ export function attachNativeProfiles(fixture: ReturnType<typeof createV5Fixture>
   }
   surface.profiles = { format: 'native-column-profile-v1', blockSize: SAMPLE_BLOCK_SIZE, levelCount: levels, recordBytes,
     coverageHash: surface.coverage.hash, blockCount: surface.samples.blockCount, storedCells: surface.samples.storedCells, groups };
+  fixture.manifest.tool = { ...fixture.manifest.tool, profileDewpointReference: 'liquid-vapor-pressure' };
   manifestV5Schema.parse(fixture.manifest);
   fixture.objects.set(`builds/${fixture.manifest.model}/${fixture.buildId}/manifest.json`, json(fixture.manifest));
   return fixture;

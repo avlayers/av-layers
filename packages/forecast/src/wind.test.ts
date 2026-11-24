@@ -25,7 +25,7 @@ function windAtHeight(column: WindColumn, height: number | 'surface'): WindVecto
 
 function sampleWindColumns(columns: readonly (WindColumn | null)[], height: number | 'surface') {
   const winds = columns.map(item => item ? windAtHeight(item, height) : null);
-  const component = (key: 'u' | 'v') => sampleCells(plan, winds.map((wind, i) => ({ value: wind?.[key] ?? NaN, flags: wind ? STATUS_VALID : columns[i] ? STATUS_UNAVAILABLE : STATUS_OUTSIDE })), 'wind-10m-u', false);
+  const component = (key: 'u' | 'v') => sampleCells(plan, winds.map((wind, i) => ({ value: wind?.[key] ?? NaN, flags: wind ? STATUS_VALID : columns[i] ? STATUS_UNAVAILABLE : STATUS_OUTSIDE })), 'wind-10m-u');
   const u = component('u'), v = component('v');
   return { u: u.value, v: v.value, status: u.status, interpolated: u.interpolated };
 }
@@ -126,9 +126,9 @@ describe('wind columns', () => {
   });
   it('preserves lift majority and stored MSL interpolation', () => {
     const cells = [2000, 500, 500, 500].map((value, index) => ({ value, flags: index ? STATUS_NO_LIFT : STATUS_VALID }));
-    expect(windTargetHeight(plan, cells, { lift: true }, true).status).toBe(STATUS_NO_LIFT);
+    expect(windTargetHeight(plan, cells, { lift: true }).status).toBe(STATUS_NO_LIFT);
     cells[1] = { value: 2000, flags: STATUS_VALID };
-    expect(windTargetHeight(plan, cells, { lift: true }, true)).toMatchObject({ status: STATUS_VALID, value: 1250 });
+    expect(windTargetHeight(plan, cells, { lift: true })).toMatchObject({ status: STATUS_VALID, value: 1250 });
   });
   it('matches object sampling for exact levels, gaps, interpolation and nearest ties', () => {
     const other: WindColumn = { surface: { u: -2, v: 8 }, levels: [{ height: 100, wind: { u: -1, v: 4 } }, null, { height: 300, wind: { u: -3, v: 12 } }, { height: 400, wind: { u: -4, v: 16 } }] };

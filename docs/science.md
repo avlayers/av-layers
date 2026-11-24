@@ -118,8 +118,9 @@ terrain and complete native geometric support emits no lift without evaluating
 the atmospheric values. Missing terrain or geometric support stays unavailable.
 The method returns MSL as DEM elevation plus usable clearance and AGL as that
 clearance. Valleys inherit the parent model's convective top and buoyancy
-forcing over a deeper local layer. Each patch records the DEM datum and surface
-type. The calculation applies no vertical-datum transformation.
+forcing over a deeper local layer. The fine surface's `terrain` metadata records
+the DEM datum and surface type. The calculation applies no vertical-datum
+transformation.
 
 ## Terrain columns
 

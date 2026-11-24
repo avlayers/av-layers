@@ -73,8 +73,7 @@ describe('client manifest projection', () => {
     }
     samples.channelCount = samples.channelCount / previous * native.layers.length;
     for (const shard of samples.shards) {
-      const shardChannels = samples.format === 'frame-group-block-shards-v1' ? Number(shard.frameCount) * native.layers.length : samples.channelCount;
-      shard.bytes = shard.storedCells * shardChannels * 5;
+      shard.bytes = shard.storedCells * Number(shard.frameCount) * native.layers.length * 5;
     }
     (manifest as unknown as { method: { id: string } }).method.id = [...new Set(manifest.layers.map(layer => String(manifest.descriptors.layers[layer]?.methodId)))].join('+');
     return { manifest, id, methodId, native };

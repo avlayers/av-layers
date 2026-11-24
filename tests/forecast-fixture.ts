@@ -59,7 +59,7 @@ export function fixtureManifestV5(overrides: Partial<ManifestV5> = {}): Manifest
     expiresAt: DEFAULT_EXPIRES_AT,
     palettes: ['lift', 'rain'],
     metrics: {},
-    tool: { pmtiles: '1.31.2' },
+    tool: { pmtiles: '1.31.2', useStoredMslNoLift: true },
     ...overrides,
     frames,
     layers,
