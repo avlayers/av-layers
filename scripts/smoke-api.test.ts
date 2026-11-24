@@ -211,8 +211,10 @@ describe('deployment publication readiness', () => {
     return { latest, sample, options: { baseUrl: 'https://api.example', expectedDeploymentId: deploymentId, fetchImpl } };
   }
 
-  it.each([false, true])('probes published models when the event-driven model is available=%s', async available => {
-    const models = catalog().map(entry => entry.model === eventModel && available ? { model: eventModel, available } : entry);
+  it.each(['publication-unavailable', 'not-retained', true] as const)('probes published models when the event-driven model status is %s', async state => {
+    const models = catalog().map(entry => entry.model === eventModel
+      ? (state === true ? { model: eventModel, available: true } : { model: eventModel, available: false, error: state })
+      : entry);
     const { latest, options } = fixture(models);
     await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
     expect(latest.mock.calls.map(([model]) => model)).toEqual(models.filter(entry => entry.available).map(entry => entry.model));
@@ -278,14 +280,14 @@ describe('deployment publication readiness', () => {
     await result;
   });
 
-  it.each(['publication-invalid', 'publication-incomplete', 'not-retained', undefined])('rejects event-driven publication error %s', async error => {
+  it.each(['publication-invalid', 'publication-incomplete', undefined])('rejects event-driven publication error %s', async error => {
     const { latest, options } = fixture(catalog().map(entry => entry.model === eventModel ? { ...entry, error } : entry));
     await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
     expect(latest).not.toHaveBeenCalled();
   });
 
-  it('requires scheduled publications and keeps explicit forecast probes strict', async () => {
-    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error: 'publication-unavailable' } : entry));
+  it.each(['publication-unavailable', 'not-retained'] as const)('requires scheduled publications (%s) and keeps explicit forecast probes strict', async error => {
+    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error } : entry));
     await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${scheduledModel}`);
     await expect(probeApi({ ...options, model: eventModel })).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
   });
