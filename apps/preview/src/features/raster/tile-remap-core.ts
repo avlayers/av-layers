@@ -1,12 +1,10 @@
-import { LIFT_COLORS, LIFT_EDGES, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
+import { LIFT_COLORS, LIFT_EDGES, paletteValueLut, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { liftStopsForTheme, rainStopsForTheme, sampleStops } from '../../themes/palette';
 import { themeOption, type MapTheme } from '../../themes/registry';
 
 export type RemapKind = 'lift' | 'rain';
 
-const LUT_SIZE = 32_768;
-const MAX_COLOR_DIST_SQ = 1_200;
 const STOP_RAMP_SIZE = 1_024;
 const MAX_LIFT_VAL = 6_700;
 const MAX_RAIN_VAL = 55;
@@ -15,55 +13,12 @@ let liftDecodeLut: Float32Array | null = null;
 let rainDecodeLut: Float32Array | null = null;
 const rampCache = new Map<string, Uint8Array>();
 
-function parseHexRgb(hex: string): [number, number, number] {
-  const clean = hex.startsWith('#') ? hex.slice(1) : hex;
-  return [
-    Number.parseInt(clean.slice(0, 2), 16),
-    Number.parseInt(clean.slice(2, 4), 16),
-    Number.parseInt(clean.slice(4, 6), 16)
-  ];
-}
-
-function buildRgb555Lut(colors: readonly string[], edges: readonly number[], topSpan: number): Float32Array {
-  const lut = new Float32Array(LUT_SIZE).fill(-1);
-  const rgb = colors.map(parseHexRgb);
-  const midpoints = colors.map((_, i) => {
-    const lo = edges[i] ?? 0;
-    const hi = edges[i + 1] ?? (lo + topSpan);
-    return (lo + hi) * 0.5;
-  });
-  for (let r5 = 0; r5 < 32; r5++) {
-    const r = (r5 << 3) | (r5 >> 2);
-    for (let g5 = 0; g5 < 32; g5++) {
-      const g = (g5 << 3) | (g5 >> 2);
-      for (let b5 = 0; b5 < 32; b5++) {
-        const b = (b5 << 3) | (b5 >> 2);
-        let bestIdx = -1;
-        let bestDist = MAX_COLOR_DIST_SQ + 1;
-        for (let i = 0; i < rgb.length; i++) {
-          const [cr, cg, cb] = rgb[i]!;
-          const dr = r - cr, dg = g - cg, db = b - cb;
-          const dist = dr * dr + dg * dg + db * db;
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestIdx = i;
-          }
-        }
-        if (bestIdx >= 0 && bestDist <= MAX_COLOR_DIST_SQ) {
-          lut[(r5 << 10) | (g5 << 5) | b5] = midpoints[bestIdx]!;
-        }
-      }
-    }
-  }
-  return lut;
-}
-
 function decodeLutFor(kind: RemapKind): Float32Array {
   if (kind === 'rain') {
-    rainDecodeLut ??= buildRgb555Lut(RAIN_COLORS, RAIN_EDGES, 20);
+    rainDecodeLut ??= paletteValueLut(RAIN_COLORS, RAIN_EDGES, 20);
     return rainDecodeLut;
   }
-  liftDecodeLut ??= buildRgb555Lut(LIFT_COLORS, LIFT_EDGES, 300);
+  liftDecodeLut ??= paletteValueLut(LIFT_COLORS, LIFT_EDGES, 300);
   return liftDecodeLut;
 }
 

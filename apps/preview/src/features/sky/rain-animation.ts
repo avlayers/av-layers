@@ -1,13 +1,11 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
+import { paletteValueLut, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
 import type { ResolvedChannelStyles } from '../map/channel-styles';
 import {
   extractOrientedContours,
   type GeoPt
 } from './contour-rings';
 
-const LUT_SIZE = 32_768;
-const MAX_COLOR_DIST_SQ = 1_200;
 const MAX_LAT = 85.05112878;
 const DEG = Math.PI / 180;
 const MIN_RAIN_MMH = 0.15;
@@ -98,43 +96,8 @@ function mmhWeight(v: number): number {
 }
 
 function getRainRgb555Lut(): Float32Array {
-  if (rainRgb555Lut) return rainRgb555Lut;
-  const lut = new Float32Array(LUT_SIZE).fill(0);
-  const rgb = RAIN_COLORS.map(hex => {
-    const clean = hex.startsWith('#') ? hex.slice(1) : hex;
-    return [
-      Number.parseInt(clean.slice(0, 2), 16),
-      Number.parseInt(clean.slice(2, 4), 16),
-      Number.parseInt(clean.slice(4, 6), 16)
-    ] as const;
-  });
-  const midpoints = RAIN_COLORS.map((_, i) => {
-    const lo = RAIN_EDGES[i] ?? 0.1;
-    const hi = RAIN_EDGES[i + 1] ?? (lo + 20);
-    return (lo + hi) * 0.5;
-  });
-  for (let r5 = 0; r5 < 32; r5++) {
-    const r = (r5 << 3) | (r5 >> 2);
-    for (let g5 = 0; g5 < 32; g5++) {
-      const g = (g5 << 3) | (g5 >> 2);
-      for (let b5 = 0; b5 < 32; b5++) {
-        const b = (b5 << 3) | (b5 >> 2);
-        let bestIdx = -1;
-        let bestDist = MAX_COLOR_DIST_SQ + 1;
-        for (let i = 0; i < rgb.length; i++) {
-          const [cr, cg, cb] = rgb[i]!;
-          const dr = r - cr, dg = g - cg, db = b - cb;
-          const dist = dr * dr + dg * dg + db * db;
-          if (dist < bestDist) { bestDist = dist; bestIdx = i; }
-        }
-        if (bestIdx >= 0 && bestDist <= MAX_COLOR_DIST_SQ) {
-          lut[(r5 << 10) | (g5 << 5) | b5] = midpoints[bestIdx]!;
-        }
-      }
-    }
-  }
-  rainRgb555Lut = lut;
-  return lut;
+  // Unmatched colours read as dry (0 mm/h).
+  return rainRgb555Lut ??= paletteValueLut(RAIN_COLORS, RAIN_EDGES, 20).map(value => Math.max(0, value));
 }
 
 /**

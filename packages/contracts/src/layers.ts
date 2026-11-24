@@ -37,6 +37,39 @@ export const PALETTES = {
   cloud: { id: 'cloud', edges: CLOUD_EDGES, colors: CLOUD_COLORS, units: '%', transparentBelow: 10, provisional: true }
 } as const satisfies Record<PaletteId, { id: string; edges: readonly number[]; colors: readonly string[]; units: string } & Record<string, unknown>>;
 
+const PALETTE_MATCH_DIST_SQ = 1_200;
+
+/**
+ * Inverse of a published step palette: maps each RGB555 colour to the midpoint value of
+ * its nearest palette bin, or -1 when no palette colour is within tolerance. The top bin
+ * spans `topSpan` above its edge. Index with `(r >> 3) << 10 | (g >> 3) << 5 | b >> 3`.
+ */
+export function paletteValueLut(colors: readonly string[], edges: readonly number[], topSpan: number): Float32Array {
+  const lut = new Float32Array(32_768).fill(-1);
+  const rgb = colors.map(hex => [1, 3, 5].map(at => Number.parseInt(hex.slice(at, at + 2), 16)) as [number, number, number]);
+  const midpoints = colors.map((_, i) => {
+    const lo = edges[i] ?? 0;
+    return (lo + (edges[i + 1] ?? lo + topSpan)) * 0.5;
+  });
+  for (let r5 = 0; r5 < 32; r5++) {
+    const r = (r5 << 3) | (r5 >> 2);
+    for (let g5 = 0; g5 < 32; g5++) {
+      const g = (g5 << 3) | (g5 >> 2);
+      for (let b5 = 0; b5 < 32; b5++) {
+        const b = (b5 << 3) | (b5 >> 2);
+        let best = -1, bestDist = PALETTE_MATCH_DIST_SQ + 1;
+        for (let i = 0; i < rgb.length; i++) {
+          const [cr, cg, cb] = rgb[i]!;
+          const dist = (r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2;
+          if (dist < bestDist) { bestDist = dist; best = i; }
+        }
+        if (best >= 0) lut[(r5 << 10) | (g5 << 5) | b5] = midpoints[best]!;
+      }
+    }
+  }
+  return lut;
+}
+
 export const LIFT_METHOD_ID = 'dry-lenschow-1p2-v2';
 export const ALL_HOURS_PRECIP_METHOD_ID = 'trailing-precipitation-rate-v2';
 
