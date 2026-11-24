@@ -1,11 +1,7 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { createServer, type AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright';
+import { prepareFixtureData, startFixtureStack } from './fixture-stack.js';
 
 export interface WindFeatureSmokeOptions {
   baseUrl: string;
@@ -525,75 +521,14 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
   return results();
 }
 
-async function freePort(): Promise<number> {
-  return new Promise((resolvePort, rejectPort) => {
-    const server = createServer();
-    server.once('error', rejectPort);
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as AddressInfo).port;
-      server.close(err => err ? rejectPort(err) : resolvePort(port));
-    });
-  });
-}
-
-async function waitForHttp(url: string, deadlineMs: number): Promise<void> {
-  while (Date.now() < deadlineMs) {
-    try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(500) });
-      await response.body?.cancel();
-      if (response.ok) return;
-    } catch { /* Server still booting. */ }
-    await new Promise(resolveWait => setTimeout(resolveWait, 100));
-  }
-  throw new Error(`Timed out waiting for ${url}`);
-}
-
 async function runWithOfflineFixture(options: Omit<WindFeatureSmokeOptions, 'baseUrl'>): Promise<WindFeatureSmokeResult> {
-  const repoRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-  const tempRoot = await mkdtemp(join(tmpdir(), 'av-wind-smoke-'));
-  const children: ChildProcess[] = [];
-  const terminate = (signal: NodeJS.Signals) => {
-    for (const child of children) {
-      try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal); else child.kill(signal); }
-      catch { child.kill(signal); }
-    }
-  };
+  const data = await prepareFixtureData();
   try {
-    const [{ OFFLINE_PRODUCT }, { generateOfflineFixture }, { seedLocalBuild }] = await Promise.all([
-      import('@av/contracts/fixture-product'),
-      import('./dev-fixture.js'),
-      import('./sample-preview.js')
-    ]);
-    const manifestPath = await generateOfflineFixture(join(tempRoot, 'output'));
-    const seeded = await seedLocalBuild({ manifestPath, persistTo: join(tempRoot, 'state'), fixture: true, trustedProduct: OFFLINE_PRODUCT });
-    const [apiPort, webPort] = await Promise.all([freePort(), freePort()]);
-    const apiDir = join(repoRoot, 'apps', 'api'), previewDir = join(repoRoot, 'apps', 'preview');
-    const wranglerJs = join(repoRoot, 'node_modules', 'wrangler', 'bin', 'wrangler.js');
-    const api = spawn(process.execPath, [
-      wranglerJs, 'dev', join(apiDir, 'test', 'fixture-worker.ts'), '--local', '--var', 'AV_LOCAL_DEVELOPMENT:true',
-      '--ip', '127.0.0.1', '--port', String(apiPort), '--persist-to', seeded.persistTo, '--log-level', 'error', '--show-interactive-dev-session=false'
-    ], { cwd: apiDir, stdio: 'inherit', detached: process.platform !== 'win32' });
-    children.push(api);
-    const web = spawn(process.execPath, [join(previewDir, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'], {
-      cwd: previewDir, stdio: 'inherit', detached: process.platform !== 'win32',
-      env: { ...process.env, AV_API_BASE: `http://127.0.0.1:${apiPort}`, VITE_MODEL: seeded.manifest.model, VITE_OFFLINE_FIXTURE: 'true', VITE_BUILD_REVISION: 'smoke' }
-    });
-    children.push(web);
-    const deadline = Date.now() + 20_000;
-    await Promise.all([
-      waitForHttp(`http://127.0.0.1:${apiPort}/healthz`, deadline),
-      waitForHttp(`http://127.0.0.1:${webPort}/`, deadline)
-    ]);
-    return await runWindFeatureSmoke({ ...options, baseUrl: `http://127.0.0.1:${webPort}` });
+    const stack = await startFixtureStack(data);
+    try { return await runWindFeatureSmoke({ ...options, baseUrl: stack.baseUrl }); }
+    finally { await stack.close(); }
   } finally {
-    terminate('SIGTERM');
-    const force = setTimeout(() => terminate('SIGKILL'), 3_000).unref();
-    await Promise.allSettled(children.map(child => new Promise<void>(done => {
-      if (child.exitCode !== null || child.signalCode !== null) { done(); return; }
-      child.once('close', () => done());
-    })));
-    clearTimeout(force);
-    await rm(tempRoot, { recursive: true, force: true });
+    await data.dispose();
   }
 }
 
