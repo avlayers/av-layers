@@ -1,9 +1,9 @@
 export const FOCUS_DWELL_MS = 400;
 
 /** Mean Earth radius for admission area, independent of model grid constants. */
-export const ADMISSION_EARTH_RADIUS_M = 6_371_008.8;
-export const FULL_HORIZON_ENTER_KM2 = 100_000;
-export const FULL_HORIZON_EXIT_KM2 = 125_000;
+const ADMISSION_EARTH_RADIUS_M = 6_371_008.8;
+const FULL_HORIZON_ENTER_KM2 = 100_000;
+const FULL_HORIZON_EXIT_KM2 = 125_000;
 const AREA_EPSILON_KM2 = 0.000001;
 
 export interface MapBoundsPort {
@@ -54,7 +54,7 @@ export function fullHorizonFor(areaKm2: number | null, warming: boolean): boolea
   return warming ? areaKm2 <= FULL_HORIZON_EXIT_KM2 + AREA_EPSILON_KM2 : areaKm2 < FULL_HORIZON_ENTER_KM2;
 }
 
-export interface ViewportWarmth {
+interface ViewportWarmth {
   update(areaKm2: number | null): boolean;
   readonly warming: boolean;
 }

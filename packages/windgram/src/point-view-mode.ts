@@ -7,7 +7,7 @@ export type PointViewMode = (typeof POINT_VIEW_MODES)[number];
 export const DEFAULT_POINT_VIEW_MODE: PointViewMode = '3d';
 export const DEFAULT_MULTI_DAY_SPAN = 3;
 
-export interface PointViewModeSpec {
+interface PointViewModeSpec {
   readonly id: PointViewMode;
   readonly label: string;
   readonly ariaLabel: string;
@@ -44,7 +44,7 @@ export function formatDayWindowLabel(windowDays: readonly string[]): string {
   return `${formatShortDayLabel(windowDays[0]!)}–${formatShortDayLabel(windowDays.at(-1)!)}`;
 }
 
-export interface StitchedDayWindow {
+interface StitchedDayWindow {
   readonly windowDays: readonly string[];
   readonly startIndex: number;
   readonly canStepPrev: boolean;

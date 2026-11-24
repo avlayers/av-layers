@@ -9,8 +9,8 @@ export const TERRAIN_READ_LIMITS = Object.freeze({
   maxDecodedPixels: 64_000_000, maxOutputPixels: 4_000_000,
   maxCachedPixels: 8_000_000, maxOpenTiles: 8
 });
-export type TerrainReadLimits = { [K in keyof typeof TERRAIN_READ_LIMITS]: number };
-export interface TerrainWindow {
+type TerrainReadLimits = { [K in keyof typeof TERRAIN_READ_LIMITS]: number };
+interface TerrainWindow {
   geometry: TerrainGeometry;
   values: Float32Array;
   missing: Uint8Array;
@@ -19,7 +19,7 @@ export interface TerrainWindow {
 export interface TerrainReadStats {
   requests: number; bytesRead: number; readBytesBound: number; decodedPixels: number; outputPixels: number; cacheHits: number;
 }
-export interface TerrainReader {
+interface TerrainReader {
   /** Native-row bilinear elevation in EGM2008 metres. Required nodata returns null; missing assets throw. */
   sample(latitude: number, longitude: number): Promise<{ elevationM: number; source: 'dem' | 'ocean' } | null>;
   sampleBatch?(points: readonly { latitude: number; longitude: number }[]): Promise<Array<{ elevationM: number; source: 'dem' | 'ocean' } | null>>;
@@ -34,7 +34,7 @@ type Cached<T> = { promise: Promise<T>; settled: boolean; pixels: number };
 type Block = { values: Float32Array; width: number; height: number; col: number; row: number };
 type Section = { tile?: TerrainTile; geometry: TerrainGeometry; left: number; top: number; right: number; bottom: number };
 type TerrainTotals = Pick<TerrainReadLimits, 'maxReadBytes' | 'maxDecodedPixels' | 'maxOutputPixels'>;
-export type TerrainReadBudget = { readonly token: unique symbol };
+type TerrainReadBudget = { readonly token: unique symbol };
 type Proof = { etag: string; key: string; sha256: string; size: number };
 const budgets = new WeakMap<TerrainReadBudget, { limits: TerrainTotals; stats: TerrainReadStats; etags: Map<string, Proof>; inBatch: boolean; readerOpen: boolean; dataId?: string; signal?: AbortSignal; deadlineAt?: number }>();
 export function createTerrainReadBudget(limits: TerrainTotals, options: { deadlineAt?: number; signal?: AbortSignal } = {}): TerrainReadBudget {

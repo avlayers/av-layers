@@ -38,9 +38,9 @@ export const WINDGRAM_HYBRID_SKY_COLOR = '#4f5c87';
 
 /** Minimum resolved statically stable upward vertical velocity (m/s, ~120 / ~295 ft/min) contoured as model ascent aloft. */
 export const WAVE_ASCENT_MIN_MPS = 0.6;
-export const WAVE_ASCENT_STRONG_MPS = 1.5;
+const WAVE_ASCENT_STRONG_MPS = 1.5;
 /** Filter near-adiabatic convective chimneys (<= -2.45 °C/1kft) and light-wind (<12 kt) plumes on background ascent contours. */
-export const WAVE_MIN_LAPSE_C_PER_1000FT = -2.45;
+const WAVE_MIN_LAPSE_C_PER_1000FT = -2.45;
 export const WAVE_MIN_WIND_KT = 12;
 
 /**
@@ -64,13 +64,6 @@ export const WINDGRAM_INVERSION_BANDS = [
 
 export const CLOUD_SCT_RH_PERCENT = 83;
 export const CLOUD_BKN_RH_PERCENT = 89;
-
-/** 3-tier stratiform RH cloud decks: scattered wisps (83–89%), broken deck (89–94%), and saturated overcast (94–100%). */
-export const WINDGRAM_CLOUD_DECK_BANDS = [
-  { className: 'wg-cloud-deck-sct', minRh: CLOUD_SCT_RH_PERCENT, maxRh: CLOUD_BKN_RH_PERCENT },
-  { className: 'wg-cloud-deck-bkn', minRh: CLOUD_BKN_RH_PERCENT, maxRh: CLOUD_RH_THRESHOLD_PERCENT },
-  { className: 'wg-cloud-deck-ovc', minRh: CLOUD_RH_THRESHOLD_PERCENT, maxRh: 100 },
-] as const;
 
 /** Standard aviation METAR/ASOS sky-cover category from 0..100% cloud fraction. */
 export function skyCoverageCode(percent: number | null | undefined): SkyCoverageCode {
@@ -123,7 +116,7 @@ export function omegaToVerticalVelocityMps(
 }
 
 /** Resolves effective surface terrain elevation from persistent fine DEM or model ground. */
-export function effectiveHourGroundM(
+function effectiveHourGroundM(
   hour: Pick<PublishedForecastHour, 'fineTerrainM' | 'modelTerrainM'>,
 ): number | null {
   return hour.fineTerrainM ?? hour.modelTerrainM ?? null;
@@ -140,7 +133,7 @@ export function climbBandRange(index: number, system: UnitSystem): string {
   return `${fmt(band.minMps)}–${fmt(band.maxMps)}`;
 }
 
-export interface ConvectiveColumnEnvelope {
+interface ConvectiveColumnEnvelope {
   readonly groundM: number;
   readonly floorM: number;
   readonly usableTopM: number;
@@ -149,7 +142,7 @@ export interface ConvectiveColumnEnvelope {
   readonly peakClimbMps: number;
 }
 
-export interface ConvectiveEnvelopeOptions {
+interface ConvectiveEnvelopeOptions {
   readonly modelTerrainM?: number | null;
   readonly isNativeFallback?: boolean;
 }
@@ -279,7 +272,7 @@ export function classifyConvectiveCloudRegime(hour: PublishedForecastHour): Conv
 }
 
 /** Clips an ordered altitude field to `scale` bounds and projects heights into pixel offsets from plot bottom. */
-export function clipFieldNodesToScale(
+function clipFieldNodesToScale(
   source: readonly FieldNode[],
   scale: WindgramScale,
 ): { distanceFromBottomPx: number; value: number }[] {

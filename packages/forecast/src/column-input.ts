@@ -5,7 +5,7 @@ import type { NormalizedFrame } from './inputs.js';
 
 const { kelvinOffset, pascalsPerHectopascal, waterDryAirMolarMassRatio: epsilon, gribQuantizationRelativeHumidityLimit } = LIFT_METHOD_PARAMETERS;
 
-export interface NativeColumnScratch extends ColumnInput {
+interface NativeColumnScratch extends ColumnInput {
   humidity: { specificHumidityKgKg: number };
   levels: { heightM: number; temperatureC: number }[];
 }

@@ -18,14 +18,14 @@ import { emptyOverlay, type PreviewInitialState } from '../stores/app-store';
 
 export const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 export const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
-export const fixtureModel = (import.meta.env.VITE_MODEL ?? 'gfs') as ModelId;
+const fixtureModel = (import.meta.env.VITE_MODEL ?? 'gfs') as ModelId;
 
-export interface StorageLike {
+interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
 
-export interface Preferences {
+interface Preferences {
   units(): UnitSystem | null;
   opacity(): number | null;
   theme(): MapTheme | null;
@@ -44,7 +44,7 @@ export interface Preferences {
   setWind(state: WindControlState, fixedHeight: number): void;
 }
 
-export interface StartupSnapshot {
+interface StartupSnapshot {
   readonly query: ReturnType<typeof previewQuery>;
   readonly preferences: Preferences;
   readonly initial: PreviewInitialState;

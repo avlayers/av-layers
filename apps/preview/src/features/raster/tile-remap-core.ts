@@ -81,14 +81,14 @@ function rampLutFor(kind: RemapKind, theme: MapTheme): Uint8Array {
   return ramp;
 }
 
-export interface RemapScratch {
+interface RemapScratch {
   scalarA: Float32Array;
   scalarB: Float32Array;
   coverageA: Float32Array;
   coverageB: Float32Array;
 }
 
-export function createRemapScratch(initialPixels = RASTER_TILE_SIZE * RASTER_TILE_SIZE): RemapScratch {
+function createRemapScratch(initialPixels = RASTER_TILE_SIZE * RASTER_TILE_SIZE): RemapScratch {
   return {
     scalarA: new Float32Array(initialPixels),
     scalarB: new Float32Array(initialPixels),

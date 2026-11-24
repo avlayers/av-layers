@@ -75,14 +75,12 @@ Versions are pinned in package.json manifests and the pnpm-workspace.yaml catalo
 published packages at those versions.
   maplibre-gl 6.16.0                       BSD-3-Clause
   @deck.gl/core 9.4.1                      MIT
-  @deck.gl/extensions 9.4.1                MIT
   @deck.gl/layers 9.4.1                    MIT
   @deck.gl/maplibre 9.4.1                  MIT
   @luma.gl/core 9.4.2                      MIT
   @luma.gl/engine 9.4.2                    MIT
   @math.gl/*                               MIT
   @loaders.gl/*                            MIT
-  weatherlayers-gl 2026.9.1                MPL-2.0
   vite 7.3.7                               MIT
   zod 4.6.7                                MIT
   hono 4.13.14                             MIT

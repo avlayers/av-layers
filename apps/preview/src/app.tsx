@@ -8,7 +8,7 @@ import { BottomDock } from './features/controls/bottom-dock';
 import { ModelEmblem, ThemeIconPicker, WeatherChannelDock } from './features/controls/topbar-icons';
 import { cleanModelDisplayLabel, formatModelResolutionKm, modelRegionSubtitle } from './features/controls/topbar-model';
 
-export interface AppProps {
+interface AppProps {
   readonly store: PreviewStore;
   readonly commands: PreviewCommands;
   readonly offline: boolean;

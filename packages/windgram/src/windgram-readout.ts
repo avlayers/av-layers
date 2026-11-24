@@ -106,7 +106,7 @@ export function formatWindgramHourStamp(view: WindgramView, hourIndex: number, v
   return resolveHourClockMeta(view, hourIndex, validAt).accessibleStamp;
 }
 
-export function isMapLiftDonorReference(
+function isMapLiftDonorReference(
   lift: MapLiftSummary,
   reading: WindgramReading,
 ): boolean {
@@ -143,13 +143,13 @@ export interface WindgramTelemetryStrip {
   readonly hasPositiveClimb: boolean;
 }
 
-export function isTolCappedBelowThermalTop(
+function isTolCappedBelowThermalTop(
   reading: Pick<WindgramReading, 'cloudCapped' | 'nativeThermalTopM' | 'heightM'>,
 ): boolean {
   return Boolean(reading.cloudCapped) || (reading.nativeThermalTopM !== null && reading.heightM < reading.nativeThermalTopM - 25);
 }
 
-export interface SnappedTolClimbChoice {
+interface SnappedTolClimbChoice {
   readonly climbMps: number;
   readonly stripPrefix: 'Climb' | 'Peak';
   readonly tileCaption: '▲ Cu base' | '▲ At ceiling' | '▲ Peak lift';

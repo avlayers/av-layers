@@ -1,6 +1,6 @@
 import type { GeoPoint } from '@av/client';
 
-export interface ProjectableMap {
+interface ProjectableMap {
   project?(lngLat: [number, number]): { x: number; y: number };
   getContainer(): unknown;
 }

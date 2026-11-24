@@ -12,8 +12,8 @@ const LUT_SIZE = 32_768;
 const MAX_COLOR_DIST_SQ = 1_200;
 const MAX_LAT = 85.05112878;
 const DEG = Math.PI / 180;
-export const MIN_RAIN_MMH = 0.15;
-export const RAIN_CUFF_EDGE_MMH = 0.65;
+const MIN_RAIN_MMH = 0.15;
+const RAIN_CUFF_EDGE_MMH = 0.65;
 const SHOWER_CONTOUR_MMH = 0.65;
 const SQUALL_CONTOUR_MMH = 8.0;
 
@@ -30,7 +30,7 @@ const SPRITE_CELL_H = 72;
 const WEIGHT_LUT_MAX_MMH = 64;
 const WEIGHT_LUT_SIZE = 1_280;
 
-export interface PrecipBounds {
+interface PrecipBounds {
   readonly west: number;
   readonly south: number;
   readonly east: number;
@@ -55,7 +55,7 @@ export interface PrecipField {
   readonly wetCdf: Float32Array;
 }
 
-export interface ViewportSpawnDistribution {
+interface ViewportSpawnDistribution {
   readonly indices: Uint32Array;
   readonly cdf: Float32Array;
   readonly visibleWetFraction: number;

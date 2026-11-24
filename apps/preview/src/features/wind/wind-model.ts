@@ -21,7 +21,7 @@ export const WIND_STATUS_LABELS: Record<WindStatus, string> = {
   ready: '', loading: 'Loading wind', unavailable: 'Wind unavailable'
 };
 export const WIND_STORAGE_KEY = 'av.wind-controls.v1';
-export const METRES_PER_FOOT = 0.3048;
+const METRES_PER_FOOT = 0.3048;
 
 /**
  * Pilot-friendly nominal imperial AGL altitudes (ft) corresponding to each canonical
@@ -41,7 +41,7 @@ const IMPERIAL_NOMINAL_FEET: Readonly<Record<number, number>> = {
   4000: 13000
 };
 
-export const isWindStyle = (value: unknown): value is WindStyle => WIND_STYLES.includes(value as WindStyle);
+const isWindStyle = (value: unknown): value is WindStyle => WIND_STYLES.includes(value as WindStyle);
 
 export function snapWindHeight(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -49,7 +49,7 @@ export function snapWindHeight(value: unknown): number | undefined {
     : undefined;
 }
 
-export function windHeightFromStorage(value: unknown): WindHeight | undefined {
+function windHeightFromStorage(value: unknown): WindHeight | undefined {
   return value === 'surface' || value === 'lift' ? value : snapWindHeight(value);
 }
 

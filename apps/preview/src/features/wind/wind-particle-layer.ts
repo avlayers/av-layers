@@ -4,7 +4,7 @@ import { BufferTransform, Geometry, Model, type ModelProps } from '@luma.gl/engi
 import type { WindPreparedGrid } from '@av/client/wind';
 import { WIND_TRAIL_WIDTH } from '../raster/raster-budget';
 
-export interface WindParticleLayerProps {
+interface WindParticleLayerProps {
   prepared: WindPreparedGrid | null;
   gridBounds: readonly [number, number, number, number];
   spawnBounds: readonly [number, number, number, number];

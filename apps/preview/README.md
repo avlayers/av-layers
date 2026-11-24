@@ -27,7 +27,8 @@ Reload the page to pick up a newly published build (subject to the API's
 
 Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
 A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.
-Builds with numeric wind render GPU particles through `weatherlayers-gl` and
+Builds with numeric wind render GPU particles through the in-house
+`WindParticleLayer` (deck.gl/luma.gl transform feedback) and
 WMO/ICAO knot-feathered barbs through `@deck.gl/layers` (`IconLayer` in the map
 plane, upright `TextLayer` labels). The barb atlas covers calm plus 5–280 kt in
 both hemispheres and generates on-demand icons above 280 kt. Overlays share
@@ -47,8 +48,7 @@ The startup bundle includes MapLibre and triggers Vite’s large-chunk warning.
 The Windgram loads in a separate chunk on the first map click.
 [Build checks](vite.config.ts) bound startup (`1,200,000 B` gzip) and lazy
 (`300,000 B` gzip) JavaScript transfer and reject server modules in the browser output.
-The startup cap reserves the pinned `@deck.gl/*`, `@luma.gl/*` and `weatherlayers-gl`
-renderer set.
+The startup cap reserves the pinned `@deck.gl/*` and `@luma.gl/*` renderer set.
 
 Click the map to open the Windgram. Sampled AGL and MSL lift appear while the
 chart loads and in its selected hour readout. The km/mi control sets units.
@@ -69,7 +69,7 @@ scalar chart covers builds that publish no native profiles.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
 - [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
-- [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl/WeatherLayers particles, map-plane barbs and labels.
+- [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
 - [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.

@@ -123,7 +123,7 @@ function stitchDirectedSegments(segments: Array<[GeoPt, GeoPt]>, minVertices: nu
   return polylines;
 }
 
-export function smoothPolyline(line: GeoPt[]): GeoPt[] {
+function smoothPolyline(line: GeoPt[]): GeoPt[] {
   if (line.length < 4) return line;
   const closed = Math.hypot(line[0]![0] - line[line.length - 1]![0], line[0]![1] - line[line.length - 1]![1]) < 1e-4;
   const out: GeoPt[] = closed ? [] : [line[0]!];

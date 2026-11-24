@@ -45,13 +45,13 @@ function invalid(message: string, details?: Record<string, unknown>): never {
   throw new IndexedGribError('invalid-option', message, details);
 }
 
-export function validateHour(source: IndexedSource, hour: number): void {
+function validateHour(source: IndexedSource, hour: number): void {
   if (!Number.isInteger(hour) || !source.model.forecast.hours.includes(hour)) {
     invalid('Source forecast hour is outside configured hours', { hour });
   }
 }
 
-export function validateActiveIndices(source: IndexedSource, input: Uint32Array): Uint32Array {
+function validateActiveIndices(source: IndexedSource, input: Uint32Array): Uint32Array {
   try { return copySourceIndices(input, source.grid.width * source.grid.height); }
   catch (error) { throw new IndexedGribError('invalid-option', (error as Error).message); }
 }

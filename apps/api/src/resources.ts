@@ -1,4 +1,4 @@
-import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, parseBoundedJson, ResourceLimitError } from '@av/contracts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_PROVENANCE_BYTES, ResourceLimitError } from '@av/contracts';
 export { parseBoundedJson, ResourceLimitError } from '@av/contracts';
 
 /** Cache limits account retained typed arrays and estimated decoded object storage. */
@@ -274,10 +274,6 @@ export function estimateJsonBytes(value: unknown): number {
   if (Array.isArray(value)) return 40 + value.length * 8 + value.reduce((sum, item) => sum + estimateJsonBytes(item), 0);
   return 64 + Object.entries(value).reduce((sum, [key, item]) => sum + 32 + 24 + key.length * 2 + estimateJsonBytes(item), 0);
 }
-export async function readObjectJson(object: R2ObjectBody, limit: number, ctx?: WaitContext, signal?: AbortSignal, maxTokens?: number): Promise<{ value: unknown; bytes: number; estimatedBytes: number }> {
-  const bytes = await readObjectBytes(object, limit, false, ctx, signal), value = parseBoundedJson(bytes, maxTokens);
-  return { value, bytes: bytes.byteLength, estimatedBytes: estimateJsonBytes(value) };
-}
 
 // Reserve before constructing a body. One lease covers the payload and both Cache API
 // tee branches; it is released only after every branch consumes, cancels or expires.
@@ -374,8 +370,8 @@ export function forkResponseForCache(response: Response, timeoutMs = DEFAULT_REQ
 const binaryReads = new WeakMap<R2Bucket, MaterializedReads<Uint8Array>>();
 export const MAX_SAMPLE_CONCURRENT_READS_PER_REQUEST = 8;
 export const MAX_BINARY_READ_CONCURRENCY = 32;
-export const MAX_BINARY_READ_WAITERS = 192;
-export const MAX_BINARY_READ_QUEUED = 128;
+const MAX_BINARY_READ_WAITERS = 192;
+const MAX_BINARY_READ_QUEUED = 128;
 export function binaryRead(bucket: R2Bucket, key: string, load: (signal: AbortSignal) => Promise<Uint8Array>, ctx: WaitContext, waiterSignal?: AbortSignal): Promise<Uint8Array> {
   let reads = binaryReads.get(bucket);
   if (!reads) { reads = new MaterializedReads(MAX_BINARY_READ_CONCURRENCY, DEFAULT_REQUEST_TIMEOUT_MS, MAX_BINARY_READ_WAITERS, MAX_BINARY_READ_QUEUED); binaryReads.set(bucket, reads); }

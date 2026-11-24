@@ -8,7 +8,7 @@ import {
 } from './tile-remap-core';
 import type { WorkerRemapRequest, WorkerRemapResponse } from './tile-remap.worker';
 
-export { remapRgbaInPlace, type RemapKind };
+export { remapRgbaInPlace,  };
 
 let remapSupported: boolean | null = null;
 
@@ -28,7 +28,7 @@ export function canRemapTiles(): boolean {
   return remapSupported;
 }
 
-export interface RemapTileOptions {
+interface RemapTileOptions {
   readonly priority?: 'foreground' | 'background';
   readonly signal?: AbortSignal;
   readonly transferInput?: boolean;

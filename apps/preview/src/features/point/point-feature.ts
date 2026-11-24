@@ -13,7 +13,7 @@ export interface PointWind {
   sample(lat: number, lon: number): { u: number | null; v: number | null; status: string };
 }
 
-export interface PointFeatureOptions {
+interface PointFeatureOptions {
   readonly root: () => HTMLElement | null;
   readonly series: PointSeriesController;
   readonly isOpen?: () => boolean;

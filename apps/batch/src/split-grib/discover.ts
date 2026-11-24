@@ -8,7 +8,7 @@ const PROBE_CONCURRENCY = 4;
 const PROBE_ATTEMPTS = 3;
 
 
-export interface SplitGribDiscoveryResult {
+interface SplitGribDiscoveryResult {
   readonly schemaVersion: 1;
   readonly model: string;
   readonly cycle: string;

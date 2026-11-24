@@ -1,0 +1,57 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "workspaces": {
+    ".": {
+      "entry": [
+        "scripts/*.{ts,mjs}",
+        "scripts/fixtures/*.ts",
+        "tests/*.ts",
+        "scripts/masks/*.ts"
+      ],
+      "project": [
+        "scripts/**/*.{ts,mjs}",
+        "tests/**/*.ts"
+      ]
+    },
+    "apps/api": {
+      "entry": [
+        "test/**/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "apps/batch": {
+      "entry": [
+        "src/*/cli.ts",
+        "src/raster-worker.ts",
+        "src/whole-domain/derive-worker.ts",
+        "src/**/*.test.ts",
+        "src/**/*.bench.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ]
+    },
+    "apps/preview": {
+      "entry": [
+        "src/index.tsx",
+        "src/features/raster/tile-remap.worker.ts",
+        "bench.ts"
+      ],
+      "project": [
+        "src/**/*.{ts,tsx}",
+        "*.ts"
+      ]
+    },
+    "packages/*": {
+      "project": [
+        "src/**/*.ts"
+      ]
+    }
+  },
+  "ignoreBinaries": [
+    "uv"
+  ]
+}

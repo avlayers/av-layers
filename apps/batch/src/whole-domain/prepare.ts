@@ -7,7 +7,7 @@ import { MAX_PACKED_COLUMN_BYTES, wholeDomainSurfaceLayers } from './capacity.js
 import { acquisitionSupport, loadBundledFineCoverage, stageFineCoverage, wholeDomainPlan, writeNativeCoverage } from './coverage.js';
 import { loadWholeDomainTerrain, prepareWholeDomainTerrain, type WholeDomainTerrainOptions } from './terrain.js';
 
-export interface WholeDomainCoverage { mask: SparseCoverageMask; descriptor: SparseCoverageDescriptor; bytes: Uint8Array; hash: string }
+interface WholeDomainCoverage { mask: SparseCoverageMask; descriptor: SparseCoverageDescriptor; bytes: Uint8Array; hash: string }
 export type WholeDomainOptions = (WholeDomainTerrainOptions & { fine?: WholeDomainCoverage })
   | { fine: WholeDomainCoverage; terrain: SparseTerrainRef };
 export interface WholeDomainPrepared {
@@ -22,7 +22,7 @@ export interface WholeDomainPrepared {
   nativeSurfaceLayers: LayerId[];
   fineSurfaceLayers: LayerId[];
 }
-export interface WholeDomainFrozenPlan {
+interface WholeDomainFrozenPlan {
   k: number; nativeCoverageHash: string;
   fineCoverage: { id: string; hash: string; maskKey: string; maxZoom: number; gridHash: string };
   terrain: SparseTerrainRef;

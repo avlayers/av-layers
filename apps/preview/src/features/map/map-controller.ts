@@ -8,7 +8,7 @@ import type { MapTheme } from './visual-theme';
 
 maplibregl.setWorkerUrl(workerUrl);
 
-export interface MapOptions {
+interface MapOptions {
   readonly container: HTMLElement;
   readonly offlineFixture: boolean;
   readonly camera: { center: [number, number]; zoom: number } | null;
@@ -30,7 +30,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
 
 export { maplibregl };
 
-export interface MapCameraOptions {
+interface MapCameraOptions {
   readonly home: { lat: number; lng: number };
   readonly followsPlace: boolean;
   readonly initialOffset: number;

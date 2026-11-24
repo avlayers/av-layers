@@ -87,7 +87,7 @@ export function writeThemeInfoOpen(open: boolean): void {
   }
 }
 
-export interface ChannelDetailContext {
+interface ChannelDetailContext {
   readonly cloudStyle?: CloudStyleChoice;
   readonly rainStyle?: RainStyleChoice;
   readonly windStyle?: WindStyle;
@@ -95,7 +95,7 @@ export interface ChannelDetailContext {
   readonly units?: UnitSystem;
 }
 
-export interface ChannelDescriptor {
+interface ChannelDescriptor {
   readonly key: DockChannelKey;
   readonly id: string;
   readonly shortLabel: string;

@@ -39,7 +39,7 @@ export function createNormalizedFrameTarget(cells: number, levels: number, model
     ...(modelLevels ? { pressurePa: Array.from({ length: levels }, values) } : {}), missing } as NormalizedFrameTarget;
 }
 
-export interface ForecastSession {
+interface ForecastSession {
   cycle: string;
   readonly stats: Record<string, unknown>;
   /** Acquire sequentially; the caller owns each returned frame and closes the session in finally. */

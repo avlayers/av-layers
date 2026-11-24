@@ -22,7 +22,7 @@ import { preparationBudgetBytes, WIND_CACHE_CAPACITY_BYTES, windHorizonProtected
 import { CoverageSeam } from '../features/map/coverage-seam';
 import { SkyComposite } from '../features/sky/sky-composite';
 import { createWindSession } from '../features/wind/wind-session';
-type WindControls = import('../features/wind/wind-controls').WindControls;
+import type { WindControls } from '../features/wind/wind-controls';
 import { WindOverlay } from '../features/wind/wind-overlay';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
 import { createLocationController } from '../features/location/location-controller';

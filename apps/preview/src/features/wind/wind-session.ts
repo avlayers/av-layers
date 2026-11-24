@@ -8,11 +8,11 @@ import { cameraBounds, coversBounds, windBounds } from '../map/viewport-policy';
 import type { WindField } from './wind-overlay';
 import type { WindHeight, WindStatus } from './wind-model';
 
-export interface WindSchedulerPort {
+interface WindSchedulerPort {
   fetch: typeof fetch;
   request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
 }
-export interface WindCachePort {
+interface WindCachePort {
   isBuildUnavailable(buildId: string): boolean;
   readonly allocatedBytes: number;
   clear(): void;
@@ -20,7 +20,7 @@ export interface WindCachePort {
   evictUnreferenced?: () => number;
 }
 
-export interface WindSessionOptions {
+interface WindSessionOptions {
   readonly apiBaseUrl: string;
   readonly map: MapBoundsPort;
   readonly lowMemory: boolean;

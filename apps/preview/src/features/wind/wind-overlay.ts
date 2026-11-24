@@ -4,8 +4,8 @@ import type { PreparationBudget } from '@av/client';
 import { WindDeck, type WindDeckOptions, type WindField } from './wind-deck';
 
 export type { WindField };
-export type WindOverlayOptions = WindDeckOptions;
-export interface WindOverlayAllocationOptions { budget?: PreparationBudget }
+type WindOverlayOptions = WindDeckOptions;
+interface WindOverlayAllocationOptions { budget?: PreparationBudget }
 
 /** Owns the GPU wind renderer and the retained prepared grid for the current scene. */
 export class WindOverlay {

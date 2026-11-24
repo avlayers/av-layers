@@ -1,13 +1,13 @@
 import type { GeoPoint } from '@av/client';
 
-export interface ScreenBox {
+interface ScreenBox {
   readonly left: number;
   readonly top: number;
   readonly right: number;
   readonly bottom: number;
 }
 
-export interface PointRevealGeometry {
+interface PointRevealGeometry {
   readonly pointPx: { readonly x: number; readonly y: number };
   readonly viewport: { readonly width: number; readonly height: number };
   readonly cardRect: ScreenBox | null;
@@ -16,14 +16,14 @@ export interface PointRevealGeometry {
   readonly rightClearancePx?: number;
 }
 
-export interface PointRevealTarget {
+interface PointRevealTarget {
   readonly targetX: number;
   readonly targetY: number;
   readonly panBy: [number, number];
   readonly centerOffset: [number, number];
 }
 
-export interface PannablePointMap {
+interface PannablePointMap {
   project?(lngLat: [number, number]): { x: number; y: number };
   easeTo?(
     options: { center: [number, number]; offset: [number, number]; duration?: number },

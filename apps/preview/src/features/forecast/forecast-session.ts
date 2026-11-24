@@ -9,7 +9,7 @@ import { committedFrame, LIFT_LAYERS, resumeModelFor } from './forecast-model';
 
 const AUTO_METADATA_CACHE_TTL_MS = 15_000;
 
-export interface ForecastHooks {
+interface ForecastHooks {
   readonly onLoading: (model: ModelId) => void;
   readonly onBuild: (build: PinnedBuild, frame: string | null, resolved: boolean) => void;
   readonly onSameBuild: (frame: string) => void;
@@ -21,7 +21,7 @@ export interface ForecastHooks {
   readonly stopTimer: () => void;
 }
 
-export interface ForecastSessionOptions {
+interface ForecastSessionOptions {
   readonly api: ApiClient;
   readonly writer: Pick<PreviewWriter, 'forecast' | 'intent' | 'notices'>;
   readonly intent: () => Pick<PreviewIntent, 'model' | 'reference' | 'customLayer' | 'requestedTime'>;
@@ -34,7 +34,7 @@ export interface ForecastSessionOptions {
   readonly hooks: ForecastHooks;
 }
 
-export interface ForecastSession {
+interface ForecastSession {
   load(model: ModelId, resolved?: AutoForecastSelection): Promise<void>;
   loadAuto(): Promise<void>;
   cancelAuto(): void;

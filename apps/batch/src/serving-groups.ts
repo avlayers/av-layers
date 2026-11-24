@@ -12,7 +12,7 @@ import type { ObjectStorage } from './storage.js';
 
 const SERVING_GROUP_FRAMES = 24;
 
-export interface HourSampleShard {
+interface HourSampleShard {
   readonly key: string;
   readonly bytes: number;
   readonly sha256: string;
@@ -27,7 +27,7 @@ export interface HourSamplePart {
   readonly shards: readonly HourSampleShard[];
 }
 
-export interface ServingSampleShard {
+interface ServingSampleShard {
   readonly group: number;
   readonly firstFrame: number;
   readonly frameCount: number;

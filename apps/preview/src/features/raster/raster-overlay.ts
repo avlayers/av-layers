@@ -9,12 +9,12 @@ import { boundsAreaKm2, cameraBounds, createViewportWarmth } from '../map/viewpo
 import { isMapTheme, type MapTheme } from '../map/visual-theme';
 import { canRemapTiles, remapTileToBitmap } from './tile-remap';
 
-export interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
+interface RasterSelection { build: PinnedBuild; layer: LayerId; frame: string }
 type Selection = RasterSelection;
 class RasterBudgetError extends Error {}
 interface Slot extends Selection { id: string; transport: RasterTileSourceTransport; lease: PreparationLease | null; successful: boolean; pending: Set<object>; failed: Set<object>; sourceFailed: boolean; staleTheme?: boolean }
 export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
-export type DetailReadiness = 'idle' | 'valid-empty' | 'complete' | 'partial' | 'failed' | 'timed-out';
+type DetailReadiness = 'idle' | 'valid-empty' | 'complete' | 'partial' | 'failed' | 'timed-out';
 export interface OverlayState { displayed: Selection | null; requested: Selection | null; quality: 'overview' | 'detail' | null; viewLoading: boolean; overviewReady: number; overviewTotal: number; overviewFailed: number; incomplete: boolean; replacementFailed: boolean; previewReadyFrames?: readonly string[]; detailReadyFrames?: readonly string[]; limited?: boolean; detailState?: DetailReadiness; cameraRevision?: number; requiredTiles?: number; loadedTiles?: number; pendingTiles?: number; erroredTiles?: number; coarseReadyFrames?: readonly string[]; detailBytesReadyFrames?: readonly string[]; detailDrawableFrames?: readonly string[] }
 const matches = (a: Selection | null, b: Selection | null): boolean => !!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame;
 const canonicalKey = (tile: { x?: number; y?: number; z?: number } | undefined): string | null =>

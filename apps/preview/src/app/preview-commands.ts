@@ -9,7 +9,7 @@ import type { MapTheme } from '../features/map/visual-theme';
 import type { AltitudeReference } from '../features/navigation/url-state';
 import type { WindHeight, WindStyle } from '../features/wind/wind-model';
 
-export type WeatherChannel = WeatherChannelKey;
+type WeatherChannel = WeatherChannelKey;
 
 export interface PreviewCommands {
   selectModel(model: ModelId): void;

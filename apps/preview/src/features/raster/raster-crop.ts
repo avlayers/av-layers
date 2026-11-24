@@ -4,7 +4,7 @@ const LATITUDE_LIMIT = 85.0511287798066;
 const MAX_TILES = 64;
 const MAX_EDGE = 4096;
 
-export interface CropTile {
+interface CropTile {
   /** Unwrapped tile column, used for drawing. */
   x: number;
   y: number;
@@ -32,7 +32,7 @@ export interface RasterCrop {
   bytes: number;
 }
 
-export interface CropOptions {
+interface CropOptions {
   tileSize?: number;
   marginFractionPerEdge?: number;
   gutterPixelsPerEdge?: number;

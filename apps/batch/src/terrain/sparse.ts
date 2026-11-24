@@ -36,7 +36,7 @@ const descriptorSchema = z.strictObject({
   }
 });
 
-export type SparsePreparedTerrain = { descriptor: z.infer<typeof descriptorSchema>; elevationM: Float32Array; valid: Uint8Array };
+type SparsePreparedTerrain = { descriptor: z.infer<typeof descriptorSchema>; elevationM: Float32Array; valid: Uint8Array };
 export interface SparseTerrainProgress {
   phase: 'cache-check' | 'cache-validation' | 'cache-reuse' | 'planning' | 'sampling' | 'upload' | 'complete';
   cells: number; completedCells: number; elapsedMs: number;

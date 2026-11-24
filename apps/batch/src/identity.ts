@@ -42,13 +42,13 @@ async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   return (await Promise.all(entries.map(async entry => entry.isDirectory() ? sourceFiles(join(directory, entry.name)) : /\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name) ? [join(directory, entry.name)] : []))).flat().sort();
 }
-export interface BuildIdentity {
+interface BuildIdentity {
   readonly recipe: ReturnType<typeof createRecipeIdentity>;
   readonly components: { readonly adapter: string; readonly science: string; readonly contracts: string; readonly configuration: string };
   readonly scienceHash: string;
 }
 /** Content identity includes actual files, even in a dirty local checkout; Git SHA alone is not a recipe. */
-export interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
+interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
 
 export async function buildIdentity(product: ProductDefinition, coverageHash: string, { root = ROOT, wholeDomain }: { root?: string; wholeDomain?: WholeDomainIdentityInput } = {}): Promise<BuildIdentity> {
   const groups = {

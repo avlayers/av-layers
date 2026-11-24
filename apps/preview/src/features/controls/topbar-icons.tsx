@@ -51,7 +51,7 @@ export function ModelEmblem({ isAuto }: { isAuto: boolean }) {
   );
 }
 
-export function ThemeGlyph({ theme }: { theme: MapTheme }) {
+function ThemeGlyph({ theme }: { theme: MapTheme }) {
   const common = {
     width: 16,
     height: 16,
@@ -127,7 +127,7 @@ export function ThemeGlyph({ theme }: { theme: MapTheme }) {
   }
 }
 
-export function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
+function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
   const common = {
     width: 17,
     height: 17,

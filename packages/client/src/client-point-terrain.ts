@@ -178,7 +178,7 @@ const MAX_CACHED_DESCRIPTORS = 16;
 const MAX_CACHED_FINE_TILES = 16;
 const DEFAULT_TERRAIN_DEADLINE_MS = 2_500;
 
-export interface PointTerrainReadOptions {
+interface PointTerrainReadOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
 }

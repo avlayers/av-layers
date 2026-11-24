@@ -19,7 +19,7 @@ export function isRainStyleId(value: string | null | undefined): value is RainSt
   return typeof value === 'string' && RAIN_SET.has(value);
 }
 
-export interface StyleChoiceOption<T extends string> {
+interface StyleChoiceOption<T extends string> {
   readonly id: T;
   readonly label: string;
   readonly summary: string;
@@ -41,7 +41,7 @@ export const RAIN_STYLE_OPTIONS: readonly StyleChoiceOption<RainStyleChoice>[] =
   { id: 'wet-lens', label: 'Bevel', summary: 'Wet-lens dark outer moat + specular inner lip (#4)' }
 ];
 
-export interface RainEdgeTokens {
+interface RainEdgeTokens {
   readonly haloCasingColor: string;
   readonly dryHaloColor: string;
   readonly rimStrokeColor: string;
@@ -50,7 +50,7 @@ export interface RainEdgeTokens {
   readonly cuffMaxAlpha: number;
 }
 
-export interface CloudContourTokens {
+interface CloudContourTokens {
   readonly brokenColor: string;
   readonly overcastColor: string;
   readonly haloColor: string;
@@ -66,7 +66,7 @@ export interface ResolvedChannelStyles {
   readonly isobar: IsobarThemeTokens;
 }
 
-export function defaultCloudStyleForTheme(theme: MapTheme): CloudStyleId {
+function defaultCloudStyleForTheme(theme: MapTheme): CloudStyleId {
   switch (theme) {
     case 'slate':
       return 'satellite-ir';
@@ -84,7 +84,7 @@ export function defaultCloudStyleForTheme(theme: MapTheme): CloudStyleId {
   }
 }
 
-export function defaultRainStyleForTheme(_theme: MapTheme): RainStyleId {
+function defaultRainStyleForTheme(_theme: MapTheme): RainStyleId {
   return 'vignette-cuff';
 }
 

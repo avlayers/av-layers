@@ -113,7 +113,7 @@ function packingMetadata(field: GribField): { packing: number; packingError: num
   return { packing, packingError, codedCount };
 }
 
-export interface InspectIndexedGribFieldOptions {
+interface InspectIndexedGribFieldOptions {
   cycle: string;
   spec: IndexedGribFieldSpec;
   expectedStartHour: number;

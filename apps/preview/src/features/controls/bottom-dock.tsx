@@ -12,7 +12,7 @@ import {
 } from './bottom-dock-model';
 import { legendModel, type LegendModel } from './legend-model';
 
-export interface BottomDockProps {
+interface BottomDockProps {
   readonly dockView: DockViewId;
   readonly build: PinnedBuild | null;
   readonly layer: LayerId | null;

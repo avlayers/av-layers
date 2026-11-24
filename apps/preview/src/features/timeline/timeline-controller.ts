@@ -26,7 +26,7 @@ export interface CompactTimeline {
   pause(): void;
   destroy(): void;
 }
-export interface RibbonStop { readonly at: number; readonly color: string }
+interface RibbonStop { readonly at: number; readonly color: string }
 
 interface LocalTime { day: string; hour: number; minute: number }
 interface DayGroup { day: string; indices: number[] }
@@ -51,9 +51,9 @@ const MAX_RUBBER_PX = 6;
 const MAX_DEAD_STOP_PX = 2.5;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
 
-export interface NightBounds { sunrise: number; sunset: number }
+interface NightBounds { sunrise: number; sunset: number }
 interface ScaleSegment { kind: 'morning' | 'day' | 'evening'; start: number; end: number; folded: boolean; x0: number; x1: number }
-export interface DayScale { linear: boolean; width: number; segments: ScaleSegment[] }
+interface DayScale { linear: boolean; width: number; segments: ScaleSegment[] }
 
 function localTimeFromMs(ms: number, offsetMinutes: number): LocalTime | null {
   if (!Number.isFinite(ms) || !Number.isFinite(offsetMinutes)) return null;
@@ -245,7 +245,7 @@ export function minuteToX(scale: DayScale, minute: number): number {
   return segment.x0 + fraction * (segment.x1 - segment.x0);
 }
 
-export function xToMinute(scale: DayScale, x: number): number {
+function xToMinute(scale: DayScale, x: number): number {
   const clamped = Math.min(scale.width, Math.max(0, x));
   const segment = scale.segments.find(part => clamped < part.x1) ?? scale.segments.at(-1);
   if (!segment || segment.x1 <= segment.x0) return 0;

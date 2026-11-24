@@ -12,7 +12,7 @@ const WARM_REFRESH_OPTIONS: PositionOptions = {
   timeout: 6_000
 };
 
-export interface LocationControllerOptions {
+interface LocationControllerOptions {
   readonly map: Map;
   readonly publish: { message(message: string): void; detail(detail: string): void; busy(busy: boolean): void };
   readonly isAborted: () => boolean;
@@ -20,7 +20,7 @@ export interface LocationControllerOptions {
   readonly now?: () => number;
 }
 
-export interface LocationController {
+interface LocationController {
   locate(): void;
   reset(): void;
   dispose(): void;

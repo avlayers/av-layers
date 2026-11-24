@@ -38,9 +38,9 @@ export interface PreviewIntent {
 }
 
 type CompositeIntentDefaults = Pick<PreviewIntent, 'theme' | 'dockView' | 'cloudStyle' | 'rainStyle' | 'liftVisible' | 'cloudsVisible' | 'rainVisible' | 'isobarsVisible' | 'peeking' | 'pointViewMode'>;
-export type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
+type PreviewInitialIntent = Omit<PreviewIntent, keyof CompositeIntentDefaults> & Partial<CompositeIntentDefaults>;
 
-export interface ForecastView {
+interface ForecastView {
   readonly build: PinnedBuild | null;
   readonly selectedFrame: string | null;
   readonly pendingModel: ModelId | null;
@@ -53,14 +53,14 @@ export interface ForecastView {
   readonly playing: boolean;
 }
 
-export interface WindView {
+interface WindView {
   readonly status: WindStatus;
   readonly overview: boolean;
   readonly displayed: boolean;
   readonly supported: boolean;
 }
 
-export interface PointView {
+interface PointView {
   readonly open: boolean;
   readonly location: string;
   readonly detailLocation?: string;
@@ -71,13 +71,13 @@ export interface PointView {
   readonly wind: string;
 }
 
-export interface LocationView {
+interface LocationView {
   readonly message: string;
   readonly detail: string;
   readonly busy: boolean;
 }
 
-export interface NoticeView {
+interface NoticeView {
   readonly error: string;
   readonly tileError: string;
   readonly horizon: string;

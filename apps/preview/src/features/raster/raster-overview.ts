@@ -46,8 +46,8 @@ interface ImageSourceLike {
   updateImage?: (options: { image: ImageBitmap; coordinates: Coordinates }) => void;
   setCoordinates?: (coordinates: Coordinates) => void;
 }
-export interface RasterOverviewState { ready: number; total: number; failed: number }
-export interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
+interface RasterOverviewState { ready: number; total: number; failed: number }
+interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
 export interface RasterOverviewOptions { budget?: PreparationBudget; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
 
 const SELECTED_PREVIEW_SLOTS = 4;

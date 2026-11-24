@@ -24,7 +24,7 @@ const DEFAULT_CONCURRENCY = 8;
 const MAX_TRANSFER_ATTEMPTS = 3;
 const RETRYABLE_HTTP_STATUS = [408, 429, 500, 502, 503, 504];
 
-export interface SplitGribObjectReceipt {
+interface SplitGribObjectReceipt {
   readonly field: string;
   readonly hour: number;
   readonly level: number | null;
@@ -36,7 +36,7 @@ export interface SplitGribObjectReceipt {
   readonly normalization?: { units: string; scale: number };
 }
 
-export interface SplitGribTransportStats {
+interface SplitGribTransportStats {
   [key: string]: unknown;
   downloads: number;
   cacheHits: number;
@@ -44,7 +44,7 @@ export interface SplitGribTransportStats {
   retries: number;
 }
 
-export interface SplitGribAcquisitionOptions {
+interface SplitGribAcquisitionOptions {
   readonly cycle?: string;
   readonly activeIndices: Uint32Array;
   readonly cacheDir: string;
@@ -56,7 +56,7 @@ export interface SplitGribAcquisitionOptions {
   readonly offline?: boolean;
 }
 
-export interface SplitGribStaticGeometryCache {
+interface SplitGribStaticGeometryCache {
   readonly cycle: string;
   readonly terrainM: Float32Array;
   readonly missingTerrain: Uint8Array;
@@ -224,7 +224,7 @@ function frameValues({ values }: DecodedSplitGribField): Float32Array {
 }
 
 /** Build midpoint heights from configured interfaces and verify ground agreement. */
-export function computeSplitGribModelLevelHeights(source: SplitSource,
+function computeSplitGribModelLevelHeights(source: SplitSource,
   hsurf: Pick<DecodedSplitGribField, 'values' | 'missing'>,
   halfLevelsByLevel: ReadonlyMap<number, Pick<DecodedSplitGribField, 'values' | 'missing'>>,
   modelLevels: readonly number[] = source.modelLevels

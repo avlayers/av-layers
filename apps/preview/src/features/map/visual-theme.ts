@@ -18,10 +18,10 @@ export function isMapTheme(value: string | null | undefined): value is MapTheme 
   return typeof value === 'string' && THEME_SET.has(value);
 }
 
-export type LiftEncodingMode = 'smooth' | 'stepped-contour' | 'isoline-wash' | 'core-rim' | 'ink-outline' | 'classic-raw';
-export type RainEncodingMode = 'smooth-iso' | 'radar-glow' | 'hatch' | 'concentric-rings' | 'slant-streaks' | 'blueprint-hatch' | 'ink-hatch' | 'classic-raw';
+type LiftEncodingMode = 'smooth' | 'stepped-contour' | 'isoline-wash' | 'core-rim' | 'ink-outline' | 'classic-raw';
+type RainEncodingMode = 'smooth-iso' | 'radar-glow' | 'hatch' | 'concentric-rings' | 'slant-streaks' | 'blueprint-hatch' | 'ink-hatch' | 'classic-raw';
 
-export interface RgbaStop {
+interface RgbaStop {
   readonly at: number;
   readonly r: number;
   readonly g: number;
@@ -29,7 +29,7 @@ export interface RgbaStop {
   readonly a: number;
 }
 
-export interface MiniScaleStop {
+interface MiniScaleStop {
   readonly color: string;
   readonly label: string;
 }
@@ -43,13 +43,13 @@ export interface IsobarThemeTokens {
   readonly lowColor: string;
 }
 
-export interface RainPerimeterTokens {
+interface RainPerimeterTokens {
   readonly showerColor: string;
   readonly squallColor: string;
   readonly haloColor: string;
 }
 
-export interface ThemeOption {
+interface ThemeOption {
   readonly id: MapTheme;
   readonly label: string;
   readonly shortLabel: string;

@@ -7,7 +7,7 @@ import { isCloudStyleId, isRainStyleId, type CloudStyleChoice, type RainStyleCho
 import { isMapTheme, type MapTheme } from '../map/visual-theme';
 
 export type AltitudeReference = 'agl' | 'msl';
-export type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
+type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
 
 function finiteParam(value: string | null): number | null {
   if (value === null || value.trim() === '') return null;

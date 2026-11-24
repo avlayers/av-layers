@@ -1,6 +1,6 @@
 import type { Grid, SparseCoverage } from '@av/contracts';
 import type { TerrainAsset, TerrainStorage } from '../terrain/contract.js';
-import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, readSparsePreparedTerrain, type SparseTerrainOptions, type SparseTerrainRef } from '../terrain/sparse.js';
+import { MAX_SPARSE_TERRAIN_BYTES, prepareSparseTerrain, type SparseTerrainOptions, type SparseTerrainRef } from '../terrain/sparse.js';
 import { loadTerrainCatalog, stageSparsePreparedTerrain, loadSparsePreparedTerrain } from '../terrain/staging.js';
 import { openTerrainSourceCache } from '../terrain/source-cache.js';
 
@@ -8,8 +8,8 @@ const TERRAIN_PREPARATION_MS = 90 * 60_000;
 const SOURCE_CACHE_BYTES = 2 * 1024 ** 3;
 
 export interface WholeDomainTerrainOptions { catalogRef: TerrainAsset; storage: TerrainStorage; cacheOnly?: boolean; sourceCacheDir?: string; reuseFrom?: SparseTerrainOptions['reuseFrom'] }
-export interface WholeDomainTerrainInput { ref: SparseTerrainRef; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array }
-export interface PrepareWholeDomainTerrainInput { grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; out: string; signal?: AbortSignal }
+interface WholeDomainTerrainInput { ref: SparseTerrainRef; grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array }
+interface PrepareWholeDomainTerrainInput { grid: Grid; coverage: SparseCoverage; coverageDescriptor: Uint8Array; out: string; signal?: AbortSignal }
 
 /** Prepare or verify the reusable R2 terrain independently of a forecast cycle. */
 export async function ensureWholeDomainTerrain(options: WholeDomainTerrainOptions & Omit<PrepareWholeDomainTerrainInput, 'out'>): Promise<SparseTerrainRef> {
@@ -50,4 +50,4 @@ export function loadWholeDomainTerrain(input: WholeDomainTerrainInput & { out: s
     coverageDescriptor: input.coverageDescriptor, signal: input.signal, collect: input.collect });
 }
 
-export { readSparsePreparedTerrain };
+;

@@ -9,13 +9,13 @@ import { MAX_PACKED_COLUMN_BYTES } from './capacity.js';
 import { MAX_RASTER_WORKERS, RASTER_WORKER_RESOURCE_LIMITS } from '../raster-pool.js';
 
 type Output = { 'usable-lift-msl': GridField; 'usable-lift-agl': GridField };
-export interface DerivePoolInput {
+interface DerivePoolInput {
   plan: WholeDomainGrid; coverage: SparseCoverage; activeIndices: Uint32Array; maxLevels: number;
   terrain: { elevationM: Float32Array; valid: Uint8Array }; output: Output; workers: number;
   /** Bytes copied into shared buffers for the frame and native clearance together. */
   maxFrameCopyBytes: number; signal?: AbortSignal;
 }
-export interface DeriveJob {
+interface DeriveJob {
   generation: number; frame: NormalizedFrame; time: { intervalStart: string; validTime: string };
   daylightOnly?: boolean; nativeClearance?: TerrainColumnNativeClearance; deadlineAt?: number;
 }

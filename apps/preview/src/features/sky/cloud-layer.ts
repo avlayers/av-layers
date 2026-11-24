@@ -231,7 +231,7 @@ export function renderSmoothCloudRgba(
   }
 }
 
-export type CloudContourGeoJson = {
+type CloudContourGeoJson = {
   readonly type: 'FeatureCollection';
   readonly features: Array<{
     readonly type: 'Feature';
