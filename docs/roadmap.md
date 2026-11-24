@@ -136,7 +136,7 @@ and [serving budgets](serving-budgets.md):
   publish Tier 2 boundary-layer wind, vertical wind shear, and `bs-ratio`
   thermal climbability.
 
-## 5. XC Skies basic-view parity (Thermal MSL / AGL presentation & point UX)
+## 5. Soaring map presentation (Thermal MSL / AGL presentation & point UX)
 
 - **Expose terrain elevation (`terrainM`) on every `/sample` frame:** preserve
   the terrain height already written into `usable-lift-msl` on `STATUS_NO_LIFT`

@@ -2,7 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { seamInsertBefore, WEATHER_CEILING_ID, windInsertBefore } from '@av/client';
 
 export const RAIN_CUFF_LAYER_ID = 'av-rain-cuff';
-const FIRST_VECTOR_LINE_ID = 'coastline';
+const FIRST_VECTOR_LINE_ID = 'waterway';
 const FIRST_VECTOR_SYMBOL_ID = 'aero-strip';
 const FALLBACK_SYMBOL_ID = 'place-village';
 
@@ -11,10 +11,7 @@ interface ImageSourceInternal {
   readonly _imageDirty?: boolean;
 }
 
-/**
- * Inserts vector weather lines (cloud contours, isobar lines, storm perimeters) above roads,
- * borders, and weather rasters, while keeping them strictly below airport, peak, and place labels.
- */
+/** Inserts vector weather lines above roads, borders, and weather rasters, and below airport, peak, and place labels. */
 export function weatherContourBeforeId(map: MapLibreMap): string | undefined {
   if (typeof map.getLayer === 'function') {
     if (map.getLayer(FIRST_VECTOR_SYMBOL_ID)) return FIRST_VECTOR_SYMBOL_ID;
@@ -23,10 +20,7 @@ export function weatherContourBeforeId(map: MapLibreMap): string | undefined {
   return windInsertBefore(map);
 }
 
-/**
- * Inserts the raster storm cuff (`av-rain-cuff`) above thermal lift (`av-overlay-*` + `av-hillshade-top`)
- * and cloud decks (`av-sky-clouds`), while keeping it below coastlines, roads, borders, and labels.
- */
+/** Inserts the raster storm cuff (`av-rain-cuff`) above thermal lift and cloud decks, and below vector waterways, roads, borders, and labels. */
 export function rainCuffBeforeId(map: MapLibreMap): string | undefined {
   if (typeof map.getLayer === 'function' && map.getLayer(FIRST_VECTOR_LINE_ID)) {
     return FIRST_VECTOR_LINE_ID;
@@ -34,11 +28,7 @@ export function rainCuffBeforeId(map: MapLibreMap): string | undefined {
   return weatherContourBeforeId(map);
 }
 
-/**
- * Inserts raster cloud cover (`av-sky-clouds`) strictly AFTER `av-hillshade-top` so dynamic
- * `RasterOverlay` thermal-lift slots (`av-overlay-N` inserted before `av-hillshade-top`) never
- * bury clouds on `xcskies` or high-lift views, while staying below `av-rain-cuff`, roads, and labels.
- */
+/** Inserts raster cloud cover (`av-sky-clouds`) after `av-hillshade-top` and before `av-rain-cuff`, vector lines, and labels. */
 export function cloudRasterBeforeId(map: MapLibreMap): string | undefined {
   if (typeof map.getLayer === 'function') {
     if (map.getLayer(RAIN_CUFF_LAYER_ID)) return RAIN_CUFF_LAYER_ID;
@@ -50,7 +40,7 @@ export function cloudRasterBeforeId(map: MapLibreMap): string | undefined {
   return seamInsertBefore(map);
 }
 
-/** Inserts isobar line numbers and H/L pressure centers just below wind streamlines/barbs. */
+/** Inserts isobar line numbers and H/L pressure centers below wind streamlines and barbs. */
 export function isobarLabelBeforeId(map: MapLibreMap): string | undefined {
   return windInsertBefore(map);
 }
@@ -64,9 +54,8 @@ export function isBitmapPendingOnImageSource(map: MapLibreMap, sourceId: string,
 }
 
 /**
- * Safely manages owned `ImageBitmap` instances handed to MapLibre's `ImageSource.updateImage()`.
- * MapLibre defers `gl.texImage2D(..., this.image)` until the next `Map._render()` frame; closing
- * an `ImageBitmap` synchronously detaches `source.image` mid-render and turns the WebGL canvas black.
+ * Retires `ImageBitmap` instances handed to `ImageSource.updateImage()` after MapLibre uploads
+ * `this.image` on the next `Map._render()` frame.
  */
 export class OwnedImageBitmapRetirer {
   private shown: ImageBitmap | null = null;
@@ -99,7 +88,7 @@ export class OwnedImageBitmapRetirer {
     }
   }
 
-  /** Call strictly AFTER `map.removeLayer` and `map.removeSource` have detached the WebGL source. */
+  /** Call after `map.removeLayer` and `map.removeSource` have detached the WebGL source. */
   releaseAllAfterSourceRemoved(): void {
     if (this.shown) {
       this.shown.close();

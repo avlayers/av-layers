@@ -15,7 +15,7 @@ export interface WindControlState {
 export const WIND_STYLES: readonly WindStyle[] = ['trails', 'barbs', 'hybrid'];
 export const WIND_STOPS: readonly number[] = WIND_HEIGHTS;
 export const WIND_STYLE_LABELS: Record<WindStyle, string> = {
-  trails: 'White trails', barbs: 'XC barbs', hybrid: 'Flow and sparse barbs'
+  trails: 'White trails', barbs: 'WMO barbs', hybrid: 'Flow and sparse barbs'
 };
 export const WIND_STATUS_LABELS: Record<WindStatus, string> = {
   ready: '', loading: 'Loading wind', unavailable: 'Wind unavailable'

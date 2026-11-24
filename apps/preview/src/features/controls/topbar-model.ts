@@ -23,7 +23,7 @@ export const THEME_CHIP_LABELS: Readonly<Record<MapTheme, string>> = {
   convergence: 'Converge',
   blueprint: 'Blueprint',
   cockpit: 'Cockpit',
-  xcskies: 'XC Skies'
+  classic: 'Classic'
 };
 
 export const WIND_ENCODING_OPTIONS: ReadonlyArray<{ readonly id: WindStyle; readonly label: string; readonly summary: string }> = [
@@ -32,14 +32,12 @@ export const WIND_ENCODING_OPTIONS: ReadonlyArray<{ readonly id: WindStyle; read
   { id: 'hybrid', label: 'Mix', summary: WIND_STYLE_LABELS.hybrid }
 ];
 
-/** Formats the active wind altitude for compact badges and hover cards. */
 export function formatWindLevelLabel(height: WindHeight, units: UnitSystem = 'metric'): string {
   if (height === 'surface') return 'SFC';
   if (height === 'lift') return 'TOL';
   return `${windStopLabel(height, units)} ${units === 'imperial' ? 'ft' : 'm'} AGL`;
 }
 
-/** Returns the approximate horizontal grid spacing in integer kilometers for a configured model. */
 export function modelApproxKm(modelId: string | null | undefined): number | null {
   if (!modelId) return null;
   const option = MODEL_OPTIONS.find(item => item.modelId === modelId);
@@ -47,7 +45,6 @@ export function modelApproxKm(modelId: string | null | undefined): number | null
   return Math.max(1, Math.round(option.nominalDxMeters / 1000));
 }
 
-/** Formats a compact horizontal resolution badge such as `'28 km'`, `'7 km'`, `'3 km'`, or `'1 km'`. */
 export function formatModelResolutionKm(modelId: string | null | undefined): string | null {
   const km = modelApproxKm(modelId);
   return km !== null ? `${km} km` : null;
@@ -63,12 +60,10 @@ const MODEL_REGION_SUBTITLES: Readonly<Record<ConfiguredModelId, string>> = {
   'wrf-va-1km': 'Northern Virginia'
 };
 
-/** Returns a concise geographic region subtitle for the model picker menu. */
 export function modelRegionSubtitle(modelId: string | null | undefined): string | undefined {
   return modelId && modelId in MODEL_REGION_SUBTITLES ? MODEL_REGION_SUBTITLES[modelId as ConfiguredModelId] : undefined;
 }
 
-/** Strips inline `'1 km'` and trailing parenthetical qualifiers from model labels when paired with a dedicated km badge. */
 export function cleanModelDisplayLabel(label: string): string {
   return label
     .replace(/\s+\d+(?:\.\d+)?\s*km\b/i, '')
@@ -116,8 +111,8 @@ export const DOCK_CHANNELS: readonly ChannelDescriptor[] = [
     id: 'toggle-lift',
     shortLabel: 'Lift',
     title: 'Thermal Lift',
-    detail: theme => theme === 'xcskies'
-      ? 'Usable thermal ceiling in classic 22-step XC Skies duckies'
+    detail: theme => theme === 'classic'
+      ? 'Usable thermal ceiling in classic 22-step soaring palette'
       : `Usable thermal ceiling (${themeOption(theme).shortLabel} palette)`
   },
   {

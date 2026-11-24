@@ -129,7 +129,7 @@ export function remapRgbaInPlace(
   maskPixels?: Uint8ClampedArray | null,
   scratchArg?: RemapScratch
 ): void {
-  if (theme === 'xcskies') return;
+  if (theme === 'classic') return;
   const count = width * height;
   if (count <= 0) return;
   const scratch = scratchArg ?? (defaultScratch ??= createRemapScratch(count));
@@ -169,7 +169,6 @@ export function remapRgbaInPlace(
     }
   }
 
-  // Fast-path empty/dry/masked tiles in O(1) without running separable blur or ramp passes.
   if (maxX < minX) {
     pixels.fill(0, 0, count * 4);
     return;
@@ -374,10 +373,7 @@ function extractPixels(bitmap: ImageBitmap, canvas: OffscreenCanvas): { ctx: Off
   return { ctx, imageData: ctx.getImageData(0, 0, w, h) };
 }
 
-/**
- * Decodes WebP bytes, remaps pixels in place inside an isolated workspace, and
- * transfers an ImageBitmap with zero WebP/PNG re-encoding.
- */
+/** Decodes WebP bytes, remaps pixels in place inside `workspace`, and returns an `ImageBitmap`. */
 export async function decodeAndRemapBitmap(
   workspace: RemapBitmapWorkspace,
   data: ArrayBuffer,
@@ -385,7 +381,7 @@ export async function decodeAndRemapBitmap(
   theme: MapTheme,
   maskData?: ArrayBuffer | null
 ): Promise<ImageBitmap> {
-  if (theme === 'xcskies' || data.byteLength <= 48) {
+  if (theme === 'classic' || data.byteLength <= 48) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const [bitmap, maskBitmap] = await Promise.all([

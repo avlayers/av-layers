@@ -199,10 +199,7 @@ async function runFallback(
   }
 }
 
-/**
- * Decodes and remaps a forecast tile off the main thread, returning a GPU-ready
- * ImageBitmap with foreground/background priority scheduling and zero WebP re-encoding.
- */
+/** Decodes and remaps a forecast tile into a GPU-ready `ImageBitmap` with priority scheduling. */
 export function remapTileToBitmap(
   data: ArrayBuffer,
   kind: RemapKind,
@@ -211,7 +208,7 @@ export function remapTileToBitmap(
   options: RemapTileOptions = {}
 ): Promise<ImageBitmap> {
   if (options.signal?.aborted) return Promise.reject(abortError());
-  if (theme === 'xcskies' || data.byteLength <= 48 || !canRemapTiles()) {
+  if (theme === 'classic' || data.byteLength <= 48 || !canRemapTiles()) {
     return createImageBitmap(new Blob([data], { type: 'image/webp' }));
   }
   const slots = ensurePool();
