@@ -42,7 +42,10 @@ export const publicationShape = {
   frames: z.array(frameSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES), layers: z.array(layerIdSchema).min(1).max(LAYER_IDS.length),
   artifacts: z.array(artifactSchema).min(1).max(MAX_JSON_CONTAINER_ENTRIES),
   source: z.object({ provider: key, provenanceKey: key, provenanceSha256: sha256 }).catchall(z.unknown()),
-  tool: z.looseObject({ useStoredMslNoLift: z.literal(true).optional() }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
+  tool: z.looseObject({
+    useStoredMslNoLift: z.literal(true).optional(),
+    profileDewpointReference: z.literal('liquid-vapor-pressure').optional()
+  }), palettes: z.array(key).min(1), metrics: z.record(z.string(), z.unknown())
 };
 
 const provenanceIdentity = { model: modelIdSchema, buildId: key, cycle: timestamp };

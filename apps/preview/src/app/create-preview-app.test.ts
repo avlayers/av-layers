@@ -36,6 +36,8 @@ vi.mock('../features/lazy', () => ({
       async open(point: unknown) { session.current = { build: options.getBuild(), point }; },
       close() { session.current = null; },
       updateSelection() {}, followMapFrame(frame: string | null) { session.frameId = frame; },
+      formatWindTime(validMs: number) { return new Date(validMs).toISOString(); },
+      renderBuildDetails() {},
       async loadRange() {}, suspend() {}, dispose() {}
     };
     mocks.point = session;

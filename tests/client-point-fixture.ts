@@ -46,6 +46,7 @@ function attachProfiles(manifest: ManifestV5, prefix: string, levels = PROFILE_L
     coverageHash: native.coverage.hash, blockCount: native.samples.blockCount, storedCells: native.samples.storedCells,
     groups: [{ firstFrame: 0, frameCount: frames, shards }]
   };
+  manifest.tool = { ...manifest.tool, profileDewpointReference: 'liquid-vapor-pressure' };
 }
 
 /** Profile-backed tiny GFS grid. */
@@ -62,7 +63,9 @@ export function retainedPointBuild(): PinnedBuild {
 
 /** Retained GFS publication whose native surface also serves column profiles. */
 export function retainedProfileBuild(): PinnedBuild {
-  return fixtureProfileBuild({ frameHours: retainedHours, mapFrameCount: 24 });
+  const build = fixtureProfileBuild({ frameHours: retainedHours, mapFrameCount: 24 });
+  delete build.manifest.tool.profileDewpointReference;
+  return build;
 }
 
 /** Older v5 publication without an explicit map prefix. */

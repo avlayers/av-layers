@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ApiClient } from './client-api';
-import { MAX_POINT_RESPONSE_BYTES, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from '@av/contracts';
+import { MAX_POINT_RESPONSE_BYTES, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, estimateProfileResponseBytes, manifestV5Schema, maxProfileFrames } from '@av/contracts';
+import { WIND_FINE_CELL_BYTES, windLayout } from '@av/contracts/wind-data';
 import { pointLiftExpectation, pointSeriesSelection } from './client-point';
+import { evaluateFineTerrainContributors, PointTerrainCache } from './client-point-terrain';
 import type { PointSeries } from './client-types';
 import { fixturePointBuild, fixturePointFetch, fixtureProfileBuild, retainedProfileBuild, retainedPointBuild, retainedUnprefixedPointBuild, fixturePointSample } from '../../../tests/client-point-fixture';
 
@@ -420,5 +422,354 @@ describe('cached point forecast pages', () => {
     expect(recovered.frames[0].layers['thermal-top-msl'].value).toBe(2500);
     const first = new URL(String(fetchImpl.mock.calls[0][0])).searchParams.get('frame');
     expect(new URL(String(fetchImpl.mock.calls[1][0])).searchParams.get('frame')).toBe(first);
+  });
+});
+
+describe('weather-independent static fine-tile point terrain (Finding 2)', () => {
+  function makeTileView(tileSize: number, writer: (row: number, col: number, view: DataView, offset: number) => void): DataView {
+    const bytes = new Uint8Array(tileSize * tileSize * WIND_FINE_CELL_BYTES);
+    const view = new DataView(bytes.buffer);
+    for (let r = 0; r < tileSize; r++) {
+      for (let c = 0; c < tileSize; c++) {
+        const pos = (r * tileSize + c) * WIND_FINE_CELL_BYTES;
+        view.setUint8(pos + 8, STATUS_VALID | (STATUS_VALID << 2) | 0x10);
+        writer(r, c, view, pos);
+      }
+    }
+    return view;
+  }
+
+  it('keeps 1,240 m bilinear DSM elevation invariant when a weather donor is unavailable or no-lift, and handles missing terrain donors, 0 m sea level, coverage edges, and 4-tile corners', () => {
+    const contributors = [
+      { row: 0, column: 0, weight: 0.36 },
+      { row: 0, column: 1, weight: 0.24 },
+      { row: 1, column: 0, weight: 0.24 },
+      { row: 1, column: 1, weight: 0.16 },
+    ];
+    const dsm = [
+      [1000, 1200],
+      [1400, 1600],
+    ];
+    // Hour 1: last weather donor marked STATUS_UNAVAILABLE while terrain donor stays STATUS_VALID
+    const missingWeatherTile = makeTileView(64, (r, c, view, pos) => {
+      const elev = dsm[r]?.[c] ?? 500;
+      view.setFloat32(pos, elev, true);
+      const liftStatus = r === 1 && c === 1 ? STATUS_UNAVAILABLE : STATUS_NO_LIFT;
+      view.setUint8(pos + 8, STATUS_VALID | (liftStatus << 2) | 0x10);
+    });
+    // Hour 2: all four weather donors valid
+    const fullWeatherTile = makeTileView(64, (r, c, view, pos) => {
+      const elev = dsm[r]?.[c] ?? 500;
+      view.setFloat32(pos, elev, true);
+      view.setFloat32(pos + 4, elev + 300, true);
+      view.setUint8(pos + 8, STATUS_VALID | (STATUS_VALID << 2) | 0x10);
+    });
+
+    const evalWith = (tile: DataView) => evaluateFineTerrainContributors({
+      contributors,
+      fineGridWidth: 128,
+      fineTileSize: 64,
+      resolveSlot: logical => logical,
+      tiles: new Map([[0, tile]]),
+      surfaceId: 'icon-eu-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    });
+    const hour1 = evalWith(missingWeatherTile);
+    const hour2 = evalWith(fullWeatherTile);
+    expect(hour1).toMatchObject({ status: 'valid', interpolated: true, surfaceId: 'icon-eu-fine', surface: 'DSM', verticalDatum: 'EGM2008' });
+    expect(hour1.elevationM).toBeCloseTo(1240, 6);
+    expect(hour2.elevationM).toBeCloseTo(1240, 6);
+
+    // Missing terrain donor falls back to nearest contributor (1,000 m, interpolated: false)
+    const missingTerrainTile = makeTileView(64, (r, c, view, pos) => {
+      const elev = dsm[r]?.[c] ?? 0;
+      view.setFloat32(pos, elev, true);
+      const terrainSt = r === 1 && c === 1 ? STATUS_UNAVAILABLE : STATUS_VALID;
+      view.setUint8(pos + 8, terrainSt | (STATUS_UNAVAILABLE << 2) | 0x10);
+    });
+    expect(evalWith(missingTerrainTile)).toMatchObject({ elevationM: 1000, status: 'valid', interpolated: false });
+
+    // Valid 0 m sea-level elevation stays numeric zero
+    const seaLevelTile = makeTileView(64, (_r, _c, view, pos) => {
+      view.setFloat32(pos, 0, true);
+      view.setUint8(pos + 8, STATUS_VALID | (STATUS_NO_LIFT << 2) | 0x10);
+    });
+    expect(evalWith(seaLevelTile)).toMatchObject({ elevationM: 0, status: 'valid', interpolated: true });
+
+    // Nearest contributor outside coverage mask returns outside-domain
+    const outsideEdgeTile = makeTileView(64, (r, c, view, pos) => {
+      view.setFloat32(pos, 500, true);
+      const outputBit = r === 0 && c === 0 ? 0 : 0x10;
+      view.setUint8(pos + 8, (outputBit ? STATUS_VALID : STATUS_OUTSIDE) | (STATUS_OUTSIDE << 2) | outputBit);
+    });
+    expect(evalWith(outsideEdgeTile)).toMatchObject({ elevationM: null, status: 'outside-domain', interpolated: false });
+
+    // Four-tile corner seam across row 63..64 and column 63..64
+    const cornerContributors = [
+      { row: 63, column: 63, weight: 0.25 },
+      { row: 63, column: 64, weight: 0.25 },
+      { row: 64, column: 63, weight: 0.25 },
+      { row: 64, column: 64, weight: 0.25 },
+    ];
+    const cornerTiles = new Map<number, DataView>([
+      [0, makeTileView(64, (r, c, view, pos) => { if (r === 63 && c === 63) view.setFloat32(pos, 2100, true); })],
+      [1, makeTileView(64, (r, c, view, pos) => { if (r === 63 && c === 0) view.setFloat32(pos, 2200, true); })],
+      [2, makeTileView(64, (r, c, view, pos) => { if (r === 0 && c === 63) view.setFloat32(pos, 2300, true); })],
+      [3, makeTileView(64, (r, c, view, pos) => { if (r === 0 && c === 0) view.setFloat32(pos, 2589.088, true); })],
+    ]);
+    const cornerResult = evaluateFineTerrainContributors({
+      contributors: cornerContributors,
+      fineGridWidth: 128,
+      fineTileSize: 64,
+      resolveSlot: logical => logical,
+      tiles: cornerTiles,
+      surfaceId: 'icon-eu-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    });
+    expect(cornerResult.interpolated).toBe(true);
+    expect(cornerResult.elevationM).toBeCloseTo(2297.272, 4);
+  });
+
+  it('loads fine-tile siteTerrain via ApiClient.pointSeries independently of interpolated weather, caches across loads, handles 404 companion, and aborts stale point switches', async () => {
+    const build = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 2 });
+    build.manifest.mapData = { sha256: 'c'.repeat(64), bytes: 512 };
+    const native = build.manifest.surfaces.find(s => s.kind === 'native')!;
+    const fine = build.manifest.surfaces.find(s => s.kind === 'fine')!;
+    const windTileSize = 16;
+    const fineTileSize = 64;
+    const wLayout = windLayout(native.grid.width, native.grid.height, windTileSize, 4);
+    const fLayout = windLayout(fine.grid.width, fine.grid.height, fineTileSize);
+    const makeShards = (layout: ReturnType<typeof windLayout>) => Array.from({ length: layout.pages }, (_, page) => ({
+      sha256: 'a'.repeat(64),
+      indexSha256: 'b'.repeat(64),
+      count: layout.pageCount(page),
+      bytes: layout.pageCount(page) * layout.chunkBytes,
+    }));
+    const descriptor = {
+      version: 3 as const,
+      frame: 'f001',
+      levels: 4,
+      tileSize: windTileSize,
+      fineTileSize: fineTileSize as 64,
+      wind: makeShards(wLayout),
+      fine: makeShards(fLayout),
+    };
+    const fineTileBytes = new Uint8Array(fineTileSize * fineTileSize * WIND_FINE_CELL_BYTES);
+    const fineTileView = new DataView(fineTileBytes.buffer);
+    for (let i = 0; i < fineTileBytes.byteLength; i += WIND_FINE_CELL_BYTES) {
+      fineTileView.setFloat32(i, 2297.272, true);
+      fineTileView.setFloat32(i + 4, 0, true);
+      fineTileView.setUint8(i + 8, STATUS_VALID | (STATUS_NO_LIFT << 2) | 0x10);
+    }
+
+    let dataCalls = 0;
+    const fetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      init?.signal?.throwIfAborted();
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/data/f001')) {
+        dataCalls++;
+        return new Response(JSON.stringify(descriptor), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.includes('/data/f001/fine/')) {
+        dataCalls++;
+        return new Response(fineTileBytes, { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      const payload = fixturePointFetch(build, String(input)) as Record<string, unknown>;
+      if (url.pathname.endsWith('/sample')) {
+        // All map frames interpolated or no-usable-lift so pointMapLift.terrainM === null
+        const sample = payload as ReturnType<typeof fixturePointSample>;
+        for (const frame of sample.frames) {
+          frame.layers['usable-lift-msl'] = { ...frame.layers['usable-lift-msl']!, value: 2427.4957, interpolated: true };
+          frame.layers['usable-lift-agl'] = { ...frame.layers['usable-lift-agl']!, value: 130.2237, interpolated: true };
+        }
+      }
+      return new Response(JSON.stringify(payload), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const api = new ApiClient({ baseUrl: 'https://api.test', fetchImpl, now: () => Date.parse(build.manifest.createdAt) });
+    const araPoint = { lat: 40.4186, lon: 44.4547 };
+    const loader = api.pointSeries(build, araPoint);
+    const first = await loader.load('day');
+    expect(first.siteTerrain?.status).toBe('valid');
+    expect(first.siteTerrain?.elevationM).toBeCloseTo(2297.272, 2);
+    const callsAfterFirst = dataCalls;
+    expect(callsAfterFirst).toBeGreaterThanOrEqual(2);
+    // Second range load reuses cached siteTerrain with zero additional /data/ reads
+    const second = await loader.load('forecast');
+    expect(second.siteTerrain).toEqual(first.siteTerrain);
+    expect(dataCalls).toBe(callsAfterFirst);
+
+    // Missing companion (404) degrades cleanly and returns the point series
+    const missingBuild = fixtureProfileBuild({ frameHours: [1], mapFrameCount: 1 });
+    missingBuild.manifest.mapData = { sha256: 'd'.repeat(64), bytes: 512 };
+    const api404 = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.includes('/data/')) return new Response(null, { status: 404 });
+        return new Response(JSON.stringify(fixturePointFetch(missingBuild, String(input))));
+      },
+      now: () => Date.parse(missingBuild.manifest.createdAt),
+    });
+    const fallbackSeries = await api404.pointSeries(missingBuild, point).load('day');
+    expect(fallbackSeries.siteTerrain).toBeUndefined();
+    expect(fallbackSeries.frames).toHaveLength(1);
+
+    // Closing a point loader aborts an in-flight terrain tile request immediately
+    let terrainSignal: AbortSignal | undefined;
+    const slowBuild = fixtureProfileBuild({ frameHours: [1], mapFrameCount: 1 });
+    slowBuild.manifest.mapData = { sha256: 'e'.repeat(64), bytes: 512 };
+    const apiSlow = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.includes('/data/')) {
+          terrainSignal = init?.signal ?? undefined;
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+          });
+        }
+        return new Response(JSON.stringify(fixturePointFetch(slowBuild, String(input))));
+      },
+      now: () => Date.parse(slowBuild.manifest.createdAt),
+    });
+    const slowLoader = apiSlow.pointSeries(slowBuild, araPoint);
+    const pendingSlow = expect(slowLoader.load('day')).rejects.toThrow();
+    await vi.waitFor(() => expect(terrainSignal?.aborted).toBe(false));
+    slowLoader.dispose();
+    await pendingSlow;
+    expect(terrainSignal?.aborted).toBe(true);
+
+    // Concurrent clicks on the same build coalesce the descriptor fetch even if the first caller aborts
+    let descFetches = 0;
+    let releaseDesc!: () => void;
+    const descGate = new Promise<void>(resolve => { releaseDesc = resolve; });
+    const sharedCache = new PointTerrainCache();
+    const coalescedFetchImpl = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith(`/data/${build.manifest.frames[0]!.id}`)) {
+        descFetches++;
+        await descGate;
+        init?.signal?.throwIfAborted();
+        return new Response(JSON.stringify(descriptor), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.pathname.includes('/fine/')) {
+        return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+      }
+      throw new Error('Unexpected URL');
+    });
+    const abortFirst = new AbortController();
+    const firstRead = sharedCache.read('https://api.test', coalescedFetchImpl, build, araPoint, abortFirst.signal);
+    const secondRead = sharedCache.read('https://api.test', coalescedFetchImpl, build, { lat: 40.42, lon: 44.46 });
+    await vi.waitFor(() => expect(descFetches).toBe(1));
+    abortFirst.abort(new DOMException('Aborted', 'AbortError'));
+    await expect(firstRead).rejects.toThrow();
+    releaseDesc();
+    const resolvedSecond = await secondRead;
+    expect(resolvedSecond?.status).toBe('valid');
+    expect(descFetches).toBe(1);
+
+    // 1) Bounded terrain deadline: unresponsive terrain settles within 30 ms deadline so weather completes well under 180 ms
+    const deadlineBuild = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 1 });
+    deadlineBuild.manifest.model = 'icon-eu';
+    deadlineBuild.manifest.surfaces = structuredClone(build.manifest.surfaces);
+    deadlineBuild.manifest.descriptors.bounds = build.manifest.descriptors.bounds;
+    deadlineBuild.manifest.mapData = { sha256: 'f'.repeat(64), bytes: 512 };
+    const apiDeadline = new ApiClient({
+      baseUrl: 'https://api.test',
+      requestTimeoutMs: 30,
+      fetchImpl: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.includes('/data/')) {
+          return new Promise<Response>(() => {}); // completely unresponsive terrain endpoint
+        }
+        return new Response(JSON.stringify(fixturePointFetch(deadlineBuild, String(input))));
+      },
+      now: () => Date.parse(deadlineBuild.manifest.createdAt),
+    });
+    const progressLoadingStates: boolean[] = [];
+    const t0 = performance.now();
+    const completedWeather = await apiDeadline.pointSeries(deadlineBuild, araPoint).load('day', undefined, {
+      onProgress(_payload, _total, isLoading) {
+        progressLoadingStates.push(isLoading);
+      },
+    });
+    expect(performance.now() - t0).toBeLessThan(180);
+    expect(completedWeather.frames).toHaveLength(1);
+    expect(progressLoadingStates.at(-1)).toBe(false);
+
+    // 2) Transient 503 retries on forecast load and recovers Mount Ara terrain (unlike authoritative 404)
+    let terrainAttempts503 = 0;
+    const retryBuild = structuredClone(deadlineBuild);
+    retryBuild.manifest.buildId = '20261123T000000Z-retry-503';
+    const api503 = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async input => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/data/${retryBuild.manifest.frames[0]!.id}`)) {
+          terrainAttempts503++;
+          if (terrainAttempts503 === 1) return new Response(null, { status: 503 });
+          return new Response(JSON.stringify({ ...descriptor, frame: retryBuild.manifest.frames[0]!.id }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.pathname.includes('/fine/')) {
+          return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+        }
+        return new Response(JSON.stringify(fixturePointFetch(retryBuild, String(input))));
+      },
+      now: () => Date.parse(retryBuild.manifest.createdAt),
+    });
+    const retryLoader = api503.pointSeries(retryBuild, araPoint);
+    const after503Day = await retryLoader.load('day');
+    expect(after503Day.siteTerrain).toBeUndefined();
+    expect(terrainAttempts503).toBe(1);
+    const after503Forecast = await retryLoader.load('forecast');
+    expect(terrainAttempts503).toBe(2);
+    expect(after503Forecast.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+
+    // 3) Zero-overlapping-waiter point switch: cancel A while descriptor is loading, then open B before A settles
+    let switchDescCalls = 0;
+    const switchGates: (() => void)[] = [];
+    const switchBuild = structuredClone(deadlineBuild);
+    switchBuild.manifest.buildId = '20261123T000000Z-switch-ab';
+    const apiSwitch = new ApiClient({
+      baseUrl: 'https://api.test',
+      fetchImpl: async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith(`/data/${switchBuild.manifest.frames[0]!.id}`)) {
+          const callNum = ++switchDescCalls;
+          if (callNum === 1) {
+            await new Promise<void>(resolve => { switchGates.push(resolve); });
+            init?.signal?.throwIfAborted();
+          }
+          return new Response(JSON.stringify({ ...descriptor, frame: switchBuild.manifest.frames[0]!.id }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.pathname.includes('/fine/')) {
+          return new Response(Uint8Array.from(fineTileBytes), { status: 200, headers: { 'content-type': 'application/octet-stream' } });
+        }
+        return new Response(JSON.stringify(fixturePointFetch(switchBuild, String(input))));
+      },
+      now: () => Date.parse(switchBuild.manifest.createdAt),
+    });
+    const pointALoader = apiSwitch.pointSeries(switchBuild, { lat: 40.42, lon: 44.46 });
+    const pendingA = pointALoader.load('day');
+    await vi.waitFor(() => expect(switchDescCalls).toBe(1));
+    pointALoader.dispose();
+    await expect(pendingA).rejects.toThrow();
+
+    // Point A's underlying fetch has NOT settled yet (switchGates[0] still pending), and Point B opens immediately
+    const pointBLoader = apiSwitch.pointSeries(switchBuild, araPoint);
+    const bDay = await pointBLoader.load('day');
+    expect(switchDescCalls).toBe(2);
+    expect(bDay.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+    const bForecast = await pointBLoader.load('forecast');
+    expect(bForecast.siteTerrain?.elevationM).toBeCloseTo(2297.272, 3);
+    switchGates.forEach(release => release());
   });
 });

@@ -61,9 +61,48 @@ export const saturationVaporPressureHpa = (tempC: number): number => {
   );
 };
 
+/**
+ * Murphy & Koop (2005) saturation vapor pressure e_si (hPa) over hexagonal ice for T <= 0 °C,
+ * joining liquid-water saturation continuously at 0 °C.
+ */
+export const saturationVaporPressureIceHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  const tk = tempC + ZERO_CELSIUS_K;
+  if (!(tk > 0)) return NaN;
+  const lnPa = 9.550426 - 5723.265 / tk + 3.53068 * Math.log(tk) - 0.00728332 * tk;
+  return Math.exp(lnPa) / THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal;
+};
+
+/**
+ * Mixed-phase saturation vapor pressure (hPa): pure liquid water at T >= 0 °C,
+ * pure ice at T <= -23 °C, and quadratic mixed-phase ramp across -23 °C < T < 0 °C.
+ */
+export const mixedPhaseSaturationVaporPressureHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  if (tempC <= -23) return saturationVaporPressureIceHpa(tempC);
+  const liquidFraction = ((tempC + 23) / 23) ** 2;
+  return (
+    liquidFraction * saturationVaporPressureHpa(tempC) +
+    (1 - liquidFraction) * saturationVaporPressureIceHpa(tempC)
+  );
+};
+
 /** Relative humidity (%) over liquid water from temperature and dewpoint (°C). */
 export function relativeHumidityFromTempAndDewpointPercent(temperatureC: number, dewPointC: number): number {
   return Math.max(0, Math.min(100, 100 * saturationVaporPressureHpa(dewPointC) / saturationVaporPressureHpa(temperatureC)));
+}
+
+/**
+ * Phase-aware cloud relative humidity (%) comparing vapor pressure from Bolton dewpoint
+ * against mixed-phase liquid/ice saturation at ambient temperature.
+ */
+export function effectiveCloudHumidityPercent(temperatureC: number, dewPointC: number): number {
+  return Math.max(
+    0,
+    Math.min(100, (100 * saturationVaporPressureHpa(dewPointC)) / mixedPhaseSaturationVaporPressureHpa(temperatureC))
+  );
 }
 
 /**
@@ -79,18 +118,127 @@ export const saturationMixingRatioGPerKg = (pressureHpa: number, tempC: number):
 };
 
 /**
- * Dewpoint temperature (°C) from ambient temperature (°C) and relative humidity (%).
+ * GFS v16 isobaric relative-humidity reference saturation vapor pressure (hPa):
+ * pure liquid water at T >= 0 °C, pure ice at T <= -20 °C, and a linear ramp across -20 °C < T < 0 °C.
  */
-export const dewpointFromTempAndRhC = (tempC: number, rhPercent: number): number => {
-  if (!Number.isFinite(tempC) || !Number.isFinite(rhPercent) || rhPercent <= 0) {
-    return NaN;
-  }
-  const clampedRh = Math.min(100, Math.max(0.1, rhPercent));
-  const es = saturationVaporPressureHpa(tempC);
-  const e = (es * clampedRh) / 100;
-  const lnRatio = Math.log(e / SATURATION_SCALE_HPA);
+export const gfsV16SaturationVaporPressureHpa = (tempC: number): number => {
+  if (!Number.isFinite(tempC)) return NaN;
+  if (tempC >= 0) return saturationVaporPressureHpa(tempC);
+  if (tempC <= -20) return saturationVaporPressureIceHpa(tempC);
+  const liquidWeight = (tempC + 20) / 20;
+  return (
+    liquidWeight * saturationVaporPressureHpa(tempC) +
+    (1 - liquidWeight) * saturationVaporPressureIceHpa(tempC)
+  );
+};
+
+const boltonDewpointFromVaporPressureC = (vaporPressureHpa: number): number => {
+  if (!Number.isFinite(vaporPressureHpa) || vaporPressureHpa <= 0) return NaN;
+  const lnRatio = Math.log(vaporPressureHpa / SATURATION_SCALE_HPA);
   return (SATURATION_OFFSET_C * lnRatio) / (SATURATION_EXPONENT - lnRatio);
 };
+
+const boltonDewpointFromEsAndRhC = (esHpa: number, rhPercent: number): number =>
+  !Number.isFinite(esHpa) || esHpa <= 0 || !Number.isFinite(rhPercent) || rhPercent <= 0
+    ? NaN
+    : boltonDewpointFromVaporPressureC((esHpa * Math.min(100, Math.max(0.1, rhPercent))) / 100);
+
+/** Dewpoint temperature (°C) over liquid water from ambient temperature (°C) and liquid-reference RH (%). */
+export const dewpointFromTempAndRhC = (tempC: number, rhPercent: number): number =>
+  boltonDewpointFromEsAndRhC(saturationVaporPressureHpa(tempC), rhPercent);
+
+/** Liquid-vapor-pressure Bolton dewpoint (°C) from ambient temperature (°C) and GFS v16 mixed-phase RH (%). */
+export const dewpointFromGfsV16RhC = (tempC: number, rhPercent: number): number =>
+  boltonDewpointFromEsAndRhC(gfsV16SaturationVaporPressureHpa(tempC), rhPercent);
+
+export type UpperAirMoistureReference = 'liquid-vapor-pressure' | 'gfs-v16-mixed' | 'model-rh';
+
+const SPFH_PROFILE_MODELS = new Set(['icon-eu', 'rrfs', 'av-wrf', 'wrf-va-1km']);
+
+/** Resolve the upper-air moisture reference of a published profile build. */
+export function resolveUpperAirMoistureReference(
+  model: string,
+  declared?: UpperAirMoistureReference
+): UpperAirMoistureReference {
+  if (declared === 'liquid-vapor-pressure' || declared === 'gfs-v16-mixed' || declared === 'model-rh') {
+    return declared;
+  }
+  if (model === 'gfs') return 'gfs-v16-mixed';
+  if (SPFH_PROFILE_MODELS.has(model) || model.startsWith('wrf-')) return 'liquid-vapor-pressure';
+  return 'model-rh';
+}
+
+export interface InterpretedUpperAirMoisture {
+  readonly dewPointC: number | null;
+  readonly liquidRhPercent: number | null;
+  readonly cloudRhPercent: number | null;
+  readonly modelRhPercent: number | null;
+}
+
+/**
+ * Recover physical liquid-vapor-pressure Bolton dewpoint, liquid RH, and mixed-phase cloud RH
+ * from a stored upper-air level according to the build's moisture reference.
+ * Unsupported references ('model-rh') report model RH and leave liquid quantities null.
+ */
+export function interpretUpperAirMoisture(
+  temperatureC: number | null | undefined,
+  storedDewPointC: number | null | undefined,
+  reference: UpperAirMoistureReference = 'liquid-vapor-pressure'
+): InterpretedUpperAirMoisture {
+  const hasT = typeof temperatureC === 'number' && Number.isFinite(temperatureC);
+  const hasTd = typeof storedDewPointC === 'number' && Number.isFinite(storedDewPointC);
+  if (reference === 'liquid-vapor-pressure') {
+    const dewPointC = hasTd ? storedDewPointC : null;
+    if (!hasT || dewPointC === null) {
+      return { dewPointC, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
+    }
+    const liquidRhPercent = relativeHumidityFromTempAndDewpointPercent(temperatureC, dewPointC);
+    const cloudRhPercent = effectiveCloudHumidityPercent(temperatureC, dewPointC);
+    return {
+      dewPointC,
+      liquidRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null,
+      cloudRhPercent: Number.isFinite(cloudRhPercent) ? cloudRhPercent : null,
+      modelRhPercent: Number.isFinite(liquidRhPercent) ? liquidRhPercent : null
+    };
+  }
+  if (!hasT || !hasTd) {
+    return { dewPointC: null, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
+  }
+  const modelRhPercent = relativeHumidityFromTempAndDewpointPercent(temperatureC, storedDewPointC);
+  if (!Number.isFinite(modelRhPercent)) {
+    return { dewPointC: null, liquidRhPercent: null, cloudRhPercent: null, modelRhPercent: null };
+  }
+  if (reference === 'gfs-v16-mixed') {
+    if (temperatureC >= 0) {
+      const cloudRh = effectiveCloudHumidityPercent(temperatureC, storedDewPointC);
+      return {
+        dewPointC: storedDewPointC,
+        liquidRhPercent: modelRhPercent,
+        cloudRhPercent: Number.isFinite(cloudRh) ? cloudRh : null,
+        modelRhPercent
+      };
+    }
+    const esLiquid = saturationVaporPressureHpa(temperatureC);
+    const esStored = saturationVaporPressureHpa(storedDewPointC);
+    const ratio = esLiquid > 0 && Number.isFinite(esStored) ? Math.min(1, Math.max(0, esStored / esLiquid)) : NaN;
+    const physicalTd = boltonDewpointFromVaporPressureC(ratio * gfsV16SaturationVaporPressureHpa(temperatureC));
+    const dewPointC = Number.isFinite(physicalTd) ? physicalTd : null;
+    const liquidRh = dewPointC !== null ? relativeHumidityFromTempAndDewpointPercent(temperatureC, dewPointC) : NaN;
+    const cloudRh = dewPointC !== null ? effectiveCloudHumidityPercent(temperatureC, dewPointC) : NaN;
+    return {
+      dewPointC,
+      liquidRhPercent: Number.isFinite(liquidRh) ? liquidRh : null,
+      cloudRhPercent: Number.isFinite(cloudRh) ? cloudRh : null,
+      modelRhPercent
+    };
+  }
+  return {
+    dewPointC: null,
+    liquidRhPercent: null,
+    cloudRhPercent: modelRhPercent,
+    modelRhPercent
+  };
+}
 
 /**
  * Espy / dry-adiabatic lifted condensation level (LCL) height AGL in meters.
@@ -121,9 +269,7 @@ export function mixingRatioFromDewPointKgKg(dewPointC: number, pressureHpa: numb
 
 export function dewPointFromMixingRatioC(mixingRatioKgKg: number, pressureHpa: number): number {
   if (!Number.isFinite(mixingRatioKgKg) || mixingRatioKgKg <= 0 || !Number.isFinite(pressureHpa) || pressureHpa <= 0) return NaN;
-  const e = mixingRatioKgKg * pressureHpa / (WATER_DRY_AIR_MOLAR_MASS_RATIO + mixingRatioKgKg);
-  const log = Math.log(e / SATURATION_SCALE_HPA);
-  return SATURATION_OFFSET_C * log / (SATURATION_EXPONENT - log);
+  return boltonDewpointFromVaporPressureC(mixingRatioKgKg * pressureHpa / (WATER_DRY_AIR_MOLAR_MASS_RATIO + mixingRatioKgKg));
 }
 
 export function dewPointFromSpecificHumidityC(specificHumidityKgKg: number, pressureHpa: number): number {
@@ -131,12 +277,14 @@ export function dewPointFromSpecificHumidityC(specificHumidityKgKg: number, pres
     ? dewPointFromMixingRatioC(specificHumidityKgKg / (1 - specificHumidityKgKg), pressureHpa) : NaN;
 }
 
-/** Upward geometric velocity in m/s from pressure velocity omega in Pa/s. */
-export function geometricWFromOmegaMps(omegaPaS: number, pressureHpa: number, temperatureC: number): number {
+/** Upward geometric velocity in m/s from pressure velocity omega in Pa/s and optional specific humidity. */
+export function geometricWFromOmegaMps(omegaPaS: number, pressureHpa: number, temperatureC: number, specificHumidityKgKg = 0): number {
   const temperatureK = temperatureC + ZERO_CELSIUS_K;
-  return Number.isFinite(omegaPaS) && Number.isFinite(pressureHpa) && Number.isFinite(temperatureK) && pressureHpa > 0 && temperatureK > 0
-    ? omegaPaS === 0 ? 0 : -omegaPaS * THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * temperatureK /
-      (pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2) : NaN;
+  if (!Number.isFinite(omegaPaS) || !Number.isFinite(pressureHpa) || !Number.isFinite(temperatureK) || pressureHpa <= 0 || temperatureK <= 0
+      || !(specificHumidityKgKg >= 0 && specificHumidityKgKg < 1)) return NaN;
+  const virtualTemperatureK = temperatureK * (1 + (1 / WATER_DRY_AIR_MOLAR_MASS_RATIO - 1) * specificHumidityKgKg);
+  return omegaPaS === 0 ? 0 : -omegaPaS * THERMODYNAMIC_CONSTANTS.dryAirGasConstantJkgK * virtualTemperatureK /
+    (pressureHpa * THERMODYNAMIC_CONSTANTS.pascalsPerHectopascal * THERMODYNAMIC_CONSTANTS.gravityMps2);
 }
 
 /** Hydrostatic pressure velocity in Pa/s from upward geometric velocity and specific humidity. */

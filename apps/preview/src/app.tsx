@@ -231,13 +231,22 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
       >
         <div id="point-body" tabindex={-1} />
         <p id="point-status" role="status" hidden={!point.status}>{point.status}</p>
-        <details id="point-settings" class="point-info-tip">
-          <summary id="point-info-trigger" aria-label="Point details" title="Point coordinates and forecast details">
+        <details
+          id="point-settings"
+          class="point-info-tip"
+          onToggle={event => {
+            const target = event.currentTarget as HTMLDetailsElement;
+            if (!target.open) return;
+            const keyPop = target.closest('#point-card')?.querySelector<HTMLDetailsElement>('.av-windgram-key-pop[open]');
+            if (keyPop) keyPop.open = false;
+          }}
+        >
+          <summary id="point-info-trigger" aria-label="Point details" title={(point.detailLocation ?? point.location) || 'Point coordinates and forecast details'}>
             <span class="point-info-coords">{point.location}</span>
             <span class="point-info-glyph" aria-hidden="true">ⓘ</span>
           </summary>
           <div class="point-settings-body">
-            <p id="point-location">{point.location}</p>
+            <p id="point-location">{point.detailLocation ?? point.location}</p>
             <p id="point-wind" role="status" hidden={!point.wind}>{point.wind}</p>
             <details id="point-build-details" onToggle={event => { if ((event.currentTarget as HTMLDetailsElement).open) commands.refreshPointDiagnostics(); }}>
               <summary>Build details</summary>

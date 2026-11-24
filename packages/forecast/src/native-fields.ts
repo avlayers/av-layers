@@ -5,7 +5,7 @@ import {
   type CoverageMask, type LayerId, type SparseCoverage
 } from '@av/contracts';
 import { deriveNativeColumnDiagnostics, type NativeDiagnosticInput, type NativeDiagnosticLevel } from '@av/soaring';
-import { dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
+import { dewpointFromGfsV16RhC, dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
 import { directSurfaceBinding } from './direct-scalars.js';
 import type { AuxField, AuxSurfaceId, NormalizedFrame } from './inputs.js';
 import type { GridField } from './sampler.js';
@@ -42,7 +42,11 @@ function columnReader(frame: NormalizedFrame, includeLevels = true) {
       if ((Number.isFinite(p) && p >= pressure) || (Number.isFinite(height) && height <= terrain)) continue;
       const t = read(frame.tempK[j]!, frame.missing.temp[j]!, i) - 273.15;
       const q = at(frame.auxLevels?.spfhKgKg?.[j], i), relativeHumidity = at(frame.auxLevels?.rhPercent?.[j], i);
-      const td = q !== null ? dewPointFromSpecificHumidityC(q, p) : relativeHumidity !== null ? dewpointFromTempAndRhC(t, relativeHumidity) : NaN;
+      const td = q !== null
+        ? dewPointFromSpecificHumidityC(q, p)
+        : relativeHumidity !== null
+          ? (frame.rhReference === 'gfs-v16-mixed' ? dewpointFromGfsV16RhC(t, relativeHumidity) : dewpointFromTempAndRhC(t, relativeHumidity))
+          : NaN;
       const u = at(frame.auxLevels?.uWindMps?.[j], i), v = at(frame.auxLevels?.vWindMps?.[j], i);
       const level = levels[count++]!;
       level.heightM = height; level.temperatureC = t; level.pressureHpa = p; level.dewPointC = number(td);
@@ -127,13 +131,29 @@ export function prepareNativeProfiles(frame: NormalizedFrame, coverage: SparseCo
         const count = readColumn.read(ordinals[index]!), input = readColumn.input;
         profile.modelTerrainM = number(input.terrainM); profile.surfacePressureHpa = input.surfacePressureHpa ?? null;
         profile.status = profile.modelTerrainM === null ? 'unavailable' : 'valid';
-        profile.levels.length = count;
-        for (let j = 0; j < profile.levels.length; j++) {
-          const level = input.levels[j] as NativeLevel, target = scratch[j]!;
-          target.pressureHpa = number(level.pressureHpa); target.heightM = number(level.heightM); target.temperatureC = number(level.temperatureC);
+        let outCount = 0;
+        let prevRawH = Number.NEGATIVE_INFINITY, prevQuantH = Number.NEGATIVE_INFINITY;
+        let prevRawP = Number.POSITIVE_INFINITY, prevQuantP = Number.POSITIVE_INFINITY;
+        for (let j = 0; j < count; j++) {
+          const level = input.levels[j] as NativeLevel;
+          let p = number(level.pressureHpa), h = number(level.heightM);
+          const qP = p === null ? null : Math.round(p * 10);
+          const qH = h === null ? null : Math.round(h);
+          const subStepH = h !== null && h > prevRawH && qH! <= prevQuantH;
+          const subStepP = p !== null && p < prevRawP && qP! >= prevQuantP;
+          if ((subStepH && (p === null || p < prevRawP)) || (subStepP && h === null)) {
+            continue;
+          }
+          if (h !== null && (h <= prevRawH || qH! <= prevQuantH)) h = null;
+          if (p !== null && (p >= prevRawP || qP! >= prevQuantP)) p = null;
+          if (h !== null) { prevRawH = h; prevQuantH = qH!; }
+          if (p !== null) { prevRawP = p; prevQuantP = qP!; }
+          const target = scratch[outCount++]!;
+          target.pressureHpa = p; target.heightM = h; target.temperatureC = number(level.temperatureC);
           target.dewPointC = level.dewPointC ?? null; target.uWindMps = level.uMps ?? null; target.vWindMps = level.vMps ?? null; target.omegaPaS = level.omegaPaS;
-          profile.levels[j] = target;
+          profile.levels[outCount - 1] = target;
         }
+        profile.levels.length = outCount;
         writeProfileRecord(record, profile);
         return record;
       }

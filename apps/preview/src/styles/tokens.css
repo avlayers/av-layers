@@ -1,0 +1,76 @@
+/* Shared design tokens for Preview chrome (Light default & Dark Slate / Blueprint) */
+:root,
+#app {
+  --av-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --av-canvas-bg: #dfd9ce;
+  --av-surface-glass: #fffffff2;
+  --av-surface-popover: #fffffff7;
+  --av-surface-subtle: #f4f7faf2;
+  --av-surface-hover: #eef3f8;
+  --av-surface-track: #d6dfe8;
+  --av-border: #d5dde6;
+  --av-border-subtle: #e2e7ed;
+  --av-text: #1c2430;
+  --av-text-strong: #162434;
+  --av-text-muted: #526170;
+  --av-accent: #16324f;
+  --av-accent-border: #0f253c;
+  --av-accent-on: #ffffff;
+  --av-focus-ring: #2563eb;
+  --av-shadow-card: 0 8px 24px #0b1b282e;
+  --av-shadow-popover: 0 10px 28px #0b1b2840;
+  --av-blur-glass: blur(8px);
+}
+
+#app[data-chrome="dark"],
+#app[data-theme="slate"] {
+  --av-canvas-bg: #141c26;
+}
+
+#app[data-theme="blueprint"] {
+  --av-canvas-bg: #0a1b2e;
+}
+
+#app[data-chrome="dark"] {
+  --av-surface-glass: #111b27eb;
+  --av-surface-popover: #111b27f2;
+  --av-surface-subtle: #182535;
+  --av-surface-hover: #1e2e42;
+  --av-surface-track: #29384c;
+  --av-border: #29384c;
+  --av-border-subtle: #283649;
+  --av-text: #e2e8f0;
+  --av-text-strong: #f8fafc;
+  --av-text-muted: #94a3b8;
+  --av-accent: #f59e0b;
+  --av-accent-border: #d97706;
+  --av-accent-on: #0f172a;
+  --av-shadow-card: 0 8px 24px #00000070;
+  --av-shadow-popover: 0 10px 28px #00000080;
+
+  /* Bridge dark-chrome tokens to @av/windgram without coupling packages/windgram to #app */
+  --av-wg-seg-bg: #162231;
+  --av-wg-seg-border: #2b3c52;
+  --av-wg-seg-text: #94a3b8;
+  --av-wg-seg-hover-bg: #1f3044;
+  --av-wg-seg-hover-fg: #f8fafc;
+  --av-wg-seg-active-bg: #f59e0b;
+  --av-wg-seg-active-fg: #0f172a;
+  --av-wg-step-bg: #182636;
+  --av-wg-step-border: #2b3c52;
+  --av-wg-step-btn-fg: #cbd5e1;
+  --av-wg-step-hover-bg: #223449;
+  --av-wg-step-hover-fg: #ffffff;
+  --av-wg-step-label-fg: #e2e8f0;
+  --av-wg-step-best-fg: #fde68a;
+  --av-wg-chip-bg: #192738;
+  --av-wg-chip-border: #2b3c52;
+  --av-wg-chip-fg: #dce6f2;
+  --av-wg-alt-bg: #1e3a5f;
+  --av-wg-alt-hover-bg: #264873;
+  --av-wg-alt-border: #38bdf8;
+  --av-wg-alt-fg: #e0f2fe;
+  --av-wg-key-btn-bg: #1a2838;
+  --av-wg-key-btn-border: #2d4057;
+  --av-wg-key-btn-fg: #e2e8f0;
+}

@@ -22,11 +22,15 @@ export function normalizedWindColumn(frame: NormalizedFrame, slot: number): Wind
   let canAnchor = groundValid && surface !== null && surfaceHeight > terrain;
   // A spare slot retains every missing native interval when adding the 10 m anchor.
   const levels: WindLevel[] = [null];
+  let previousHeight = -Infinity;
   for (let i = 0; i < frame.hgtM.length; i++) {
-    const height = frame.missing.hgt[i][slot] ? NaN : frame.hgtM[i][slot];
+    const rawHeight = frame.missing.hgt[i][slot] ? NaN : frame.hgtM[i][slot];
+    const height = Math.fround(rawHeight);
     const pressure = frame.pressurePa ? (frame.missing.pressure![i][slot] ? NaN : frame.pressurePa[i][slot]) : frame.pressureLevelsHpa![i] * 100;
     const wind = pair(read(frame.auxLevels?.uWindMps?.[i]), read(frame.auxLevels?.vWindMps?.[i]));
-    const level = groundValid && Number.isFinite(pressure) && pressure > 0 && pressure < groundPressure && Number.isFinite(height) && height > terrain && wind ? { height, wind } : null;
+    const monotonic = Number.isFinite(height) && height > terrain && height > previousHeight;
+    const level = groundValid && Number.isFinite(pressure) && pressure > 0 && pressure < groundPressure && monotonic && wind ? { height, wind } : null;
+    if (level) previousHeight = height;
     levels.push(level);
     if (canAnchor && !((Number.isFinite(pressure) && pressure >= groundPressure) || (Number.isFinite(height) && height <= terrain))) {
       if (level && surfaceHeight < height) levels[i] = { height: surfaceHeight, wind: surface! };

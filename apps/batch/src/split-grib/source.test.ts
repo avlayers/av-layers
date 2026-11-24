@@ -92,8 +92,8 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
     expect(first.auxLevels!.spfhKgKg![0]!.values[0]).toBeCloseTo(0.005);
     expect([...first.auxSurface!.u10mMps!.values]).toEqual([5, 5]);
     expect([...first.auxSurface!.v10mMps!.values]).toEqual([4, -2]);
-    expect(first.auxLevels!.uWindMps!.map(field => [...field.values])).toEqual([[5, 5], [5, 5]]);
-    expect(first.auxLevels!.vWindMps!.map(field => [...field.values])).toEqual([[4, -2], [4, -2]]);
+    expect(first.auxLevels!.uWindMps!.map(field => [...field!.values])).toEqual([[5, 5], [5, 5]]);
+    expect(first.auxLevels!.vWindMps!.map(field => [...field!.values])).toEqual([[4, -2], [4, -2]]);
     expect(first.auxLevels!.spfhKgKg![0]!.values.buffer).toBeInstanceOf(SharedArrayBuffer);
     validateNormalizedFrame(first, first.activeIndices, configured.grid, 2, ['usable-lift-msl', 'usable-lift-agl'], 'model-levels');
     const second = await session.acquire(5, slot);

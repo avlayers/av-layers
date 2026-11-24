@@ -36,8 +36,9 @@ export function createPointMarker(map: ProjectableMap, doc: Document = document)
     if (!dot) return;
     const projected = map.project(point);
     if (!Number.isFinite(projected.x) || !Number.isFinite(projected.y)) return;
-    dot.style.left = `${Math.round(projected.x * 10) / 10}px`;
-    dot.style.top = `${Math.round(projected.y * 10) / 10}px`;
+    const x = Math.round(projected.x * 10) / 10;
+    const y = Math.round(projected.y * 10) / 10;
+    dot.style.transform = `translate3d(${x}px, ${y}px, 0) translate(-50%, -50%)`;
   };
 
   const clear = (): void => {

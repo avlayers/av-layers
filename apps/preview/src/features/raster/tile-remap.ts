@@ -50,6 +50,7 @@ interface QueuedTask {
 interface PoolSlot {
   readonly worker: Worker;
   busy: boolean;
+  activeTask: QueuedTask | null;
 }
 
 const fgQueue: QueuedTask[] = [];
@@ -78,8 +79,9 @@ function ensurePool(): PoolSlot[] | null {
     const created: PoolSlot[] = [];
     for (let i = 0; i < count; i++) {
       const worker = new Worker(new URL('./tile-remap.worker.ts', import.meta.url), { type: 'module' });
-      const slot: PoolSlot = { worker, busy: false };
+      const slot: PoolSlot = { worker, busy: false, activeTask: null };
       worker.onmessage = (event: MessageEvent<WorkerRemapResponse>) => {
+        slot.activeTask = null;
         slot.busy = false;
         const msg = event.data;
         const task = inflight.get(msg.id);
@@ -100,7 +102,13 @@ function ensurePool(): PoolSlot[] | null {
         pumpPool();
       };
       worker.onerror = err => {
+        const failed = slot.activeTask;
+        slot.activeTask = null;
         slot.busy = false;
+        if (failed && inflight.delete(failed.id)) {
+          if (failed.onAbort && failed.signal) failed.signal.removeEventListener('abort', failed.onAbort);
+          failed.reject(new Error(err.message || 'Tile remap worker error'));
+        }
         pumpPool();
         console.error('Tile remap worker error', err);
       };
@@ -132,6 +140,7 @@ function pumpPool(): void {
     if (!task) break;
 
     slot.busy = true;
+    slot.activeTask = task;
     inflight.set(task.id, task);
     const dataBuf = task.transferInput ? task.data : task.data.slice(0);
     const maskBuf = task.maskData ? (task.transferInput ? task.maskData : task.maskData.slice(0)) : null;

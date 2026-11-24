@@ -63,6 +63,7 @@ export interface WindView {
 export interface PointView {
   readonly open: boolean;
   readonly location: string;
+  readonly detailLocation?: string;
   readonly horizonSelectable: boolean;
   readonly horizonLabel: string;
   readonly busy: boolean;

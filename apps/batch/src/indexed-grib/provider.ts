@@ -10,10 +10,14 @@ export function createIndexedGribProvider(model: ModelDefinition, requirements?:
     const { run, sourcePin } = await discoverPrivateIndexedGribRun(source, options);
     return { cycle: run.cycle, sourcePin };
   };
+  const scheduledAuxLevelSlots = Object.values(source.upstream.auxLevels ?? {}).reduce(
+    (sum, spec) => sum + source.pressureLevels.filter(level => !spec?.products || spec.products.includes(source.levelProducts.get(level)!)).length,
+    0,
+  );
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,
     auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
-    auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
+    auxiliaryLevelFields: source.pressureLevels.length ? Math.ceil(scheduledAuxLevelSlots / source.pressureLevels.length) : 0,
     ...(source.privateR2 ? { resolveRun } : {}),
     async resolveCycle(options) {
       options.signal?.throwIfAborted();

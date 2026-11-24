@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { profileResponseSchema, SUPPORT_CUMULUS } from '@av/contracts';
+import { dewPointFromSpecificHumidityC, dewpointFromTempAndRhC } from '@av/thermodynamics';
 import { formatPointMapLift, type PointFrame } from '@av/client';
 import { fixturePointSample, fixtureProfileBuild, fixtureProfileResponse } from '../../../tests/client-point-fixture.ts';
 import { mountWindgram } from './dom.ts';
 import { disposePointWindgram, renderPointWindgram } from './point-windgram.ts';
-import { buildStitchedWindgramView, buildWindgramView, createPointForecast, readWindgram } from './model.ts';
+import { buildStitchedWindgramView, buildWindgramView, createPointForecast, readWindgram, resolveCivilTimeZone } from './model.ts';
 import { findBestSoaringDayKey, formatDayWindowLabel, resolveStitchedDayWindow } from './point-view-mode.ts';
 import { sceneData } from './scene-store.ts';
 import { renderWindgramKey, renderWindgramSvg } from './svg.ts';
@@ -215,7 +216,7 @@ describe('Windgram data', () => {
       outside.layers[layer] = { ...outside.layers[layer], value: null, status: 'outside-domain' };
     }
     const result = forecast(frames);
-    expect(result.site.timeZone).toBe('Etc/GMT+5');
+    expect(result.site.timeZone).toBe('America/New_York');
     const lift = result.hours.map(hour => hour.mapLift);
     expect(formatPointMapLift(lift[0], 'metric')).toBe('MSL 1300 m · AGL 350 m · Surface elevation unknown · Map Cu');
     expect(lift[0].agl).toMatchObject({ value: 350, interpolated: true, surfaceId: 'gfs-fine' });
@@ -245,7 +246,7 @@ describe('Windgram data', () => {
     const scene = view(frames);
     expect(scene.hours).toHaveLength(4);
     expect(scene.hours[3].x - scene.hours[2].x).toBeCloseTo(3 * (scene.hours[2].x - scene.hours[1].x));
-    expect(readWindgram(scene, 0, 1900)).toMatchObject({ heightAglM: 400, heightAglReference: 'terrain', speedKt: null });
+    expect(readWindgram(scene, 0, 1900)).toMatchObject({ heightAglM: null, heightAglReference: null, speedKt: null });
     expect(readWindgram(scene, 1, 1900)).toMatchObject({ heightAglM: null, heightAglReference: null, temperatureF: null });
     expect(readWindgram(scene, 2, 1800).speedKt).toBeCloseTo(9.7192);
   });
@@ -457,12 +458,21 @@ describe('Windgram data', () => {
   });
 
   it('snaps magnetically within 16px of Top of Lift, glides freely beyond 16px, and re-snaps via snapToTol', () => {
-    const { sample, profile, forecast } = fixture([20, 21]);
+    const { build, sample, profile } = fixture([20, 21]);
     const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i].layers } }));
     frames[0].layers['usable-lift-msl']!.value = 2100;
     frames[0].layers['usable-lift-agl']!.value = 600;
     frames[0].layers['cloud-cover-total'] = { ...frames[0].layers['sfc-temp-c']!, value: 35 };
-    const site = forecast(frames);
+    const site = createPointForecast(build, point, {
+      siteTerrain: {
+        elevationM: 1500,
+        status: 'valid',
+        interpolated: true,
+        surfaceId: 'gfs-fine',
+        surface: 'DSM',
+        verticalDatum: 'EGM2008',
+      },
+    })(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
     const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, timeZone: site.site.timeZone, hours: site.hours });
     const cursor = new FakeElement('g');
     const tolRing = new FakeElement('circle');
@@ -713,7 +723,7 @@ describe('Windgram data', () => {
     const baseReading = readWindgram(scene, 0, 1800);
     const dummyTelemetry = {
       timeChip: '3:00 PM', altChip: '★ TOL 500 m AGL', snappedToTol: true, canSnapToTol: false,
-      calloutBadge: '★ TOP OF LIFT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: true, chips: [],
+      calloutBadge: '★ TOP OF LIFT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: true,
     };
 
     // 1) Flyable wind (270° W blowing East -> downwind arrow rotated 90°), clear air under SCT 35% sky, dewpoint Td 2°, no surface gust aloft at 300 m AGL.
@@ -730,7 +740,7 @@ describe('Windgram data', () => {
     expect(windArrow.getAttribute('transform')).toBe('translate(16.5 33) rotate(90)');
     expect(windSpeed.textContent).toBe('16 km/h');
     expect(windSpeed.getAttribute('class')).toContain('is-ok');
-    expect(windDir.textContent).toBe('W');
+    expect(windDir.textContent).toBe('W · Sfc G41');
     expect(Number(climbFill.getAttribute('height'))).toBeGreaterThan(0);
     expect(oktas.map(el => el.getAttribute('class')?.includes('is-lit') ?? false)).toEqual([true, true, false, false, false]);
     expect(skyCodeEl.textContent).toBe('SCT 35%');
@@ -766,6 +776,7 @@ describe('Windgram data', () => {
         temperatureF: 28.4,
         dewPointC: -2.4,
         relativeHumidityPercent: 96,
+        cloudHumidityPercent: 96,
         cloud: 'humidity',
         cloudCoverTotalPercent: 85,
         precipitationMmHr: 0.8,
@@ -775,16 +786,16 @@ describe('Windgram data', () => {
     expect(badge.textContent).toBe('ALT');
     expect(back.getAttribute('class')).toContain('is-caution');
     expect(windBg.getAttribute('class')).toContain('is-caution');
-    expect(windDir.textContent).toBe('WNW');
-    expect(windDir.textContent).not.toMatch(/Caution|Strong|G/i);
+    expect(windDir.textContent).toBe('WNW · Sfc G44');
+    expect(windDir.textContent).not.toMatch(/Caution|Strong/i);
     expect(cloudBg.getAttribute('class')).toContain('is-cloud');
-    expect(skyCodeEl.textContent).toBe('IMC');
-    expect(cloudText.textContent).toBe('☁ Whiteout · RH 96%');
+    expect(skyCodeEl.textContent).toBe('OVC');
+    expect(cloudText.textContent).toBe('☁ In cloud · RH 96%');
     expect(tempEl.textContent).toBe('❄ -2°C');
     expect(dewpointEl.textContent).toBe('Td -2°');
     expect(tempEl.getAttribute('class')).toContain('is-freeze');
     expect(rainIcon.getAttribute('visibility')).toBe('visible');
-    expect(hazardEl.textContent).toBe('Rain 0.8 mm/h');
+    expect(hazardEl.textContent).toBe('Precip 0.8 mm/h');
 
     // 3) Live runtime variant swap via setCalloutVariant.
     const swapHost = new FakeElement('div');
@@ -858,10 +869,11 @@ describe('Windgram data', () => {
     });
     const svg = renderWindgramSvg(scene);
 
-    // Chart SVG renders patterned SCT/BKN & solid OVC stratiform decks, vertical Cu depth tower, and HI OVC cirrus badge!
+    // Chart SVG renders patterned SCT/BKN & solid OVC stratiform decks, Cu base glyph (no vertical tower boxes), and HI OVC cirrus badge!
     expect(svg).toContain('class="wg-cloud-deck-sct"');
     expect(svg).toContain('class="wg-cloud-deck-ovc"');
-    expect(svg).toContain('data-cu-tower="cu"');
+    expect(svg).toContain('data-cumulus="cu"');
+    expect(svg).not.toContain('data-cu-tower=');
     expect(svg).toContain('data-sky-high="true"');
     expect(svg).toContain('>HI OVC<');
 
@@ -891,19 +903,19 @@ describe('Windgram data', () => {
     } as unknown as ParentNode);
     const dummyTel = {
       timeChip: '12:00 PM', altChip: '', snappedToTol: false, canSnapToTol: false,
-      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false, chips: [],
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false,
     };
 
-    // a) Hour 0 at 1,820 m (inside lower saturated OVC stratus): 'IMC' + '☁ Whiteout · ... m'
+    // a) Hour 0 at 1,820 m (inside lower saturated OVC stratus): 'OVC 100%' + '☁ In cloud · ... m'
     const inLowOvc = readWindgram(scene, 0, 1820);
     bound.paint({ aglText: '320 m AGL', mslText: '1,820 m MSL', useTol: false, telemetry: dummyTel, reading: inLowOvc, unitSystem: 'metric' });
-    expect(skyCodeEl.textContent).toBe('IMC');
-    expect(cloudText.textContent).toMatch(/^☁ Whiteout · \d+ m$/);
+    expect(skyCodeEl.textContent).toBe('OVC 100%');
+    expect(cloudText.textContent).toMatch(/^☁ In cloud · \d+ m$/);
     expect(cloudBg.getAttribute('class')).toContain('is-cloud');
 
-    // b) Hour 0 at 2,250 m (clear VMC slot between low OVC deck and mid SCT/BKN deck): '2 LYR' + 'Clear · Base +...' + 'Dry · 2 layers'
+    // b) Hour 0 at 2,250 m (clear VMC slot between low OVC deck and mid SCT/BKN deck): '2 LYR' + 'Clear · Base +...' + 'Dry · 2 layers' when precip is 0
     const betweenLayers = readWindgram(scene, 0, 2250);
-    bound.paint({ aglText: '750 m AGL', mslText: '2,250 m MSL', useTol: false, telemetry: dummyTel, reading: betweenLayers, unitSystem: 'metric' });
+    bound.paint({ aglText: '750 m AGL', mslText: '2,250 m MSL', useTol: false, telemetry: dummyTel, reading: { ...betweenLayers, precipitationMmHr: 0 }, unitSystem: 'metric' });
     expect(skyCodeEl.textContent).toBe('2 LYR');
     expect(cloudText.textContent).toMatch(/^Clear · Base \+\d+ m$/);
     expect(cloudBg.getAttribute('class')).not.toContain('is-cloud');
@@ -1038,7 +1050,7 @@ describe('Windgram data', () => {
     for (const panel of threeDayInternal.dayPanels!) {
       expect(labelRects.some(x => x >= panel.left && x <= panel.left + panel.width)).toBe(true);
     }
-    // Usable lift path has 3 separate M subpaths (never connected across midnight).
+    // Usable lift path has 3 separate per-day M subpaths.
     const liftPath = threeDayInternal.series.find(s => s.key === 'usableLiftTopM')?.path ?? '';
     expect(liftPath.match(/M/g)).toHaveLength(3);
 
@@ -1338,8 +1350,11 @@ describe('Windgram data', () => {
     expect(stitchedSvg).toContain('data-cumulus="od"');
     expect(stitchedSvg).not.toContain('data-cumulus="cb"');
     expect(stitchedSvg).not.toContain('wg-cloud-cb-bolt');
-    expect(stitchedSvg).toContain('style="color:#fca5a5"');
-    expect(stitchedSvg).toContain('style="color:#e879f9"');
+    expect(stitchedSvg).toContain('wg-barb-danger');
+    expect(stitchedSvg).toContain('wg-barb-pennant');
+    expect(stitchedSvg).toContain('--wg-wind-danger: #fca5a5');
+    expect(stitchedSvg).toContain('--wg-wind-pennant: #e879f9');
+    expect(stitchedSvg).not.toContain('style="color:');
     expect(stitchedSvg).toContain('data-native-lift-ceiling=""');
     expect(stitchedSvg).toContain('class="wg-wave-lift"');
 
@@ -1361,7 +1376,7 @@ describe('Windgram data', () => {
     } as unknown as ParentNode);
     const dummyTelemetry = {
       timeChip: '2:00 PM', altChip: '', snappedToTol: false, canSnapToTol: false,
-      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false, chips: [],
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false,
     };
 
     // a) Cu-capped TOL + OD spreadout
@@ -1376,28 +1391,28 @@ describe('Windgram data', () => {
     expect(hazardEl.textContent).toBe('CAPE 1450');
     expect(hazardEl.textContent).not.toContain('⚡');
 
-    // c) Statically stable mountain wave ('▲ Wave') vs adiabatic plume ('▲ Ascent') & lee-wave sink
+    // c) Neutral model vertical motion ('▲ Model ascent' / '▼ Model descent')
     bound.paint({ aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry, reading: waveReading, unitSystem: 'imperial' });
-    expect(climbSub.textContent).toBe('▲ Wave');
+    expect(climbSub.textContent).toBe('▲ Model ascent');
     expect(climbFill.getAttribute('class')).toContain('is-wave');
     bound.paint({
       aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry,
       reading: { ...waveReading, lapseCPer1000Ft: -2.9 },
       unitSystem: 'imperial',
     });
-    expect(climbSub.textContent).toBe('▲ Ascent');
+    expect(climbSub.textContent).toBe('▲ Model ascent');
     bound.paint({
       aglText: '2,950 ft AGL', mslText: '7,870 ft MSL', useTol: false, telemetry: dummyTelemetry,
       reading: { ...waveReading, waveVelocityMps: -1.4 },
       unitSystem: 'imperial',
     });
     expect(climbVal.textContent).toMatch(/^-\d+ fpm$/);
-    expect(climbSub.textContent).toBe('▼ Wave sink');
+    expect(climbSub.textContent).toBe('▼ Model descent');
 
-    // d) Supercooled liquid water icing (-4°C in cloud -> '❄ Icing risk') vs -35°C glaciated cirrus (no icing risk)
+    // d) Supercooled liquid water icing (-4°C with liquid RH >= 94% -> '❄ Icing risk') vs -35°C glaciated cirrus (no icing risk)
     bound.paint({
       aglText: '4,000 ft AGL', mslText: '8,900 ft MSL', useTol: false, telemetry: dummyTelemetry,
-      reading: { ...waveReading, temperatureF: 24.8, cloud: 'humidity', precipitationMmHr: 0 },
+      reading: { ...waveReading, waveVelocityMps: 0, temperatureF: 24.8, relativeHumidityPercent: 96, cloud: 'humidity', precipitationMmHr: 0 },
       unitSystem: 'metric',
     });
     expect(tempEl.textContent).toBe('❄ -4°C');
@@ -1427,5 +1442,997 @@ describe('Windgram data', () => {
       unitSystem: 'imperial',
     });
     expect(hazardEl.textContent).toBe('Shear 5.1 mph/kft');
+  });
+
+  it('Finding 1: keeps retained GFS cold-air levels free of double ice conversion while converting liquid-vapor-pressure builds and preserving 2 m and positive-control clouds', () => {
+    const cascades = { lat: 47.5, lon: -121.5 };
+    const { build: retainedBuild, profile: retainedProfile } = fixture([18, 42], 2);
+    // Retained GFS build omits manifest.tool.profileDewpointReference: stored upper-air Td came from GFS mixed-phase RH (71.7% @ 450 hPa, 67.0% @ 400 hPa)
+    delete retainedBuild.manifest.tool.profileDewpointReference;
+    for (const f of retainedProfile.frames) {
+      f.layers['sfc-temp-c']!.value = -25;
+      f.layers['sfc-dewpoint-c'] = { ...f.layers['sfc-temp-c']!, value: -27.4 }; // 2 m SPFH liquid dewpoint (~78.6% liquid RH -> ~100% ice RH)
+      f.profile.modelTerrainM = 1200;
+      f.profile.levels = [
+        { pressureHpa: 850, heightM: 1500, temperatureC: -8, dewPointC: -18, uWindMps: 5, vWindMps: 0, omegaPaS: 0 },
+        { pressureHpa: 450, heightM: 6200, temperatureC: -34.406195, dewPointC: dewpointFromTempAndRhC(-34.406195, 71.7), uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
+        { pressureHpa: 400, heightM: 7050, temperatureC: -41.870703, dewPointC: dewpointFromTempAndRhC(-41.870703, 67.0), uWindMps: 16, vWindMps: 0, omegaPaS: 0 },
+      ];
+    }
+    const retainedSite = createPointForecast(retainedBuild, cascades)(retainedBuild.manifest.frames, new Map(retainedProfile.frames.map(f => [f.id, f])));
+    expect(retainedSite.hours[0]!.upperAirDewpointReference).toBe('gfs-v16-mixed');
+    const retainedDay = buildWindgramView(retainedSite, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: retainedSite.site.timeZone, hours: [retainedSite.hours[0]!] });
+    const retainedStitched = buildStitchedWindgramView(retainedSite, {
+      unitSystem: 'metric', compact: true, heightRange: 'full', timeZone: retainedSite.site.timeZone,
+      dateKeys: [...new Set(retainedSite.hours.map(h => h.validAt.slice(0, 10)))],
+    });
+    for (const scene of [retainedDay, retainedStitched]) {
+      const r450 = readWindgram(scene, 0, 6200);
+      const r400 = readWindgram(scene, 0, 7050);
+      expect(r450.cloud).toBeNull();
+      expect(r400.cloud).toBeNull();
+      expect(r450.cloudHumidityPercent).toBeCloseTo(71.7, 0);
+      expect(r400.cloudHumidityPercent).toBeCloseTo(67.0, 0);
+      // 2 m anchor (1202 m) still applies mixed-phase conversion to its SPFH liquid dewpoint
+      const r2m = readWindgram(scene, 0, 1202);
+      expect(r2m.cloudHumidityPercent!).toBeGreaterThan(95);
+    }
+
+    // Normalized GFS build with manifest.tool.profileDewpointReference = 'liquid-vapor-pressure'
+    const { build: normBuild, profile: normProfile } = fixture([18, 20], 2);
+    normBuild.manifest.tool.profileDewpointReference = 'liquid-vapor-pressure';
+    // Hour 0: Cascades SPFH liquid dewpoints (q = 2.3565e-4 @ 450 hPa, q = 1.0778e-4 @ 400 hPa -> 71.53% / 66.79% mixed-phase RH, no cloud)
+    normProfile.frames[0]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1500, temperatureC: 2, dewPointC: -8, uWindMps: 5, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 450, heightM: 6200, temperatureC: -34.406195, dewPointC: dewPointFromSpecificHumidityC(0.0002356488985, 450), uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 400, heightM: 7050, temperatureC: -41.870703, dewPointC: dewPointFromSpecificHumidityC(0.0001077765628, 400), uWindMps: 16, vWindMps: 0, omegaPaS: 0 },
+    ];
+    // Hour 1: Positive control (38.75°N, 78.25°W @ 400 hPa: T = -27.19 °C, q = 0.00078861 kg/kg -> 76.45% liquid RH -> ~100% ice cloud)
+    normProfile.frames[1]!.profile.levels = [
+      { pressureHpa: 820, heightM: 1800, temperatureC: 4, dewPointC: -6, uWindMps: 5, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 400, heightM: 7200, temperatureC: -27.19, dewPointC: dewPointFromSpecificHumidityC(0.00078861, 400), uWindMps: 18, vWindMps: 0, omegaPaS: 0 },
+    ];
+    const normSite = createPointForecast(normBuild, { lat: 38.75, lon: -78.25 })(normBuild.manifest.frames, new Map(normProfile.frames.map(f => [f.id, f])));
+    expect(normSite.hours[0]!.upperAirDewpointReference).toBe('liquid-vapor-pressure');
+    const normScene = buildWindgramView(normSite, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: normSite.site.timeZone, hours: normSite.hours });
+    expect(readWindgram(normScene, 0, 6200).cloud).toBeNull();
+    expect(readWindgram(normScene, 0, 6200).cloudHumidityPercent).toBeCloseTo(71.53, 0);
+    expect(readWindgram(normScene, 0, 7050).cloudHumidityPercent).toBeCloseTo(66.79, 0);
+    const posControl = readWindgram(normScene, 1, 7200);
+    expect(posControl.relativeHumidityPercent).toBeCloseTo(76.45, 0);
+    expect(posControl.cloudHumidityPercent!).toBeGreaterThan(99);
+    expect(posControl.cloud).toBe('humidity');
+  });
+
+  it('Finding 2: resolves Mount Ara fine DSM site clearance on interpolated hours, keeps native fallback lift invariant to fine terrain, and labels model AGL when fine terrain is absent', () => {
+    const ara = { lat: 40.4186, lon: 44.4547 };
+    const { build, sample, profile } = fixture([9, 12, 36], 2);
+    build.manifest.model = 'icon-eu';
+    const frames = profile.frames.map((frame, i) => {
+      const fine = sample.frames[i];
+      return fine ? { ...frame, layers: { ...frame.layers, ...fine.layers } } : frame;
+    });
+    for (const f of frames) f.profile.modelTerrainM = 1794;
+    // Hour 0 (mapped, interpolated: true -> pointMapLift.terrainM === null)
+    frames[0]!.layers['usable-lift-msl'] = { ...frames[0]!.layers['usable-lift-msl']!, value: 2427.4957, interpolated: true };
+    frames[0]!.layers['usable-lift-agl'] = { ...frames[0]!.layers['usable-lift-agl']!, value: 130.2237, interpolated: true };
+    // Hour 1 (mapped, no-usable-lift)
+    frames[1]!.layers['usable-lift-msl'] = { ...frames[1]!.layers['usable-lift-msl']!, value: null, status: 'no-usable-lift', interpolated: true };
+    frames[1]!.layers['usable-lift-agl'] = { ...frames[1]!.layers['usable-lift-agl']!, value: 0, status: 'no-usable-lift', interpolated: true };
+
+    const loadedMap = new Map(frames.map(f => [f.id, f]));
+    const araTerrain = {
+      elevationM: 2297.272,
+      status: 'valid' as const,
+      interpolated: true,
+      surfaceId: 'gfs-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    };
+    const siteWithDsm = createPointForecast(build, ara, { siteTerrain: araTerrain })(build.manifest.frames, loadedMap);
+    const dayScene = buildWindgramView(siteWithDsm, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: siteWithDsm.site.timeZone, hours: siteWithDsm.hours.slice(0, 2) });
+    const stitchedScene = buildStitchedWindgramView(siteWithDsm, {
+      unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: siteWithDsm.site.timeZone,
+      dateKeys: [...new Set(siteWithDsm.hours.map(h => h.validAt.slice(0, 10)))],
+    });
+    for (const scene of [dayScene, stitchedScene]) {
+      const freeAtTol = readWindgram(scene, 0, 2427.4957);
+      expect(freeAtTol.heightAglM).toBeCloseTo(130.2237, 2);
+      expect(freeAtTol.heightAglReference).toBe('terrain');
+      expect(freeAtTol.terrainDeltaM).toBeCloseTo(503.272, 2);
+    }
+    expect(siteWithDsm.hours[1]!.fineTerrainM).toBeCloseTo(2297.272, 3);
+    expect(siteWithDsm.hours[2]!.fineTerrainM).toBeCloseTo(2297.272, 3);
+
+    // Retained build lacking fine terrain labels free cursor explicitly as 'model AGL'
+    const siteNoFine = createPointForecast(build, ara)(build.manifest.frames, loadedMap, null);
+    const noFineScene = buildWindgramView(siteNoFine, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: siteNoFine.site.timeZone, hours: [siteNoFine.hours[0]!] });
+    const modelRefReading = readWindgram(noFineScene, 0, 2427.4957);
+    expect(modelRefReading.heightAglM).toBeCloseTo(633.4957, 2);
+    expect(modelRefReading.heightAglReference).toBe('model');
+
+    // Native usable lift top stays fixed at ~1,521.35 m MSL before and after loading a 1,450 m site DEM
+    const { build: tailBuild, profile: tailProfile } = fixture([14, 30], 1);
+    const tailFrame = tailProfile.frames[1]!;
+    tailFrame.profile.modelTerrainM = 1000;
+    tailFrame.layers['thermal-top-msl']!.value = 2000;
+    tailFrame.layers['thermal-velocity']!.value = 0.639445;
+    tailFrame.derived.effectiveCloudLimitM = 4000;
+    tailFrame.derived.usableLiftTopV2M = null;
+    const toTailForecast = createPointForecast(tailBuild, point);
+    const tailLoaded = new Map([[tailProfile.frames[0]!.id, tailProfile.frames[0]!], [tailFrame.id, tailFrame]]);
+    const beforeDem = toTailForecast(tailBuild.manifest.frames, tailLoaded, null);
+    expect(beforeDem.hours[1]!.nativeUsableLiftTopM).toBeCloseTo(1521.35, 1);
+    const afterDem = toTailForecast(tailBuild.manifest.frames, tailLoaded, {
+      elevationM: 1450,
+      status: 'valid',
+      interpolated: false,
+      surfaceId: 'gfs-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    });
+    expect(afterDem.hours[1]!.nativeUsableLiftTopM).toBeCloseTo(1521.35, 1);
+    const afterDemScene = buildWindgramView(afterDem, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: afterDem.site.timeZone, hours: [afterDem.hours[1]!] });
+    expect(readWindgram(afterDemScene, 0, afterDem.hours[1]!.nativeUsableLiftTopM!).heightAglM).toBeCloseTo(71.35, 1);
+  });
+
+  it('Finding 3: preserves endpoint surface-to-layer-top shear while reporting maximum wind difference from surface within layer separately', () => {
+    const { build, profile } = fixture([18], 1);
+    const frame = profile.frames[0]!;
+    frame.profile.modelTerrainM = 1000;
+    frame.layers['wind-10m-u'] = { ...frame.layers['sfc-temp-c']!, value: 5 };
+    frame.layers['wind-10m-v'] = { ...frame.layers['sfc-temp-c']!, value: 0 };
+    frame.layers['thermal-top-msl']!.value = 2200;
+    frame.layers['thermal-velocity']!.value = 2.0;
+    frame.derived.blWindShearMps = 0;
+    frame.profile.levels = [
+      { pressureHpa: 850, heightM: 1600, temperatureC: 10, dewPointC: 0, uWindMps: 17, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 780, heightM: 2200, temperatureC: 4, dewPointC: -4, uWindMps: 5, vWindMps: 0, omegaPaS: 0 },
+    ];
+    const site = createPointForecast(build, point)(build.manifest.frames, new Map([[frame.id, frame]]));
+    const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: site.site.timeZone, hours: site.hours });
+    const reading = readWindgram(scene, 0, 1600);
+    expect(reading.publishedLayerWind?.surfaceToTopShearMps).toBe(0);
+    expect(reading.publishedLayerWind?.maxDepartureFromSurfaceMps).toBeCloseTo(12, 5);
+    const lines = formatWindgramReading(sceneData(scene), reading, 'surface').join(' · ');
+    expect(lines).toContain('Surface-to-layer-top shear 0.0 km/h');
+    expect(lines).toContain('Maximum wind difference from surface within layer 43.2 km/h');
+  });
+
+  it('Finding 4: separates ice cloud from liquid icing and visibility, preserves missing sub-ground T and total precip, gates launch gusts by site AGL, uses neutral descent and OD cold-top wording, and renders Rain+CAPE+Shear', () => {
+    const { build, sample, profile } = fixture([15, 16, 17], 3);
+    build.manifest.tool.profileDewpointReference = 'liquid-vapor-pressure';
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+
+    // Hour 0: Ice-saturated (-18 °C, 80% liquid RH -> 94.66% mixed-phase RH), plus sub-ground warm-nose precip
+    frames[0]!.profile.modelTerrainM = 1500;
+    frames[0]!.layers['usable-lift-msl']!.value = 1900;
+    frames[0]!.layers['usable-lift-agl']!.value = 900; // fineTerrainM = 1000 m
+    frames[0]!.layers['sfc-temp-c']!.value = -3;
+    frames[0]!.layers['precip-rate'] = { ...frames[0]!.layers['sfc-temp-c']!, value: 0.6 };
+    frames[0]!.layers['wind-10m-u'] = { ...frames[0]!.layers['sfc-temp-c']!, value: 5 };
+    frames[0]!.layers['wind-10m-v'] = { ...frames[0]!.layers['sfc-temp-c']!, value: 0 };
+    const tdIce80 = dewpointFromTempAndRhC(-18, 80);
+    frames[0]!.profile.levels = [
+      { pressureHpa: 840, heightM: 1600, temperatureC: 1.1, dewPointC: 0.5, uWindMps: 6, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 540, heightM: 5000, temperatureC: -18, dewPointC: tdIce80, uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 520, heightM: 5300, temperatureC: -18, dewPointC: tdIce80, uWindMps: 15, vWindMps: 0, omegaPaS: 0 },
+    ];
+
+    // Hour 1: Dry valley wind turn (5 m/s E -> 10 m/s W => >29 kt vector change!) with 25 kt 10 m gust, unresolved high OD top (5500 m above 3600 m highest level)
+    frames[1]!.profile.modelTerrainM = 1200;
+    frames[1]!.layers['usable-lift-msl']!.value = 2100;
+    frames[1]!.layers['usable-lift-agl']!.value = 1100; // fineTerrainM = 1000 m
+    frames[1]!.layers['wind-10m-u'] = { ...frames[1]!.layers['sfc-temp-c']!, value: -10 };
+    frames[1]!.layers['wind-10m-v'] = { ...frames[1]!.layers['sfc-temp-c']!, value: 0 };
+    frames[1]!.layers['wind-gust-10m']!.value = 25 / mpsToKnots(1);
+    frames[1]!.layers['surface-lcl-msl'] = { ...frames[1]!.layers['sfc-temp-c']!, value: 2100 };
+    frames[1]!.layers['thermal-top-msl']!.value = 5500;
+    frames[1]!.layers['thermal-velocity']!.value = 2.4;
+    frames[1]!.derived.effectiveCloudLimitM = 2100;
+    frames[1]!.derived.cuPotentialM = 3400;
+    frames[1]!.derived.cloudCapped = true;
+    frames[1]!.derived.overdeveloped = true;
+    frames[1]!.profile.levels = [
+      { pressureHpa: 820, heightM: 1800, temperatureC: 12, dewPointC: 4, uWindMps: -10, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 650, heightM: 3600, temperatureC: -4, dewPointC: -10, uWindMps: -12, vWindMps: 0, omegaPaS: 0 },
+    ];
+
+    // Hour 2: Resolved cold OD top (-24 °C at 5400 m) + Rain + CAPE + Shear
+    frames[2]!.profile.modelTerrainM = 1200;
+    frames[2]!.layers['usable-lift-msl']!.value = 2300;
+    frames[2]!.layers['usable-lift-agl']!.value = 1300;
+    frames[2]!.layers['surface-lcl-msl'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 2300 };
+    frames[2]!.layers['thermal-top-msl']!.value = 5400;
+    frames[2]!.layers['thermal-velocity']!.value = 2.8;
+    frames[2]!.layers['cape-jkg'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 1200 };
+    frames[2]!.layers['precip-rate'] = { ...frames[2]!.layers['sfc-temp-c']!, value: 1.4 };
+    frames[2]!.derived.effectiveCloudLimitM = 2300;
+    frames[2]!.derived.cuPotentialM = 3100;
+    frames[2]!.derived.cloudCapped = true;
+    frames[2]!.derived.overdeveloped = true;
+    frames[2]!.profile.levels = [
+      { pressureHpa: 820, heightM: 1800, temperatureC: 14, dewPointC: 8, uWindMps: 4, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 760, heightM: 2400, temperatureC: 8, dewPointC: 7, uWindMps: 12, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 520, heightM: 5400, temperatureC: -24, dewPointC: -25, uWindMps: 18, vWindMps: 0, omegaPaS: 0 },
+    ];
+
+    const site = createPointForecast(build, point, {
+      siteTerrain: {
+        elevationM: 1000,
+        status: 'valid',
+        interpolated: true,
+        surfaceId: 'gfs-fine',
+        surface: 'DSM',
+        verticalDatum: 'EGM2008',
+      },
+    })(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: site.site.timeZone, hours: site.hours });
+    const fullSvg = renderWindgramSvg(scene);
+    expect(fullSvg).toContain('class="wg-barb-rim"');
+    expect(fullSvg).toContain('wg-cloud-od-glaciated');
+    expect(fullSvg).not.toContain('data-cu-tower=');
+    expect(fullSvg).not.toContain('IMC whiteout');
+    expect(fullSvg).not.toContain('Deep glaciated OD anvil');
+
+    const back = new FakeElement('rect');
+    const windDir = new FakeElement('text');
+    const climbSub = new FakeElement('text');
+    const skyCodeEl = new FakeElement('text');
+    const cloudText = new FakeElement('text');
+    const tempEl = new FakeElement('text');
+    const hazardEl = new FakeElement('text');
+    const tileMap = new Map<string, FakeElement>([
+      ['[data-cursor-back]', back],
+      ['[data-tile-wind-dir]', windDir],
+      ['[data-tile-climb-sub]', climbSub],
+      ['[data-tile-sky-code]', skyCodeEl],
+      ['[data-tile-cloud-text]', cloudText],
+      ['[data-tile-temp]', tempEl],
+      ['[data-tile-hazard]', hazardEl],
+    ]);
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => tileMap.get(sel) ?? null,
+    } as unknown as ParentNode);
+    const dummyTel = {
+      timeChip: '11:00 AM', altChip: '', snappedToTol: false, canSnapToTol: false,
+      calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false,
+    };
+
+    // 1) -18 °C with 80% liquid RH (94.66% mixed-phase RH): inferred cold cloud, zero icing risk, zero IMC/Whiteout
+    const iceCloudReading = { ...readWindgram(scene, 0, 5150), precipitationMmHr: 0 };
+    expect(iceCloudReading.relativeHumidityPercent).toBeCloseTo(80, 0);
+    expect(iceCloudReading.cloudHumidityPercent).toBeCloseTo(94.66, 0);
+    bound.paint({ aglText: '4,150 m AGL', mslText: '5,150 m MSL', useTol: false, telemetry: dummyTel, reading: iceCloudReading, unitSystem: 'metric' });
+    expect(skyCodeEl.textContent).not.toBe('IMC');
+    expect(cloudText.textContent).toContain('☁ Cold cloud');
+    expect(cloudText.textContent).not.toContain('Whiteout');
+    expect(hazardEl.textContent).not.toContain('Icing');
+
+    // 2) Sub-ground 1,200 m cursor below 1,500 m model ground with surface -3 °C, +1.1 °C at 1,600 m, and 0.6 mm/h total precip
+    const subGroundReading = readWindgram(scene, 0, 1200);
+    expect(subGroundReading.temperatureF).toBeNull();
+    expect(subGroundReading.warmLayerAloft).toBe(true);
+    bound.paint({ aglText: '200 m AGL', mslText: '1,200 m MSL', useTol: false, telemetry: dummyTel, reading: subGroundReading, unitSystem: 'metric' });
+    expect(tempEl.textContent).toBe('—');
+    expect(hazardEl.textContent).toBe('0.6 mm/h · Warm aloft');
+    expect(hazardEl.textContent).not.toContain('Frz rain');
+
+    // 3) Cursor at 1,260 m MSL (260 m above 1,000 m site ground, 60 m above 1,200 m model ground): NOT nearSurface!
+    const aloft260Reading = readWindgram(scene, 1, 1260);
+    expect(aloft260Reading.heightAglM).toBe(260);
+    expect(aloft260Reading.surfaceWindShift).not.toBeNull();
+    bound.paint({ aglText: '260 m AGL', mslText: '1,260 m MSL', useTol: false, telemetry: dummyTel, reading: { ...aloft260Reading, speedKt: 10, directionDeg: 90, overdeveloped: false }, unitSystem: 'metric' });
+    expect(windDir.textContent).toBe('E · Sfc G46');
+    expect(back.getAttribute('class')).not.toContain('is-caution');
+    expect(hazardEl.textContent).not.toContain('Gust front');
+    expect(hazardEl.textContent).not.toBe('Wind shift');
+    // Near site surface (80 m AGL): shows 'Wind shift' and surface gust 'E · G46'
+    bound.paint({ aglText: '80 m AGL', mslText: '1,080 m MSL', useTol: false, telemetry: dummyTel, reading: { ...aloft260Reading, heightM: 1080, heightAglM: 80, speedKt: 10, directionDeg: 90, overdeveloped: false }, unitSystem: 'metric' });
+    expect(windDir.textContent).toBe('E · G46');
+    expect(hazardEl.textContent).toBe('Wind shift');
+    const shiftSurfaceText = formatWindgramReading(sceneData(scene), aloft260Reading, 'surface').join(' · ');
+    expect(shiftSurfaceText).toContain('1h surface wind shift');
+
+    // 4) Unresolved OD top (5,500 m above 3,600 m highest resolved T) keeps topTempC null and shows 'OD spreadout', while resolved -24 °C top shows 'OD · Cold top'
+    expect(aloft260Reading.cloudLayers?.[0]?.topTempC).toBeNull();
+    bound.paint({ aglText: '260 m AGL', mslText: '1,260 m MSL', useTol: false, telemetry: dummyTel, reading: aloft260Reading, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('OD spreadout');
+
+    const resolvedColdOd = { ...readWindgram(scene, 2, 1600), precipitationMmHr: 0, capeJkg: 200, windShear: null };
+    expect(resolvedColdOd.cloudLayers?.[0]?.topTempC).toBeLessThanOrEqual(-20);
+    bound.paint({ aglText: '600 m AGL', mslText: '1,600 m MSL', useTol: false, telemetry: dummyTel, reading: resolvedColdOd, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('OD · Cold top');
+
+    // 5) Flat-terrain strong wind + dry modeled descent (-1.4 m/s) shows '▼ Model descent'
+    bound.paint({
+      aglText: '120 m AGL', mslText: '1,120 m MSL', useTol: false, telemetry: dummyTel,
+      reading: { ...resolvedColdOd, heightAglM: 120, speedKt: 22, estimatedClimbMps: null, waveVelocityMps: -1.4, overdeveloped: false },
+      unitSystem: 'metric',
+    });
+    expect(climbSub.textContent).toBe('▼ Model descent');
+
+    // 6) Compound untyped precip + CAPE + Shear preserves rate and phase uncertainty ('1.4 mm/h · CAPE 1200 · Shr') alongside preserved touch clearance
+    const rainCapeShear = readWindgram(scene, 2, 2000);
+    bound.paint({ aglText: '1,000 m AGL', mslText: '2,000 m MSL', useTol: false, telemetry: dummyTel, reading: { ...rainCapeShear, peakClimbMps: 1.0 }, unitSystem: 'metric' });
+    expect(hazardEl.textContent).toBe('1.4 mm/h · CAPE 1200 · Shr');
+
+    const touchPlaced = placeWindgramCallout({
+      cursorX: 220, cursorY: 220, width: 204, height: 74,
+      bounds: { left: 40, top: 20, right: 400, bottom: 300 },
+      ceilingSamples: [], touchMode: true,
+    });
+    expect(touchPlaced.y + 74).toBeLessThanOrEqual(220 - 44);
+  });
+
+  it('Finding 5: preserves signed model vertical motion across directional turns and saturated air, keeps missing omega unavailable, and avoids quadratic scans', async () => {
+    const mod = await import('./index.ts');
+    expect('hasWaveCriticalLevelBelow' in mod).toBe(false);
+
+    const { build, profile } = fixture([14, 15, 16, 17], 4);
+    // Hour 0: (5, 10) -> (5, -10) directional change; Hour 1: (-1, 10) -> (1, 10); Hour 2: saturated 98% RH ascent; Hour 3: missing omega
+    profile.frames[0]!.layers['thermal-velocity']!.value = 0;
+    profile.frames[0]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1800, temperatureC: 6, dewPointC: -4, uWindMps: 5, vWindMps: 10, omegaPaS: -12 },
+      { pressureHpa: 750, heightM: 2800, temperatureC: 2, dewPointC: -8, uWindMps: 5, vWindMps: -10, omegaPaS: -14 },
+    ];
+    profile.frames[1]!.layers['thermal-velocity']!.value = 0;
+    profile.frames[1]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1800, temperatureC: 6, dewPointC: -4, uWindMps: -1, vWindMps: 10, omegaPaS: -12 },
+      { pressureHpa: 750, heightM: 2800, temperatureC: 2, dewPointC: -8, uWindMps: 1, vWindMps: 10, omegaPaS: -14 },
+    ];
+    profile.frames[2]!.layers['thermal-velocity']!.value = 0;
+    profile.frames[2]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1800, temperatureC: 6, dewPointC: 5.8, uWindMps: 12, vWindMps: 0, omegaPaS: -14 },
+      { pressureHpa: 750, heightM: 2800, temperatureC: 2, dewPointC: 1.8, uWindMps: 14, vWindMps: 0, omegaPaS: -15 },
+    ];
+    profile.frames[3]!.layers['thermal-velocity']!.value = 0;
+    profile.frames[3]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1800, temperatureC: 6, dewPointC: -4, uWindMps: 12, vWindMps: 0, omegaPaS: null },
+      { pressureHpa: 750, heightM: 2800, temperatureC: 2, dewPointC: -8, uWindMps: 14, vWindMps: 0, omegaPaS: null },
+    ];
+
+    const site = createPointForecast(build, point)(build.manifest.frames, new Map(profile.frames.map(f => [f.id, f])));
+    const scene = buildWindgramView(site, { unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: site.site.timeZone, hours: site.hours });
+    expect(scene.topM).toBeGreaterThanOrEqual(2800);
+    expect(readWindgram(scene, 0, 2800).waveVelocityMps).toBeGreaterThan(1.0);
+    expect(readWindgram(scene, 1, 2800).waveVelocityMps).toBeGreaterThan(1.0);
+    expect(readWindgram(scene, 2, 2400).waveVelocityMps).toBeGreaterThan(1.0);
+    expect(readWindgram(scene, 2, 2400).cloud).toBe('humidity');
+    const missingOmega = readWindgram(scene, 3, 2400);
+    expect(missingOmega.verticalVelocityPaS).toBeNull();
+    expect(missingOmega.waveVelocityMps).toBeNull();
+
+    // Structural & timing check on 72-hour x 40-level dry missing-omega forecast
+    let omegaReads = 0;
+    const dryHours = Array.from({ length: 72 }, (_, h) => {
+      const base = site.hours[3]!;
+      const levels = Array.from({ length: 40 }, (_, k) => {
+        const lvl = {
+          pressureHpa: 1000 - k * 20,
+          heightM: 500 + k * 250,
+          temperatureC: 15 - k * 1.2,
+          dewPointC: -20 - k,
+          uWindMps: k % 2 === 0 ? 10 : -10,
+          vWindMps: 5,
+        };
+        Object.defineProperty(lvl, 'omegaPaS', {
+          enumerable: true,
+          get() { omegaReads++; return null; },
+        });
+        return lvl as PublishedLevel;
+      });
+      return { ...base, validAt: new Date(Date.UTC(2026, 10, 1, h)).toISOString(), levels };
+    });
+    type PublishedLevel = (typeof site.hours)[number]['levels'][number];
+    const syntheticSite = { ...site, hours: dryHours };
+    const { buildWindgramVerticalScale } = await import('./windgram-scale.ts');
+    omegaReads = 0;
+    const t0 = performance.now();
+    buildWindgramVerticalScale(syntheticSite, dryHours, { compact: true, heightRange: 'soaring', top: 44, bottom: 280, plotHeight: 236 });
+    const elapsedMs = performance.now() - t0;
+    // Linear single-pass scan touches each of the 72 * 40 = 2,880 levels exactly once!
+    expect(omegaReads).toBe(72 * 40);
+    expect(elapsedMs).toBeLessThan(20);
+  });
+
+  it('Finding 6: resolves geographic civil zones, per-frame DST transitions, half-hour offsets, and labeled UTC fallback across day and stitched views', async () => {
+    expect(resolveCivilTimeZone(40.179, 44.499)).toBe('Asia/Yerevan');
+    expect(resolveCivilTimeZone(38.8473, -78.4121)).toBe('America/New_York');
+    expect(resolveCivilTimeZone(40.4168, -3.7038)).toBe('Europe/Madrid');
+    expect(resolveCivilTimeZone(38.7223, -9.1393)).toBe('Europe/Lisbon');
+    expect(resolveCivilTimeZone(43.615, -116.202)).toBe('America/Boise');
+    expect(resolveCivilTimeZone(33.45, -112.07)).toBe('America/Phoenix');
+    expect(resolveCivilTimeZone(47.56, -52.71)).toBe('America/St_Johns');
+    expect(resolveCivilTimeZone(27.7172, 85.324)).toBe('Asia/Kathmandu');
+    expect(resolveCivilTimeZone(-31.676, 128.885)).toBe('Australia/Eucla');
+    expect(resolveCivilTimeZone(-32.8895, -68.8458)).toBe('America/Argentina/Mendoza');
+    expect(resolveCivilTimeZone(30.0, -40.0)).toBe('UTC');
+
+    const { buildWindgramTelemetry } = await import('./windgram-readout.ts');
+    const { build, profile } = fixture([1, 2, 3, 4], 4);
+
+    // US Nov 1, 2026 fall-back at New York (05Z -> 01:00 EDT, 06Z -> 01:00 EST)
+    const dstFrames = [
+      { id: 'f001', validTime: '2026-11-01T05:00:00.000Z', intervalStart: '2026-11-01T04:00:00.000Z', intervalEnd: '2026-11-01T05:00:00.000Z' },
+      { id: 'f002', validTime: '2026-11-01T06:00:00.000Z', intervalStart: '2026-11-01T05:00:00.000Z', intervalEnd: '2026-11-01T06:00:00.000Z' },
+      { id: 'f003', validTime: '2026-11-01T15:00:00.000Z', intervalStart: '2026-11-01T14:00:00.000Z', intervalEnd: '2026-11-01T15:00:00.000Z' },
+      { id: 'f004', validTime: '2026-11-02T15:00:00.000Z', intervalStart: '2026-11-02T14:00:00.000Z', intervalEnd: '2026-11-02T15:00:00.000Z' },
+    ];
+    build.manifest.frames = dstFrames;
+    const mappedFrames = profile.frames.map((f, i) => ({ ...f, ...dstFrames[i]! }));
+    const nySite = createPointForecast(build, { lat: 40.7128, lon: -74.006 })(dstFrames, new Map(mappedFrames.map(f => [f.id, f])));
+    const nyFullDay = buildWindgramView(nySite, { unitSystem: 'metric', compact: true, timeZone: nySite.site.timeZone, hours: nySite.hours.slice(0, 3) });
+    const tel05Z = buildWindgramTelemetry(sceneData(nyFullDay), readWindgram(nyFullDay, 0, 1800), nySite.hours[0]!.mapLift, false, false);
+    const tel06Z = buildWindgramTelemetry(sceneData(nyFullDay), readWindgram(nyFullDay, 1, 1800), nySite.hours[1]!.mapLift, false, false);
+    expect(tel05Z.timeChip).toBe('01:00 EDT');
+    expect(tel06Z.timeChip).toBe('01:00 EST');
+    expect(tel05Z.compactTime).toBe('1a EDT');
+    expect(tel06Z.compactTime).toBe('1a EST');
+
+    // Offshore (30°N, 40°W) labeled UTC fallback in both 1-day and stitched views
+    const offshoreSite = createPointForecast(build, { lat: 30.0, lon: -40.0 })(dstFrames, new Map(mappedFrames.map(f => [f.id, f])));
+    expect(offshoreSite.site.isUtcFallback).toBe(true);
+    const offshoreDay = buildWindgramView(offshoreSite, { unitSystem: 'metric', compact: true, timeZone: offshoreSite.site.timeZone, hours: offshoreSite.hours.slice(2, 3) });
+    const offshoreStitched = buildStitchedWindgramView(offshoreSite, {
+      unitSystem: 'metric', compact: true, timeZone: offshoreSite.site.timeZone,
+      dateKeys: ['2026-11-01', '2026-11-02'],
+    });
+    const offshoreTel = buildWindgramTelemetry(sceneData(offshoreDay), readWindgram(offshoreDay, 0, 1800), offshoreSite.hours[2]!.mapLift, false, false);
+    expect(offshoreTel.timeChip).toBe('15:00 UTC');
+    expect(offshoreTel.compactTime).toBe('3p UTC');
+    expect(renderWindgramSvg(offshoreDay)).toContain('time UTC (fallback)');
+    expect(renderWindgramSvg(offshoreStitched)).toContain('time UTC (fallback)');
+  });
+
+  it('preserves native-column convective depth on high-ridge fallback hours and distinguishes unpublished model omega', async () => {
+    const { resolveConvectiveEnvelope, estimateThermalClimbAtHeight } = await import('./windgram-atmosphere.ts');
+    // Ridge DEM 1,450 m over 1,000 m model ground with 1,521.35 m native usable ceiling (thermal top 2,000 m, w* = 0.639445 m/s)
+    const wStar = 0.639445;
+    const env = resolveConvectiveEnvelope(1450, 1521.35, 2000, 4000, wStar, {
+      modelTerrainM: 1000,
+      isNativeFallback: true,
+    });
+    expect(env).not.toBeNull();
+    expect(env!.groundM).toBe(1000);
+    expect(env!.floorM).toBe(1450);
+    expect(env!.convectiveDepthM).toBeCloseTo(1000, 0);
+    // Below the 1,450 m ridge is underground (0 climb); at 1,480 m MSL inside [1450, 1521.35] it follows the true 1,000 m native profile
+    expect(estimateThermalClimbAtHeight(1400, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps).toBe(0);
+    const aloftClimb = estimateThermalClimbAtHeight(1480, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps!;
+    expect(aloftClimb).toBeGreaterThan(0);
+    expect(aloftClimb).toBeLessThan(0.12);
+
+    // Unpublished model omega (e.g. GFS / ICON-EU) vs missing single-level omega (e.g. RRFS / WRF)
+    const { build, profile } = fixture([1, 2], 2);
+    const noOmegaFrames = profile.frames.map(f => ({
+      ...f,
+      profile: f.profile ? { ...f.profile, levels: f.profile.levels.map(l => ({ ...l, omegaPaS: null })) } : f.profile,
+    }));
+    const noOmegaSite = createPointForecast(build, { lat: 38.85, lon: -78.41 })(
+      build.manifest.frames.slice(0, 2),
+      new Map(noOmegaFrames.slice(0, 2).map(f => [f.id, f])),
+    );
+    const noOmegaView = buildWindgramView(noOmegaSite, { unitSystem: 'metric', compact: true, timeZone: noOmegaSite.site.timeZone, hours: noOmegaSite.hours });
+    expect(readWindgram(noOmegaView, 0, 1800).verticalVelocityUnavailableReason).toBe(
+      'Vertical motion unavailable (not published for this model).',
+    );
+
+    const partialOmegaFrames = noOmegaFrames.map((f, idx) => idx === 1 && f.profile
+      ? { ...f, profile: { ...f.profile, levels: f.profile.levels.map((l, j) => (j === 1 ? { ...l, omegaPaS: -0.9 } : l)) } }
+      : f);
+    const partialSite = createPointForecast(build, { lat: 38.85, lon: -78.41 })(
+      build.manifest.frames.slice(0, 2),
+      new Map(partialOmegaFrames.slice(0, 2).map(f => [f.id, f])),
+    );
+    const partialView = buildWindgramView(partialSite, { unitSystem: 'metric', compact: true, timeZone: partialSite.site.timeZone, hours: partialSite.hours });
+    expect(readWindgram(partialView, 0, 1800).verticalVelocityUnavailableReason).toBe(
+      'Vertical motion unavailable for the selected frame and height.',
+    );
+    expect(readWindgram(partialView, 1, 1800).verticalVelocityUnavailableReason).toBe(
+      'Vertical motion unavailable at this height.',
+    );
+  });
+
+  it('recovers physical liquid RH and dewpoint on retained GFS cold clouds without false Icing risk, and leaves liquid quantities unknown for unsupported model-rh', () => {
+    const cascades = { lat: 47.25, lon: -121.75 };
+    const { build: retainedBuild, profile: retainedProfile } = fixture([18, 21], 2);
+    delete retainedBuild.manifest.tool.profileDewpointReference;
+
+    // Frame 0: Nov 22 18Z GFS f018 at 600 hPa (4,159 m): stored -17.72 °C / -17.77 °C (99.58% GFS RH -> 85.41% liquid RH)
+    retainedProfile.frames[0]!.profile.modelTerrainM = 1200;
+    retainedProfile.frames[0]!.layers['sfc-temp-c']!.value = 2;
+    retainedProfile.frames[0]!.layers['sfc-dewpoint-c'] = { ...retainedProfile.frames[0]!.layers['sfc-temp-c']!, value: -2 };
+    retainedProfile.frames[0]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1500, temperatureC: -2, dewPointC: dewpointFromTempAndRhC(-2, 70), uWindMps: 6, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 600, heightM: 4159, temperatureC: -17.72, dewPointC: -17.77, uWindMps: 14, vWindMps: 0, omegaPaS: 0 },
+    ];
+    // Frame 1: Cascades -19.82 °C with 95.12% GFS RH -> 78.29% liquid RH
+    retainedProfile.frames[1]!.profile.modelTerrainM = 1200;
+    retainedProfile.frames[1]!.profile.levels = [
+      { pressureHpa: 850, heightM: 1500, temperatureC: -3, dewPointC: dewpointFromTempAndRhC(-3, 70), uWindMps: 6, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 600, heightM: 4170, temperatureC: -19.82, dewPointC: dewpointFromTempAndRhC(-19.82, 95.12), uWindMps: 15, vWindMps: 0, omegaPaS: 0 },
+    ];
+
+    const retainedSite = createPointForecast(retainedBuild, cascades)(
+      retainedBuild.manifest.frames,
+      new Map(retainedProfile.frames.map(f => [f.id, f])),
+    );
+    const retainedView = buildWindgramView(retainedSite, {
+      unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: retainedSite.site.timeZone, hours: retainedSite.hours,
+    });
+
+    const f018 = readWindgram(retainedView, 0, 4159);
+    expect(f018.relativeHumidityPercent!).toBeCloseTo(85.41, 1);
+    expect(f018.cloudHumidityPercent!).toBeGreaterThanOrEqual(94);
+    expect(f018.dewPointC!).toBeLessThan(-19.5);
+
+    const archived600 = readWindgram(retainedView, 1, 4170);
+    expect(archived600.relativeHumidityPercent!).toBeCloseTo(78.4, 0);
+    expect(archived600.cloudHumidityPercent!).toBeGreaterThanOrEqual(94);
+
+    // Tile callout shows cold-cloud evidence without Icing risk at both heights
+    const cloudText = new FakeElement('text');
+    const hazardEl = new FakeElement('text');
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) => (sel === '[data-tile-cloud-text]' ? cloudText : sel === '[data-tile-hazard]' ? hazardEl : null),
+    } as unknown as ParentNode);
+    const dummyTel = { timeChip: '07:00', altChip: '', snappedToTol: false, canSnapToTol: false, calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false };
+    for (const r of [f018, archived600]) {
+      bound.paint({ aglText: '2,960 m AGL', mslText: '4,160 m MSL', useTol: false, telemetry: dummyTel, reading: { ...r, precipitationMmHr: 0 }, unitSystem: 'metric' });
+      expect(cloudText.textContent).toContain('☁ Cold cloud');
+      expect(hazardEl.textContent).not.toContain('Icing');
+    }
+
+    // Unsupported model-rh reports model RH while leaving liquid RH and dewpoint unknown
+    const unsupportedBuild = structuredClone(retainedBuild);
+    unsupportedBuild.manifest.model = 'custom-nwp';
+    const unsupportedSite = createPointForecast(unsupportedBuild, cascades)(
+      unsupportedBuild.manifest.frames,
+      new Map(retainedProfile.frames.map(f => [f.id, f])),
+    );
+    expect(unsupportedSite.hours[0]!.upperAirDewpointReference).toBe('model-rh');
+    const unsupportedView = buildWindgramView(unsupportedSite, {
+      unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: unsupportedSite.site.timeZone, hours: unsupportedSite.hours,
+    });
+    const unsupported600 = readWindgram(unsupportedView, 0, 4159);
+    expect(unsupported600.dewPointC).toBeNull();
+    expect(unsupported600.relativeHumidityPercent).toBeNull();
+    expect(unsupported600.cloudHumidityPercent!).toBeCloseTo(99.58, 1);
+    // Separate 2 m surface dewpoint remains physical
+    expect(readWindgram(unsupportedView, 0, 1202).dewPointC).toBeCloseTo(-2, 5);
+  });
+
+  it('prevents a weather donor from becoming site ground across mixed contributors, absence, outside-domain, loading-order reversal, and SVG footer', async () => {
+    const { buildWindgramTelemetry } = await import('./windgram-readout.ts');
+    const ara = { lat: 40.4186, lon: 44.4547 };
+    const { build, sample, profile } = fixture([12, 13], 2);
+    build.manifest.model = 'icon-eu';
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+    for (const f of frames) f.profile.modelTerrainM = 1794;
+
+    // Hour 0: 1 weather contributor missing -> nearest weather donor (2,470.101 m terrain, 2,770.101 m MSL, 300 m donor AGL, interpolated: false)
+    frames[0]!.layers['usable-lift-msl'] = { ...frames[0]!.layers['usable-lift-msl']!, value: 2770.101, interpolated: false };
+    frames[0]!.layers['usable-lift-agl'] = { ...frames[0]!.layers['usable-lift-agl']!, value: 300, interpolated: false };
+    // Hour 1: all 4 weather contributors valid -> 2,597.272 m MSL, 300 m site AGL, interpolated: true
+    frames[1]!.layers['usable-lift-msl'] = { ...frames[1]!.layers['usable-lift-msl']!, value: 2597.272, interpolated: true };
+    frames[1]!.layers['usable-lift-agl'] = { ...frames[1]!.layers['usable-lift-agl']!, value: 300, interpolated: true };
+
+    const loaded = new Map(frames.map(f => [f.id, f]));
+    const araTerrain = {
+      elevationM: 2297.272,
+      status: 'valid' as const,
+      interpolated: true,
+      surfaceId: 'gfs-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    };
+
+    // 1) Mixed contributor with valid siteTerrain: snapped preserves 300 m labeled 'donor AGL', free reads 473 m site AGL
+    const withSite = createPointForecast(build, ara, { siteTerrain: araTerrain })(build.manifest.frames, loaded);
+    const viewWithSite = buildWindgramView(withSite, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: withSite.site.timeZone, hours: withSite.hours });
+    const mixedFree = readWindgram(viewWithSite, 0, 2770.101);
+    expect(mixedFree.heightAglM!).toBeCloseTo(472.829, 2);
+    expect(mixedFree.heightAglReference).toBe('terrain');
+    const snappedTel = buildWindgramTelemetry(sceneData(viewWithSite), mixedFree, withSite.hours[0]!.mapLift, true, true);
+    expect(snappedTel.altChip).toContain('300 m donor AGL');
+    expect(snappedTel.altChip).toContain('473 m site AGL');
+    const freeTel = buildWindgramTelemetry(sceneData(viewWithSite), mixedFree, withSite.hours[0]!.mapLift, false, true);
+    expect(freeTel.altChip).toContain('473 m AGL');
+
+    // 2) Site terrain unavailable: donor never carries into Hour 1 (never turns 300 m into 127 m), free cursor uses 'model AGL', SVG footer never prints donor as 'Ground'
+    const toForecast = createPointForecast(build, ara);
+    const noSite = toForecast(build.manifest.frames, loaded, null);
+    expect(noSite.hours[0]!.fineTerrainM).toBeNull();
+    expect(noSite.hours[1]!.fineTerrainM).toBeNull();
+    const viewNoSite = buildWindgramView(noSite, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: noSite.site.timeZone, hours: noSite.hours });
+    const h1Reading = readWindgram(viewNoSite, 1, 2597.272);
+    expect(h1Reading.heightAglReference).toBe('model');
+    expect(h1Reading.heightAglM!).toBeCloseTo(2597.272 - 1794, 2);
+    const h1SnappedTel = buildWindgramTelemetry(sceneData(viewNoSite), h1Reading, noSite.hours[1]!.mapLift, true, true);
+    expect(h1SnappedTel.altChip).toBe('★ TOL 300 m AGL');
+    const h1FreeTel = buildWindgramTelemetry(sceneData(viewNoSite), h1Reading, noSite.hours[1]!.mapLift, false, true);
+    expect(h1FreeTel.altChip).toContain('803 m model AGL');
+    const noSiteSvg = renderWindgramSvg(viewNoSite);
+    expect(noSiteSvg).toContain('Model ground 1,794 m MSL');
+    expect(noSiteSvg).not.toContain('Ground 2,470');
+
+    // 3) Loading-order reversal: siteTerrain arrives after weather and recovers 300 m AGL on Hour 1
+    const recovered = toForecast(build.manifest.frames, loaded, araTerrain);
+    const viewRecovered = buildWindgramView(recovered, { unitSystem: 'metric', compact: false, heightRange: 'soaring', timeZone: recovered.site.timeZone, hours: recovered.hours });
+    expect(readWindgram(viewRecovered, 1, 2597.272).heightAglM!).toBeCloseTo(300, 2);
+    expect(renderWindgramSvg(viewRecovered)).toContain('Ground 2,297 m MSL');
+
+    // 4) Explicit outside-domain terrain is never overridden by current-frame weather donor
+    const outsideSite = createPointForecast(build, ara, {
+      siteTerrain: { ...araTerrain, elevationM: null, status: 'outside-domain', interpolated: false },
+    })(build.manifest.frames, loaded);
+    expect(outsideSite.hours[0]!.fineTerrainM).toBeNull();
+  });
+
+  it('keeps visual and accessible altitudes in agreement across same-hour vertical pointer motion and parent container scroll', async () => {
+    vi.useFakeTimers();
+    try {
+      const { build, sample, profile } = fixture([18], 1);
+      const frame = { ...profile.frames[0]!, layers: { ...profile.frames[0]!.layers, ...sample.frames[0]!.layers } };
+      frame.profile.modelTerrainM = 500;
+      frame.layers['usable-lift-msl']!.value = 2400;
+      frame.layers['usable-lift-agl']!.value = 1900;
+      const site = createPointForecast(build, point, {
+        siteTerrain: { elevationM: 500, status: 'valid', interpolated: true, surfaceId: 'gfs-fine', surface: 'DSM', verticalDatum: 'EGM2008' },
+      })(build.manifest.frames, new Map([[frame.id, frame]]));
+      const scene = buildWindgramView(site, { unitSystem: 'metric', compact: false, timeZone: site.site.timeZone, hours: site.hours });
+
+      let containerOffsetY = 0;
+      const agl = new FakeElement('text');
+      const readout = new FakeElement('p');
+      readout.id = 'scroll-readout';
+      const svg = {
+        querySelector: (sel: string) => (sel === '[data-cursor-agl]' ? agl : null),
+        getScreenCTM: () => ({
+          inverse: () => ({ offsetY: containerOffsetY }),
+        }),
+      };
+      const host = Object.assign(new FakeElement('div'), {
+        ownerDocument: {},
+        querySelector: (sel: string) => (sel === 'svg.windgram' ? svg : null),
+        getBoundingClientRect: () => ({
+          left: 0,
+          top: containerOffsetY,
+          right: scene.width,
+          bottom: scene.height + containerOffsetY,
+        }),
+      });
+      vi.stubGlobal('DOMPoint', class {
+        constructor(readonly x: number, readonly y: number) {}
+        matrixTransform(inv: { offsetY?: number }) {
+          return new DOMPoint(this.x, this.y - (inv.offsetY ?? 0));
+        }
+      });
+
+      const telemetries: import('./windgram-readout.ts').WindgramTelemetryStrip[] = [];
+      const chart = mountWindgram(host as unknown as HTMLElement, {
+        view: scene,
+        idPrefix: 'ptr-reg',
+        readout: readout as unknown as HTMLElement,
+        inspectionMode: 'magnetic',
+        onTelemetry: t => { if (t) telemetries.push(t); },
+      });
+
+      const yForAgl = (targetAglM: number) => {
+        const msl = 500 + targetAglM;
+        return scene.bottom - ((msl - scene.floorM) / (scene.topM - scene.floorM)) * scene.plotHeight;
+      };
+
+      // Move vertically within the same hour from 1,528 m AGL to 982 m AGL
+      host.dispatchEvent(Object.assign(new Event('pointermove'), {
+        pointerType: 'mouse', pointerId: 1, clientX: scene.hours[0]!.x, clientY: yForAgl(1528),
+      }));
+      expect(telemetries.at(-1)!.altChip).toContain('1,528 m AGL');
+      expect(readout.textContent).toContain('1,528 m AGL');
+
+      host.dispatchEvent(Object.assign(new Event('pointermove'), {
+        pointerType: 'mouse', pointerId: 1, clientX: scene.hours[0]!.x, clientY: yForAgl(982),
+      }));
+      expect(telemetries.at(-1)!.altChip).toContain('982 m AGL');
+      vi.advanceTimersByTime(80);
+      expect(readout.textContent).toContain('982 m AGL');
+
+      // Shift enclosing container by 70 CSS pixels and point at the exact same chart-relative position
+      containerOffsetY = 70;
+      host.dispatchEvent(Object.assign(new Event('pointermove'), {
+        pointerType: 'mouse', pointerId: 1, clientX: scene.hours[0]!.x, clientY: yForAgl(982) + 70,
+      }));
+      vi.advanceTimersByTime(80);
+      expect(telemetries.at(-1)!.altChip).toContain('982 m AGL');
+      expect(readout.textContent).toContain('982 m AGL');
+
+      chart.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('aligns Windgram Key swatches, ranges, 15 kt white lapse barb, 50 kt pennant, scientific wording, and trigger glyph', () => {
+    const hybridMetric = renderWindgramKey('metric', true, 'hybrid-climb');
+    const hybridImperial = renderWindgramKey('imperial', false, 'hybrid-climb');
+    const lapseMetric = renderWindgramKey('metric', false, 'lapse');
+
+    // Hybrid: 6 quantitative climb swatches with 6 visible/accessible ranges, 1.2 m/s / 236 ft/min sink stated, sky/inversion separated
+    expect(hybridMetric.match(/class="wg-key-band"/g)).toHaveLength(6);
+    expect(hybridMetric).toContain('includes 1.2 m/s sink');
+    expect(hybridImperial).toContain('includes 236 ft/min sink');
+    expect(hybridMetric).toContain('wg-key-backdrops');
+    expect(hybridMetric).toContain('Neutral sky');
+    expect(hybridMetric).toContain('Inversion lid');
+
+    // Lapse: 8 quantitative swatches with 8 visible/accessible ranges, 15 kt barb colored white (#ffffff), 50 kt filled pennant drawn
+    expect(lapseMetric.match(/class="wg-key-band"/g)).toHaveLength(8);
+    const barb15Match = lapseMetric.match(/data-key-barb="15"[^>]*>([\s\S]*?)<\/g>/);
+    expect(barb15Match?.[1]).toContain('stroke="#ffffff"');
+    expect(barb15Match?.[1]).not.toContain('#78ff78');
+    const barb50Match = lapseMetric.match(/data-key-barb="50"[^>]*>([\s\S]*?)<\/g>/);
+    expect(barb50Match?.[1]).toContain('Z" fill="#ffffff"');
+    expect(lapseMetric).toContain('data-key-hover-dial');
+    expect(lapseMetric).toContain('Barb points to wind source; hover arrow points downwind');
+
+    // Scientific wording: modeled ascent aloft, inferred moisture ranges, separate lift line samples, missing hours or heights, secondary disclosure
+    expect(hybridMetric).toContain('Modeled ascent aloft');
+    expect(hybridMetric).not.toContain('stable wave');
+    expect(hybridMetric).toContain('Inferred moisture');
+    expect(hybridMetric).toContain('83–&lt;89%, 89–&lt;94%, ≥94%');
+    expect(hybridMetric).not.toMatch(/SCT\/BKN/i);
+    expect(hybridMetric).toContain('Native lift estimate');
+    expect(hybridMetric).toContain('Unavailable hours or heights');
+    expect(hybridMetric).toContain('<details class="wg-key-more">');
+  });
+
+  it('preserves missing-height gaps in modeled ascent contours, truthful precip/cloud labels, DST accessible clock, RRFS isolated omega wording, and stitched run-switch ticks', () => {
+    // 1) Missing native level height breaks modeled ascent contour across 2,500 m
+    const { build, sample, profile } = fixture([18], 1);
+    const gapFrame = profile.frames[0]!;
+    gapFrame.profile.modelTerrainM = 400;
+    gapFrame.layers['thermal-velocity']!.value = 0;
+    gapFrame.profile.levels = [
+      { pressureHpa: 880, heightM: 1000, temperatureC: 8, dewPointC: -5, uWindMps: 14, vWindMps: 0, omegaPaS: -18 },
+      { pressureHpa: 750, heightM: null, temperatureC: 2, dewPointC: -8, uWindMps: 15, vWindMps: 0, omegaPaS: -18 },
+      { pressureHpa: 620, heightM: 4000, temperatureC: -8, dewPointC: -18, uWindMps: 18, vWindMps: 0, omegaPaS: -18 },
+    ];
+    const gapSite = createPointForecast(build, point)(build.manifest.frames, new Map([[gapFrame.id, gapFrame]]));
+    const gapView = buildWindgramView(gapSite, { unitSystem: 'metric', compact: false, heightRange: 'full', timeZone: gapSite.site.timeZone, hours: gapSite.hours });
+    expect(readWindgram(gapView, 0, 2500).waveVelocityMps).toBeNull();
+    const y2500 = gapView.bottom - ((2500 - gapView.floorM) / (gapView.topM - gapView.floorM)) * gapView.plotHeight;
+    const wavePaths = sceneData(gapView).fields.filter(f => f.className.startsWith('wg-wave-')).map(f => f.path);
+    for (const d of wavePaths) {
+      for (const ring of d.split('Z').filter(Boolean)) {
+        const ys = [...ring.matchAll(/[ML][-\d.]+\s+([-\d.]+)/g)].map(m => Number(m[1]));
+        if (ys.length) {
+          const minY = Math.min(...ys), maxY = Math.max(...ys);
+          expect(y2500 > minY + 1 && y2500 < maxY - 1).toBe(false);
+        }
+      }
+    }
+
+    // 2) Callout labels: untyped 1 mm/h + CAPE 1200 + Shear, 100% sky cover with unknown local RH & precip, and dry inversion gated off Warm aloft
+    const skyCodeEl = new FakeElement('text');
+    const cloudText = new FakeElement('text');
+    const hazardEl = new FakeElement('text');
+    const bound = getWindgramCalloutRenderer('tile-2x2').bind({
+      querySelector: (sel: string) =>
+        sel === '[data-tile-sky-code]' ? skyCodeEl : sel === '[data-tile-cloud-text]' ? cloudText : sel === '[data-tile-hazard]' ? hazardEl : null,
+    } as unknown as ParentNode);
+    const dummyTel = { timeChip: '14:00', altChip: '', snappedToTol: false, canSnapToTol: false, calloutBadge: 'ALT', calloutMeteo: '', calloutSoar: '', hasPositiveClimb: false };
+
+    const baseR = readWindgram(gapView, 0, 1000);
+    bound.paint({
+      aglText: '600 m AGL', mslText: '1,000 m MSL', useTol: false, telemetry: dummyTel,
+      reading: { ...baseR, precipitationMmHr: 1.0, capeJkg: 1200, windShear: { lowerM: 800, upperM: 1200, vectorChangeMps: 4, perKmMps: 10 } },
+      unitSystem: 'metric',
+    });
+    expect(hazardEl.textContent).toBe('1.0 mm/h · CAPE 1200 · Shr');
+
+    bound.paint({
+      aglText: '600 m AGL', mslText: '1,000 m MSL', useTol: false, telemetry: dummyTel,
+      reading: {
+        ...baseR,
+        cloud: null,
+        cloudLayers: [],
+        activeCloudLayer: null,
+        relativeHumidityPercent: null,
+        cloudHumidityPercent: null,
+        cloudCoverTotalPercent: 100,
+        precipitationMmHr: null,
+        capeJkg: 0,
+        windShear: null,
+      },
+      unitSystem: 'metric',
+    });
+    expect(skyCodeEl.textContent).toBe('SKY 100%');
+    expect(cloudText.textContent).toBe('Local RH — · Sky 100%');
+    expect(hazardEl.textContent).toBe('Precip —');
+
+    // Dry post-frontal subsidence inversion (0 mm/h precip, low RH) does NOT trigger warmLayerAloft
+    const dryInvFrame = structuredClone(gapFrame);
+    dryInvFrame.layers['sfc-temp-c']!.value = 8;
+    dryInvFrame.layers['precip-rate'] = { ...dryInvFrame.layers['sfc-temp-c']!, value: 0 };
+    dryInvFrame.profile.levels = [
+      { pressureHpa: 840, heightM: 1600, temperatureC: -4, dewPointC: -16, uWindMps: 8, vWindMps: 0, omegaPaS: 0 },
+      { pressureHpa: 790, heightM: 2100, temperatureC: 1.2, dewPointC: -15, uWindMps: 10, vWindMps: 0, omegaPaS: 0 },
+    ];
+    const dryInvSite = createPointForecast(build, point)(build.manifest.frames, new Map([[dryInvFrame.id, dryInvFrame]]));
+    const dryInvView = buildWindgramView(dryInvSite, { unitSystem: 'metric', compact: false, timeZone: dryInvSite.site.timeZone, hours: dryInvSite.hours });
+    expect(readWindgram(dryInvView, 0, 1800).warmLayerAloft).toBe(false);
+
+    // 3) Accessible timestamp at America/New_York DST transition (Nov 1 06Z -> 01:00 EST)
+    const dstFrames = [
+      { id: 'f001', validTime: '2026-11-01T05:00:00.000Z', intervalStart: '2026-11-01T04:00:00.000Z', intervalEnd: '2026-11-01T05:00:00.000Z' },
+      { id: 'f002', validTime: '2026-11-01T06:00:00.000Z', intervalStart: '2026-11-01T05:00:00.000Z', intervalEnd: '2026-11-01T06:00:00.000Z' },
+    ];
+    const dstBuild = fixtureProfileBuild({ frameHours: [1, 2], mapFrameCount: 2 });
+    dstBuild.manifest.frames = dstFrames;
+    const dstLoaded = new Map(dstFrames.map(df => [df.id, { ...profile.frames[0]!, ...df, id: df.id, layers: { ...profile.frames[0]!.layers, ...sample.frames[0]!.layers } }]));
+    const nySite = createPointForecast(dstBuild, { lat: 40.7128, lon: -74.006 })(dstFrames, dstLoaded);
+    const nyView = buildWindgramView(nySite, { unitSystem: 'metric', compact: true, timeZone: nySite.site.timeZone, hours: nySite.hours });
+    const srEl = new FakeElement('p');
+    srEl.id = 'dst-sr';
+    const dstHost = new FakeElement('div');
+    const dstChart = mountWindgram(dstHost as unknown as HTMLElement, {
+      view: nyView,
+      idPrefix: 'dst',
+      readout: srEl as unknown as HTMLElement,
+      selectedValidAt: '2026-11-01T06:00:00.000Z',
+    });
+    expect(srEl.textContent).toContain('01:00 EST (06:00 UTC)');
+    dstChart.dispose();
+
+    // 4) RRFS f018 missing omega in isolation vs alongside f021 never claims 'not published for this model'
+    const rrfsBuild = fixtureProfileBuild({ frameHours: [18, 21], mapFrameCount: 2 });
+    rrfsBuild.manifest.model = 'rrfs';
+    const rrfsSample = fixturePointSample(rrfsBuild, `https://api.test/point?lat=${point.lat}&lon=${point.lon}&frame=f018,f021&layers=usable-lift-msl,usable-lift-agl`);
+    const rrfsProfile = fixtureProfileResponse(rrfsBuild, `https://api.test/point?lat=${point.lat}&lon=${point.lon}&frame=f018,f021&layers=thermal-top-msl,pbl-height-agl,thermal-velocity,sfc-temp-c,wind-gust-10m,cloud-cover-total,cloud-cover-low`);
+    rrfsProfile.frames[0]!.profile.levels = rrfsProfile.frames[0]!.profile.levels.map(l => ({ ...l, omegaPaS: null }));
+    rrfsProfile.frames[1]!.profile.levels = rrfsProfile.frames[1]!.profile.levels.map(l => ({ ...l, omegaPaS: -1.5 }));
+    const rrfsFrames = rrfsProfile.frames.map((f, i) => ({ ...f, layers: { ...f.layers, ...rrfsSample.frames[i]!.layers } }));
+    const rrfsSiteIsolated = createPointForecast(rrfsBuild, point)([rrfsBuild.manifest.frames[0]!], new Map([[rrfsFrames[0]!.id, rrfsFrames[0]!]]));
+    const rrfsIsolatedView = buildWindgramView(rrfsSiteIsolated, { unitSystem: 'metric', compact: true, timeZone: rrfsSiteIsolated.site.timeZone, hours: rrfsSiteIsolated.hours });
+    const isolatedReason = readWindgram(rrfsIsolatedView, 0, 1800).verticalVelocityUnavailableReason;
+    expect(isolatedReason).not.toContain('not published for this model');
+
+    const rrfsSiteBoth = createPointForecast(rrfsBuild, point)(rrfsBuild.manifest.frames, new Map(rrfsFrames.map(f => [f.id, f])));
+    const rrfsBothView = buildWindgramView(rrfsSiteBoth, { unitSystem: 'metric', compact: true, timeZone: rrfsSiteBoth.site.timeZone, hours: rrfsSiteBoth.hours });
+    expect(readWindgram(rrfsBothView, 0, 1800).verticalVelocityUnavailableReason).toBe(isolatedReason);
+
+    // 5) Stitched empty-panel ticks stay identical whether a shifted-alignment run is opened after an earlier run or fresh
+    const wvPoint = { lat: 38.0, lon: -81.5 };
+    const makeRunSite = (cycleIso: string, hours: readonly number[], pt = wvPoint) => {
+      const cycleMs = Date.parse(cycleIso);
+      const runBuild = fixtureProfileBuild({ frameHours: hours, mapFrameCount: 2 });
+      runBuild.manifest.cycle = cycleIso;
+      runBuild.manifest.frames = hours.map(h => ({
+        id: `f${String(h).padStart(3, '0')}`,
+        validTime: new Date(cycleMs + h * 3_600_000).toISOString(),
+        intervalStart: new Date(cycleMs + (h - 3) * 3_600_000).toISOString(),
+        intervalEnd: new Date(cycleMs + h * 3_600_000).toISOString(),
+      }));
+      const loadedRun = new Map(runBuild.manifest.frames.map(fr => [fr.id, { ...profile.frames[0]!, ...fr, id: fr.id }]));
+      return createPointForecast(runBuild, pt)(runBuild.manifest.frames, loadedRun);
+    };
+    const siteRunA = makeRunSite('2026-11-24T06:00:00.000Z', [2, 5, 8, 11, 14, 17]); // aligned to 08Z (3a/6a/9a/12p/3p EST)
+    const siteRunB = makeRunSite('2026-11-24T12:00:00.000Z', [1, 4, 7, 10, 13, 16]); // aligned to 13Z (8a/11a/2p EST)
+    const siteRunBFresh = makeRunSite('2026-11-24T12:00:00.000Z', [1, 4, 7, 10, 13, 16], { lat: 38.0001, lon: -81.5 });
+    const viewRunA = buildStitchedWindgramView(siteRunA, {
+      unitSystem: 'metric', compact: true, timeZone: siteRunA.site.timeZone, widthPx: 420, heightPx: 280,
+      dateKeys: ['2026-11-23', '2026-11-24', '2026-11-25'],
+    });
+    const viewRunBAfterA = buildStitchedWindgramView(siteRunB, {
+      unitSystem: 'metric', compact: true, timeZone: siteRunB.site.timeZone, widthPx: 420, heightPx: 280,
+      dateKeys: ['2026-11-23', '2026-11-24', '2026-11-25'],
+    });
+    const viewRunBFresh = buildStitchedWindgramView(siteRunBFresh, {
+      unitSystem: 'metric', compact: true, timeZone: siteRunBFresh.site.timeZone, widthPx: 420, heightPx: 280,
+      dateKeys: ['2026-11-23', '2026-11-24', '2026-11-25'],
+    });
+    const ticksA = sceneData(viewRunA).dayPanels![0]!.visibleAxisIndices.map(i => sceneData(viewRunA).timeAxis[i]!.label);
+    const ticksBAfterA = sceneData(viewRunBAfterA).dayPanels![0]!.visibleAxisIndices.map(i => sceneData(viewRunBAfterA).timeAxis[i]!.label);
+    const ticksBFresh = sceneData(viewRunBFresh).dayPanels![0]!.visibleAxisIndices.map(i => sceneData(viewRunBFresh).timeAxis[i]!.label);
+    expect(ticksA).toEqual(['9a', '12p', '3p']);
+    expect(ticksBAfterA).toEqual(['8a', '11a', '2p']);
+    expect(ticksBAfterA).toEqual(ticksBFresh);
+  });
+
+  it('keeps 1-Day cropped to solar daylight on nocturnal frameIds, anchors chart floor at site ground without sub-model hatching, and omits vertical tower bars', () => {
+    const head = new FakeElement('head');
+    const owner = {
+      head,
+      getElementById: (id: string) => head.children.find(child => child.id === id) ?? null,
+      createElement: (tag: string) => new FakeElement(tag, owner as unknown as Document),
+      defaultView: new EventTarget(),
+    };
+
+    // Armenia point (Asia/Yerevan UTC+4) across 01Z..19Z (5a..11p local)
+    const armPoint = { lat: 40.0096, lon: 44.6283 };
+    const hours = Array.from({ length: 19 }, (_, i) => i + 1);
+    const { build, sample, profile } = fixture(hours, hours.length);
+    const frames = profile.frames.map((frame, i) => ({ ...frame, layers: { ...frame.layers, ...sample.frames[i]!.layers } }));
+    for (const f of frames) {
+      f.profile.modelTerrainM = 1495;
+      f.layers['usable-lift-msl']!.value = 2400;
+      f.layers['usable-lift-agl']!.value = 920;
+    }
+
+    const container = owner.createElement('div') as unknown as HTMLElement;
+    const siteTerrainValley = {
+      elevationM: 1480,
+      status: 'valid' as const,
+      interpolated: true,
+      surfaceId: 'gfs-fine',
+      surface: 'DSM',
+      verticalDatum: 'EGM2008',
+    };
+    renderPointWindgram(container, { frames, siteTerrain: siteTerrainValley }, build, {
+      point: armPoint,
+      frameId: 'f001', // 01:00 UTC = 05:00 local (pre-sunrise)
+      unitSystem: 'imperial',
+      viewMode: '1d',
+      onFrame: vi.fn(),
+    });
+    const host = visit(container as unknown as FakeElement).find(el => el.className === 'av-windgram-host')!;
+    expect(host.innerHTML).not.toContain('>5a<');
+    expect(host.innerHTML).not.toContain('>11p<');
+    expect(host.innerHTML).toContain('data-height-series="modelTerrainM"');
+    expect(host.innerHTML).not.toContain('class="windgram-missing"');
+    disposePointWindgram(container);
+
+    // Ridge case (Ground 1,450 m > model 1,248 m): floorM anchors at 1,450 m, clipping underground air
+    for (const f of frames) f.profile.modelTerrainM = 1248;
+    const ridgeSite = createPointForecast(build, armPoint, {
+      siteTerrain: { ...siteTerrainValley, elevationM: 1450 },
+    })(build.manifest.frames, new Map(frames.map(f => [f.id, f])));
+    const ridgeDay = buildWindgramView(ridgeSite, {
+      unitSystem: 'metric', compact: true, heightRange: 'soaring', timeZone: ridgeSite.site.timeZone,
+      hours: { timeZone: ridgeSite.site.timeZone, dateKey: ridgeSite.hours[0]!.validAt.slice(0, 10) },
+    });
+    expect(ridgeDay.floorM).toBe(1450);
+  });
+
+  it('adopts shared Constructable Stylesheets without DOM <style> nodes when supported, emits zero inline style attributes in keys/barbs, and keeps CSS band colors in sync', async () => {
+    const { adoptDocumentStyleSheet } = await import('./style-registry.ts');
+    const chartCss = (await import('./styles/windgram-chart.css?inline')).default;
+    const panelCss = (await import('./styles/windgram-panel.css?inline')).default;
+    const { WINDGRAM_CLIMB_BANDS } = await import('./windgram-atmosphere.ts');
+    const { WINDGRAM_STABILITY } = await import('./windgram-stability.ts');
+
+    // 1) Shared CSSStyleSheet adoption across multiple documents in the same realm
+    let constructed = 0;
+    class MockCSSStyleSheet {
+      text = '';
+      constructor() { constructed++; }
+      replaceSync(css: string) { this.text = css; }
+    }
+    const win = { CSSStyleSheet: MockCSSStyleSheet };
+    const docA = { defaultView: win, adoptedStyleSheets: [] as MockCSSStyleSheet[], head: new FakeElement('head') };
+    const docB = { defaultView: win, adoptedStyleSheets: [] as MockCSSStyleSheet[], head: new FakeElement('head') };
+    adoptDocumentStyleSheet(docA as unknown as Document, 'test-sheet', '.x{color:red}');
+    adoptDocumentStyleSheet(docA as unknown as Document, 'test-sheet', '.x{color:red}');
+    adoptDocumentStyleSheet(docB as unknown as Document, 'test-sheet', '.x{color:red}');
+    expect(constructed).toBe(1);
+    expect(docA.adoptedStyleSheets).toHaveLength(1);
+    expect(docB.adoptedStyleSheets[0]).toBe(docA.adoptedStyleSheets[0]);
+    expect(docA.head.children).toHaveLength(0);
+
+    // 2) Zero inline style="..." attributes in rendered keys across modes, and no host #app selector leak in windgram-panel.css
+    expect(renderWindgramKey('metric', true, 'hybrid-climb')).not.toContain('style=');
+    expect(renderWindgramKey('imperial', false, 'lapse')).not.toContain('style=');
+    expect(panelCss).not.toContain('#app');
+
+    // 3) 1:1 color sync between TS band definitions and CSS stylesheets
+    for (const band of WINDGRAM_CLIMB_BANDS) {
+      expect(chartCss).toContain(`.${band.className} { fill: ${band.color.toLowerCase()}; }`);
+      expect(panelCss).toContain(`.wg-key-seg.${band.className} { background: ${band.color.toLowerCase()}; }`);
+    }
+    for (const stab of WINDGRAM_STABILITY) {
+      expect(chartCss).toContain(`.meteo-gram-stab-${stab.className} { fill: ${stab.color.toLowerCase()}; }`);
+      expect(panelCss).toContain(`.wg-key-seg.meteo-gram-stab-${stab.className} { background: ${stab.color.toLowerCase()}; }`);
+    }
   });
 });

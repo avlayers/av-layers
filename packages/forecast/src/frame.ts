@@ -106,7 +106,7 @@ const frameViews = (frame: NormalizedFrame): ArrayBufferView[] => [
   ...frame.missing.temp,
   ...(frame.missing.pressure ?? []),
   ...Object.values(frame.auxSurface ?? {}).flatMap(field => [field.values, field.missing]),
-  ...Object.values(frame.auxLevels ?? {}).flatMap(levels => levels.flatMap(field => [field.values, field.missing]))
+  ...Object.values(frame.auxLevels ?? {}).flatMap(levels => levels.flatMap(field => field ? [field.values, field.missing] : []))
 ];
 
 function validateDiagnostics(

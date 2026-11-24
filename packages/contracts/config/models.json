@@ -142,7 +142,8 @@
         "auxLevels": {
           "uWindMps": {"variable": "UGRD", "unit": "m/s"},
           "vWindMps": {"variable": "VGRD", "unit": "m/s"},
-          "rhPercent": {"variable": "RH", "unit": "%"}
+          "spfhKgKg": {"variable": "SPFH", "unit": "kg/kg", "products": ["primary"]},
+          "rhPercent": {"variable": "RH", "unit": "%", "products": ["secondary"], "reference": "gfs-v16-mixed"}
         }
       },
       "terrainSubdivisionFactor": 10,

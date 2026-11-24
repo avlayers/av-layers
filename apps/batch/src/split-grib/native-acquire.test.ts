@@ -110,11 +110,11 @@ it('maps whole columns and statistical companions into shared targets and replay
     const frame = await session.acquire(3, target);
     expect(frame.grid).toEqual(source.grid); expect([...frame.activeIndices]).toEqual([...activeIndices]);
     expect(frame.terrainM).toBe(target.terrainM); expect(frame.temp2mK).toBe(target.temp2mK); expect(frame.pressurePa[0]).toBe(target.pressurePa![0]);
-    expect(frame.auxLevels!.uWindMps![0].values.buffer).toBeInstanceOf(SharedArrayBuffer);
+    expect(frame.auxLevels!.uWindMps![0]!.values.buffer).toBeInstanceOf(SharedArrayBuffer);
     expect([...frame.terrainM]).toEqual([110, 130, 120, 100]); expect([...frame.hgtM[0]!]).toEqual([120, 140, 130, 110]);
     expect([...frame.temp2mK]).toEqual([281, 283, 282, 280]); expect([...frame.tempK[0]!]).toEqual([271, 273, 272, 270]);
     expect([...frame.surfacePressurePa]).toEqual([100001, 100003, 100002, 100000]); expect([...frame.pressurePa[0]!]).toEqual([99001, 99003, 99002, 99000]);
-    expect([...frame.auxSurface!.u10mMps!.values]).toEqual([-1, 1, 0, -2]); expect([...frame.auxLevels!.vWindMps![0].values]).toEqual([3, 1, 2, 4]);
+    expect([...frame.auxSurface!.u10mMps!.values]).toEqual([-1, 1, 0, -2]); expect([...frame.auxLevels!.vWindMps![0]!.values]).toEqual([3, 1, 2, 4]);
     expect([...frame.sensibleHeatFluxWm2]).toEqual([41, 43, 42, 40]); expect([...frame.latentHeatFluxWm2]).toEqual([61, 63, 62, 60]);
     expect([...frame.precipitationMmPerHour!]).toEqual([2, 4, 3, 1]);
     expect(frame.intervals.usedCompanion).toBe(true);
@@ -173,9 +173,9 @@ it('carries a native bitmap through the donor map and pairs missing wind compone
   try {
     const frame = await session.acquire(3, createNormalizedFrameTarget(4, 1, true, true));
     expect([...frame.tempK[0]!]).toEqual([271, 273, 272, NaN]); expect([...frame.missing.temp[0]!]).toEqual([0, 0, 0, 1]);
-    expect([...frame.auxLevels!.uWindMps![0].values]).toEqual([-1, 1, 0, NaN]);
-    expect([...frame.auxLevels!.uWindMps![0].missing]).toEqual([0, 0, 0, 1]);
-    expect([...frame.auxLevels!.vWindMps![0].missing]).toEqual([0, 0, 0, 1]);
+    expect([...frame.auxLevels!.uWindMps![0]!.values]).toEqual([-1, 1, 0, NaN]);
+    expect([...frame.auxLevels!.uWindMps![0]!.missing]).toEqual([0, 0, 0, 1]);
+    expect([...frame.auxLevels!.vWindMps![0]!.missing]).toEqual([0, 0, 0, 1]);
   } finally { await session.close(); }
 });
 

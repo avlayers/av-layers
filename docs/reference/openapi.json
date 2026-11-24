@@ -1339,6 +1339,12 @@
               "nullable": true
             },
             "properties": {
+              "profileDewpointReference": {
+                "enum": [
+                  "liquid-vapor-pressure"
+                ],
+                "type": "string"
+              },
               "useStoredMslNoLift": {
                 "enum": [
                   true

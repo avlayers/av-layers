@@ -1,15 +1,15 @@
 :root {
   color-scheme: light;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #1c2430;
+  font-family: var(--av-font-sans);
+  color: var(--av-text);
 }
 
 * { box-sizing: border-box; }
 html, body, #app { margin: 0; height: 100%; }
-#app { position: relative; background: #dfd9ce; }
-#app[data-chrome="dark"], #app[data-theme="slate"] { background: #141c26; color: #e2e8f0; }
-#app[data-theme="blueprint"] { background: #0a1b2e; color: #e0f2fe; }
+#app { position: relative; background: var(--av-canvas-bg); color: var(--av-text); }
+#app[data-theme="blueprint"] { color: #e0f2fe; }
 #map { position: absolute; inset: 0; }
+.av-rain-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 
 #topbar {
   position: absolute;
@@ -28,9 +28,9 @@ html, body, #app { margin: 0; height: 100%; }
 .topbar-row, .topbar-subrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; pointer-events: none; }
 
 #models, #model-selected, #layer-picker, .control-pill, .theme-bar, #theme-menu, .peek-icon-btn, .topbar-hover-card, #display-units, #locate, #location-status:not([hidden]), #point-card, .toast {
-  background: #fffffff2;
-  backdrop-filter: blur(8px);
-  box-shadow: 0 8px 24px #0b1b282e;
+  background: var(--av-surface-glass);
+  backdrop-filter: var(--av-blur-glass);
+  box-shadow: var(--av-shadow-card);
 }
 
 #models, #reference, #layer-picker, .control-pill { display: flex; border-radius: 7px; overflow: hidden; }
@@ -38,8 +38,8 @@ html, body, #app { margin: 0; height: 100%; }
   align-items: center;
   gap: 3px;
   padding: 3px;
-  border: 1px solid #d5dde6;
-  background: #f4f7faf2;
+  border: 1px solid var(--av-border);
+  background: var(--av-surface-subtle);
 }
 #layer-picker[hidden] { display: none; }
 .layer-button {
@@ -49,7 +49,7 @@ html, body, #app { margin: 0; height: 100%; }
   border: 1px solid transparent;
   border-radius: 5px;
   background: transparent;
-  color: #475569;
+  color: var(--av-text-muted);
   min-height: 28px;
   padding: 4px 9px;
   font-size: 11.5px;
@@ -57,11 +57,11 @@ html, body, #app { margin: 0; height: 100%; }
   cursor: pointer;
   user-select: none;
 }
-.layer-button:hover:not(.is-selected) { background: #e8eef5; color: #162434; }
+.layer-button:hover:not(.is-selected) { background: var(--av-surface-hover); color: var(--av-text-strong); }
 .layer-button.is-selected {
-  background: #16324f;
-  border-color: #0f253c;
-  color: #fff;
+  background: var(--av-accent);
+  border-color: var(--av-accent-border);
+  color: var(--av-accent-on);
   box-shadow: 0 1px 3px #0b1b2838;
 }
 
@@ -696,18 +696,20 @@ html, body, #app { margin: 0; height: 100%; }
 #display-units button:hover:not([aria-pressed="true"]) { background: #eef3f8; color: #1c2a38; }
 #display-units button + button { border-left: 1px solid #dce3ea; }
 #display-units button[aria-pressed="true"] { background: #16324f; color: #fff; }
-.location-pulse { position: absolute; z-index: 2; transform: translate(-50%, -50%); width: 14px; height: 14px; border: 2px solid white; border-radius: 50%; background: #287bd2; box-shadow: 0 0 0 7px #287bd233; pointer-events: none; }
+.location-pulse { position: absolute; left: 0; top: 0; z-index: 2; will-change: transform; width: 14px; height: 14px; border: 2px solid white; border-radius: 50%; background: #287bd2; box-shadow: 0 0 0 7px #287bd233; pointer-events: none; }
 .location-pulse::after { content: ''; position: absolute; inset: -9px; border: 2px solid #287bd288; border-radius: 50%; animation: location-ring 1s ease-out 2; }
 .point-marker {
   position: absolute;
+  left: 0;
+  top: 0;
   z-index: 2;
+  will-change: transform;
   width: 13px;
   height: 13px;
   border-radius: 50%;
   background: #f97316;
   border: 2px solid #ffffff;
   box-shadow: 0 0 0 1.5px #0f172a, 0 0 0 6px #f9731640, 0 2px 6px #00000055;
-  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 @keyframes location-ring { to { transform: scale(1.7); opacity: 0; } }
@@ -1167,7 +1169,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 /* Zero-Header-Row Point Windgram Card + Compact Bottom-Right Info Tooltip */
 #point-card {
   --av-chart-max-height: min(520px, max(140px, calc(100dvh - 176px)));
-  --av-bar-reserve-right: 122px;
+  --av-bar-reserve-right: 146px;
   position: absolute;
   z-index: 6;
   top: 58px;
@@ -1191,7 +1193,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #point-status {
   flex: none;
   margin: 4px 2px 0;
-  padding-right: 122px;
+  padding-right: var(--av-bar-reserve-right, 146px);
   color: #526170;
   font-size: 11.5px;
   line-height: 1.35;
@@ -1230,6 +1232,7 @@ button:disabled { opacity: 0.45; cursor: default; }
   font-weight: 600;
   line-height: 20px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   list-style: none;
   cursor: pointer;
   user-select: none;

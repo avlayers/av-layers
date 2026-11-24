@@ -154,8 +154,17 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
   const { source, cycle, activeIndices, nativeIndices, transport, sampler } = context;
   const capturedAt = new Date().toISOString();
   const intervalHours = sourceIntervalHours(source.model.forecast, hour);
-  const { auxSurface, auxLevels } = createAuxiliaryTargets(activeIndices.length, source.pressureLevels.length,
-    Object.keys(source.upstream.auxSurface ?? {}) as AuxSurfaceId[], Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[], target);
+  const { auxSurface, auxLevels } = createAuxiliaryTargets(
+    activeIndices.length,
+    source.pressureLevels.length,
+    Object.keys(source.upstream.auxSurface ?? {}) as AuxSurfaceId[],
+    Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[],
+    target,
+    (id, index) => {
+      const products = source.upstream.auxLevels?.[id]?.products;
+      return !products || products.includes(source.levelProducts.get(source.pressureLevels[index]!)!);
+    },
+  );
   const nextRaw = new Map<string, Omit<LoadedField, 'inspected'>>();
   const stamp = cycleStamp(cycle);
   const currentStartHour = indexedGribWindowStart(source, hour);
@@ -430,6 +439,7 @@ async function acquireFrame(context: AcquisitionContext, hour: number, target?: 
       tempK,
       ...(Object.keys(auxSurface).length ? { auxSurface } : {}),
       ...(Object.keys(auxLevels).length ? { auxLevels } : {}),
+      ...(source.upstream.auxLevels?.rhPercent?.reference ? { rhReference: source.upstream.auxLevels.rhPercent.reference } : {}),
       missing: {
         terrain: terrain.missing,
         surfacePressure: surfacePressure.missing,

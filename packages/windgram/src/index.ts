@@ -1,4 +1,6 @@
 export { disposePointWindgram, renderPointWindgram, type PointWindgramOptions } from './point-windgram.ts';
+export { adoptDocumentStyleSheet } from './style-registry.ts';
+export { resolveCivilTimeZone, timeZoneForLongitude, timeZoneOffsetMinutesAt } from '@av/client/timezone';
 export {
   DEFAULT_POINT_VIEW_MODE,
   formatDayWindowLabel,

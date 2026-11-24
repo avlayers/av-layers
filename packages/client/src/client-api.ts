@@ -5,8 +5,9 @@ import { catalogSchema, clientLatestSchema, getProvenanceReference, sampleRespon
 import { projectClientManifest, projectKnownResponse } from '@av/contracts/manifest-client';
 import { estimateProfileResponseBytes, MAX_POINT_RESPONSE_BYTES, MAX_SAMPLE_POINTS, multiPointSampleResponseSchema,
   profileResponseSchema, type MultiPointSampleResponse, type ProfileResponse } from '@av/contracts/point-products';
-import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader } from './client-types.ts';
+import type { GeoPoint, PinnedBuild, SamplePayload, PointSeriesLoader, PointTerrain } from './client-types.ts';
 import { createPointSeriesLoader, fieldSeriesPages } from './client-point.ts';
+import { PointTerrainCache } from './client-point-terrain.ts';
 import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
 import { ForecastCapacityError, schedulerFetchBudget } from './client-request-scheduler.ts';
 
@@ -212,6 +213,7 @@ export class ApiClient {
   private readonly retryDelayMs: number;
   private readonly onMetric: ApiClientOptions['onMetric'];
   private readonly budget: PreparationBudget | undefined;
+  private readonly terrainCache = new PointTerrainCache();
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = normalizeBaseUrl(requireString(options.baseUrl, 'baseUrl'));
@@ -304,11 +306,23 @@ export class ApiClient {
     };
   }
 
+  async pointTerrain(build: PinnedBuild, point: GeoPoint, options: RequestOptions = {}): Promise<PointTerrain | null> {
+    assertNotExpired(build.manifest.expiresAt, this.now());
+    validatePoint(point);
+    const result = await this.terrainCache.read(this.baseUrl, this.fetchImpl, build, point, {
+      signal: options.signal,
+      timeoutMs: Math.min(this.requestTimeoutMs, 2_500),
+    });
+    assertNotExpired(build.manifest.expiresAt, this.now());
+    return result;
+  }
+
   pointSeries(build: PinnedBuild, point: GeoPoint): PointSeriesLoader {
     validatePoint(point);
     const location = { ...point };
     const pinned = build.manifest, { model, buildId, cycle, expiresAt } = pinned;
     const methodId = pinned.method.id, methodHash = pinned.method.hash;
+    const hasCompanionFineTiles = pinned.mapData !== undefined && pinned.surfaces.some(s => s.kind === 'fine');
     return createPointSeriesLoader(build,
       (frames, layers, signal) => this.sample(build, { ...location, frames, layers, signal }),
       (frames, layers, signal) => this.profile(build, { ...location, frames, layers, signal }),
@@ -316,7 +330,9 @@ export class ApiClient {
         if (build.manifest !== pinned || pinned.model !== model || pinned.buildId !== buildId || pinned.cycle !== cycle || pinned.expiresAt !== expiresAt
           || pinned.method.id !== methodId || pinned.method.hash !== methodHash) throw new InvalidApiResponseError('Point series pinned build changed');
         assertNotExpired(expiresAt, this.now());
-      });
+      },
+      hasCompanionFineTiles ? signal => this.pointTerrain(build, location, { signal }) : undefined,
+    );
   }
 
   async sample(build: PinnedBuild, request: SampleRequest): Promise<SamplePayload> {

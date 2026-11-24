@@ -265,6 +265,11 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
       // Should draw many raindrops via drawImage while only calling map.project 4 times for calibration!
       expect(fakeCtx.drawImage.mock.calls.length).toBeGreaterThan(50);
       expect(projectSpy.mock.calls.length).toBe(4);
+
+      // Stationary subsequent redraws reuse the cached Mercator projector with 0 map.project calls
+      projectSpy.mockClear();
+      animator.setOpacity(0.75);
+      expect(projectSpy.mock.calls.length).toBe(0);
       animator.destroy();
     } finally {
       vi.stubGlobal('document', origDoc);

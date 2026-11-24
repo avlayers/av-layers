@@ -39,6 +39,7 @@ export interface RequestMetrics {
   r2Bytes: number;
   cacheHits: number;
   coalesced: number;
+  queueTimeouts?: number;
   admitMs?: number;
   r2WaitMs?: number;
   responseCache?: 'hit' | 'miss' | 'bypass';
@@ -144,19 +145,22 @@ export class MaterializedReads<T> {
     entry.consumers--;
     if (!entry.started && entry.consumers === 0 && !entry.settled) this.drop(entry);
   }
-  private drop(entry: QueuedRead<T>): void {
+  private drop(entry: QueuedRead<T>, timedOut = false): void {
     entry.settled = true;
     clearTimeout(entry.timer);
     if (this.queued.get(entry.key) === entry) this.queued.delete(entry.key);
     const index = this.queue.indexOf(entry);
     if (index >= 0) this.queue.splice(index, 1);
+    if (timedOut && entry.ctx?.metrics) {
+      entry.ctx.metrics.queueTimeouts = (entry.ctx.metrics.queueTimeouts ?? 0) + 1;
+    }
     entry.reject(new ResourceLimitError('Object read deadline exceeded'));
   }
   private enqueue(key: string, load: (signal: AbortSignal) => Promise<T>, ctx?: WaitContext, waiterSignal?: AbortSignal): Promise<T> {
     let resolve!: (value: T) => void, reject!: (error: unknown) => void;
     const promise = new Promise<T>((success, failure) => { resolve = success; reject = failure; });
     const entry: QueuedRead<T> = { key, load, ctx, consumers: 1, started: false, settled: false, deadline: Date.now() + this.timeoutMs, resolve, reject, promise };
-    entry.timer = setTimeout(() => { if (!entry.started && !entry.settled) this.drop(entry); }, this.timeoutMs);
+    entry.timer = setTimeout(() => { if (!entry.started && !entry.settled) this.drop(entry, true); }, this.timeoutMs);
     this.queue.push(entry);
     this.queued.set(key, entry);
     ctx?.waitUntil(promise.then(() => undefined, () => undefined));
@@ -188,7 +192,15 @@ export class MaterializedReads<T> {
     while (this.pending.size < this.maxPending && this.queue.length) {
       const entry = this.queue.shift()!;
       if (this.queued.get(entry.key) === entry) this.queued.delete(entry.key);
-      if (entry.settled || entry.consumers === 0 || entry.deadline <= Date.now()) { entry.settled = true; clearTimeout(entry.timer); entry.reject(new ResourceLimitError('Object read deadline exceeded')); continue; }
+      if (entry.settled || entry.consumers === 0 || entry.deadline <= Date.now()) {
+        if (!entry.settled && entry.consumers > 0 && entry.deadline <= Date.now() && entry.ctx?.metrics) {
+          entry.ctx.metrics.queueTimeouts = (entry.ctx.metrics.queueTimeouts ?? 0) + 1;
+        }
+        entry.settled = true;
+        clearTimeout(entry.timer);
+        entry.reject(new ResourceLimitError('Object read deadline exceeded'));
+        continue;
+      }
       entry.started = true;
       clearTimeout(entry.timer);
       const owner = this.execute(entry.key, entry.load, entry.ctx, entry.deadline - Date.now());

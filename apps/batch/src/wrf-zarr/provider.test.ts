@@ -48,8 +48,8 @@ function valuesAt(frame: NormalizedFrame, slot: number) {
     gust_10m_mps: surface.gust10mMps!.values[slot], pbl_height_m: surface.pblHeightM!.values[slot], cape_jkg: surface.capeJkg!.values[slot],
     cloud_total_pct: surface.cloudTotalPct!.values[slot], cloud_low_pct: surface.cloudLowPct!.values[slot],
     pressure_pa: frame.pressurePa!.map(field => field[slot]), height_msl_m: frame.hgtM.map(field => field[slot]), temp_k: frame.tempK.map(field => field[slot]),
-    spfh_kgkg: levels.spfhKgKg!.map(field => field.values[slot]), u_earth_mps: levels.uWindMps!.map(field => field.values[slot]),
-    v_earth_mps: levels.vWindMps!.map(field => field.values[slot]), omega_pas: levels.omegaPaS!.map(field => field.values[slot])
+    spfh_kgkg: levels.spfhKgKg!.map(field => field!.values[slot]), u_earth_mps: levels.uWindMps!.map(field => field!.values[slot]),
+    v_earth_mps: levels.vWindMps!.map(field => field!.values[slot]), omega_pas: levels.omegaPaS!.map(field => field!.values[slot])
   };
 }
 

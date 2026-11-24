@@ -13,6 +13,7 @@ export interface WindgramHour {
 export interface WindgramLayout {
   readonly unitSystem: UnitSystem;
   readonly timeZone: string;
+  readonly isUtcFallback?: boolean;
   readonly width: number;
   readonly height: number;
   readonly left: number;
@@ -58,6 +59,8 @@ export interface WindgramCloudLayerSummary {
   readonly coverPercent: number;
   readonly maxRhPercent: number | null;
   readonly saturated: boolean;
+  readonly topTempC?: number | null;
+  readonly glaciated?: boolean;
 }
 
 export interface WindgramReading {
@@ -74,6 +77,7 @@ export interface WindgramReading {
   /** Moisture and omega at the inspected height; omega < 0 is ascent. */
   dewPointC: number | null;
   relativeHumidityPercent: number | null;
+  cloudHumidityPercent?: number | null;
   verticalVelocityPaS: number | null;
   windSource: 'surface-10m' | 'model-level' | 'interpolated' | null;
   /** Vector wind change between surrounding native nodes. Bounds: metres MSL;
@@ -94,6 +98,10 @@ export interface WindgramReading {
   lapseCPer1000Ft?: number | null;
   /** Hydrostatic vertical air velocity w (m/s, positive upward) converted from omegaPaS. */
   waveVelocityMps?: number | null;
+  /** True when a resolved above-freezing layer (>+0.5 °C) sits above sub-freezing air in this column. */
+  warmLayerAloft?: boolean;
+  /** Rapid 1-hour surface vector wind jump + >=45° directional shift (convective outflow / frontal gust line). */
+  surfaceWindShift?: { readonly deltaKt: number; readonly shiftDeg: number } | null;
   /** Dimensionless w* / BL vector wind shear ratio from @av/soaring (RASP B/S = 10x this value). */
   buoyancyShearRatio?: number | null;
   /** Discrete vertical cloud layers resolved in this column (ordered lowest to highest). */
@@ -111,6 +119,8 @@ export interface WindgramReading {
   overdeveloped?: boolean | null;
   cloudCapped?: boolean | null;
   modelTerrainM: number | null;
+  fineTerrainM?: number | null;
+  terrainDeltaM?: number | null;
   nativeThermalTopM: number | null;
   modelPblTopM: number | null;
   /** Published V2 layer diagnostics, independent of inspected height.
@@ -120,6 +130,7 @@ export interface WindgramReading {
     meanSpeedMps: number | null; meanDirectionDeg: number | null;
     topSpeedMps: number | null; topDirectionDeg: number | null;
     surfaceToTopShearMps: number | null;
+    maxDepartureFromSurfaceMps?: number | null;
   } | null;
 }
 export interface WindgramSvgOptions {

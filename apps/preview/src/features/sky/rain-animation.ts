@@ -739,19 +739,25 @@ export class RainAnimator {
   private cssW = 0;
   private cssH = 0;
   private dpr = 1;
+  private cachedProjector: FastMercatorProjector | null | undefined = undefined;
+  private cachedProjLon = Number.NaN;
+  private cachedProjLat = Number.NaN;
   private disposed = false;
 
   private readonly onResize = (): void => {
+    this.cachedProjector = undefined;
     this.syncCanvasSize();
     this.rebuildViewportDistribution(true);
     if (!this.rafId && this.shouldRenderStatic()) this.drawFrame(0);
   };
 
   private readonly onCameraMove = (): void => {
+    this.cachedProjector = undefined;
     if (!this.rafId && this.shouldRenderStatic()) this.drawFrame(0);
   };
 
   private readonly onCameraMoveEnd = (): void => {
+    this.cachedProjector = undefined;
     this.rebuildViewportDistribution(false);
     if (!this.rafId && this.shouldRenderStatic()) this.drawFrame(0);
   };
@@ -779,7 +785,6 @@ export class RainAnimator {
       const el = document.createElement('canvas');
       el.className = 'av-rain-canvas';
       el.setAttribute('aria-hidden', 'true');
-      el.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1;';
       host.appendChild(el);
       this.canvas = el;
       this.ctx = el.getContext('2d');
@@ -1035,7 +1040,13 @@ export class RainAnimator {
     const masterAlpha = Math.min(1, 0.50 + this.opacity * 0.50);
     const center = this.map.getCenter();
     const centerLon = center.lng;
-    const fastProj = calibrateMercatorProjector(this.map, centerLon, center.lat);
+    const centerLat = center.lat;
+    if (this.cachedProjector === undefined || centerLon !== this.cachedProjLon || centerLat !== this.cachedProjLat) {
+      this.cachedProjector = calibrateMercatorProjector(this.map, centerLon, centerLat);
+      this.cachedProjLon = centerLon;
+      this.cachedProjLat = centerLat;
+    }
+    const fastProj = this.cachedProjector;
     const casingStroke = dark ? '#020814' : '#0c1424';
     const coreStroke = dark ? '#e0f2fe' : '#ffffff';
     const casingBaseAlpha = dark ? 0.72 : 0.58;
@@ -1089,7 +1100,7 @@ export class RainAnimator {
 
     // 2. Multi-depth tapered optical raindrop sprites scaled by local mm/h
     const atlasRowY = dark ? SPRITE_CELL_H : 0;
-    const count = this.activeDropCount;
+    const count = fastProj ? this.activeDropCount : Math.min(this.activeDropCount, 480);
 
     for (let i = 0; i < count; i++) {
       const drop = this.drops[i]!;

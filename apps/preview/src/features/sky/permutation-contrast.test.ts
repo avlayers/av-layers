@@ -277,4 +277,37 @@ describe('8-view × multi-channel contrast & MapLibre WebGL lifecycle permutatio
     isobars.clear();
     rain.dispose();
   });
+
+  it('renders cold upper cloud decks brighter than warm shallow low stratus in satellite-ir mode', () => {
+    const w = 16, h = 16;
+    const makeField = (low: number, total: number): SynopticField => ({
+      id: `ir-${low}-${total}`,
+      buildId: 'b1',
+      frame: 'f1',
+      west: -79.2,
+      south: 38.2,
+      east: -78.0,
+      north: 39.2,
+      cols: 8,
+      rows: 8,
+      total: new Float32Array(64).fill(total),
+      low: new Float32Array(64).fill(low),
+      mslp: new Float32Array(64).fill(1016),
+      hasClouds: true,
+      hasMslp: true
+    });
+    const highCirrus = new Uint8ClampedArray(w * h * 4);
+    const lowStratus = new Uint8ClampedArray(w * h * 4);
+    renderSmoothCloudRgba(makeField(0.0, 0.92), 'satellite-ir', true, highCirrus, w, h);
+    renderSmoothCloudRgba(makeField(0.90, 0.92), 'satellite-ir', true, lowStratus, w, h);
+    let sumHighLum = 0, sumLowLum = 0, sumHighAlpha = 0;
+    for (let i = 0; i < w * h; i++) {
+      const off = i * 4;
+      sumHighLum += relLum([highCirrus[off]!, highCirrus[off + 1]!, highCirrus[off + 2]!]);
+      sumLowLum += relLum([lowStratus[off]!, lowStratus[off + 1]!, lowStratus[off + 2]!]);
+      sumHighAlpha += highCirrus[off + 3]!;
+    }
+    expect(sumHighLum / (w * h)).toBeGreaterThan(sumLowLum / (w * h) + 55);
+    expect(sumHighAlpha / (w * h)).toBeGreaterThan(68);
+  });
 });

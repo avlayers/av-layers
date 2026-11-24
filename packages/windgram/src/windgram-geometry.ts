@@ -37,7 +37,7 @@ export interface TemperatureContour {
 }
 
 const round = (n: number) => Math.round(n * 100) / 100;
-const contourPointKey = (x: number, y: number) => `${Math.round(x * 100)},${Math.round(y * 100)}`;
+const contourPointKey = (x: number, y: number) => Math.round(x * 100) * 1_048_576 + Math.round(y * 100);
 
 function closestOnSegment(point: Point, segment: ContourSegment): Point {
   const dx = segment.x2 - segment.x1, dy = segment.y2 - segment.y1;
@@ -57,24 +57,30 @@ function buildContourComponentsFromSegments(
   segments: readonly ContourSegment[],
   labels: readonly Point[],
 ): ContourComponent[] {
-  const parent = segments.map((_, i) => i);
+  const parent = new Int32Array(segments.length);
+  for (let i = 0; i < segments.length; i++) parent[i] = i;
   const root = (index: number): number => {
     while (parent[index] !== index) {
-      parent[index] = parent[parent[index]];
-      index = parent[index];
+      parent[index] = parent[parent[index]!]!;
+      index = parent[index]!;
     }
     return index;
   };
-  const endpoint = new Map<string, number>();
-  segments.forEach((segment, i) => {
-    for (const key of [contourPointKey(segment.x1, segment.y1), contourPointKey(segment.x2, segment.y2)]) {
-      const previous = endpoint.get(key);
-      if (previous !== undefined) parent[root(i)] = root(previous);
-      else endpoint.set(key, i);
-    }
-  });
+  const endpoint = new Map<number, number>();
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]!;
+    const k1 = contourPointKey(segment.x1, segment.y1);
+    const p1 = endpoint.get(k1);
+    if (p1 !== undefined) parent[root(i)] = root(p1);
+    else endpoint.set(k1, i);
+    const k2 = contourPointKey(segment.x2, segment.y2);
+    const p2 = endpoint.get(k2);
+    if (p2 !== undefined) parent[root(i)] = root(p2);
+    else endpoint.set(k2, i);
+  }
   const groups = new Map<number, ContourComponent>();
-  segments.forEach((segment, i) => {
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]!;
     const id = root(i);
     let group = groups.get(id);
     if (!group) {
@@ -86,7 +92,7 @@ function buildContourComponentsFromSegments(
     group.maxX = Math.max(group.maxX, segment.x1, segment.x2);
     group.minY = Math.min(group.minY, segment.y1, segment.y2);
     group.maxY = Math.max(group.maxY, segment.y1, segment.y2);
-  });
+  }
   const components = [...groups.values()];
   for (const candidate of labels) {
     let nearest: { component: ContourComponent; point: Point; distanceSquared: number } | null = null;
@@ -115,6 +121,8 @@ export function buildStabilityFieldPaths(args: {
   columnWidth: number;
   plotTop: number;
   plotBottom: number;
+  leftBound?: number;
+  rightBound?: number;
   banding: { breakpoints: readonly number[]; classNames: readonly string[] };
 }): Record<string, string> {
   const hourCount = args.nodesByHour.length;
@@ -150,7 +158,9 @@ export function buildStabilityFieldPaths(args: {
   }
 
   const xOf = (column: number) => hourX(args.hours, column / columns * hourCount - 0.5, args.columnWidth);
-  const left = xOf(0), right = xOf(columns);
+  const left = Math.max(args.leftBound ?? -Infinity, xOf(0));
+  const right = Math.min(args.rightBound ?? Infinity, xOf(columns));
+  if (right <= left) return {};
   const yOf = (row: number) => args.plotTop + (row / rows) * plotHeight;
   const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
   const shortNum = (v: number) => Number(v.toFixed(1));
@@ -335,90 +345,156 @@ export function temperatureContours(
     columnWidth: number;
     hours: readonly { validAt: string; x: number }[];
     sampling: readonly HourSampling[];
+    leftBound?: number;
+    rightBound?: number;
   },
   system: UnitSystem,
 ): TemperatureContour[] {
-  const temperatures = view.sampling.flatMap((s) => s.temperatureC.map((n) => n.value)).filter(Number.isFinite);
-  if (!temperatures.length || view.hours.length < 2) return [];
+  const hourCount = view.hours.length;
+  if (hourCount < 2) return [];
+  let minTempC = Infinity;
+  let maxTempC = -Infinity;
+  for (let h = 0; h < view.sampling.length; h++) {
+    const nodes = view.sampling[h]!.temperatureC;
+    for (let i = 0; i < nodes.length; i++) {
+      const v = nodes[i]!.value;
+      if (Number.isFinite(v)) {
+        if (v < minTempC) minTempC = v;
+        if (v > maxTempC) maxTempC = v;
+      }
+    }
+  }
+  if (!Number.isFinite(minTempC)) return [];
+
   const metric = system === 'metric';
   const step = metric ? 5 : 8;
-  const low = Math.floor(convertQuantity(Math.min(...temperatures), 'temperature', system)! / step) * step;
-  const high = Math.ceil(convertQuantity(Math.max(...temperatures), 'temperature', system)! / step) * step;
-  const cols = Math.max(2, (view.hours.length - 1) * 8);
+  const low = Math.floor(convertQuantity(minTempC, 'temperature', system)! / step) * step;
+  const high = Math.ceil(convertQuantity(maxTempC, 'temperature', system)! / step) * step;
+  const cols = Math.max(2, (hourCount - 1) * 8);
   const rows = Math.ceil(view.plotHeight / 4);
-  const times = Array.from({ length: cols + 1 }, (_, c) => (view.hours.length - 1) * c / cols);
-  const ys = Array.from({ length: rows + 1 }, (_, r) => view.top + (view.plotHeight * r) / rows);
-  const xs = times.map(time => hourX(view.hours, time, view.columnWidth));
-  const grid = ys.map(y => {
+  const stride = cols + 1;
+  const colLower = new Int32Array(stride);
+  const colUpper = new Int32Array(stride);
+  const colFrac = new Float64Array(stride);
+  const xs = new Float64Array(stride);
+  for (let c = 0; c <= cols; c++) {
+    const time = ((hourCount - 1) * c) / cols;
+    const lower = Math.floor(time);
+    colLower[c] = lower;
+    colUpper[c] = Math.ceil(time);
+    colFrac[c] = time - lower;
+    xs[c] = hourX(view.hours, time, view.columnWidth);
+  }
+  const ys = new Float64Array(rows + 1);
+  const atHour = new Float64Array(hourCount);
+  const grid = new Float64Array((rows + 1) * stride);
+  for (let r = 0; r <= rows; r++) {
+    const y = view.top + (view.plotHeight * r) / rows;
+    ys[r] = y;
     const z = yToHeight(view, y);
-    const atHour = view.sampling.map(hour => sampleHeight(hour.temperatureC, z));
-    return times.map(time => {
-      const lower = Math.floor(time), upper = Math.ceil(time);
-      const a = atHour[lower], b = atHour[upper];
-      return a === null || b === null ? null : a + (b - a) * (time - lower);
-    });
-  });
+    for (let h = 0; h < hourCount; h++) {
+      const sampled = sampleHeight(view.sampling[h]!.temperatureC, z);
+      atHour[h] = sampled === null ? NaN : sampled;
+    }
+    const rowOffset = r * stride;
+    for (let c = 0; c <= cols; c++) {
+      const a = atHour[colLower[c]!]!;
+      const b = atHour[colUpper[c]!]!;
+      grid[rowOffset + c] = Number.isNaN(a) || Number.isNaN(b) ? NaN : a + (b - a) * colFrac[c]!;
+    }
+  }
+
   const labelHours = new Set<number>();
   let lastLabelTime = -Infinity;
   view.hours.forEach((h, i) => {
-    if (i === 0 && view.hours.length >= 3) return;
+    if (i === 0 && hourCount >= 3) return;
     const time = Date.parse(h.validAt);
     if (time - lastLabelTime >= 3 * 3_600_000) {
       labelHours.add(i);
       lastLabelTime = time;
     }
   });
+  const edgeX = new Float64Array(4);
+  const edgeY = new Float64Array(4);
+  const xMin = view.leftBound ?? -Infinity;
+  const xMax = view.rightBound ?? Infinity;
   const contours: TemperatureContour[] = [];
   for (let value = low; value <= high; value += step) {
     // Preserve operation order at exact-threshold corners: /1.8 can round to
     // the other side of a sample and change marching-square connectivity.
-    const target = metric ? value : (value - 32) * 5 / 9;
+    const target = metric ? value : ((value - 32) * 5) / 9;
     const f = metric ? celsiusToFahrenheit(target) : value;
     const segments: ContourSegment[] = [];
     const pathParts: string[] = [];
-    const addLine = (a: Point, b: Point) => {
-      const x1 = round(a.x), y1 = round(a.y), x2 = round(b.x), y2 = round(b.y);
+    const addLineCoords = (rawAx: number, rawAy: number, rawBx: number, rawBy: number) => {
+      let ax = rawAx, ay = rawAy, bx = rawBx, by = rawBy;
+      if (Math.max(ax, bx) < xMin || Math.min(ax, bx) > xMax) return;
+      const dx = bx - ax;
+      if (dx !== 0) {
+        if (ax < xMin) { ay += ((xMin - ax) / dx) * (by - ay); ax = xMin; }
+        else if (ax > xMax) { ay += ((xMax - ax) / dx) * (by - ay); ax = xMax; }
+        const dx2 = bx - ax;
+        if (dx2 !== 0) {
+          if (bx < xMin) { by = ay + ((xMin - ax) / dx2) * (by - ay); bx = xMin; }
+          else if (bx > xMax) { by = ay + ((xMax - ax) / dx2) * (by - ay); bx = xMax; }
+        }
+      }
+      const x1 = round(ax), y1 = round(ay), x2 = round(bx), y2 = round(by);
+      if (x1 === x2 && y1 === y2) return;
       segments.push({ x1, y1, x2, y2 });
       pathParts.push(`M${x1},${y1}L${x2},${y2}`);
     };
     for (let r = 0; r < rows; r++) {
+      const y0 = ys[r]!, y1 = ys[r + 1]!;
+      const rowBase = r * stride;
       for (let c = 0; c < cols; c++) {
-        const v = [grid[r][c], grid[r][c + 1], grid[r + 1][c + 1], grid[r + 1][c]];
-        if (v.some((n) => n === null)) continue;
-        const values = v as number[];
-        const p = [
-          { x: xs[c], y: ys[r] },
-          { x: xs[c + 1], y: ys[r] },
-          { x: xs[c + 1], y: ys[r + 1] },
-          { x: xs[c], y: ys[r + 1] },
-        ];
-        const edges: { edge: number; p: Point }[] = [];
-        for (let e = 0; e < 4; e++) {
-          const n = (e + 1) % 4;
-          if ((values[e] >= target) === (values[n] >= target)) continue;
-          const fraction = (target - values[e]) / (values[n] - values[e]);
-          edges.push({
-            edge: e,
-            p: { x: p[e].x + (p[n].x - p[e].x) * fraction, y: p[e].y + (p[n].y - p[e].y) * fraction },
-          });
+        const idx = rowBase + c;
+        const v0 = grid[idx]!;
+        const v1 = grid[idx + 1]!;
+        const v2 = grid[idx + stride + 1]!;
+        const v3 = grid[idx + stride]!;
+        if (Number.isNaN(v0) || Number.isNaN(v1) || Number.isNaN(v2) || Number.isNaN(v3)) continue;
+        const b0 = v0 >= target;
+        const b1 = v1 >= target;
+        const b2 = v2 >= target;
+        const b3 = v3 >= target;
+        if (b0 === b1 && b1 === b2 && b2 === b3) continue;
+        const x0 = xs[c]!, x1 = xs[c + 1]!;
+        let edgeCount = 0;
+        if (b0 !== b1) {
+          edgeX[edgeCount] = x0 + (x1 - x0) * ((target - v0) / (v1 - v0));
+          edgeY[edgeCount++] = y0;
         }
-        if (edges.length === 2) addLine(edges[0].p, edges[1].p);
-        if (edges.length === 4) {
+        if (b1 !== b2) {
+          edgeX[edgeCount] = x1;
+          edgeY[edgeCount++] = y0 + (y1 - y0) * ((target - v1) / (v2 - v1));
+        }
+        if (b2 !== b3) {
+          edgeX[edgeCount] = x1 + (x0 - x1) * ((target - v2) / (v3 - v2));
+          edgeY[edgeCount++] = y1;
+        }
+        if (b3 !== b0) {
+          edgeX[edgeCount] = x0;
+          edgeY[edgeCount++] = y1 + (y0 - y1) * ((target - v3) / (v0 - v3));
+        }
+        if (edgeCount === 2) {
+          addLineCoords(edgeX[0]!, edgeY[0]!, edgeX[1]!, edgeY[1]!);
+        } else if (edgeCount === 4) {
           // Resolve saddles by their centre; preserve both independent branches.
-          const sameAsTopLeft = (values.reduce((sum, n) => sum + n, 0) / 4 >= target) === (values[0] >= target);
+          const sameAsTopLeft = ((v0 + v1 + v2 + v3) / 4 >= target) === b0;
           if (sameAsTopLeft) {
-            addLine(edges[0].p, edges[1].p);
-            addLine(edges[2].p, edges[3].p);
+            addLineCoords(edgeX[0]!, edgeY[0]!, edgeX[1]!, edgeY[1]!);
+            addLineCoords(edgeX[2]!, edgeY[2]!, edgeX[3]!, edgeY[3]!);
           } else {
-            addLine(edges[0].p, edges[3].p);
-            addLine(edges[1].p, edges[2].p);
+            addLineCoords(edgeX[0]!, edgeY[0]!, edgeX[3]!, edgeY[3]!);
+            addLineCoords(edgeX[1]!, edgeY[1]!, edgeX[2]!, edgeY[2]!);
           }
         }
       }
     }
     const labels = view.hours.flatMap((h, i) =>
-      labelHours.has(i)
-        ? crossings(view.sampling[i].temperatureC, target)
+      labelHours.has(i) && h.x >= xMin && h.x <= xMax
+        ? crossings(view.sampling[i]!.temperatureC, target)
             .filter(z => z >= view.floorM && z <= view.topM)
             .map((z) => ({ x: h.x, y: heightToY(view, z) }))
         : [],

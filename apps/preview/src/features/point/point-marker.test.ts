@@ -40,12 +40,12 @@ describe('createPointMarker', () => {
     const dot = container.children[0]!;
     expect(dot.className).toBe('point-marker');
     expect(dot.attributes.get('aria-hidden')).toBe('true');
-    expect(dot.style).toEqual({ left: '449px', top: '99.5px' });
+    expect(dot.style).toEqual({ transform: 'translate3d(449px, 99.5px, 0) translate(-50%, -50%)' });
 
     panOffset = 35.24;
     marker.sync();
     expect(container.children).toHaveLength(1);
-    expect(dot.style).toEqual({ left: '484.2px', top: '99.5px' });
+    expect(dot.style).toEqual({ transform: 'translate3d(484.2px, 99.5px, 0) translate(-50%, -50%)' });
 
     marker.clear();
     expect(container.children).toHaveLength(0);

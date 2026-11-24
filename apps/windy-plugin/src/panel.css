@@ -1,0 +1,158 @@
+.av-panel,
+.av-panel * {
+  box-sizing: border-box;
+}
+
+.av-panel {
+  --av-plugin-bg-input: #0e1113;
+  --av-plugin-border: #36464d;
+  --av-plugin-fg: #e6edf0;
+  --av-plugin-muted: #8fa4ad;
+  --av-plugin-accent: #1c6b8a;
+  /* Bridge dark-chrome tokens to @av/windgram controls inside Windy */
+  --av-wg-seg-bg: #162231;
+  --av-wg-seg-border: #2b3c52;
+  --av-wg-seg-text: #94a3b8;
+  --av-wg-seg-hover-bg: #1f3044;
+  --av-wg-seg-hover-fg: #f8fafc;
+  --av-wg-seg-active-bg: #f59e0b;
+  --av-wg-seg-active-fg: #0f172a;
+  --av-wg-step-bg: #182636;
+  --av-wg-step-border: #2b3c52;
+  --av-wg-step-btn-fg: #cbd5e1;
+  --av-wg-step-hover-bg: #223449;
+  --av-wg-step-hover-fg: #ffffff;
+  --av-wg-step-label-fg: #e2e8f0;
+  --av-wg-step-best-fg: #fde68a;
+  --av-wg-chip-bg: #192738;
+  --av-wg-chip-border: #2b3c52;
+  --av-wg-chip-fg: #dce6f2;
+  --av-wg-alt-bg: #1e3a5f;
+  --av-wg-alt-hover-bg: #264873;
+  --av-wg-alt-border: #38bdf8;
+  --av-wg-alt-fg: #e0f2fe;
+  --av-wg-key-btn-bg: #1a2838;
+  --av-wg-key-btn-border: #2d4057;
+  --av-wg-key-btn-fg: #e2e8f0;
+  --av-wg-warn-fg: #ffdc91;
+  color: var(--av-plugin-fg);
+  font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+}
+
+.av-panel[hidden],
+.av-mobile-header[hidden] {
+  display: none;
+}
+
+.av-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.av-header h1 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.av-back {
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--av-plugin-accent);
+  color: #ffffff;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.av-muted {
+  color: var(--av-plugin-muted);
+  font-size: 11px;
+  margin: 6px 0;
+}
+
+.av-controls {
+  display: grid;
+  grid-template-columns: 62px 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+  margin: 8px 0;
+  font-size: 12px;
+}
+
+.av-controls select,
+.av-controls input {
+  width: 100%;
+  min-width: 0;
+  background: var(--av-plugin-bg-input);
+  color: var(--av-plugin-fg);
+  border: 1px solid var(--av-plugin-border);
+  border-radius: 4px;
+  padding: 4px;
+}
+
+.av-readout {
+  min-width: 36px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--av-plugin-fg);
+}
+
+.av-notice {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: #14202a;
+  border: 1px solid #2f4a5c;
+  color: #d5e7ef;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.av-error {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: #2a1414;
+  border: 1px solid #7e2f2f;
+  color: #ffb4b4;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.av-warning {
+  margin: 6px 0;
+  padding: 6px 8px;
+  background: #302613;
+  border: 1px solid #79622f;
+  color: #ffdc91;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.av-point {
+  margin-top: 12px;
+  border-top: 1px solid var(--av-plugin-border);
+  padding-top: 8px;
+}
+
+.av-point-settings {
+  margin-top: 5px;
+  font-size: 11px;
+}
+
+.av-point-settings summary {
+  cursor: pointer;
+}
+
+.av-point-location {
+  margin: 5px 0 0;
+}
+
+.av-point-settings label {
+  display: inline-block;
+  margin: 5px 5px 0 0;
+}
+
+.av-point-settings select {
+  margin: 5px 9px 0 0;
+}

@@ -110,10 +110,12 @@ export function indexedGribCurrentSpecs(source: IndexedSource, hour: number): In
       ...instant(`auxSurface.${id}`, 'aux-surface', spec.variable, spec.level, spec.product ?? source.upstream.surfaceProduct, hour),
       auxId: id, scale: spec.scale, outputUnit: spec.unit, ...(spec.surface ? { fixedSurface: spec.surface } : {})
     })),
-    ...Object.entries(source.upstream.auxLevels ?? {}).flatMap(([id, spec]) => source.pressureLevels.map(level => ({
-      ...instant(`auxLevels.${id}.${level}`, 'aux-level', spec.variable, `${level} mb`, source.levelProducts.get(level)!, hour, level),
-      auxId: id, scale: spec.scale, outputUnit: spec.unit, ...(spec.conversion ? { conversion: spec.conversion } : {})
-    })))
+    ...Object.entries(source.upstream.auxLevels ?? {}).flatMap(([id, spec]) => source.pressureLevels
+      .filter(level => !spec.products || spec.products.includes(source.levelProducts.get(level)!))
+      .map(level => ({
+        ...instant(`auxLevels.${id}.${level}`, 'aux-level', spec.variable, `${level} mb`, source.levelProducts.get(level)!, hour, level),
+        auxId: id, scale: spec.scale, outputUnit: spec.unit, ...(spec.conversion ? { conversion: spec.conversion } : {})
+      })))
   ];
 }
 

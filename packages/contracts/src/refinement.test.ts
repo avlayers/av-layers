@@ -232,5 +232,28 @@ describe('configured refinement geometry', () => {
     }
     const excessive = config(feature('zone-001', [rectangle(-10, 20, 10, 40)]));
     expect(() => planRefinements(excessive, options)).toThrow('cell budget');
+
+    const rrfsLambert = {
+      kind: 'lambert-conformal' as const,
+      width: 1799,
+      height: 1059,
+      earthRadiusM: 6_371_229,
+      centralMeridianDeg: -97.5,
+      latitudeOfOriginDeg: 38.5,
+      standardParallel1Deg: 38.5,
+      standardParallel2Deg: 38.5,
+      x0M: -2_697_520.1425219304,
+      y0M: -1_587_306.1525566643,
+      dxM: 3_000,
+      dyM: 3_000,
+      wrapLongitude: false as const,
+    };
+    const bellingham = config(feature('zone-bellingham', [rectangle(-122.48, 48.75, -122.43, 48.80)]));
+    const mtWashington = config(feature('zone-mt-washington', [rectangle(-71.30, 44.27, -71.25, 44.32)]));
+    for (const candidate of [bellingham, mtWashington]) {
+      expect(() =>
+        planRefinements(candidate, { sourceGrid: rrfsLambert, bounds: [-134.12, 21.12, -60.89, 52.63], haloCells: 1 }),
+      ).toThrow('Refinement planning currently requires a regular-latlon source grid');
+    }
   });
 });

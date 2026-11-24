@@ -78,8 +78,8 @@ describe('wind columns', () => {
     if (field === 'surface-v') frame.auxSurface!.v10mMps!.missing[0] = 1;
     if (field === 'terrain') frame.missing.terrain[0] = 1;
     if (field === 'ground-pressure') frame.missing.surfacePressure[0] = 1;
-    if (field === 'first-u') frame.auxLevels!.uWindMps![0].missing[0] = 1;
-    if (field === 'first-v') frame.auxLevels!.vWindMps![0].missing[0] = 1;
+    if (field === 'first-u') frame.auxLevels!.uWindMps![0]!.missing[0] = 1;
+    if (field === 'first-v') frame.auxLevels!.vWindMps![0]!.missing[0] = 1;
     if (field === 'first-height') frame.missing.hgt[0][0] = 1;
     if (field === 'first-pressure') frame.missing.pressure[0][0] = 1;
     const normalized = normalizedWindColumn(frame, 0);
@@ -89,7 +89,7 @@ describe('wind columns', () => {
 
   it('preserves missing interior intervals and native levels below 10 m', () => {
     const frame = nearSurfaceFrame();
-    frame.auxLevels!.uWindMps![1].missing[0] = 1;
+    frame.auxLevels!.uWindMps![1]!.missing[0] = 1;
     const normalized = normalizedWindColumn(frame, 0);
     expect(normalized.levels[0]?.height).toBe(1010);
     expect(normalized.levels[2]).toBeNull();
@@ -99,6 +99,17 @@ describe('wind columns', () => {
     expect(low.levels[0]).toBeNull();
     expect(low.levels[1]?.height).toBe(1005);
     expect(() => encodeWindColumns([low])).not.toThrow();
+
+    // Non-hydrostatic height reversal becomes a missing interior interval instead of crashing encodeWindColumns
+    const reversed = nearSurfaceFrame();
+    reversed.hgtM[0][0] = 1120;
+    reversed.hgtM[1][0] = 1100;
+    reversed.hgtM[2][0] = 1300;
+    const normalizedRev = normalizedWindColumn(reversed, 0);
+    expect(normalizedRev.levels[1]?.height).toBe(1120);
+    expect(normalizedRev.levels[2]).toBeNull();
+    expect(normalizedRev.levels[3]?.height).toBe(1300);
+    expect(() => encodeWindColumns([normalizedRev])).not.toThrow();
   });
 
   it('round trips paired values, missing levels and outside cells', () => {

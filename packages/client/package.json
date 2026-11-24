@@ -7,11 +7,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./dom": "./src/dom.ts",
+    "./timezone": "./src/client-timezone.ts",
     "./wind": "./src/client-wind.ts"
   },
   "dependencies": {
     "@av/contracts": "workspace:*",
+    "@av/forecast": "workspace:*",
     "@av/soaring": "workspace:*",
-    "@av/forecast": "workspace:*"
+    "@photostructure/tz-lookup": "11.8.0"
   }
 }

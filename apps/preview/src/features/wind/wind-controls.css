@@ -1,28 +1,17 @@
 .wind-controls {
-  --wind-surface: #fffffff2;
-  --wind-border: #dce3ea;
-  --wind-ink: #16324f;
-  --wind-ink-on: #ffffff;
-  --wind-text: #1c2430;
-  --wind-muted: #5b6b7b;
-  --wind-hover: #eef3f8;
-  --wind-track: #d6dfe8;
+  --wind-surface: var(--av-surface-glass, #fffffff2);
+  --wind-border: var(--av-border, #dce3ea);
+  --wind-ink: var(--av-accent, #16324f);
+  --wind-ink-on: var(--av-accent-on, #ffffff);
+  --wind-text: var(--av-text, #1c2430);
+  --wind-muted: var(--av-text-muted, #5b6b7b);
+  --wind-hover: var(--av-surface-hover, #eef3f8);
+  --wind-track: var(--av-surface-track, #d6dfe8);
   position: relative;
   width: 48px;
   color: var(--wind-text);
-  font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 12px/1 var(--av-font-sans, ui-sans-serif, system-ui, sans-serif);
   user-select: none;
-}
-
-#app[data-chrome="dark"] .wind-controls {
-  --wind-surface: #111b27eb;
-  --wind-border: #29384c;
-  --wind-ink: #f59e0b;
-  --wind-ink-on: #0f172a;
-  --wind-text: #e2e8f0;
-  --wind-muted: #94a3b8;
-  --wind-hover: #1d2b3c;
-  --wind-track: #29384c;
 }
 
 .wind-controls, .wind-controls * { box-sizing: border-box; }

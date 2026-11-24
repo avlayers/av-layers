@@ -183,4 +183,28 @@ describe('point views', () => {
       expect(deriveCloudRegime(basis).cloudCapped).toBe(dry === null ? null : cap < dry);
     }
   });
+
+  it('preserves surface-to-top endpoint shear and buoyancy-to-shear ratio when an interior jet is present', () => {
+    const jetColumn: NativeDiagnosticInput = {
+      terrainM: 100,
+      surfaceTemperatureC: 26,
+      surfaceDewPointC: 10,
+      surfacePressureHpa: 990,
+      sensibleHeatFluxWm2: 240,
+      latentHeatFluxWm2: 20,
+      wind10mU: 2,
+      wind10mV: 0,
+      levels: [
+        { heightM: 450, temperatureC: 22.0, dewPointC: 8, pressureHpa: 950, uMps: 14, vMps: 0 },
+        { heightM: 900, temperatureC: 17.5, dewPointC: 6, pressureHpa: 900, uMps: 2, vMps: 0 },
+        { heightM: 1400, temperatureC: 15.0, dewPointC: 2, pressureHpa: 850, uMps: 2, vMps: 0 },
+      ],
+    };
+    const diag = deriveNativeColumnDiagnostics(jetColumn);
+    expect(diag.thermalTopM).toBeGreaterThan(900);
+    expect(diag.blTopWindU).toBeCloseTo(2, 5);
+    const views = deriveSoaringViews({ ...diag, terrainM: 100, wind10mU: 2, wind10mV: 0 });
+    expect(views.blWindShearMps).toBeCloseTo(0, 6);
+    expect(views.buoyancyShearRatio).toBeCloseTo(diag.thermalVelocityMps! / 0.2, 5);
+  });
 });

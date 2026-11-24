@@ -246,6 +246,9 @@ importers:
       '@av/soaring':
         specifier: workspace:*
         version: link:../soaring
+      '@photostructure/tz-lookup':
+        specifier: 11.8.0
+        version: 11.8.0
 
   packages/contracts:
     dependencies:
@@ -1102,6 +1105,9 @@ packages:
   '@petamoriken/float16@3.9.3':
     resolution: {integrity: sha512-8awtpHXCx/bNpFt4mt2xdkgtgVvKqty8VbjHI/WWWQuEw+KLzFot3f4+LkQY9YmOtq7A5GdOnqoIC8Pdygjk2g==}
 
+  '@photostructure/tz-lookup@11.8.0':
+    resolution: {integrity: sha512-RvTkAjjWAfgvoaHVXugwi9XOw4rwyrL8wuqox4PwRLW9FZwpmPhNUY31MgY7k5avK6sbD9S7i1/rUtM4A310/g==}
+
   '@poppinss/colors@4.1.6':
     resolution: {integrity: sha512-H9xkIdFswbS8n1d6vmRd8+c10t2Qe+rZITbbDHHkQixH5+2x1FDGmi/0K+WgWiqQFKPSlIYB7jlH6Kpfn6Fleg==}
 
@@ -1314,6 +1320,9 @@ packages:
   '@smithy/core@3.38.0':
     resolution: {integrity: sha512-aLyyCnK2p4yvNA2TaM+5owXqb+rZGSiUKEsNP329AzeYnERtAz7NrlTbRsaxqmZ0ooxwoID8LMm959UGQQDIsg==}
     engines: {node: '>=18.0.0'}
+    deprecated: |-
+      Deprecated due to a bug in custom logger data redaction. Upgrade to the latest version. If you used a custom logger with this
+        version, review your logs and rotate any credentials or other secrets. See https://github.com/aws/aws-sdk-js-v3/issues/8393.
 
   '@smithy/credential-provider-imds@4.5.2':
     resolution: {integrity: sha512-A9uSdn72ozbRUSit0eib0TW7nXuNPlaeM0zcGkJ+nE6tFcSDbnmtwoxbTCFBukVQcszDAyvsd7+rTduPTXpygg==}
@@ -3323,6 +3332,8 @@ snapshots:
     optional: true
 
   '@petamoriken/float16@3.9.3': {}
+
+  '@photostructure/tz-lookup@11.8.0': {}
 
   '@poppinss/colors@4.1.6':
     dependencies:

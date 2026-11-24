@@ -9,3 +9,5 @@ export type { NativeDiagnosticInput, NativeDiagnosticLevel, NativeColumnDiagnost
 export { deriveSoaringViews, deriveCloudRegime, windFromComponents } from './views.js';
 export type { SoaringViewInput, SoaringViews } from './views.js';
 export { NATIVE_DIAGNOSTIC_PARAMETERS } from './parameters.js';
+export { interpretUpperAirMoisture, resolveUpperAirMoistureReference } from '@av/thermodynamics';
+export type { InterpretedUpperAirMoisture, UpperAirMoistureReference } from '@av/thermodynamics';

@@ -7,7 +7,11 @@ import {
   type HourSampling,
   type PublishedForecastHour as ProfileHour,
 } from './internal-meteo.ts';
-import { relativeHumidityFromTempAndDewpointPercent } from '@av/thermodynamics';
+import {
+  effectiveCloudHumidityPercent,
+  interpretUpperAirMoisture,
+  relativeHumidityFromTempAndDewpointPercent,
+} from '@av/thermodynamics';
 import { finiteScalar } from './windgram-format.ts';
 
 export type Point = { x: number; y: number };
@@ -15,7 +19,7 @@ export const CLOUD_RH_THRESHOLD_PERCENT = 94;
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
-/** Linear interpolation in physical height. Never bridge an explicitly missing level. */
+/** Linear interpolation in physical height. Gaps block interpolation across missing levels. */
 export function sampleHeight(nodes: readonly FieldNode[], heightM: number): number | null {
   return sampleField(nodes, heightM, 'altitudeM');
 }
@@ -40,10 +44,10 @@ export function sampleField<Axis extends string>(nodes: readonly (Record<Axis, n
   return null;
 }
 
-type HeightGap = readonly [lower: number, upper: number];
+export type HeightGap = readonly [lower: number, upper: number];
 
 /** Published levels retain their order when a height is missing. */
-function profileHeightGaps(levels: ProfileHour['levels']): HeightGap[] {
+export function profileHeightGaps(levels: ProfileHour['levels']): HeightGap[] {
   const gaps: HeightGap[] = [];
   let lower = -Infinity, pending = false;
   for (const { heightM } of levels) {
@@ -57,7 +61,7 @@ function profileHeightGaps(levels: ProfileHour['levels']): HeightGap[] {
 }
 
 /** Keep known endpoints readable and block interpolation across a missing level. */
-function withHeightGaps<T extends { altitudeM: number }>(nodes: T[], gaps: readonly HeightGap[], missing: (heightM: number) => T): T[] {
+export function withHeightGaps<T extends { altitudeM: number }>(nodes: T[], gaps: readonly HeightGap[], missing: (heightM: number) => T): T[] {
   if (!gaps.length) return nodes;
   const result: T[] = [];
   let gapIndex = 0;
@@ -73,22 +77,45 @@ function withHeightGaps<T extends { altitudeM: number }>(nodes: T[], gaps: reado
   return result;
 }
 
+const hourSamplingMemo = new WeakMap<ProfileHour, HourSampling>();
+
 export function hourSampling(hour: ProfileHour): HourSampling {
+  const cached = hourSamplingMemo.get(hour);
+  if (cached) return cached;
   const floorM = hour.modelTerrainM;
   const levels = hour.levels.filter(l => l.heightM !== null && (floorM === null || l.heightM > floorM));
   const gaps = profileHeightGaps(hour.levels);
   const missingValue = (altitudeM: number) => ({ altitudeM, value: NaN });
-  const nodes = (key: 'temperatureC' | 'dewPointC') => {
-    const values = levels.map(l => ({ altitudeM: finiteScalar(l.heightM)!, value: finiteScalar(l[key]) ?? NaN }));
+  const moistureRef = hour.upperAirDewpointReference ?? 'liquid-vapor-pressure';
+  const interpretedLevels = levels.map(l => {
+    const temp = finiteScalar(l.temperatureC);
+    const moisture = interpretUpperAirMoisture(temp, finiteScalar(l.dewPointC), moistureRef);
+    return {
+      altitudeM: finiteScalar(l.heightM)!,
+      temperatureC: temp ?? NaN,
+      dewPointC: moisture.dewPointC ?? NaN,
+      cloudRhPercent: moisture.cloudRhPercent ?? NaN,
+    };
+  });
+  const anchorNodes = (values: { altitudeM: number; value: number }[], surfaceVal: number | null) => {
     if (floorM !== null) {
-      const height = floorM + 2, surface = finiteScalar(hour.surface[key]);
+      const height = floorM + 2;
       const sameHeight = values.find(node => node.altitudeM === height);
-      if (!sameHeight) values.push({ altitudeM: height, value: surface ?? NaN });
-      else if (surface !== null) sameHeight.value = surface;
+      if (!sameHeight) values.push({ altitudeM: height, value: surfaceVal ?? NaN });
+      else if (surfaceVal !== null) sameHeight.value = surfaceVal;
     }
     return withHeightGaps(values.sort((a, b) => a.altitudeM - b.altitudeM), gaps, missingValue);
   };
-  const temperatureC = nodes('temperatureC'), dewPointC = nodes('dewPointC');
+  const sfcTemp = finiteScalar(hour.surface.temperatureC);
+  const sfcTd = finiteScalar(hour.surface.dewPointC);
+  const temperatureC = anchorNodes(
+    interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.temperatureC })),
+    sfcTemp,
+  );
+  const dewPointC = anchorNodes(
+    interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.dewPointC })),
+    sfcTd,
+  );
   const wind = (u: number | null, v: number | null) => {
     return u === null || v === null ? { uMps: NaN, vMps: NaN } : { uMps: u, vMps: v };
   };
@@ -117,7 +144,7 @@ export function hourSampling(hour: ProfileHour): HourSampling {
     const upperAlt = i < lastIdx && b.altitudeM - a.altitudeM > 0.02 ? b.altitudeM - 0.01 : b.altitudeM;
     return [{ altitudeM: a.altitudeM, value }, { altitudeM: upperAlt, value }];
   });
-  return {
+  const sampled: HourSampling = {
     validAt: hour.validAt,
     temperatureC,
     dewPointC,
@@ -126,6 +153,15 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       altitudeM: p.altitudeM,
       value: relativeHumidityFromTempAndDewpointPercent(p.value, dewPointC[i].value),
     })),
+    cloudHumidityPercent: moistureRef === 'model-rh'
+      ? anchorNodes(
+          interpretedLevels.map(l => ({ altitudeM: l.altitudeM, value: l.cloudRhPercent })),
+          sfcTemp !== null && sfcTd !== null ? effectiveCloudHumidityPercent(sfcTemp, sfcTd) : null,
+        )
+      : temperatureC.map((p, i) => ({
+          altitudeM: p.altitudeM,
+          value: effectiveCloudHumidityPercent(p.value, dewPointC[i].value),
+        })),
     windU: winds.map(p => ({ altitudeM: p.altitudeM, value: p.uMps })),
     windV: winds.map(p => ({ altitudeM: p.altitudeM, value: p.vMps })),
     verticalVelocityPaS: withHeightGaps(levels.map((l) => ({
@@ -133,6 +169,8 @@ export function hourSampling(hour: ProfileHour): HourSampling {
       value: l.omegaPaS ?? NaN,
     })), gaps, missingValue),
   };
+  hourSamplingMemo.set(hour, sampled);
+  return sampled;
 }
 
 /** Reconstruct the colour field from interval centres. Source lapse rates stay

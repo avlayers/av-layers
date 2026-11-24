@@ -381,5 +381,18 @@ it('keeps queued deadlines absolute and does not release an active timed-out own
     await vi.advanceTimersByTimeAsync(100);
     expect((await lateResult as Error).message).toContain('deadline');
     finishNext(2);
+
+    // Queue-wait expiration increments metrics.queueTimeouts while active I/O timeout does not
+    let finishActive!: (value: number) => void;
+    const ownerMetrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
+    const waiterMetrics = { r2Reads: 0, r2Bytes: 0, cacheHits: 0, coalesced: 0 };
+    const active = reads.run('active-timeout', () => new Promise(resolve => { finishActive = resolve; }), { waitUntil() {}, metrics: ownerMetrics }).catch(e => e);
+    const waiting = reads.run('queue-timeout', async () => 5, { waitUntil() {}, metrics: waiterMetrics }).catch(e => e);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await active as Error).message).toContain('deadline');
+    expect((await waiting as Error).message).toContain('deadline');
+    expect(ownerMetrics).not.toHaveProperty('queueTimeouts');
+    expect(waiterMetrics).toMatchObject({ queueTimeouts: 1 });
+    finishActive(4);
   } finally { vi.useRealTimers(); }
 });

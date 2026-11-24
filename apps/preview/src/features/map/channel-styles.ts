@@ -30,7 +30,7 @@ export const CLOUD_STYLE_OPTIONS: readonly StyleChoiceOption<CloudStyleChoice>[]
   { id: 'sunlit-veil', label: 'Veil', summary: 'Billowy sunlit Cu + neutral overcast ground shadow' },
   { id: 'cu-overcast', label: 'Cu / OD', summary: 'Bright cumulus puffs vs. overcast shadow rim' },
   { id: 'nephanalysis', label: 'Contours', summary: 'Crisp vector 40 / 75% cloud isolines + airy veil' },
-  { id: 'satellite-ir', label: 'IR Deck', summary: 'Sculpted visible/IR satellite cloud tops' }
+  { id: 'satellite-ir', label: 'IR Deck', summary: 'Simulated IR deck (bright upper tops, gray low cloud)' }
 ];
 
 export const RAIN_STYLE_OPTIONS: readonly StyleChoiceOption<RainStyleChoice>[] = [
