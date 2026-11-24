@@ -1,8 +1,8 @@
 THIRD-PARTY NOTICES
 
 This file records source adaptations and third-party license
-obligations. It does not assign a new public license to this repository or its
-first-party sources. Genuine dependency and data notices remain below.
+obligations. The repository itself is licensed under AGPL-3.0-only (see
+LICENSE); the dependency and data notices below keep their own terms.
 
 1. Source adaptations
 
@@ -18,13 +18,15 @@ windgrams
   Repository revision: 32fdd75db7a4a1a302ae901b969b0f6625712368
   Reused scope: selected soaring parcel-depth/convective-lift and meteorology
   helpers, NOAA GFS acquisition patterns, publication/R2 patterns.
-  No LICENSE file identified; no MIT or other public license grant is asserted.
+  First-party code by the same author; the adapted parts are distributed here
+  under this repository's AGPL-3.0-only license.
 
 skyjuice
   Repository revision: 043e5bf18dc9b60f4586622d1b8d631af88d9235
   Reused scope: GFS thermal-input proof/admission patterns, PDT 4.8
   statistical-interval and duplicate-record guards, planning references.
-  No LICENSE file identified; no MIT or other public license grant is asserted.
+  First-party code by the same author; the adapted parts are distributed here
+  under this repository's AGPL-3.0-only license.
 
 @azohra/meteo.grib and @azohra/meteo.j2k
   Repository revision: 0296c1fb54aa9c8415e7962d7a4580b496e7ebf8

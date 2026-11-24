@@ -57,3 +57,8 @@ and PMTiles. Run `pnpm verify` for both suites and app builds.
 
 Source data and third-party license notices are in
 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+
+## License
+
+[AGPL-3.0-only](LICENSE). Contributions are accepted under the
+[contributor licence agreement](CLA.md); see [contributing](CONTRIBUTING.md).

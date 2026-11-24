@@ -2,6 +2,7 @@
   "name": "windy-av-layer",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "packageManager": "pnpm@10.34.9",
   "engines": {
