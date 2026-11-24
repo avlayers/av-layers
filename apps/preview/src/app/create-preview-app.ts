@@ -1066,9 +1066,9 @@ export function createPreviewApp(): PreviewApp {
     });
     map.on('moveend', event => {
       syncMapClock(true); pointMarker?.sync(); updateScale();
-      if (intent().model !== AUTO_MODEL_ID) updateWind();
-      if (build() && !forecast().expired) updateTimeUi();
       const pointCameraMove = Boolean(event && typeof event === 'object' && 'pointCamera' in event);
+      if (intent().model !== AUTO_MODEL_ID || pointCameraMove) updateWind();
+      if (build() && !forecast().expired) updateTimeUi();
       if (intent().model === AUTO_MODEL_ID && !history.restoring() && !pointCameraMove) void forecastSession.loadAuto();
       if (urlReady && !history.restoring()) writeUrl('push');
       refreshSeam();
