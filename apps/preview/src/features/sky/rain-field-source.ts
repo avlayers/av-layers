@@ -117,59 +117,48 @@ export class RainFieldSource {
     const protocol = this.protocol;
     protocol.setBuildExpiry(buildId, build.expiresAtMs);
 
-    try {
-      const tileBitmaps = await Promise.all(crop.tiles.map(async tile => {
-        const url = frameTileUrl(template, frame)
-          .replaceAll('{z}', String(tile.z))
-          .replaceAll('{x}', String(tile.canonicalX))
-          .replaceAll('{y}', String(tile.y));
-        let data: ArrayBuffer;
-        let release: (() => void) | undefined;
-        if (typeof protocol.requestTile === 'function') {
-          const handle = protocol.requestTile(url, { priority });
-          handlesOut.push(handle);
-          const res = await handle.response;
-          data = res.data;
-          release = res.release;
-        } else {
-          const res = await protocol.load({ url }, new AbortController());
-          data = res.data;
-        }
-        try {
-          if (!isCurrent() || data.byteLength <= 48) return null;
-          const bmp = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
-          return { tile, bmp };
-        } finally {
-          release?.();
-        }
-      }));
-
-      if (!isCurrent()) {
-        for (const item of tileBitmaps) item?.bmp.close();
-        return null;
+    const settled = await Promise.allSettled(crop.tiles.map(async tile => {
+      const url = frameTileUrl(template, frame)
+        .replaceAll('{z}', String(tile.z))
+        .replaceAll('{x}', String(tile.canonicalX))
+        .replaceAll('{y}', String(tile.y));
+      let data: ArrayBuffer;
+      let release: (() => void) | undefined;
+      if (typeof protocol.requestTile === 'function') {
+        const handle = protocol.requestTile(url, { priority });
+        handlesOut.push(handle);
+        const res = await handle.response;
+        data = res.data;
+        release = res.release;
+      } else {
+        const res = await protocol.load({ url }, new AbortController());
+        data = res.data;
       }
-
+      try {
+        if (!isCurrent() || data.byteLength <= 48) return null;
+        const bmp = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
+        return { tile, bmp };
+      } finally {
+        release?.();
+      }
+    }));
+    const tileBitmaps = settled.map(result => result.status === 'fulfilled' ? result.value : null);
+    try {
+      if (!isCurrent() || settled.some(result => result.status === 'rejected')) return null;
       const scaleX = RAIN_FIELD_SIZE / crop.width;
       const scaleY = RAIN_FIELD_SIZE / crop.height;
       const ctx = this.decodeCanvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) {
-        for (const item of tileBitmaps) item?.bmp.close();
-        return null;
-      }
+      if (!ctx) return null;
       ctx.clearRect(0, 0, RAIN_FIELD_SIZE, RAIN_FIELD_SIZE);
       for (const item of tileBitmaps) {
         if (!item) continue;
-        try {
-          ctx.drawImage(
-            item.bmp,
-            item.tile.drawX * scaleX,
-            item.tile.drawY * scaleY,
-            RASTER_TILE_SIZE * scaleX,
-            RASTER_TILE_SIZE * scaleY
-          );
-        } finally {
-          item.bmp.close();
-        }
+        ctx.drawImage(
+          item.bmp,
+          item.tile.drawX * scaleX,
+          item.tile.drawY * scaleY,
+          RASTER_TILE_SIZE * scaleX,
+          RASTER_TILE_SIZE * scaleY
+        );
       }
 
       const pixels = ctx.getImageData(0, 0, RAIN_FIELD_SIZE, RAIN_FIELD_SIZE).data;
@@ -192,6 +181,9 @@ export class RainFieldSource {
       return field;
     } catch {
       return null;
+    } finally {
+      // Settled, so no sibling can finish later: every bitmap this decode made closes here.
+      for (const item of tileBitmaps) item?.bmp.close();
     }
   }
 
