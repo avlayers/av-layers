@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID, type PointHorizon } from '@av/client';
+import { AUTO_MODEL_ID, normalizePoint, type PointHorizon } from '@av/client';
 import { liftLayerFor } from '../layers/registry';
 import type { PreviewContext } from './context';
 import type { PreviewOps } from './display-ops';
@@ -126,6 +126,12 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
     },
     selectFrame(index, mode) { ops.selectIndex(index, mode); },
     updateRun() { void ctx.forecastSession.updateRun(); },
+    forecastAtCenter() {
+      const map = live.map;
+      if (!map || ctx.mapFailed() || !live.point) return;
+      const center = map.getCenter();
+      void live.point.feature.open(normalizePoint(center.lat, center.lng)).then(() => document.querySelector<HTMLElement>('#point-body')?.focus());
+    },
     setPlaying(playing) {
       writer.forecast({ playing });
       for (const channel of live.channels) channel.setPlayback?.(playing);

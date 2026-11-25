@@ -28,6 +28,12 @@ model has a newer cycle and offers **Update**, which adopts the new run and
 keeps the map, wind height and requested time where the run covers it
 (subject to the API's 15-second [pointer cache](../../docs/serving-budgets.md)).
 
+Keyboard: **F** (or the first Tab stop, *Forecast at map center*) opens the
+point forecast at the map center and Escape closes it, returning focus. The
+arrow keys step hours, **W** and **I** toggle wind and isobars, **P** or held
+Space peeks at the terrain, **1**/**3** switch the point view and **[**/**]**
+cycle themes.
+
 Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
 A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.
 Builds with numeric wind render GPU particles through the in-house

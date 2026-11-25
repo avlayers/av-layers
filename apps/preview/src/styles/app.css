@@ -1194,6 +1194,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 #app[data-chrome="dark"] #opacity { accent-color: #f59e0b; }
 
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+.sr-only-focusable:not(:focus) { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); border: 0; }
+.sr-only-focusable:focus { position: absolute; z-index: 10; top: 8px; left: 8px; padding: 8px 12px; border-radius: 8px; font: inherit; }
 
 /* Zero-Header-Row Point Windgram Card + Compact Bottom-Right Info Tooltip */
 #point-card {

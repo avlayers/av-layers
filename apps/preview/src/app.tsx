@@ -72,6 +72,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
 
   return (
     <>
+      <button type="button" id="forecast-here" class="sr-only-focusable" onClick={() => commands.forecastAtCenter()}>Forecast at map center (F)</button>
       <div id="map" />
       <header id="topbar">
         <div class="topbar-row">

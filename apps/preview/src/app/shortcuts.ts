@@ -17,13 +17,14 @@ interface ShortcutOptions {
 /**
  * Keyboard shortcuts and outside-click dismissal: Escape closes popovers then the point card,
  * Space holds and P latches terrain peek, W and I toggle wind and isobars, 1 and 3 switch the
- * point view, [ and ] cycle themes, and the arrow keys step frames.
+ * point view, [ and ] cycle themes, the arrow keys step frames, and F opens the point forecast at the
+ * map center. Closing a point opened from the keyboard returns focus to where F was pressed.
  */
 export function installShortcuts(options: ShortcutOptions): void {
   const { root, commands, point } = options;
   const intent = () => options.store.view.intent.value;
   const listen = { signal: options.signal };
-  let spacePeek = false;
+  let spacePeek = false, pointOpener: HTMLElement | null = null;
   const endSpacePeek = () => { if (spacePeek) { spacePeek = false; commands.setPeeking(false); } };
 
   document.addEventListener('keydown', event => {
@@ -37,6 +38,8 @@ export function installShortcuts(options: ShortcutOptions): void {
       else if (point.isOpen() && !(event.target instanceof Node && root.querySelector('#point-body')?.contains(event.target))) {
         point.close();
         event.preventDefault();
+        if (pointOpener?.isConnected) pointOpener.focus();
+        pointOpener = null;
       }
     }
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey || (event.target as HTMLElement | null)?.matches?.('input,select,textarea,button,summary')) return;
@@ -48,6 +51,7 @@ export function installShortcuts(options: ShortcutOptions): void {
     const key = event.key;
     if (key === 'p' || key === 'P') { event.preventDefault(); spacePeek = false; commands.setPeeking(!intent().peeking); return; }
     if ((key === 'w' || key === 'W') && options.store.view.wind.value.supported) { event.preventDefault(); commands.toggleWeatherLayer('wind'); return; }
+    if (key === 'f' || key === 'F') { event.preventDefault(); pointOpener = document.activeElement instanceof HTMLElement ? document.activeElement : null; commands.forecastAtCenter(); return; }
     if (key === 'i' || key === 'I') { event.preventDefault(); commands.toggleWeatherLayer('isobars'); return; }
     if ((key === '1' || key === '3') && point.isOpen()) { event.preventDefault(); commands.setPointViewMode?.(key === '3' ? '3d' : '1d'); return; }
     if (key === '[' || key === ']') {
