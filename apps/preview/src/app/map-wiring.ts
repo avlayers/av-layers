@@ -35,6 +35,7 @@ export function installMapWiring(ctx: PreviewContext, ops: PreviewOps, map: mapl
     if (point.isOpen()) { point.close(); return; }
     void point.feature.open(normalizePoint(event.lngLat.lat, event.lngLat.lng));
   });
+  if (live.camera?.zoneReady) void live.camera.zoneReady.then(() => syncMapClock(true));
   map.on('move', () => { syncMapClock(false); point.marker.sync(); wind.session.reconcile(); });
   map.on('resize', () => { point.marker.sync(); point.syncBarReserve(); });
   map.on('movestart', event => {

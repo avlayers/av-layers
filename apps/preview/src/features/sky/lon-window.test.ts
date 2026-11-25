@@ -4,12 +4,12 @@ import { scaleAdaptiveSampleBox, synopticFieldCoversView } from './synoptic-samp
 
 describe('lonWindow', () => {
   it.each([
-    [170, 190, 170, 190],
+    [170, 190, -190, -170],
     [181, 191, -179, -169],
     [-191, -181, 169, 179],
     [530, 540, 170, 180],
     [-20, 10, -20, 10]
-  ])('keeps %s..%s as one span starting at %s', (west, east, w, e) => {
+  ])('keeps %s..%s as one span with its centre inside ±180 (%s..%s)', (west, east, w, e) => {
     const window = lonWindow(west, 10, east, 20);
     expect(window.west).toBeCloseTo(w);
     expect(window.east).toBeCloseTo(e);
@@ -21,8 +21,8 @@ describe('lonWindow', () => {
 
   it('pads across the seam without clamping at 180°', () => {
     const box = scaleAdaptiveSampleBox(lonWindow(175, 0, 185, 10));
-    expect(box.west).toBeLessThan(175);
-    expect(box.east).toBeGreaterThan(185);
+    expect(box.east - box.west).toBeGreaterThan(10);
+    expect((box.west + box.east) / 2).toBeCloseTo(-180);
   });
 
   it('gives equivalent ±360° views the same cache key', () => {

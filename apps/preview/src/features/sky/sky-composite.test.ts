@@ -11,10 +11,10 @@ const deferred = <T,>(): Deferred<T> => {
 
 const sampler = {
   cache: new Map<string, SynopticField>(),
-  loads: new Map<string, Deferred<SynopticField | null>>(),
+  loads: new Map<string, Deferred<SynopticField | null | undefined>>(),
   findCached: (build: PinnedBuild, frame: string) => sampler.cache.get(`${build.manifest.buildId}:${frame}`) ?? null,
   load(build: PinnedBuild, frame: string) {
-    const d = deferred<SynopticField | null>();
+    const d = deferred<SynopticField | null | undefined>();
     sampler.loads.set(`${build.manifest.buildId}:${frame}`, d);
     return d.promise;
   },
@@ -92,6 +92,18 @@ describe('SkyComposite selection identity', () => {
     expect(clouds.visible).toBe(true);
     expect(isobars.visible).toBe(false);
     expect(statuses.at(-1)).toEqual({ clouds: 'ready', isobars: 'unavailable' });
+  });
+
+  it('asks again when a prefetch evicts the selected hour, and stays loading', async () => {
+    const { sky, statuses } = create();
+    sky.select(b1, 'f1');
+    sampler.loads.get('b1:f1')!.resolve(undefined);
+    await flush();
+    expect(statuses.at(-1)).toEqual({ clouds: 'loading', isobars: 'loading' });
+    sampler.loads.get('b1:f1')!.resolve(field('b1', 'f1'));
+    await flush();
+    expect(clouds.visible).toBe(true);
+    expect(statuses.at(-1)).toEqual({ clouds: 'ready', isobars: 'ready' });
   });
 
   it('ignores a late result for an hour no longer selected', async () => {

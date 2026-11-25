@@ -1,8 +1,8 @@
 import { MAX_LAT } from './mercator';
 
 /**
- * Longitude windows for sky fields: `west` in [-180, 180), `east = west + span`, so a window can run
- * past 180° (`170..190`) and stays one coherent span. Samples normalize each point; MapLibre draws
+ * Longitude windows for sky fields: one coherent span with its centre in [-180, 180), so a window
+ * can run past the dateline (`170..190` becomes `-190..-170`). Samples normalize each point; MapLibre draws
  * the same coordinates on every world copy.
  */
 export interface LonLatWindow {
@@ -21,8 +21,10 @@ export function lonWindow(west: number, south: number, east: number, north: numb
   if (span <= 0) span += 360;
   const s = Math.max(-MAX_LAT, south), n = Math.min(MAX_LAT, north);
   if (span >= WORLD_SPAN) return { west: -180, south: s, east: 180, north: n };
-  const w = ((west + 180) % 360 + 360) % 360 - 180;
-  return { west: w, south: s, east: w + Math.max(MIN_SPAN, span), north: n };
+  const width = Math.max(MIN_SPAN, span);
+  // MapLibre image sources need their centre inside [-180, 180).
+  const centre = ((west + width / 2 + 180) % 360 + 360) % 360 - 180;
+  return { west: centre - width / 2, south: s, east: centre + width / 2, north: n };
 }
 
 /** `view` shifted by whole turns so its centre lies within 180° of `ref`'s centre. */

@@ -400,6 +400,8 @@ export class SkyComposite implements MapChannel {
       needMslp: this.isobarsVisible
     });
     if (seq !== this.synopticSeq || this.disposed || this.build !== build || this.frame !== frame) return;
+    // Evicted by a newer prefetch: the selection still needs this hour, so ask again.
+    if (field === undefined) { void this.refreshSynoptic(build, frame, rawMapViewBounds(this.map), allowWarm); return; }
     if (field) this.paintSynopticField(field);
     this.settleChannel('clouds', selected);
     this.settleChannel('isobars', selected);

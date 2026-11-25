@@ -29,3 +29,19 @@ describe('SynopticSampler cloud cells', () => {
     expect([...field!.total].every(Number.isNaN)).toBe(true);
   });
 });
+
+describe('SynopticSampler eviction', () => {
+  it('resolves an evicted foreground load as undefined, never as a failure', async () => {
+    const pending: (() => void)[] = [];
+    const api = {
+      samples: (_b: PinnedBuild, request: { points: unknown[] }) => new Promise(resolve => pending.push(() => resolve({
+        points: request.points.map(() => ({ sample: { frames: [] } }))
+      })))
+    } as unknown as ApiClient;
+    const sampler = new SynopticSampler(api);
+    const first = sampler.load(build, 'f0', view);
+    for (const frame of ['f1', 'f2', 'f3']) void sampler.load(build, frame, view);
+    for (const resolve of pending) resolve();
+    expect(await first).toBeUndefined();
+  });
+});

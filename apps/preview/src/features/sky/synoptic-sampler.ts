@@ -197,12 +197,13 @@ export class SynopticSampler {
     return null;
   }
 
+  /** Field for `frame` covering `raw`; `null` when the request failed, `undefined` when a newer foreground request evicted it. */
   async load(
     build: PinnedBuild,
     frame: string,
     raw: ViewportBounds,
     needed: SynopticChannelNeed = {}
-  ): Promise<SynopticField | null> {
+  ): Promise<SynopticField | null | undefined> {
     const hasTotal = build.manifest.layers.includes('cloud-cover-total');
     const hasLow = build.manifest.layers.includes('cloud-cover-low');
     const hasMslp = build.manifest.layers.includes('mslp-hpa');
@@ -229,7 +230,7 @@ export class SynopticSampler {
     if (existing) {
       const resolved = await existing.promise;
       if (resolved) this.active = resolved;
-      return resolved;
+      return existing.controller.signal.aborted ? undefined : resolved;
     }
 
     // Pause background warming while foreground frame misses are in flight.
@@ -256,7 +257,7 @@ export class SynopticSampler {
     this.fgInflight.set(inflightKey, { promise, controller });
     const field = await promise;
     if (field) this.active = field;
-    return field;
+    return controller.signal.aborted ? undefined : field;
   }
 
   /**
