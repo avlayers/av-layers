@@ -21,18 +21,21 @@ import {
 import type { PublishedForecastHour, SiteForecast } from './internal-meteo.ts';
 
 /**
- * Native-column usable lift ceiling (MSL) from model ground, thermal top, w* and the effective
- * cloud cap, using the 1.2 m/s Lenschow sink solver. Computed for every hour; fine map lift is a
- * separate result.
+ * Computes native-column usable lift ceiling (MSL) for forecast hours beyond `mapFrameCount`
+ * where fine-grid `usable-lift-msl` is `'unavailable'`, using the 1.2 m/s Lenschow sink solver
+ * and effective cloud cap over native model terrain.
+ * Preserves explicit `'no-usable-lift'` and `'outside-domain'` fine-surface statuses.
  */
-function resolveNativeLiftTopM(args: {
+function resolveNativeFallbackLiftTopM(args: {
+  mapLiftStatus: string | undefined;
   groundTerrainM: number | null;
   thermalTopM: number | null;
   thermalVelocityMps: number | null;
   effectiveCloudLimitM: number | null;
   derivedV2TopM: number | null;
 }): number | null {
-  const { groundTerrainM, thermalTopM, thermalVelocityMps, effectiveCloudLimitM, derivedV2TopM } = args;
+  const { mapLiftStatus, groundTerrainM, thermalTopM, thermalVelocityMps, effectiveCloudLimitM, derivedV2TopM } = args;
+  if (mapLiftStatus && mapLiftStatus !== 'unavailable') return null;
   if (
     groundTerrainM === null ||
     thermalTopM === null ||
@@ -154,13 +157,16 @@ function chartHour(
   const pblHeightM = read('pbl-height-agl');
   const effectiveCloudLimitM = diagnostics?.effectiveCloudLimitM ?? null;
   const levels = profile?.status === 'valid' ? profile.levels : [];
-  const nativeUsableLiftTopM = resolveNativeLiftTopM({
-    groundTerrainM: modelTerrainM,
-    thermalTopM,
-    thermalVelocityMps,
-    effectiveCloudLimitM,
-    derivedV2TopM: diagnostics?.usableLiftTopV2M ?? null,
-  });
+  const nativeUsableLiftTopM = mapLift.mslM !== null
+    ? null
+    : resolveNativeFallbackLiftTopM({
+        mapLiftStatus: mapLift.msl?.status,
+        groundTerrainM: modelTerrainM,
+        thermalTopM,
+        thermalVelocityMps,
+        effectiveCloudLimitM,
+        derivedV2TopM: diagnostics?.usableLiftTopV2M ?? null,
+      });
   const maxDepartureFromSurfaceMps = diagnostics
     ? computeMaxDepartureFromSurfaceMps({
         modelTerrainM,

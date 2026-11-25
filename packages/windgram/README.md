@@ -28,9 +28,7 @@ Chart modules each own one concern:
 - Scenes: [`windgram-view.ts`](src/windgram-view.ts) builds one day;
   [`windgram-stitched.ts`](src/windgram-stitched.ts) joins cached
   [day panels](src/windgram-stitched-panel.ts).
-- Fields: [`windgram-climb.ts`](src/windgram-climb.ts) (thermal dome from each
-  hour's native model column: model ground, thermal top, w* and cloud cap; fine
-  terrain only clips it, and the fine usable lift ceiling is drawn as its own line),
+- Fields: [`windgram-climb.ts`](src/windgram-climb.ts) (thermal dome),
   [`windgram-clouds.ts`](src/windgram-clouds.ts) (humidity cloud decks, and the
   sky cover strip from model total cloud), and
   [`windgram-atmosphere.ts`](src/windgram-atmosphere.ts) (inversions, model ascent,

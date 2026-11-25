@@ -3,7 +3,7 @@
 
 import type { HourSampling, PublishedForecastHour } from './internal-meteo.ts';
 import type { SkyCoverageCode, WindgramCloudLayerSummary } from './scene-types.ts';
-import { effectiveHourGroundM, nativeThermalColumn } from './windgram-climb.ts';
+import { effectiveHourGroundM, effectiveHourUsableLiftTopM } from './windgram-climb.ts';
 import { clamp, finiteScalar } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT, sampleHeight } from './windgram-sampling.ts';
 import { hourX } from './windgram-time-axis.ts';
@@ -37,8 +37,11 @@ export function classifyConvectiveCloudRegime(hour: PublishedForecastHour): Conv
     .filter((v): v is number => v !== null && Number.isFinite(v));
   if (!limits.length) return 'none';
   const lclM = Math.min(...limits);
-  const column = nativeThermalColumn(hour);
-  const topM = column ? Math.max(column.thermalTopM, column.usableTopM ?? -Infinity) : -Infinity;
+  const liftTopM = effectiveHourUsableLiftTopM(hour);
+  const topM = Math.max(
+    hour.thermalTopM !== null && Number.isFinite(hour.thermalTopM) ? hour.thermalTopM : -Infinity,
+    liftTopM !== null && Number.isFinite(liftTopM) ? liftTopM : -Infinity,
+  );
   const hasCuSupport =
     hour.cloudCapped === true ||
     hour.overdeveloped === true ||

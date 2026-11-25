@@ -204,8 +204,7 @@ describe('Windgram physics', () => {
     expect(day3Svg).toContain('class="wg-wave-strong"');
     expect(day3Svg).not.toContain('class="wg-climb-');
     const waveReading = readWindgram(day3Scene, 1, 2400);
-    // The native column is known and has no thermal: 0, which the tile shows as model ascent instead.
-    expect(waveReading.estimatedClimbMps).toBe(0);
+    expect(waveReading.estimatedClimbMps).toBeNull();
     expect(waveReading.waveVelocityMps).toBeGreaterThan(1.2);
     expect(waveReading.lapseCPer1000Ft).toBeGreaterThan(-2.45);
 
@@ -340,18 +339,21 @@ describe('Windgram physics', () => {
     expect(hazardEl.textContent).toBe('Shear 5.1 mph/kft');
   });
 
-  it('preserves native-column convective depth under a high ridge and distinguishes unpublished model omega', async () => {
+  it('preserves native-column convective depth on high-ridge fallback hours and distinguishes unpublished model omega', async () => {
     const { resolveConvectiveEnvelope, estimateThermalClimbAtHeight } = await import('./windgram-climb.ts');
     // Ridge DEM 1,450 m over 1,000 m model ground with 1,521.35 m native usable ceiling (thermal top 2,000 m, w* = 0.639445 m/s)
-    const column = { groundM: 1000, thermalTopM: 2000, thermalVelocityMps: 0.639445, usableTopM: 1521.35, cloudCapM: 4000 };
-    const env = resolveConvectiveEnvelope(column, 1450);
+    const wStar = 0.639445;
+    const env = resolveConvectiveEnvelope(1450, 1521.35, 2000, 4000, wStar, {
+      modelTerrainM: 1000,
+      isNativeFallback: true,
+    });
     expect(env).not.toBeNull();
     expect(env!.groundM).toBe(1000);
     expect(env!.floorM).toBe(1450);
     expect(env!.convectiveDepthM).toBeCloseTo(1000, 0);
     // Below the 1,450 m ridge is underground (0 climb); at 1,480 m MSL inside [1450, 1521.35] it follows the true 1,000 m native profile
-    expect(estimateThermalClimbAtHeight(1400, column, 1450).estimatedClimbMps).toBe(0);
-    const aloftClimb = estimateThermalClimbAtHeight(1480, column, 1450).estimatedClimbMps!;
+    expect(estimateThermalClimbAtHeight(1400, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps).toBe(0);
+    const aloftClimb = estimateThermalClimbAtHeight(1480, 1450, 1521.35, 2000, 4000, wStar, { modelTerrainM: 1000, isNativeFallback: true }).estimatedClimbMps!;
     expect(aloftClimb).toBeGreaterThan(0);
     expect(aloftClimb).toBeLessThan(0.12);
 
