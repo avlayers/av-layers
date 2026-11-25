@@ -537,6 +537,15 @@ describe('read-only worker', () => {
       else expect(rainText).toContain('&lt; 0.1 mm/h (transparent)');
     }
   });
+  it('revalidates weak, listed and wildcard If-None-Match tags with a 304 (RFC 9110 weak comparison)', async () => {
+    const path = '/v1/palettes/lift.json', etag = (await call(path)).headers.get('etag')!;
+    for (const tag of [etag, `W/${etag}`, `"other", W/${etag}`, '*']) {
+      const result = await call(path, { headers: { 'if-none-match': tag } });
+      expect(result.status, tag).toBe(304);
+      expect(result.headers.get('etag')).toBe(etag);
+    }
+    expect((await call(path, { headers: { 'if-none-match': 'W/"other"' } })).status).toBe(200);
+  });
   it('validates route parameter lengths and rejects unknown models and layers', async () => {
     expect((await call(`/v1/models/${'a'.repeat(129)}/latest`)).status).toBe(400);
     expect((await call(`/v1/models/gfs/runs/${'a'.repeat(129)}`)).status).toBe(400);

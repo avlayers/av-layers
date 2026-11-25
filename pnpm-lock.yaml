@@ -117,6 +117,9 @@ importers:
       '@hono/zod-openapi':
         specifier: 1.6.3
         version: 1.6.3(hono@4.13.14)(zod@4.6.7)
+      fresh:
+        specifier: 2.0.0
+        version: 2.0.0
       hono:
         specifier: 4.13.14
         version: 4.13.14
@@ -136,6 +139,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: 'catalog:'
         version: 5.20261030.1
+      '@types/fresh':
+        specifier: 0.5.3
+        version: 0.5.3
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
@@ -1482,6 +1488,9 @@ packages:
   '@types/estree@1.0.9':
     resolution: {integrity: sha512-GhdPgy1el4/ImP05X05Uw4cw2/M93BCUmnEvWZNStlCzEKME4Fkk+YpoA5OiHNQmoS7Cafb8Xa3Pya8m1Qrzeg==}
 
+  '@types/fresh@0.5.3':
+    resolution: {integrity: sha512-eZBbataAbl5t/G/klkfp/dyjOD8LlEC5L1zBrSerj500xJZS2SRxG2dsdlaWMADTm4pT7e0CxAU+8S3PfMuZpw==}
+
   '@types/geojson@7946.0.16':
     resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
 
@@ -1857,6 +1866,10 @@ packages:
     resolution: {integrity: sha512-9XNj/o4wrRFyhSMJOvsuyMwy8aUfBaZ1VrqHVfohyXf0Sw0e+yfKG+xZaY3arGCOMdwFsqObtzVOc1gU9KiT9w==}
     engines: {node: '>=18.3.0'}
     hasBin: true
+
+  fresh@2.0.0:
+    resolution: {integrity: sha512-Rx/WycZ60HOaqLKAi6cHRKKI7zxWbJ31MhntmtwMoaTeF7XFH9hhBp8vITaMidfljRQ6eYWCKkaTK+ykVJHP2A==}
+    engines: {node: '>= 0.8'}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -3825,6 +3838,8 @@ snapshots:
 
   '@types/estree@1.0.9': {}
 
+  '@types/fresh@0.5.3': {}
+
   '@types/geojson@7946.0.16': {}
 
   '@types/json-schema@7.0.15': {}
@@ -4256,6 +4271,8 @@ snapshots:
   formatly@0.3.0:
     dependencies:
       fd-package-json: 2.0.0
+
+  fresh@2.0.0: {}
 
   fsevents@2.3.3:
     optional: true

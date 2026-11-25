@@ -13,6 +13,7 @@
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
     "@hono/zod-openapi": "1.6.3",
+    "fresh": "2.0.0",
     "hono": "4.13.14",
     "lru-cache": "11.5.3",
     "pmtiles": "catalog:",
@@ -21,6 +22,7 @@
   "devDependencies": {
     "@av/client": "workspace:*",
     "@cloudflare/workers-types": "catalog:",
+    "@types/fresh": "0.5.3",
     "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "catalog:"
