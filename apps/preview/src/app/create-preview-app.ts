@@ -89,7 +89,7 @@ export function createPreviewApp(): PreviewApp {
     const cur = ctx.intent();
     live.sky = new SkyComposite(map, services.api, apiBaseUrl, {
       theme: cur.theme, opacity: cur.opacity, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
-      fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec),
+      fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec), budget: preparationBudget,
       onStatus: skyStatus => writer.notices({ skyStatus })
     });
     live.seam = new CoverageSeam(map);

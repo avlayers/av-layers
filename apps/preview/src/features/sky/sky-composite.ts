@@ -1,7 +1,7 @@
 import type { Map } from 'maplibre-gl';
 import {
   ApiClient, clampOpacity,
-  type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild
+  type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type PreparationBudget
 } from '@av/client';
 import { resolveChannelStyles, type ResolvedChannelStyles } from '../map/channel-styles';
 import type { ChannelView, MapChannel } from '../../channels/channel';
@@ -85,6 +85,7 @@ export class SkyComposite implements MapChannel {
       isobarsVisible: boolean;
       fetchImpl?: typeof fetch;
       request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
+      budget?: PreparationBudget;
       onStatus?: (status: SkyStatus) => void;
     }
   ) {
@@ -105,7 +106,8 @@ export class SkyComposite implements MapChannel {
       opacity: this.opacity,
       visible: this.rainVisible,
       fetchImpl: options.fetchImpl,
-      request: options.request
+      request: options.request,
+      budget: options.budget
     });
 
     if (this.supported) {
@@ -199,7 +201,8 @@ export class SkyComposite implements MapChannel {
     }
   }
 
-  clear(): void {
+  /** Hides every sky channel; `release` also drops retained rain fields (page suspension). */
+  clear(release = false): void {
     if (!this.supported) return;
     if (this.moveTimer !== null) { clearTimeout(this.moveTimer); this.moveTimer = null; }
     this.cancelWarmTimer();
@@ -210,7 +213,7 @@ export class SkyComposite implements MapChannel {
     for (const channel of SKY_CHANNELS) { this.painted[channel] = null; this.pending[channel] = null; }
     this.clouds.clear();
     this.isobars.clear();
-    this.rain.clear();
+    this.rain.clear(release);
     this.emitStatus();
   }
 
