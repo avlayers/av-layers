@@ -5,7 +5,8 @@ import { MAP_THEMES, themeOption, type MapTheme } from '../../themes/registry';
 import { remapRgbaInPlace } from '../raster/tile-remap-core';
 import { CloudLayerController, renderSmoothCloudRgba } from './cloud-layer';
 import { IsobarLayerController } from './isobar-layer';
-import { decodePrecipRgbaToField, renderRainInnerVignetteRgba } from './rain-animation';
+import { decodePrecipRgbaToField } from './precip-field';
+import { renderRainInnerVignetteRgba } from './rain-cuff';
 import { RainLayerController } from './rain-layer';
 import type { SynopticField } from './synoptic-sampler';
 

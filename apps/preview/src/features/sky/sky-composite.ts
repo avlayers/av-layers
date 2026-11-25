@@ -316,7 +316,7 @@ export class SkyComposite implements MapChannel {
       this.clouds.syncVisibilityAndStyle(this.styles, this.opacity, showClouds);
       this.isobars.syncStyleAndVisibility(this.styles.isobar, showIso);
     }
-    this.rain.repaintCurrent(raw, this.styles, this.opacity, showRain);
+    this.rain.repaintCurrent(this.styles, this.opacity, showRain);
   }
 
   private async refreshSynoptic(

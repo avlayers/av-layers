@@ -8,7 +8,8 @@ import { resolveChannelStyles } from '../map/channel-styles';
 import { remapRgbaInPlace } from '../raster/tile-remap-core';
 import { CloudLayerController } from './cloud-layer';
 import { IsobarLayerController } from './isobar-layer';
-import { decodePrecipRgbaToField, RainAnimator } from './rain-animation';
+import { decodePrecipRgbaToField } from './precip-field';
+import { RainAnimator } from './rain-animator';
 import { pilotHorizonFrameOrder, SynopticSampler, type SynopticField } from './synoptic-sampler';
 
 function parseHex(hex: string): [number, number, number] {
