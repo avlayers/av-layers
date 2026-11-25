@@ -3,7 +3,7 @@ import { splitSource } from './source.js';
 const profile = splitSource(SPLIT_PRODUCT);
 import { describe, expect, it, vi } from 'vitest';
 import { candidateSplitGribCycles, discoverSplitGribRun, splitGribRunSentinelUrls } from './discover.js';
-import { formatSplitGribRunStamp, splitGribFieldUrl } from './fields.js';
+import { splitGribFieldUrl } from './fields.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 
 async function withProbeTimers<T>(start: () => Promise<T>): Promise<T> {
@@ -22,11 +22,13 @@ async function withProbeTimers<T>(start: () => Promise<T>): Promise<T> {
 const now = new Date('2026-10-08T16:00:00Z');
 const cycles = candidateSplitGribCycles(profile, now);
 const lastHour = profile.model.forecast.hours.at(-1)!;
+const latestRun = `/r/${cycles[0]!.slice(0, 16).replace(':', '%3A')}/`;
 
 describe('ICON-EU run admission', () => {
   it('probes every required surface field and both profile and half-level endpoints', () => {
     const urls = splitGribRunSentinelUrls(profile, cycles[0]);
     expect(new Set(urls).size).toBe(urls.length);
+    for (const field of ['CLAT', 'CLON']) expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0]));
     for (const field of ['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S']) {
       expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0], { hour: lastHour }));
     }
@@ -78,7 +80,7 @@ describe('ICON-EU run admission', () => {
     });
     expect((await withProbeTimers(() => discoverSplitGribRun(profile, { now, fetchImpl }))).cycle).toBe(cycles[0]);
     expect(attempts).toBe(3);
-    expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(formatSplitGribRunStamp(profile, cycles[0]).runStamp))).toBe(true);
+    expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(latestRun))).toBe(true);
     expect(cancelled.every(cancel => cancel.mock.calls.length === 1)).toBe(true);
   });
   it('cancels missing-object response bodies before checking an older cycle', async () => {
@@ -139,6 +141,6 @@ describe('ICON-EU run admission', () => {
     controller.abort(new Error('cancel discovery'));
     await expect(pending).rejects.toThrow('cancel discovery');
     expect(fetchImpl).toHaveBeenCalledTimes(4);
-    expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(formatSplitGribRunStamp(profile, cycles[0]).runStamp))).toBe(true);
+    expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(latestRun))).toBe(true);
   });
 });

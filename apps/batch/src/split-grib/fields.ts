@@ -7,19 +7,9 @@ export function validateSplitGribCycle(source: SplitSource, cycleIso: string): s
   return sourceCycle(cycleIso, source.model.forecast.cycleHoursUtc);
 }
 
-export function formatSplitGribRunStamp(source: SplitSource, cycleIso: string): {
-  readonly runStamp: string;
-  readonly cycleHour: string;
-} {
+export function formatSplitGribRunStamp(source: SplitSource, cycleIso: string): string {
   const normalized = validateSplitGribCycle(source, cycleIso);
-  const yyyy = normalized.slice(0, 4);
-  const mm = normalized.slice(5, 7);
-  const dd = normalized.slice(8, 10);
-  const hh = normalized.slice(11, 13);
-  return {
-    runStamp: `${yyyy}${mm}${dd}${hh}`,
-    cycleHour: hh
-  };
+  return normalized.slice(0, 13).replace(/[-T]/g, '');
 }
 
 /** Construct a configured field URL, including native-grid vertical selectors. */
@@ -41,19 +31,16 @@ export function splitGribFieldUrl(source: SplitSource,
   if (levelRequired && (!Number.isInteger(level) || level! < 1 || level! > (spec.kind === 'model-level' ? source.modelLevels[0]! : source.halfLevels.at(-1)!))) throw new Error('Invalid source vertical level');
   const hour = options.hour ?? 0;
   if (!Number.isInteger(hour) || hour < 0 || hour > 120) throw new Error(`Source forecast hour out of range: ${hour}`);
-  const suffix = spec.kind === 'time-invariant' ? (levelRequired ? `_${level}` : '')
-    : `_${String(hour).padStart(3, '0')}${levelRequired ? `_${level}` : ''}`;
-  const marker = source.upstream.nativeGrid ? '/{field}' : '/{cycleHour}';
-  const template = options.baseUrl ? options.baseUrl.replace(/\/+$/, '') + source.upstream.urlTemplate.slice(source.upstream.urlTemplate.indexOf(marker)) : source.upstream.urlTemplate;
-  return sourceUrl(template, { ...formatSplitGribRunStamp(source, cycleIso), field, fieldLower: field.toLowerCase(), kind: spec.kind, suffix,
+  const template = options.baseUrl ? options.baseUrl.replace(/\/+$/, '') + source.upstream.urlTemplate.slice(source.upstream.urlTemplate.indexOf('/{field}')) : source.upstream.urlTemplate;
+  return sourceUrl(template, { field,
     levelPath: levelRequired ? `/lvt1/${spec.firstFixedSurfaceType}/lv1/${level}` : '',
     referenceTime: validateSplitGribCycle(source, cycleIso).slice(0, 16).replace(':', '%3A'),
     forecastHour: String(spec.kind === 'time-invariant' ? 0 : hour).padStart(3, '0') });
 }
 
 /**
- * Verify that a decoded Split GRIB GRIB2 field matches the expected run cycle, grid geometry,
- * parameter identity, vertical level, and forecast time window.
+ * Verify that a decoded Split GRIB GRIB2 field matches the expected run cycle, centre,
+ * parameter identity, vertical level, and forecast time window. Mesh identity is checked at decode.
  */
 export function verifySplitGribFieldMetadata(source: SplitSource,
   decoded: DecodedSplitGribField,
@@ -76,23 +63,6 @@ export function verifySplitGribFieldMetadata(source: SplitSource,
   if (decoded.identification.centre !== source.upstream.centre) {
     throw new Error(`Split GRIB ${field} unexpected originating centre ${decoded.identification.centre} (expected ${source.upstream.centre})`);
   }
-  if (decoded.grid.kind === 'latlon') {
-    const lonFirstNorm = ((decoded.grid.longitudeOfFirstGridPoint + 180) % 360 + 360) % 360 - 180;
-    const lonLastNorm = ((decoded.grid.longitudeOfLastGridPoint + 180) % 360 + 360) % 360 - 180;
-    const latSouth = Math.min(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
-    const latNorth = Math.max(decoded.grid.latitudeOfFirstGridPoint, decoded.grid.latitudeOfLastGridPoint);
-    if (
-      Math.abs(lonFirstNorm - source.grid.lon0) > 1e-4 ||
-      Math.abs(latNorth - source.grid.lat0) > 1e-4 ||
-      Math.abs(latSouth - (source.grid.lat0 + (source.grid.height - 1) * source.grid.dy)) > 1e-4 ||
-      Math.abs(lonLastNorm - (source.grid.lon0 + (source.grid.width - 1) * source.grid.dx)) > 1e-4 ||
-      Math.abs(decoded.grid.iDirectionIncrement - source.grid.dx) > 1e-6 ||
-      Math.abs(Math.abs(decoded.grid.jDirectionIncrement) - Math.abs(source.grid.dy)) > 1e-6
-    ) {
-      throw new Error(`Split GRIB ${field} horizontal grid geometry mismatch`);
-    }
-  }
-
   const p = decoded.product;
   if (
     decoded.discipline !== spec.discipline ||

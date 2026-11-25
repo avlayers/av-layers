@@ -39,8 +39,8 @@ export function splitGribRunSentinelUrls(source: SplitSource,
   const lowestLevel = source.modelLevels[0]!;
   const highestLevel = source.modelLevels.at(-1)!;
   return [
-    ...(source.upstream.nativeGrid ? [source.upstream.nativeGrid.latitude.field, source.upstream.nativeGrid.longitude.field]
-      .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl })) : []),
+    ...[source.upstream.nativeGrid.latitude.field, source.upstream.nativeGrid.longitude.field]
+      .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl })),
     splitGribFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
     ...[topHalfLevel, bottomHalfLevel].map(level => splitGribFieldUrl(source, source.fields.halfLevelHeight, cycle, { level, baseUrl: options.baseUrl })),
     ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux].map(field => splitGribFieldUrl(source, field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),

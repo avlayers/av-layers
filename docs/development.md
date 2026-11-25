@@ -120,9 +120,7 @@ start local workerd or package PMTiles. Either command accepts a path filter. `p
 numeric-wind build, boots local API and preview servers, and runs the headless
 Chromium smoke suite across trails, barbs, heights, units, time changes, and
 mobile/desktop viewports (`pnpm smoke:wind --url http://127.0.0.1:5173` targets
-an already-running preview). To run the optional retained DWD
-probe check for ICON-EU, set `ICON_DWD_PROBE_DIR` as shown in the
-[ICON adapter guide](../apps/batch/src/split-grib/README.md).
+an already-running preview).
 
 `pnpm verify` checks the PMTiles version before lint, typecheck, both test projects,
 `docs:check`, and app builds; CI also runs `pnpm smoke:wind --fixture`. After changing API schemas, product configs, or

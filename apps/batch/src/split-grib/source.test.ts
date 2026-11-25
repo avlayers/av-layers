@@ -1,6 +1,8 @@
 import { SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { splitSource } from './source.js';
-const profile = splitSource(SPLIT_PRODUCT);
+// Two native cells sit on output cells 0 and 1 (70.5N, 23.5W and 23.4375W).
+const product = { ...SPLIT_PRODUCT, upstream: { ...SPLIT_PRODUCT.upstream, nativeGrid: { ...splitSource(SPLIT_PRODUCT).upstream.nativeGrid, pointCount: 2 } } as Record<string, unknown> };
+const profile = splitSource(product);
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
@@ -29,21 +31,28 @@ import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acqui
 import { decodeSplitGribField } from './grib.js';
 import { splitGribFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
-import { isBzip2Compressed } from './codec/bzip2.js';
 
-const PROBE_DIR = process.env['ICON_DWD_PROBE_DIR'];
+function request(url: string): { field: string; level: number | null; hour: number } {
+  const match = /\/p\/([^/]+)(?:\/lvt1\/\d+\/lv1\/(\d+))?\/r\/[^/]+\/s\/PT(\d{3})H00M\.grib2$/.exec(new URL(url).pathname);
+  if (!match) throw new Error(`Unexpected native field URL ${url}`);
+  return { field: match[1]!, level: match[2] === undefined ? null : Number(match[2]), hour: Number(match[3]) };
+}
+const requests = (urls: readonly string[], field: string, hour?: number) =>
+  urls.filter(url => { const item = request(url); return item.field === field && (hour === undefined || item.hour === hour); });
+const cachePath = (cacheDir: string, url: string) =>
+  join(cacheDir, 'objects', `${createHash('sha256').update(url).digest('hex').slice(0, 16)}-${url.split('/').at(-1)}`);
 
 const tempDirs: string[] = [];
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })));
 });
 
-it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves east/north 10m and model winds with scan %i and grid-relative flag %s', async (scanningMode, uvRelativeToGrid) => {
+it('preserves east/north 10m and model winds', async () => {
   const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-aux-'));
   tempDirs.push(cacheDir);
-  const configured = splitSource({ ...SPLIT_PRODUCT, layers: [...SPLIT_PRODUCT.layers, 'cloud-cover-total', 'pbl-height-agl', 'wind-gust-10m', 'wind-10m-u', 'wind-10m-v'],
-    capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
-    upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74],
+  const configured = splitSource({ ...product, layers: [...product.layers, 'cloud-cover-total', 'pbl-height-agl', 'wind-gust-10m', 'wind-10m-u', 'wind-10m-v'],
+    capabilities: { ...product.capabilities, maxVerticalLevels: 2 },
+    upstream: { ...product.upstream, modelLevels: [73, 74],
       auxSurface: { cloudTotalPct: { field: 'CLCT', kind: 'single-level', parameter: [6, 1], surface: [1, 0], unit: '%' },
         pblHeightM: { field: 'MH', kind: 'single-level', parameter: [19, 3], surface: [1, 0], unit: 'm' },
         gust10mMps: { field: 'VMAX_10M', kind: 'single-level', parameter: [2, 22], surface: [103, 10], statistic: 2, unit: 'm/s' },
@@ -57,28 +66,26 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
     } });
   const cycle = '2026-10-08T00:00:00Z', requested: string[] = [], baseFetch = syntheticFetch(cycle, requested);
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = String(input), match = /_(\d{3})(?:_(\d+))?_(QV|U|V|CLCT|MH|VMAX_10M|U_10M|V_10M)\.grib2\.bz2$/.exec(url);
-    if (!match) return baseFetch(input, init);
+    const url = String(input), { field, hour, level } = request(url);
+    if (!['QV', 'U', 'V', 'CLCT', 'MH', 'VMAX_10M', 'U_10M', 'V_10M'].includes(field)) return baseFetch(input, init);
     requested.push(url);
-    const [, hour, level, field] = match, surface = level === undefined, gust = field === 'VMAX_10M';
+    const surface = level === null, gust = field === 'VMAX_10M';
     const spec = configured.specs[field]!;
     const zonal = field === 'U' || field === 'U_10M', meridional = field === 'V' || field === 'V_10M';
-    const missing = Number(hour) === 5 && (field === 'V_10M' || (field === 'V' && level === '74'));
-    const bytes = buildSyntheticSplitGrib2({ referenceTimeIso: cycle, scanningMode, uvRelativeToGrid,
+    const missing = hour === 5 && (field === 'V_10M' || (field === 'V' && level === 74));
+    const bytes = buildSyntheticSplitGrib2({ referenceTimeIso: cycle,
       coordinateValueCount: surface ? 0 : 6,
-      templateNumber: gust ? 8 : 0, statisticalProcess: gust ? 2 : undefined, startHour: Number(hour) - 1,
-      parameterCategory: spec.parameterCategory, parameterNumber: spec.parameterNumber, hour: Number(hour),
-      firstFixedSurfaceType: spec.firstFixedSurfaceType, firstFixedSurfaceValue: surface ? spec.firstFixedSurfaceValue : Number(level),
-      ...(surface ? {} : { secondFixedSurfaceType: 150, secondFixedSurfaceValue: Number(level) + 1 }),
+      templateNumber: gust ? 8 : 0, statisticalProcess: gust ? 2 : undefined, startHour: hour - 1,
+      parameterCategory: spec.parameterCategory, parameterNumber: spec.parameterNumber, hour,
+      firstFixedSurfaceType: spec.firstFixedSurfaceType, firstFixedSurfaceValue: surface ? spec.firstFixedSurfaceValue : level,
+      ...(surface ? {} : { secondFixedSurfaceType: 150, secondFixedSurfaceValue: level + 1 }),
       constantValue: field === 'QV' ? 0.005 : zonal ? 5 : meridional ? -2 : field === 'MH' ? 400 : gust ? 9.5 : 75,
       allMissing: missing,
-      ...(meridional && !missing ? { overridePoint: { sourceRow: scanningMode === 64 ? configured.grid.height - 1 : 0, col: 0, value: 4 } } : {})
+      ...(meridional && !missing ? { overrides: { 0: 4 } } : {})
     });
-    if (field === 'V_10M' && Number(hour) === 4) {
+    if (field === 'V_10M' && hour === 4) {
       const decoded = decodeSplitGribField(configured, bytes, Uint32Array.of(0, 1));
-      if (decoded.grid.kind !== 'latlon') throw new Error('Expected regular fixture grid');
-      expect(decoded.grid.uvRelativeToGrid).toBe(uvRelativeToGrid);
-      expect(decoded.grid.scanningMode).toBe(scanningMode);
+      expect(decoded.grid.kind).toBe('unstructured');
       expect([...decoded.values]).toEqual([4, -2]);
     }
     return new Response(Buffer.from(bytes));
@@ -110,21 +117,19 @@ it.each([[0, false], [0, true], [64, false], [64, true]] as const)('preserves ea
 
 const gribCache = new Map<string, Uint8Array>();
 const shortProfile = splitSource({
-  ...SPLIT_PRODUCT,
-  capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 },
-  upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74] }
+  ...product,
+  capabilities: { ...product.capabilities, maxVerticalLevels: 2 },
+  upstream: { ...product.upstream, modelLevels: [73, 74] }
 });
 
 /**
- * Build a minimal valid single-field GRIB2 message encoded with DRT 5.0 (simple packing)
- * on the 1377x657 ICON-EU regular-lat-lon grid for fast unit tests.
+ * Build a minimal valid single-field GRIB2 message on the fixture's native mesh (template 3.101).
+ * Constant fields use zero-bit CCSDS; `overrides` switches to 8-bit simple packing.
  */
 function buildSyntheticSplitGrib2(options: {
   discipline?: number;
   centre?: number;
   referenceTimeIso: string;
-  scanningMode?: number;
-  uvRelativeToGrid?: boolean;
   allMissing?: boolean;
   coordinateValueCount?: number;
   templateNumber: 0 | 8;
@@ -138,14 +143,13 @@ function buildSyntheticSplitGrib2(options: {
   hour: number;
   startHour?: number;
   constantValue: number;
-  overridePoint?: { sourceRow: number; col: number; value: number };
+  overrides?: Readonly<Record<number, number>>;
+  binaryScale?: number;
 }): Uint8Array {
   const cacheKey = JSON.stringify(options);
   const cached = gribCache.get(cacheKey);
   if (cached) return cached;
-  const width = profile.grid.width;
-  const height = profile.grid.height;
-  const pointCount = width * height;
+  const native = profile.upstream.nativeGrid, pointCount = native.pointCount;
   const ref = new Date(options.referenceTimeIso);
 
   // Section 1 (21 bytes)
@@ -167,32 +171,18 @@ function buildSyntheticSplitGrib2(options: {
   v1.setUint8(19, 0);
   v1.setUint8(20, 1);
 
-  // Section 3 (72 bytes, Template 3.0)
-  const s3 = new Uint8Array(72);
+  // Section 3 (35 bytes, Template 3.101)
+  const s3 = new Uint8Array(35);
   const v3 = new DataView(s3.buffer);
-  v3.setUint32(0, 72, false);
+  v3.setUint32(0, 35, false);
   v3.setUint8(4, 3);
-  v3.setUint8(5, 0);
   v3.setUint32(6, pointCount, false);
-  v3.setUint8(10, 0);
-  v3.setUint8(11, 0);
-  v3.setUint16(12, 0, false);
+  v3.setUint16(12, 101, false);
   v3.setUint8(14, 6); // Earth spherical radius 6,371,229 m
-  v3.setUint32(30, width, false);
-  v3.setUint32(34, height, false);
-  v3.setUint32(38, 0, false);
-  v3.setUint32(42, 0xffffffff, false);
-  const scan = options.scanningMode ?? 64;
-  const latFirst = scan === 64 ? 29_500_000 : 70_500_000;
-  const latLast = scan === 64 ? 70_500_000 : 29_500_000;
-  v3.setUint32(46, latFirst, false);
-  v3.setUint32(50, 336_500_000, false); // -23.5° in 0..360 microdegrees
-  v3.setUint8(54, 48 | (options.uvRelativeToGrid ? 8 : 0));
-  v3.setUint32(55, latLast, false);
-  v3.setUint32(59, 62_500_000, false);
-  v3.setUint32(63, 62_500, false);
-  v3.setUint32(67, 62_500, false);
-  v3.setUint8(71, scan);
+  v3.setUint16(15, Math.floor(native.number / 256), false);
+  v3.setUint8(17, native.number % 256);
+  v3.setUint8(18, 1);
+  s3.set(Buffer.from(native.uuid, 'hex'), 19);
 
   // Section 4 (Template 4.0 = 34 bytes, Template 4.8 = 58 bytes)
   const s4Len = (options.templateNumber === 0 ? 34 : 58) + 4 * (options.coordinateValueCount ?? 0);
@@ -240,9 +230,7 @@ function buildSyntheticSplitGrib2(options: {
     v4.setUint32(49, (options.hour - (options.startHour ?? 0)) * 60, false);
   }
 
-  // Section 5 (DRT 5.42 CCSDS: if constantValue and no overridePoint, bitsPerValue = 0;
-  // otherwise DRT 5.0 simple packing with 8 bits per value)
-  const hasOverride = options.overridePoint !== undefined;
+  const hasOverride = options.overrides !== undefined, binaryScale = options.binaryScale ?? 0;
   const s5Len = hasOverride ? 21 : 25;
   const s5 = new Uint8Array(s5Len);
   const v5 = new DataView(s5.buffer);
@@ -251,7 +239,7 @@ function buildSyntheticSplitGrib2(options: {
   v5.setUint32(5, options.allMissing ? 0 : pointCount, false);
   v5.setUint16(9, hasOverride ? 0 : 42, false);
   v5.setFloat32(11, options.constantValue, false);
-  v5.setUint16(15, 0, false);
+  v5.setUint16(15, binaryScale < 0 ? 0x8000 | -binaryScale : binaryScale, false);
   v5.setUint16(17, 0, false);
   v5.setUint8(19, hasOverride ? 8 : 0);
   v5.setUint8(20, 0);
@@ -272,9 +260,8 @@ function buildSyntheticSplitGrib2(options: {
   const v7 = new DataView(s7.buffer);
   v7.setUint32(0, s7.byteLength, false);
   v7.setUint8(4, 7);
-  if (hasOverride) {
-    const idx = options.overridePoint!.sourceRow * width + options.overridePoint!.col;
-    s7[5 + idx] = Math.round(options.overridePoint!.value - options.constantValue);
+  for (const [index, value] of Object.entries(options.overrides ?? {})) {
+    s7[5 + Number(index)] = Math.round((value - options.constantValue) / 2 ** binaryScale);
   }
 
   const totalLen = 16 + s1.byteLength + s3.byteLength + s4.byteLength + s5.byteLength + s6.byteLength + s7.byteLength + 4;
@@ -298,10 +285,25 @@ function syntheticFetch(cycle: string, requestedUrls: string[], resetHours?: num
   return async input => {
     const url = String(input);
     requestedUrls.push(url);
-    const file = url.split('/').at(-1)!;
+    const { field, hour, level } = request(url);
     const body = (bytes: Uint8Array): ArrayBuffer =>
       bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
-    if (file.endsWith('_HSURF.grib2.bz2')) {
+    if (field === 'CLAT' || field === 'CLON') {
+      return new Response(
+        body(buildSyntheticSplitGrib2({
+          referenceTimeIso: cycle,
+          templateNumber: 0,
+          parameterCategory: 191,
+          parameterNumber: field === 'CLAT' ? 1 : 2,
+          firstFixedSurfaceType: 1,
+          firstFixedSurfaceValue: 0,
+          hour: 0,
+          constantValue: field === 'CLAT' ? 70.5 : -23.5,
+          ...(field === 'CLON' ? { overrides: { 1: -23.4375 }, binaryScale: -4 } : {})
+        }))
+      );
+    }
+    if (field === 'HSURF') {
       return new Response(
         body(buildSyntheticSplitGrib2({
           referenceTimeIso: cycle,
@@ -316,10 +318,8 @@ function syntheticFetch(cycle: string, requestedUrls: string[], resetHours?: num
         }))
       );
     }
-    const hhlMatch = file.match(/_(\d+)_HHL\.grib2\.bz2$/);
-    if (hhlMatch) {
-      const level = Number(hhlMatch[1]);
-      const height = 1000 + (75 - level) * 200;
+    if (field === 'HHL') {
+      const height = 1000 + (75 - level!) * 200;
       return new Response(
         body(buildSyntheticSplitGrib2({
           referenceTimeIso: cycle,
@@ -334,11 +334,7 @@ function syntheticFetch(cycle: string, requestedUrls: string[], resetHours?: num
         }))
       );
     }
-    const modelMatch = file.match(/_(\d{3})_(\d+)_(T|P)\.grib2\.bz2$/);
-    if (modelMatch) {
-      const hour = Number(modelMatch[1]);
-      const level = Number(modelMatch[2]);
-      const field = modelMatch[3];
+    if ((field === 'T' || field === 'P') && level !== null) {
       const value =
         field === 'T'
           ? 290 - (74 - level) * 1.5 + hour * 0.1
@@ -358,10 +354,7 @@ function syntheticFetch(cycle: string, requestedUrls: string[], resetHours?: num
         }))
       );
     }
-    const singleMatch = file.match(/_(\d{3})_(PS|T_2M|QV_2M|ASHFL_S|ALHFL_S)\.grib2\.bz2$/);
-    if (singleMatch) {
-      const hour = Number(singleMatch[1]);
-      const field = singleMatch[2]!;
+    if (['PS', 'T_2M', 'QV_2M', 'ASHFL_S', 'ALHFL_S'].includes(field)) {
       const specMap: Record<
         string,
         { t: 0 | 8; cat: number; num: number; s1: number; v1: number | null; val: number }
@@ -395,22 +388,21 @@ it('recovers ICON precipitation intervals, retains raw companions and masks decr
   const cacheDir = await mkdtemp(join(tmpdir(), 'av-icon-precip-'));
   tempDirs.push(cacheDir);
   const cycle = '2026-10-08T00:00:00Z', requested: string[] = [];
-  const configured = splitSource({ ...SPLIT_PRODUCT, layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'],
-    capabilities: { ...SPLIT_PRODUCT.capabilities, maxVerticalLevels: 2 }, upstream: { ...SPLIT_PRODUCT.upstream, modelLevels: [73, 74],
-      fields: { ...(SPLIT_PRODUCT.upstream.fields as object), precipitation: { field: 'TOT_PREC', kind: 'single-level', parameter: [1, 52], surface: [1, 0], statistic: 1 } }
+  const configured = splitSource({ ...product, layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate'],
+    capabilities: { ...product.capabilities, maxVerticalLevels: 2 }, upstream: { ...product.upstream, modelLevels: [73, 74],
+      fields: { ...(product.upstream.fields as object), precipitation: { field: 'TOT_PREC', kind: 'single-level', parameter: [1, 52], surface: [1, 0], statistic: 1 } }
     } });
   const baseFetch = syntheticFetch(cycle, requested);
   const fetchImpl: typeof fetch = async (input, init) => {
-    const url = String(input), match = /_(\d{3})_TOT_PREC\.grib2\.bz2$/.exec(url);
-    if (!match) return baseFetch(input, init);
+    const url = String(input), { field, hour } = request(url);
+    if (field !== 'TOT_PREC') return baseFetch(input, init);
     requested.push(url);
-    const hour = Number(match[1]);
     return new Response(Buffer.from(buildSyntheticSplitGrib2({ referenceTimeIso: cycle, templateNumber: 8,
       statisticalProcess: 1, parameterCategory: 1, parameterNumber: 52, firstFixedSurfaceType: 1, firstFixedSurfaceValue: 0,
       hour, constantValue: hour === 1 ? 2 : hour === 2 ? 5 : 4
     })));
   };
-  expect(splitGribRunSentinelUrls(configured, cycle).some(url => url.endsWith('_TOT_PREC.grib2.bz2'))).toBe(true);
+  expect(requests(splitGribRunSentinelUrls(configured, cycle), 'TOT_PREC')).toHaveLength(1);
   const session = await createSplitGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
   const slot = createNormalizedFrameTarget(1, 2, true, true);
   try {
@@ -422,59 +414,26 @@ it('recovers ICON precipitation intervals, retains raw companions and masks decr
     expect(second.precipitationMmPerHour![0]).toBe(3);
     expect(second.intervals.precipitationWindow).toEqual({ start: '2026-10-08T01:00:00.000Z', end: '2026-10-08T02:00:00.000Z' });
     expect(second.intervals.precipitationSourceWindow!.start).toBe(cycle.replace('Z', '.000Z'));
-    expect(requested.filter(url => url.endsWith('_TOT_PREC.grib2.bz2'))).toHaveLength(2);
+    expect(requests(requested, 'TOT_PREC')).toHaveLength(2);
     validateNormalizedFrame(second, second.activeIndices, configured.grid, 2, configured.model.layers, 'model-levels');
     const third = await session.acquire(3, slot);
     expect(third.missing.precipitation![0]).toBe(1);
     expect(Number.isNaN(third.precipitationMmPerHour![0])).toBe(true);
   } finally { await session.close(); }
-  expect(() => splitSource({ ...SPLIT_PRODUCT, layers: ['precip-rate'], upstream: { ...SPLIT_PRODUCT.upstream,
-    fields: { ...(SPLIT_PRODUCT.upstream.fields as object), precipitation: undefined } } })).toThrow('accumulation descriptor');
+  expect(() => splitSource({ ...product, layers: ['precip-rate'], upstream: { ...product.upstream,
+    fields: { ...(product.upstream.fields as object), precipitation: undefined } } })).toThrow('accumulation descriptor');
 });
 
-describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
+describe('DWD ICON-EU native adapter', () => {
   it('constructs canonical DWD Open Data URLs and sentinel probes', () => {
-    const cycle = '2026-10-08T00:00:00Z';
-    expect(splitGribFieldUrl(profile, 'HSURF', cycle)).toBe(
-      'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/hsurf/icon-eu_europe_regular-lat-lon_time-invariant_2026100800_HSURF.grib2.bz2'
-    );
-    expect(splitGribFieldUrl(profile, 'HHL', cycle, { level: 75 })).toBe(
-      'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/hhl/icon-eu_europe_regular-lat-lon_time-invariant_2026100800_75_HHL.grib2.bz2'
-    );
-    expect(splitGribFieldUrl(profile, 'ASHFL_S', cycle, { hour: 6 })).toBe(
-      'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/ashfl_s/icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2'
-    );
-    expect(splitGribFieldUrl(profile, 'T', cycle, { hour: 6, level: 74 })).toBe(
-      'https://opendata.dwd.de/weather/nwp/icon-eu/grib/00/t/icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2'
-    );
+    const cycle = '2026-10-08T00:00:00Z', prefix = 'https://opendata.dwd.de/weather/nwp/v1/m/icon-eu/p/';
+    expect(splitGribFieldUrl(profile, 'HSURF', cycle)).toBe(`${prefix}HSURF/r/2026-10-08T00%3A00/s/PT000H00M.grib2`);
+    expect(splitGribFieldUrl(profile, 'HHL', cycle, { level: 75 })).toBe(`${prefix}HHL/lvt1/150/lv1/75/r/2026-10-08T00%3A00/s/PT000H00M.grib2`);
+    expect(splitGribFieldUrl(profile, 'ASHFL_S', cycle, { hour: 6 })).toBe(`${prefix}ASHFL_S/r/2026-10-08T00%3A00/s/PT006H00M.grib2`);
+    expect(splitGribFieldUrl(profile, 'T', cycle, { hour: 6, level: 74, baseUrl: 'http://mirror.test/dwd/' }))
+      .toBe('http://mirror.test/dwd/T/lvt1/150/lv1/74/r/2026-10-08T00%3A00/s/PT006H00M.grib2');
     const sentinels = splitGribRunSentinelUrls(profile, cycle);
-    expect(sentinels).toHaveLength(12);
-  });
-
-  it('flips DWD south-to-north (+j, scanningMode 64) rows into normalized north-to-south (-j) grid order', () => {
-    const cycle = '2026-10-08T00:00:00Z';
-    // Yerevan: j = 171 from south (29.5 + 171 * 0.0625 = 40.1875N), i = 1088 (-23.5 + 1088 * 0.0625 = 44.5E)
-    // In normalized north-to-south order (row 0 = 70.5N): row = 656 - 171 = 485
-    const normRow = profile.grid.height - 1 - 171;
-    const normIndex = normRow * profile.grid.width + 1088;
-    const grib = buildSyntheticSplitGrib2({
-      referenceTimeIso: cycle,
-      scanningMode: 64,
-      templateNumber: 0,
-      parameterCategory: 3,
-      parameterNumber: 6,
-      firstFixedSurfaceType: 1,
-      firstFixedSurfaceValue: null,
-      secondFixedSurfaceType: 101,
-      hour: 0,
-      constantValue: 500,
-      overridePoint: { sourceRow: 171, col: 1088, value: 542 }
-    });
-    const decoded = decodeSplitGribField(profile, grib, Uint32Array.of(normIndex, 0));
-    verifySplitGribFieldMetadata(profile, decoded, 'HSURF', cycle);
-    expect(decoded.values[0]).toBe(542);
-    expect(decoded.values[1]).toBe(500);
-    expect(decoded.missing).toEqual(Uint8Array.of(0, 0));
+    expect(sentinels).toHaveLength(14);
   });
 
   it.each([
@@ -491,7 +450,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const bytes = buildSyntheticSplitGrib2({ referenceTimeIso: '2026-10-08T00:00:00Z',
       templateNumber: 8, parameterCategory: 0, parameterNumber: 11,
       firstFixedSurfaceType: 1, firstFixedSurfaceValue: null, hour: 6, constantValue: -100 });
-    bytes[16 + 21 + 72 + byteOffset] = value;
+    bytes[16 + 21 + 35 + byteOffset] = value;
     expect(() => decodeSplitGribField(profile, bytes, Uint32Array.of(0))).toThrow();
   });
 
@@ -592,31 +551,27 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     // f004 ASHFL_S = -190, f003 ASHFL_S = -180 -> -(4*-190 - 3*-180) = -(-760 + 540) = +220 W/m²
     expect(frame4.sensibleHeatFluxWm2[0]).toBeCloseTo(220, 5);
 
-    const hsurfDownloadsAfterF4 = requestedUrls.filter(u => u.includes('_HSURF.grib2.bz2')).length;
-    const hhlDownloadsAfterF4 = requestedUrls.filter(u => u.includes('_HHL.grib2.bz2')).length;
-    expect(hsurfDownloadsAfterF4).toBe(1);
-    expect(hhlDownloadsAfterF4).toBe(profile.halfLevels.length);
-    expect(requestedUrls.some(u => u.includes('_003_ASHFL_S.grib2.bz2'))).toBe(true);
+    for (const field of ['CLAT', 'CLON', 'HSURF']) expect(requests(requestedUrls, field)).toHaveLength(1);
+    expect(requests(requestedUrls, 'HHL')).toHaveLength(profile.halfLevels.length);
+    expect(requests(requestedUrls, 'ASHFL_S', 3)).toHaveLength(1);
 
     // Acquire hour 5 next: static HSURF/HHL and f004 flux companions must be reused from memory,
     // while f005 T and P model levels are freshly acquired!
     const frame5 = await session.acquire(5);
-    expect(requestedUrls.filter(u => u.includes('_HSURF.grib2.bz2')).length).toBe(1);
-    expect(requestedUrls.filter(u => u.includes('_HHL.grib2.bz2')).length).toBe(
-      profile.halfLevels.length
-    );
-    expect(requestedUrls.filter(u => u.includes('_004_ASHFL_S.grib2.bz2')).length).toBe(1);
+    for (const field of ['CLAT', 'CLON', 'HSURF']) expect(requests(requestedUrls, field)).toHaveLength(1);
+    expect(requests(requestedUrls, 'HHL')).toHaveLength(profile.halfLevels.length);
+    expect(requests(requestedUrls, 'ASHFL_S', 4)).toHaveLength(1);
     expect(frame5.tempK[0]![0]).toBeCloseTo(290.5, 4);
     expect(frame4.tempK[0]![0]).toBeCloseTo(290.4, 4);
 
     // Discard disk flux objects, then jump to an earlier frame. Older decoded pairs
     // must have been released; the last completed pair alone remains reusable.
-    for (const name of await readdir(join(cacheDir, 'objects'))) {
-      if (/_A[SL]HFL_S\.grib2\.bz2$/.test(name)) await rm(join(cacheDir, 'objects', name));
+    for (const field of ['ASHFL_S', 'ALHFL_S']) for (const hour of [3, 4, 5]) {
+      await rm(cachePath(cacheDir, splitGribFieldUrl(profile, field, cycle, { hour })));
     }
     await session.acquire(4);
-    expect(requestedUrls.filter(u => u.includes('_003_ASHFL_S.grib2.bz2'))).toHaveLength(2);
-    expect(requestedUrls.filter(u => u.includes('_004_ASHFL_S.grib2.bz2'))).toHaveLength(2);
+    expect(requests(requestedUrls, 'ASHFL_S', 3)).toHaveLength(2);
+    expect(requests(requestedUrls, 'ASHFL_S', 4)).toHaveLength(2);
 
     // Derive the lift-only ICON-EU frame and verify per-column pressure screening works
     const maskBytes = Math.ceil((profile.grid.width * profile.grid.height) / 8);
@@ -652,7 +607,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     });
     let attempts = 0;
     const fetchImpl: typeof fetch = async (input, init) => {
-      if (String(input).endsWith('_HSURF.grib2.bz2')) attempts++;
+      if (request(String(input)).field === 'HSURF') attempts++;
       return good(input, init);
     };
     const options = { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl };
@@ -662,8 +617,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     expect(first.stats.retries).toBe(0);
     await first.close();
 
-    const name = (await readdir(join(cacheDir, 'objects'))).find(name => name.endsWith('_HSURF.grib2.bz2'))!;
-    await writeFile(join(cacheDir, 'objects', name), invalid);
+    await writeFile(cachePath(cacheDir, splitGribFieldUrl(shortProfile, 'HSURF', cycle)), invalid);
     const second = await createSplitGribAcquisitionSession(shortProfile, options);
     await second.acquire(5);
     expect(attempts).toBe(2);
@@ -727,7 +681,7 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       peak = Math.max(peak, ++active);
       try {
-        if (!String(input).includes('time-invariant')) {
+        if (request(String(input)).hour > 0) {
           if (active === 2) reachedLimit();
           await gate;
         }
@@ -780,12 +734,12 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
     const cycle = '2026-10-08T00:00:00Z', requested: string[] = [];
     const baseFetch = syntheticFetch(cycle, requested);
     const fetchImpl: typeof fetch = async (input, init) => {
-      const match = String(input).match(/_(\d{3})_T_2M\.grib2\.bz2$/);
-      if (!match) return baseFetch(input, init);
+      const { field, hour } = request(String(input));
+      if (field !== 'T_2M') return baseFetch(input, init);
       return new Response(Buffer.from(buildSyntheticSplitGrib2({
         referenceTimeIso: cycle, templateNumber: 0, parameterCategory: 0, parameterNumber: 0,
-        firstFixedSurfaceType: 103, firstFixedSurfaceValue: 2, hour: Number(match[1]), constantValue: 280,
-        overridePoint: { sourceRow: profile.grid.height - 1, col: 0, value: 300 }
+        firstFixedSurfaceType: 103, firstFixedSurfaceValue: 2, hour, constantValue: 280,
+        overrides: { 0: 300 }
       })));
     };
     const activeIndices = Uint32Array.of(0);
@@ -809,8 +763,8 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
       expect(second.hgtM[1][0]).toBe(1300);
       expect(second.missing.terrain[0]).toBe(0);
       expect(second.missing.hgt.slice(0, 2).map(level => level[0])).toEqual([0, 0]);
-      expect(requested.filter(url => url.endsWith('_HSURF.grib2.bz2'))).toHaveLength(1);
-      expect(requested.filter(url => url.endsWith('_HHL.grib2.bz2'))).toHaveLength(profile.halfLevels.length);
+      expect(requests(requested, 'HSURF')).toHaveLength(1);
+      expect(requests(requested, 'HHL')).toHaveLength(profile.halfLevels.length);
     } finally { await session.close(); }
   });
 
@@ -896,47 +850,4 @@ describe('DWD ICON-EU regular-lat-lon adapter & compatibility proof', () => {
 
     expect(() => assertForecastInputs(mask, regionalProduct)).not.toThrow();
   });
-
-  it.skipIf(!PROBE_DIR)(
-    'decodes six retained DWD ICON-EU .grib2.bz2 fields (bzip2 + DRT 5.42 CCSDS) and matches ecCodes/libaec reference values',
-    () => {
-      // Yerevan grid point: sourceRow = 171 (from 29.5N), col = 1088 (from -23.5E)
-      // Normalized north-to-south row = 656 - 171 = 485 -> flat index = 485 * 1377 + 1088 = 668933
-      const yerevanNormalizedIdx = (profile.grid.height - 1 - 171) * profile.grid.width + 1088;
-      const active = Uint32Array.of(yerevanNormalizedIdx);
-      const cycle = '2026-10-08T00:00:00Z';
-
-      const manifest = JSON.parse(readFileSync(join(PROBE_DIR!, 'manifest.json'), 'utf8')) as {
-        samples: { filename: string; receipt: { sha256: string; bytes: number } }[];
-      };
-      const loadReal = (filename: string) => {
-        const compressed = new Uint8Array(readFileSync(join(PROBE_DIR!, filename)));
-        const receipt = manifest.samples.find(sample => sample.filename === filename)?.receipt;
-        expect(receipt?.bytes).toBe(compressed.byteLength);
-        expect(receipt?.sha256).toBe(createHash('sha256').update(compressed).digest('hex'));
-        expect(isBzip2Compressed(compressed)).toBe(true);
-        return decodeSplitGribField(profile, compressed, active);
-      };
-
-      const hsurf = loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_HSURF.grib2.bz2');
-      verifySplitGribFieldMetadata(profile, hsurf, 'HSURF', cycle);
-      expect(hsurf.values[0]).toBeCloseTo(1059.875, 4);
-
-      const hhl75 = loadReal('icon-eu_europe_regular-lat-lon_time-invariant_2026100800_75_HHL.grib2.bz2');
-      verifySplitGribFieldMetadata(profile, hhl75, 'HHL', cycle, { level: 75 });
-      expect(hhl75.values[0]).toBeCloseTo(1059.875, 4);
-
-      const p74 = loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_P.grib2.bz2');
-      verifySplitGribFieldMetadata(profile, p74, 'P', cycle, { hour: 6, level: 74 });
-      expect(p74.values[0]).toBeCloseTo(90410.921875, 2);
-
-      const t74 = loadReal('icon-eu_europe_regular-lat-lon_model-level_2026100800_006_74_T.grib2.bz2');
-      verifySplitGribFieldMetadata(profile, t74, 'T', cycle, { hour: 6, level: 74 });
-      expect(t74.values[0]).toBeCloseTo(288.935883, 4);
-
-      const ashfl = loadReal('icon-eu_europe_regular-lat-lon_single-level_2026100800_006_ASHFL_S.grib2.bz2');
-      verifySplitGribFieldMetadata(profile, ashfl, 'ASHFL_S', cycle, { hour: 6 });
-      expect(ashfl.values[0]).toBeCloseTo(11.42572, 4);
-    }
-  );
 });

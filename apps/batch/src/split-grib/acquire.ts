@@ -130,7 +130,7 @@ async function loadSplitGribField(
 ): Promise<{ readonly decoded: DecodedSplitGribField; readonly compressedBytes: number; readonly sha256: string; readonly cacheHit: boolean }> {
   options.signal?.throwIfAborted();
   const keyHash = createHash('sha256').update(url).digest('hex');
-  const fileName = url.split('/').at(-1) ?? `${keyHash}.grib2.bz2`;
+  const fileName = url.split('/').at(-1) ?? `${keyHash}.grib2`;
   const cachePath = join(cacheDir, 'objects', `${keyHash.slice(0, 16)}-${fileName}`);
 
   let cached: Buffer | undefined;
@@ -325,11 +325,11 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     target?: { values: Float32Array; missing: Uint8Array },
     indices?: Uint32Array
   ): Promise<{ readonly decoded: DecodedSplitGribField; readonly receipt: SplitGribObjectReceipt }> => {
-    const selected = indices ?? (source.upstream.nativeGrid ? (await getNativeMapping()).indices : activeIndices);
+    const selected = indices ?? (await getNativeMapping()).indices;
     const url = splitGribFieldUrl(source, field, cycle, { hour, level, baseUrl });
     const normalization = source.specs[field]!.normalization;
     const native = source.upstream.nativeGrid;
-    const coordinateLimit = field === native?.latitude.field ? 90 : field === native?.longitude.field ? 180 : null;
+    const coordinateLimit = field === native.latitude.field ? 90 : field === native.longitude.field ? 180 : null;
     const { decoded, compressedBytes, sha256, cacheHit } = await loadSplitGribField(
       url,
       options.cacheDir,
@@ -363,7 +363,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   };
 
   const getNativeMapping = () => nativeMappingPromise ??= (async () => {
-    const native = source.upstream.nativeGrid!;
+    const native = source.upstream.nativeGrid;
     const indices = Uint32Array.from({ length: native.pointCount }, (_, i) => i);
     const latitude = await loadDecodedField(native.latitude.field, 0, null, undefined, indices);
     const longitude = await loadDecodedField(native.longitude.field, 0, null, undefined, indices);
@@ -413,7 +413,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         missingTerrain: hsurfRes.decoded.missing,
         hgtM,
         missingHgt,
-        receipts: [...(source.upstream.nativeGrid ? (await getNativeMapping()).receipts : []), hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
+        receipts: [...(await getNativeMapping()).receipts, hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
       };
     })().catch(error => {
       staticGeometryPromise = null;
@@ -482,7 +482,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         }
       }
     }
-    // DWD native U/V and regular-grid +i/+j components are east/north winds.
+    // DWD native U/V are east/north winds.
     const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined) => {
       if (!u || !v) return;
       for (let i = 0; i < activeIndices.length; i++) if (u.missing[i] || v.missing[i]) {
@@ -517,7 +517,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     const endIso = new Date(cycleMs + hour * 3_600_000).toISOString();
     const sourceStartIso = new Date(cycleMs + sourceWindowStart(source.model.forecast, hour) * 3_600_000).toISOString();
     const capturedAt = new Date().toISOString();
-    const { runStamp } = formatSplitGribRunStamp(source, cycle);
+    const runStamp = formatSplitGribRunStamp(source, cycle);
     const precipitationOutput = precipitation && target?.precipitationMmPerHour && target.missing.precipitation
       ? { values: target.precipitationMmPerHour, missing: target.missing.precipitation } : precipitation;
 
@@ -566,10 +566,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         provider: source.upstream.provider,
         model: source.model.modelId,
         gridKind: 'regridded-regular-lat-lon',
-        ...(source.upstream.nativeGrid ? {
-          nativeGrid: { number: source.upstream.nativeGrid.number, uuid: source.upstream.nativeGrid.uuid, pointCount: source.upstream.nativeGrid.pointCount },
-          remapping: { method: 'nearest-cell', maxDistanceM: MAX_NATIVE_MAPPING_DISTANCE_M, sha256: (await getNativeMapping()).sha256 }
-        } : {}),
+        nativeGrid: { number: source.upstream.nativeGrid.number, uuid: source.upstream.nativeGrid.uuid, pointCount: source.upstream.nativeGrid.pointCount },
+        remapping: { method: 'nearest-cell', maxDistanceM: MAX_NATIVE_MAPPING_DISTANCE_M, sha256: (await getNativeMapping()).sha256 },
         runStamp,
         cycle,
         hour,

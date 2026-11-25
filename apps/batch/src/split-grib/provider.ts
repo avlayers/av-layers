@@ -7,7 +7,7 @@ export function createSplitGribProvider(model: ModelDefinition, requirements?: A
   const source = splitSource(model, requirements);
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true, retainedGeometryFields: source.modelLevels.length + 1,
-    sourceMappingBytesPerCell: source.upstream.nativeGrid ? Uint32Array.BYTES_PER_ELEMENT : 0,
+    sourceMappingBytesPerCell: Uint32Array.BYTES_PER_ELEMENT,
     auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
     auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
     async resolveCycle(options) {

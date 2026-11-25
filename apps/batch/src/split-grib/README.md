@@ -19,15 +19,12 @@ per-cell missingness. Layer descriptors bind both fixed surfaces.
 Configured precipitation accumulations use same-run companions to recover
 trailing rates with the shared interval kernel and GRIB packing tolerances.
 
-[grib.ts](grib.ts) validates grid identity and decodes GRIB packing;
-[codec/bzip2.ts](codec/bzip2.ts) and [codec/ccsds.ts](codec/ccsds.ts) retain bounded
-pure-TypeScript decoding. Reference tests cover libaec, ecCodes and bzip2 data.
-The optional retained DWD fixture check uses `ICON_DWD_PROBE_DIR`.
-
 ICON-EU reads DWD's native triangular mesh through the v1 URLs in the source
-configuration. DWD requires migration by **30 November 2026** and ends the
-legacy regular-grid feed afterward ([announcement](https://www.dwd.de/DE/leistungen/opendata/neuigkeiten/opendata_september2026_1.html)).
-Native objects use template 3.101 and CCSDS packing without bzip2.
+configuration ([announcement](https://www.dwd.de/DE/leistungen/opendata/neuigkeiten/opendata_september2026_1.html)).
+[grib.ts](grib.ts) accepts uncompressed grid template 3.101 objects that match
+the configured `nativeGrid` number, UUID and point count, and decodes simple or
+CCSDS packing; [codec/ccsds.ts](codec/ccsds.ts) is a bounded pure-TypeScript
+decoder. Reference tests cover libaec and ecCodes data.
 
 [native-grid.ts](native-grid.ts) maps active output cells to the nearest native
 cell on the sphere. A session reads `CLAT` and `CLON` once, validates the configured
@@ -40,8 +37,7 @@ The regular output grid, coverage and terrain subdivision remain configured in
 `models.json`. Nearest-cell columns preserve native values; they differ from
 DWD's former field-specific regular-grid interpolation
 ([DWD interpolation guide](https://www.dwd.de/DE/leistungen/opendata/help/modelle/Opendata_cdo_EN.pdf?__blob=publicationFile&v=3)).
-Native U/V are Earth-relative. Regular-grid fixture decoding retains scan modes
-0 and 64 with east/north wind components.
+Native U/V are Earth-relative east/north components.
 
 See [science](../../../../docs/science.md#input-fields) for midpoint heights and
 flux recovery, and [third-party notices](../../../../THIRD_PARTY_NOTICES.txt).

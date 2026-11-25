@@ -17,7 +17,7 @@ const upstreamSchema = z.object({ protocol: z.literal('split-grib2'), provider: 
   urlTemplate: z.string().url(), modelLevels: z.array(z.number().int().positive()).min(1).max(256),
   nativeGrid: z.object({ number: z.number().int().nonnegative().max(65535), uuid: z.string().regex(/^[a-f0-9]{32}$/),
     pointCount: z.number().int().positive().max(MAX_GRID_CELLS),
-    latitude: field.extend({ kind: z.literal('time-invariant') }), longitude: field.extend({ kind: z.literal('time-invariant') }) }).strict().optional(),
+    latitude: field.extend({ kind: z.literal('time-invariant') }), longitude: field.extend({ kind: z.literal('time-invariant') }) }).strict(),
   discoveryLagHours: z.number().nonnegative(), discoveryCandidates: z.number().int().min(1).max(24),
   auxSurface: auxSurfaceSchema.optional(), auxLevels: auxLevelsSchema.optional(),
   fields: z.object({ staticTerrain: field, halfLevelHeight: field, surfacePressure: field, temperature2m: field,
@@ -47,7 +47,7 @@ export function splitSource(model: ModelDefinition, requirements?: AuxiliaryRequ
   upstream.auxLevels = selectConfiguredFields(upstream.auxLevels, required.levels);
   const coreFields = Object.values(upstream.fields).filter(value => value !== undefined);
   const configuredFields = [...coreFields, ...Object.values(upstream.auxSurface ?? {}), ...Object.values(upstream.auxLevels ?? {}),
-    ...(upstream.nativeGrid ? [upstream.nativeGrid.latitude, upstream.nativeGrid.longitude] : [])];
+    upstream.nativeGrid.latitude, upstream.nativeGrid.longitude];
   if (new Set(configuredFields.map(spec => spec.field)).size !== configuredFields.length) throw new Error('Duplicate Split GRIB source field');
   const specs = Object.fromEntries(configuredFields.map(value => [value.field, { field: value.field, kind: value.kind,
     discipline: 0, parameterCategory: value.parameter[0], parameterNumber: value.parameter[1], templateNumber: 'statistic' in value && value.statistic !== undefined ? 8 : 0,
