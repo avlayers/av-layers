@@ -799,6 +799,15 @@ it('still verifies serving when cleanup fails, and records both outcomes when bo
   expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/maintenance.json', expect.stringContaining('"status": "failed"'));
 });
 
+it('records a serving check cut short by cancellation as not attempted and defers cleanup', async () => {
+  fake.verifyServing.mockImplementationOnce(async ({ signal }) => { process.emit('SIGTERM'); signal.throwIfAborted(); });
+  await expect(finalizeAndPublish()).rejects.toThrow('interrupted');
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/serving.json', expect.stringContaining('"status": "not-attempted"'));
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/maintenance.json', expect.stringContaining('"status": "deferred"'));
+  expect(fake.cleanup).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"phase": "serving"'));
+});
+
 it('preserves committed publication when the API cannot serve the new build', async () => {
   fake.verifyServing.mockRejectedValueOnce(new Error('API still shows previous build'));
   await expect(finalizeAndPublish()).rejects.toThrow('Publication committed; serving verification failed');

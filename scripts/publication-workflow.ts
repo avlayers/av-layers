@@ -126,41 +126,44 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
       logForecastEvent(authority, started, { event: 'forecast-published', phase, buildId, publication: 'committed', ...timings });
       // Record commit first; cancellation, serving or maintenance failure must never masquerade as failed publication.
       // Serving verification runs first so housekeeping can neither block nor delay the live check of the new build.
-      const failures: string[] = [];
-      let failure: unknown;
+      let servingError: unknown, maintenanceError: unknown;
+      const cancelled = (status: string) => ({ status, publication: 'committed', reason: 'cancelled-after-commit' });
       phase = 'serving';
       const servingPath = join(dirname(path), 'serving.json');
       const smokeStarted = Date.now();
       if (signal.aborted) {
-        await writeFile(servingPath, JSON.stringify({ status: 'not-attempted', publication: 'committed', reason: 'cancelled-after-commit', model: manifest.model, buildId: manifest.buildId }, null, 2));
+        await writeFile(servingPath, JSON.stringify({ ...cancelled('not-attempted'), model: manifest.model, buildId: manifest.buildId }, null, 2));
       } else {
         try {
           await verifyPublishedForecast({ baseUrl: apiUrl.origin, manifest, signal });
           await writeFile(servingPath, JSON.stringify({ status: 'verified', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers, apiBaseUrl: apiUrl.origin }, null, 2));
         } catch (error) {
-          await writeFile(servingPath, JSON.stringify({ status: 'failed', publication: 'committed', smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId, error: String(error) }, null, 2)).catch(() => {});
-          failures.push(`serving verification failed: ${String(error)}`); failure ??= error;
+          // Cancellation or the run deadline cut the check short; that is not evidence the build serves badly.
+          const record = signal.aborted ? { ...cancelled('not-attempted'), error: String(error) } : { status: 'failed', publication: 'committed', error: String(error) };
+          await writeFile(servingPath, JSON.stringify({ ...record, smokeVerifyWallMs: Date.now() - smokeStarted, model: manifest.model, buildId: manifest.buildId }, null, 2)).catch(() => {});
+          if (!signal.aborted) servingError = error;
         }
       }
-      phase = 'maintenance';
       if (signal.aborted) {
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'deferred', publication: 'committed', reason: 'cancelled-after-commit', summary: null, authority }, null, 2));
-        if (failure) throw new Error(`Publication committed; ${failures.join('; ')}`, { cause: failure });
-        signal.throwIfAborted();
+        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ ...cancelled('deferred'), summary: null, authority }, null, 2));
+      } else {
+        phase = 'maintenance';
+        let summary: CleanupSummary | undefined;
+        const maintenanceStarted = Date.now();
+        try {
+          await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'running', publication: 'committed', summary: null, authority }, null, 2));
+          const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, signal);
+          await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, deletedObjects, summary: summary ?? null, authority }, null, 2));
+        } catch (error) {
+          await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, error: String(error), summary: summary ?? null, authority }, null, 2)).catch(() => {});
+          maintenanceError = error;
+        }
       }
-      let summary: CleanupSummary | undefined;
-      const maintenanceStarted = Date.now();
-      try {
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'running', publication: 'committed', summary: null, authority }, null, 2));
-        const deletedObjects = await cleanup(storage, manifest.model, authority, Date.now(), report => { summary = report; }, signal);
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'complete', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, deletedObjects, summary: summary ?? null, authority }, null, 2));
-      } catch (error) {
-        await writeFile(join(dirname(path), 'maintenance.json'), JSON.stringify({ status: 'failed', publication: 'committed', maintenanceWallMs: Date.now() - maintenanceStarted, error: String(error), summary: summary ?? null, authority }, null, 2)).catch(() => {});
-        failures.push(`maintenance failed: ${String(error)}`); failure ??= error;
-      }
-      if (failure) {
-        phase = failures[0]!.startsWith('serving') ? 'serving' : 'maintenance';
-        throw new Error(`Publication committed; ${failures.join('; ')}`, { cause: failure });
+      if (servingError !== undefined || maintenanceError !== undefined) {
+        if (servingError !== undefined) phase = 'serving';
+        const failures = [servingError !== undefined && `serving verification failed: ${String(servingError)}`,
+          maintenanceError !== undefined && `maintenance failed: ${String(maintenanceError)}`].filter(Boolean);
+        throw new Error(`Publication committed; ${failures.join('; ')}`, { cause: servingError ?? maintenanceError });
       }
       signal.throwIfAborted();
     } });
@@ -173,7 +176,7 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
     logForecastEvent(authority, workflowStarted, { event: 'forecast-failure', phase, buildId, publication, cancelled, error: failureReason(error) });
     try {
       await mkdir(root, { recursive: true });
-      await writeFile(join(root, 'failure.json'), JSON.stringify({ at: new Date().toISOString(), revision, authority, publicationPath, publication, cancelled, error: String(error) }, null, 2));
+      await writeFile(join(root, 'failure.json'), JSON.stringify({ at: new Date().toISOString(), revision, authority, phase, publication, publicationPath, cancelled, error: String(error) }, null, 2));
     } catch {}
     throw error;
   } finally {
