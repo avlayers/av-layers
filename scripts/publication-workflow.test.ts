@@ -780,12 +780,32 @@ it('rejects a plan for another workflow model before worker computation or final
   expect(fake.shard).not.toHaveBeenCalled(); expect(fake.finalize).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
 });
 
-it('verifies the committed build and hour listing through the live API after cleanup', async () => {
+it('verifies the committed build and hour listing through the live API before cleanup', async () => {
   await finalizeAndPublish();
   expect(fake.verifyServing).toHaveBeenCalledWith({ baseUrl: 'https://api.example', manifest, signal: expect.any(AbortSignal) });
-  expect(fake.verifyServing.mock.invocationCallOrder[0]).toBeGreaterThan(fake.cleanup.mock.invocationCallOrder[0]);
+  expect(fake.verifyServing.mock.invocationCallOrder[0]).toBeLessThan(fake.cleanup.mock.invocationCallOrder[0]);
   const record = JSON.parse(fake.write.mock.calls.find(([path]) => String(path).endsWith('/serving.json'))![1]);
   expect(record).toMatchObject({ status: 'verified', model: manifest.model, buildId: manifest.buildId, frames: manifest.frames, layers: manifest.layers });
+});
+
+it('still verifies serving when cleanup fails, and records both outcomes when both fail', async () => {
+  fake.cleanup.mockRejectedValueOnce(new Error('list timed out'));
+  await expect(finalizeAndPublish()).rejects.toThrow('Publication committed; maintenance failed');
+  expect(fake.verifyServing).toHaveBeenCalledOnce();
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/serving.json', expect.stringContaining('"status": "verified"'));
+  fake.verifyServing.mockRejectedValueOnce(new Error('API still shows previous build'));
+  fake.cleanup.mockRejectedValueOnce(new Error('list timed out'));
+  await expect(finalizeAndPublish()).rejects.toThrow(/serving verification failed.*; maintenance failed/);
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/maintenance.json', expect.stringContaining('"status": "failed"'));
+});
+
+it('records a serving check cut short by cancellation as not attempted and defers cleanup', async () => {
+  fake.verifyServing.mockImplementationOnce(async ({ signal }) => { process.emit('SIGTERM'); signal.throwIfAborted(); });
+  await expect(finalizeAndPublish()).rejects.toThrow('interrupted');
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/serving.json', expect.stringContaining('"status": "not-attempted"'));
+  expect(fake.write).toHaveBeenCalledWith('output/builds/gfs/build/maintenance.json', expect.stringContaining('"status": "deferred"'));
+  expect(fake.cleanup).not.toHaveBeenCalled();
+  expect(fake.write).toHaveBeenCalledWith('output/failure.json', expect.stringContaining('"phase": "serving"'));
 });
 
 it('preserves committed publication when the API cannot serve the new build', async () => {

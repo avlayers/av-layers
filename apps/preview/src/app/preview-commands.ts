@@ -12,6 +12,10 @@ type WeatherChannel = WeatherChannelKey;
 
 export interface PreviewCommands {
   selectModel(model: ModelId): void;
+  /** Adopts the newer run the catalog advertises. */
+  updateRun(): void;
+  /** Opens the point forecast at the map center (the keyboard route to a point) and focuses it. */
+  forecastAtCenter(): void;
   selectReference(reference: AltitudeReference): void;
   selectLayer(layer: 'lift' | LayerId): void;
   prepareLayer(layer: 'lift' | LayerId): void;

@@ -108,8 +108,9 @@ export function resolveInitialWindowStartKey(
 }
 
 /**
- * Identifies the strongest soaring day among candidate `dayKeys` (only when >= 2 days exist
- * and at least one day has positive usable lift or convective velocity w* >= 0.4 m/s).
+ * Identifies the day with the highest peak thermal score among candidate `dayKeys` (only when >= 2 days
+ * exist and at least one day has positive usable lift or convective velocity w* >= 0.4 m/s). The score is
+ * the best hour's (usable depth + 320 × w*) × surface-wind factor; missing terrain or wind never raises it.
  */
 export function findBestSoaringDayKey(
   dayKeys: readonly string[],
@@ -136,14 +137,13 @@ export function findBestSoaringDayKey(
     for (const h of hours) {
       const fh = forecastHourByValidAt.get(h.validAt);
       if (!fh) continue;
-      const agl = fh.usableLiftTopM !== null
-        ? (fh.terrainM !== null ? Math.max(0, fh.usableLiftTopM - fh.terrainM) : fh.usableLiftTopM)
-        : 0;
+      // Missing inputs never help a day: unknown terrain adds no depth, unknown wind takes the strong-wind factor.
+      const agl = fh.usableLiftTopM !== null && fh.terrainM !== null ? Math.max(0, fh.usableLiftTopM - fh.terrainM) : 0;
       const wStar = fh.thermalVelocityMps !== null ? Math.max(0, fh.thermalVelocityMps) : 0;
       if (agl > rawMaxAgl) rawMaxAgl = agl;
       if (wStar > rawMaxWStar) rawMaxWStar = wStar;
       const sfcWind = fh.surfaceWindMps ?? null;
-      const windFactor = sfcWind === null || sfcWind <= 5.6 ? 1 : sfcWind <= 8.4 ? 0.8 : 0.35;
+      const windFactor = sfcWind === null ? 0.35 : sfcWind <= 5.6 ? 1 : sfcWind <= 8.4 ? 0.8 : 0.35;
       const hourScore = (agl + wStar * 320) * windFactor;
       if (hourScore > bestHourScore) bestHourScore = hourScore;
     }

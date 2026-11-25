@@ -27,10 +27,10 @@ let cache: EdgeCache;
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); cache = new EdgeCache(); vi.stubGlobal('caches', { default: cache }); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
-async function call(fixture: Fixture, path: string, options: { app?: ReturnType<typeof createApp>; cache?: 'off'; method?: string } = {}): Promise<Response> {
+async function call(fixture: Fixture, path: string, options: { app?: ReturnType<typeof createApp>; cache?: 'off'; method?: string; deploymentId?: string } = {}): Promise<Response> {
   const pending: Promise<unknown>[] = [];
   const response = await (options.app ?? fixture.app).fetch(new Request(`https://api.test${path}`, { method: options.method, headers: { 'cf-connecting-ip': '192.0.2.1' } }), {
-    BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: options.cache
+    BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) }, AV_RESPONSE_CACHE: options.cache, AV_DEPLOYMENT_ID: options.deploymentId
   }, { waitUntil(promise) { pending.push(promise); } });
   const bytes = await response.arrayBuffer();
   await Promise.all(pending);
@@ -226,4 +226,15 @@ it('bypasses response cache when disabled and keeps health and errors uncached',
     expect(response.headers.get('cache-control')).toBe('no-store');
   }
   expect(cache.matches).toBe(0); expect(cache.puts).toBe(0);
+});
+
+it('stamps the catalog with the deployment that built it and never serves it to another deployment', async () => {
+  const fixture = createV5Fixture();
+  const first = await call(fixture, '/v1/catalog', { deploymentId: 'one' });
+  expect(await first.json()).toMatchObject({ deploymentId: 'one' });
+  vi.setSystemTime(NOW + 1000);
+  const next = await call(fixture, '/v1/catalog', { deploymentId: 'two' });
+  expect(next.headers.get('x-av-response-cache')).toBe('miss');
+  expect(await next.json()).toMatchObject({ deploymentId: 'two' });
+  expect(await (await call(fixture, '/v1/catalog')).json()).not.toHaveProperty('deploymentId');
 });

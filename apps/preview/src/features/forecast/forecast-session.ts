@@ -8,6 +8,8 @@ import type { PreviewIntent, PreviewWriter } from '../../stores/app-store';
 import { committedFrame, LIFT_LAYERS, resumeModelFor } from './forecast-model';
 
 const AUTO_METADATA_CACHE_TTL_MS = 15_000;
+/** How often an open session asks the catalog whether a newer run of the pinned model exists. */
+const NEW_RUN_CHECK_MS = 5 * 60_000;
 
 interface ForecastHooks {
   readonly onLoading: (model: ModelId) => void;
@@ -38,6 +40,10 @@ interface ForecastSession {
   load(model: ModelId, resolved?: AutoForecastSelection): Promise<void>;
   loadAuto(): Promise<void>;
   cancelAuto(): void;
+  /** Asks the catalog (at most every few minutes) whether the pinned model has a newer cycle; shows a notice when it does. */
+  checkNewRun(): Promise<void>;
+  /** Adopts the newest run of the current model or Auto, keeping the requested time where the new run covers it. */
+  updateRun(): Promise<void>;
   commitFrame(frameId: string, requestedTime: string): void;
   ensureLive(): boolean;
   expire(): void;
@@ -54,7 +60,7 @@ interface ForecastSession {
 export function createForecastSession(options: ForecastSessionOptions): ForecastSession {
   const { api, writer, intent, hooks } = options;
   let build: PinnedBuild | null = null, selectedFrame: string | null = null, pendingModel: ModelId | null = null, expired = false;
-  let buildFromAuto = false;
+  let buildFromAuto = false, lastRunCheck = Number.NEGATIVE_INFINITY;
   let loadAbort: AbortController | null = null, autoAbort: AbortController | null = null, resumeModel: ModelId | null = null;
   let disposeExpiry = (): void => {}, destroyed = false;
   let cachedCatalog: { models: CatalogModelEntry[]; expiresAtMs: number } | null = null;
@@ -95,6 +101,7 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
       cachedBuilds.set(next.manifest.model, { build: next, cacheExpiresAtMs: now + AUTO_METADATA_CACHE_TTL_MS });
     }
     writer.forecast({ build: next, selectedFrame: frame, expired: false });
+    writer.notices({ newRun: '' }); lastRunCheck = now;
   }
   function clearBuild(): void {
     build = null; selectedFrame = null; buildFromAuto = false;
@@ -124,7 +131,8 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
     if (intent().model === AUTO_MODEL_ID) void loadAuto();
   }
 
-  async function loadAuto(): Promise<void> {
+  /** `fresh` resolves without the pinned build, for an explicit update to a newer run. */
+  async function loadAuto(fresh = false): Promise<void> {
     if (intent().model !== AUTO_MODEL_ID || options.mapFailed() || options.aborted() || destroyed) return;
     autoAbort?.abort();
     const request = new AbortController(); autoAbort = request;
@@ -136,10 +144,11 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
     const layers = custom ? [custom, ...LIFT_LAYERS] : intent().reference === 'agl' ? [...LIFT_LAYERS] : [...LIFT_LAYERS].reverse();
     if (!build) { writer.notices({ freshness: 'Finding a forecast for this location…' }); writer.forecast({ resolving: true }); }
     try {
-      const next = await resolveAutoBuild(autoApi, {
+      // A fresh resolution skips the pinned build and asks every model's latest pointer directly.
+      const next = await resolveAutoBuild(fresh ? { ...autoApi, latest: (model, reqOptions) => api.latest(model, reqOptions) } : autoApi, {
         ...(located ? normalizePoint(raw.lat, raw.lon) : {}),
         ...(viewBounds ? { bounds: viewBounds } : {}),
-        ...(!expired && build ? { currentBuild: build } : {}),
+        ...(!expired && build && !fresh ? { currentBuild: build } : {}),
         globe: options.globe?.() ?? false,
         now: options.now,
         layers, signal: request.signal, ...(Number.isFinite(time) ? { validTimeMs: time } : {})
@@ -148,6 +157,7 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
       if (next) {
         if (!expired && build?.manifest.model === next.build.manifest.model && build.manifest.buildId === next.build.manifest.buildId) {
           buildFromAuto = true;
+          if (fresh) writer.notices({ newRun: '' });
           if (selectedFrame !== null && selectedFrame !== next.frame.id) hooks.onSameBuild(next.frame.id);
           selectedFrame = next.frame.id;
           writer.forecast({ selectedFrame: next.frame.id });
@@ -190,7 +200,7 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
       loadAbort = null;
       writer.intent({ model });
       setPending(null);
-      commitBuild(resolved.build, resolved.frame.id, true);
+      commitBuild(resolved.build, resolved.frame.id, model === AUTO_MODEL_ID);
       if (intent().requestedTime !== null && resolved.frame.validTime) {
         writer.intent({ requestedTime: resolved.frame.validTime });
       }
@@ -224,8 +234,39 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
     }
   }
 
+  async function checkNewRun(): Promise<void> {
+    const current = build, now = options.now();
+    if (!current || expired || destroyed || now - lastRunCheck < NEW_RUN_CHECK_MS) return;
+    lastRunCheck = now;
+    try {
+      const entry = (await api.catalog()).find(model => model.model === current.manifest.model);
+      if (destroyed || build !== current || !entry?.available || !entry.cycle || !(Date.parse(entry.cycle) > Date.parse(current.manifest.cycle))) return;
+      writer.notices({ newRun: `A newer ${current.manifest.model} run is available.` });
+    } catch { /* Best effort: the next check retries. */ }
+  }
+
+  async function updateRun(): Promise<void> {
+    if (destroyed || options.mapFailed()) return;
+    cachedCatalog = null; cachedBuilds.clear();
+    const model = intent().model;
+    if (model === AUTO_MODEL_ID) { await loadAuto(true); return; }
+    autoAbort?.abort(); loadAbort?.abort();
+    const request = new AbortController(); loadAbort = request;
+    try {
+      const next = await api.latest(model, { signal: request.signal });
+      if (destroyed || request.signal.aborted || loadAbort !== request) return;
+      // The latest pointer can lag the catalog briefly; keep the pinned build and check again later.
+      if (next.manifest.buildId === build?.manifest.buildId) { writer.notices({ newRun: '' }); lastRunCheck = options.now(); return; }
+      const frame = committedFrame(next, intent().requestedTime, options.now());
+      const resolved = next.manifest.frames.find(item => item.id === frame.id);
+      if (resolved) await load(model, { build: next, frame: resolved });
+    } catch (error) {
+      if (!request.signal.aborted) writer.notices({ error: error instanceof Error ? error.message : String(error) });
+    } finally { if (loadAbort === request) loadAbort = null; }
+  }
+
   return {
-    load, loadAuto, cancelAuto() { autoAbort?.abort(); }, commitFrame, ensureLive, expire,
+    load, loadAuto, cancelAuto() { autoAbort?.abort(); }, checkNewRun, updateRun, commitFrame, ensureLive, expire,
     suspend() {
       resumeModel = resumeModelFor(pendingModel, intent().model);
       cachedCatalog = null; cachedBuilds.clear();

@@ -1,7 +1,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import {
   createSourceRasterTileProtocol, frameTileUrl, layerMaxZoom,
-  type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type RasterTileHandle, type RasterTileSourceProtocol
+  type ForecastRequestHandle, type ForecastRequestSpec, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileHandle, type RasterTileSourceProtocol
 } from '@av/client';
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, type RasterCrop } from '../raster/raster-crop';
@@ -40,22 +40,32 @@ function precipFieldCoversView(field: PrecipField, view: ViewportBounds, maxzoom
   return (field.east - field.west) <= maxAllowedSpan;
 }
 
+function fieldBytes(field: PrecipField): number {
+  return field.mmh.byteLength + (field.cellWeights?.byteLength ?? 0) + field.wetIndices.byteLength + field.wetCdf.byteLength;
+}
+
 /**
  * Fetches `precip-rate` tiles for a viewport crop, decodes them into a `PrecipField`, and keeps
- * the last `MAX_RAIN_FIELD_CACHE` fields keyed by build, frame and crop.
+ * the last `MAX_RAIN_FIELD_CACHE` fields keyed by build, frame and crop. With a preparation budget,
+ * tiles and retained fields are charged to it; the oldest fields give way when it is full, and a
+ * field that still does not fit is returned for display without being kept.
  */
 export class RainFieldSource {
   private readonly decodeCanvas = new OffscreenCanvas(RAIN_FIELD_SIZE, RAIN_FIELD_SIZE);
   private readonly protocol: RasterTileSourceProtocol;
   private readonly fieldCache = new Map<string, PrecipField>();
+  private readonly leases = new Map<string, PreparationLease>();
+  private readonly budget: PreparationBudget | undefined;
 
   constructor(
     private readonly map: MapLibreMap,
     baseUrl: string,
-    options: { fetchImpl?: typeof fetch; request?: (spec: ForecastRequestSpec) => ForecastRequestHandle }
+    options: { fetchImpl?: typeof fetch; request?: (spec: ForecastRequestSpec) => ForecastRequestHandle; budget?: PreparationBudget }
   ) {
+    this.budget = options.budget;
     this.protocol = createSourceRasterTileProtocol(baseUrl, {
       maxSources: 2,
+      budget: options.budget,
       fetchImpl: options.fetchImpl,
       request: options.request,
       maxActive: 8,
@@ -175,11 +185,7 @@ export class RainFieldSource {
         north
       }, cacheKey);
 
-      if (this.fieldCache.size >= MAX_RAIN_FIELD_CACHE) {
-        const oldest = this.fieldCache.keys().next().value;
-        if (oldest !== undefined) this.fieldCache.delete(oldest);
-      }
-      this.fieldCache.set(cacheKey, field);
+      this.retain(cacheKey, field, priority);
       return field;
     } catch {
       return null;
@@ -189,9 +195,37 @@ export class RainFieldSource {
     }
   }
 
+  /** Drops every retained field and its budget lease; tiles cached by the protocol stay charged to the budget. */
+  release(): void {
+    for (const key of [...this.fieldCache.keys()]) this.evict(key);
+  }
+
   dispose(): void {
     this.protocol.dispose();
-    this.fieldCache.clear();
+    this.release();
+  }
+
+  private retain(key: string, field: PrecipField, priority: 'foreground' | 'background'): void {
+    if (this.fieldCache.size >= MAX_RAIN_FIELD_CACHE) this.evictOldest();
+    if (this.budget) {
+      const bytes = fieldBytes(field);
+      let lease = this.budget.reserve('rain-field', bytes, priority);
+      while (!lease && this.fieldCache.size) { this.evictOldest(); lease = this.budget.reserve('rain-field', bytes, priority); }
+      if (!lease) return;
+      this.leases.set(key, lease);
+    }
+    this.fieldCache.set(key, field);
+  }
+
+  private evictOldest(): void {
+    const oldest = this.fieldCache.keys().next().value;
+    if (oldest !== undefined) this.evict(oldest);
+  }
+
+  private evict(key: string): void {
+    this.fieldCache.delete(key);
+    this.leases.get(key)?.release();
+    this.leases.delete(key);
   }
 
   private touch(key: string, field: PrecipField): void {

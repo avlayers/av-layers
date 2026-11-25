@@ -116,3 +116,41 @@ describe('RainFieldSource.decode', () => {
     expect(released).toHaveLength(3);
   });
 });
+
+describe('RainFieldSource budget', () => {
+  async function decodeFrame(source: InstanceType<typeof RainFieldSource>, frame: string) {
+    const result = source.decode(build, frame, crop, 'background', [], () => true);
+    for (const x of [0, 1, 2]) tiles.get(`https://api.test/tiles/${frame}/2/${x}/1.webp`)!.resolve(body());
+    return result;
+  }
+
+  it('charges retained fields to the shared budget, evicts the oldest when full and releases on demand', async () => {
+    stubCanvas();
+    const { createPreparationBudget } = await import('@av/client');
+    const probe = new RainFieldSource({ getZoom: () => 2 } as unknown as MapLibreMap, 'https://api.test', {});
+    const field = (await decodeFrame(probe, 'f000'))!;
+    const bytes = field.mmh.byteLength + (field.cellWeights?.byteLength ?? 0) + field.wetIndices.byteLength + field.wetCdf.byteLength;
+    const budget = createPreparationBudget(2 * bytes + 1);
+    const source = new RainFieldSource({ getZoom: () => 2 } as unknown as MapLibreMap, 'https://api.test', { budget });
+    const cached = (frame: string) => { tiles.clear(); void source.decode(build, frame, crop, 'background', [], () => true); return tiles.size === 0; };
+    await decodeFrame(source, 'f001');
+    await decodeFrame(source, 'f002');
+    expect(budget.snapshot()['rain-field']).toBe(2 * bytes);
+    await decodeFrame(source, 'f003');
+    expect(budget.snapshot()['rain-field']).toBe(2 * bytes);
+    expect(cached('f003')).toBe(true);
+    expect(cached('f001')).toBe(false);
+    source.release();
+    expect(budget.used).toBe(0);
+    expect(cached('f003')).toBe(false);
+  });
+
+  it('still returns a field that does not fit, without keeping it', async () => {
+    stubCanvas();
+    const { createPreparationBudget } = await import('@av/client');
+    const budget = createPreparationBudget(1024);
+    const source = new RainFieldSource({ getZoom: () => 2 } as unknown as MapLibreMap, 'https://api.test', { budget });
+    expect(await decodeFrame(source, 'f001')).not.toBeNull();
+    expect(budget.used).toBe(0);
+  });
+});

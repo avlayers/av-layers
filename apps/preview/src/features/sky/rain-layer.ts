@@ -1,5 +1,5 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import type { ForecastRequestHandle, ForecastRequestSpec, PinnedBuild, RasterTileHandle } from '@av/client';
+import type { ForecastRequestHandle, ForecastRequestSpec, PinnedBuild, PreparationBudget, RasterTileHandle } from '@av/client';
 import type { ResolvedChannelStyles } from '../map/channel-styles';
 import type { PrecipField } from './precip-field';
 import { RainAnimator } from './rain-animator';
@@ -41,13 +41,14 @@ export class RainLayerController {
       visible: boolean;
       fetchImpl?: typeof fetch;
       request?: (spec: ForecastRequestSpec) => ForecastRequestHandle;
+      budget?: PreparationBudget;
     }
   ) {
     this.animator = supported
       ? new RainAnimator(map, { darkChrome: options.styles.darkChrome, opacity: options.opacity, visible: options.visible })
       : null;
     this.source = supported
-      ? new RainFieldSource(map, baseUrl, { fetchImpl: options.fetchImpl, request: options.request })
+      ? new RainFieldSource(map, baseUrl, { fetchImpl: options.fetchImpl, request: options.request, budget: options.budget })
       : null;
     this.cuff = new RainCuffLayer(map);
     this.contours = new RainContourLayer(map);
@@ -174,7 +175,8 @@ export class RainLayerController {
     this.contours.syncStyle(styles, opacity, visible);
   }
 
-  clear(): void {
+  /** Hides rain; `release` also drops the retained decoded fields (page suspension). */
+  clear(release = false): void {
     this.jobToken++;
     this.pauseWarming();
     this.cancelForegroundHandles();
@@ -182,6 +184,7 @@ export class RainLayerController {
     this.animator?.setField(null);
     this.contours.clear();
     this.cuff.clear();
+    if (release) this.source?.release();
   }
 
   dispose(): void {

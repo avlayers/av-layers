@@ -169,7 +169,7 @@ it('uses one pinned build for the shared sample/tile probe and propagates servin
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true, deploymentId });
-    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }], deploymentId });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     expect(path).toBe(`/tiles/${manifest.model}/${manifest.buildId}/${manifest.layers[0]}/${manifest.frames[0].id}/0/0/0.webp`);
@@ -215,7 +215,7 @@ describe('deployment publication readiness', () => {
     const fetchImpl = vi.fn<typeof fetch>(async input => {
       const path = new URL(String(input)).pathname;
       if (path === '/healthz') return Response.json({ ok: true, deploymentId });
-      if (path === '/v1/catalog') return Response.json({ models });
+      if (path === '/v1/catalog') return Response.json({ models, deploymentId });
       const model = path.startsWith('/tiles/') ? path.split('/')[2]! : path.split('/')[3]!;
       const { manifest } = builds.get(model)!;
       if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
@@ -331,29 +331,33 @@ describe('deployment publication readiness', () => {
     expect(latest).not.toHaveBeenCalled();
   });
 
-  it('waits for a rollout whose catalog still omits a newly registered model', async () => {
+  it('retries a catalog built by the previous Worker version, then checks every registered model', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const { latest, options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
     let catalogRequests = 0;
     options.fetchImpl.mockImplementation(async (input, init) => {
       if (new URL(String(input)).pathname === '/v1/catalog' && ++catalogRequests === 1) {
-        return Response.json({ models: catalog().filter(entry => entry.model !== scheduledModel) });
+        return Response.json({ models: catalog().filter(entry => entry.model !== scheduledModel), deploymentId: 'previous' });
       }
       return original(input, init);
     });
     await expect(verifyApiDeployment({ ...options, catalogRetryDelayMs: 0 })).resolves.toBeUndefined();
-    expect(log.mock.calls.filter(([line]) => String(line).includes(`does not list ${scheduledModel} yet`))).toHaveLength(1);
+    expect(log.mock.calls.filter(([line]) => String(line).includes('catalog served by previous'))).toHaveLength(1);
     expect(latest.mock.calls.map(([model]) => model)).toContain(scheduledModel);
   });
 
-  it('warns and skips a registered model the catalog keeps omitting', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  it('fails when the old version keeps answering the catalog', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
+    options.fetchImpl.mockImplementation(async (input, init) => new URL(String(input)).pathname === '/v1/catalog'
+      ? Response.json({ models: catalog() }) : original(input, init));
+    await expect(verifyApiDeployment({ ...options, catalogRetries: 2, catalogRetryDelayMs: 0 })).rejects.toThrow(/still served by deployment \(unmarked\)/);
+  });
+
+  it('fails when the expected deployment omits a registered model', async () => {
     const { latest, options } = fixture(catalog().filter(entry => entry.model !== scheduledModel));
-    await expect(verifyApiDeployment({ ...options, catalogRetries: 2, catalogRetryDelayMs: 0 })).resolves.toBeUndefined();
-    expect(log.mock.calls.filter(([line]) => String(line).includes(`does not list ${scheduledModel} yet`))).toHaveLength(2);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`catalog omitted registered forecast model ${scheduledModel}`));
-    expect(latest.mock.calls.map(([model]) => model)).not.toContain(scheduledModel);
+    await expect(verifyApiDeployment({ ...options, catalogRetryDelayMs: 0 })).rejects.toThrow(`omits registered forecast model ${scheduledModel}`);
+    expect(latest).not.toHaveBeenCalled();
   });
 
   it('propagates serving failures for published models', async () => {

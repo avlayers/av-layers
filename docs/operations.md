@@ -96,9 +96,10 @@ compaction use the working-set limit.
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the plan meets the [build elapsed budget](../apps/batch/src/capacity.ts),
 its scoped credentials and the environment sealing key remain valid. Start a
-new build after expiry or rotation. Also start a new build
-when a failed shard uploaded frame provenance without completing its receipt.
-Reacquisition can change the immutable provenance timestamp.
+new build after expiry or rotation. A shard that failed after uploading frame
+provenance but before completing its receipt can be rerun too: when the
+reacquired upstream objects match, it adopts the stored provenance, whose only
+difference is the capture time. Changed upstream objects still need a new build.
 Workers and assembly finish under their frozen revision when main advances.
 Publication proceeds when main advanced without changing `PUBLICATION_PATHS`
 in [publication-workflow.ts](../scripts/publication-workflow.ts); otherwise
@@ -177,10 +178,12 @@ Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
 the clients, deploys the API Worker, and checks the complete model catalog.
 A model without a servable publication (missing, expired, invalid or
 incomplete) only logs a warning and skips its probes: forecast data problems
-belong to the health monitor, not to code deploys. A newly registered model the
-catalog does not list yet is retried for about a minute, because an old Worker
-isolate can still answer after `/healthz` reports the new deployment, and is
-then also only warned about. Deployment fails if no model has a publication.
+belong to the health monitor, not to code deploys. The catalog names the
+Worker deployment that built it (`deploymentId`), so a catalog from an old
+isolate that still answers after `/healthz` reports the new deployment is
+retried for about two minutes. Deployment fails if the new deployment never
+answers, if its catalog omits a registered model, or if no model has a
+publication.
 Hourly health checks only models enrolled for that environment, so a
 new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
@@ -258,8 +261,9 @@ Inspect the run's uploaded receipt artifacts:
 - `publication.json`: records a committed pointer update.
 - `failure.json`: reports `not-attempted`, `unconfirmed`, or `committed`. Resume
   `unconfirmed` runs with `resume-run-id`.
-- `maintenance.json`: records cleanup or rollback status.
-- `serving.json`: records live API verification after commit.
+- `serving.json`: records live API verification, which runs right after commit.
+- `maintenance.json`: records cleanup or rollback status. Cleanup runs after the
+  serving check, so its failure or slowness never hides whether the new build serves.
 
 The hourly [health workflow](https://github.com/avlayers/av-layers/actions/workflows/health.yml)
 checks each model enrolled in `monitoring.environments` for the selected

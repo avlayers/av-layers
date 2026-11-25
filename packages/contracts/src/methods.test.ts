@@ -236,3 +236,21 @@ it.each([INDEXED_PRODUCT, SPLIT_PRODUCT])('includes native cloud support on the 
   expect(methodDescriptorSchema.safeParse(method).success).toBe(true);
   expect(METHODS[method.id]).toBe(method);
 });
+
+describe('flux time support', () => {
+  it('describes HRDPS instantaneous fluxes as valid-time snapshots end to end and leaves other models alone', () => {
+    const hrdps = getProduct('hrdps')!, descriptors = createWholeDomainDescriptors(hrdps);
+    for (const layer of ['sensible-heat-flux', 'latent-heat-flux', 'thermal-velocity', 'thermal-top-msl', 'usable-lift-msl', 'usable-lift-agl'] as const) {
+      expect(descriptors.layers[layer]!.timeSupport).toBe('valid-time');
+    }
+    for (const method of Object.values(descriptors.methods)) {
+      for (const input of ['sensibleHeatFluxWm2', 'latentHeatFluxWm2']) if (method.inputs[input]) expect(method.inputs[input]!.timeSupport).toBe('valid-time');
+    }
+    for (const model of ['gfs', 'icon-eu', 'rrfs'] as const) {
+      const other = createWholeDomainDescriptors(getProduct(model)!);
+      expect(other.layers['sensible-heat-flux']!.timeSupport).toBe('interval-mean');
+      expect(other.layers['thermal-velocity']!.timeSupport).toBe('interval-flux-endpoint-profile');
+      expect(other.methods[other.layers['usable-lift-msl']!.methodId]!.inputs.sensibleHeatFluxWm2!.timeSupport).toBe('interval-mean');
+    }
+  });
+});

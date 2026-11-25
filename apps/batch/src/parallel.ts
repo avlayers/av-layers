@@ -23,7 +23,7 @@ import { admitWholeDomain, partitionForecastHours, planWholeDomainCapacity, whol
 import { buildWholeDomainFrames, type WholeDomainSurfaceResult } from './whole-domain/frames.js';
 import { finishWholeDomain, type FinishWholeDomainOptions } from './whole-domain/finish.js';
 import { frozenWholeDomain, loadFrozenWholeDomain, loadWholeDomainTerrain, prepareWholeDomain, type WholeDomainOptions, type WholeDomainPrepared } from './whole-domain/prepare.js';
-import { readFrameProvenance } from './frame-provenance.js';
+import { adoptStoredFrameProvenance, readFrameProvenance } from './frame-provenance.js';
 import { sampleShardKey } from './sample-pack-v5.js';
 import { writeServingGroups } from './serving-groups.js';
 import { putImmutableReceipt, verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
@@ -339,12 +339,14 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       const coverage = layerSurface(artifact.layer) === 'native' ? whole.native : whole.fine;
       await validateArchive(localPath(root, artifact.tilesKey), coverageAtZoom(coverage.mask, options.product.maxNativeZoom));
     }
-    await assertWholeDomainProvenance(root, plan, shard, options.product, result.receipts);
-    const objects: ObjectReceipt[] = [], store = options.store;
+    const store = options.store;
+    const provenance = store ? await Promise.all(result.receipts.map(reference => adoptStoredFrameProvenance(root, store, reference, options.signal))) : result.receipts;
+    await assertWholeDomainProvenance(root, plan, shard, options.product, provenance);
+    const objects: ObjectReceipt[] = [];
     if (store) {
       const files = [...result.surfaces.flatMap(surface => [...surface.shards!, ...(surface.profiles?.shards ?? [])].map(item => ({ key: item.key, hash: item.sha256, type: 'application/octet-stream' }))),
         ...result.artifacts.map(item => ({ key: item.tilesKey, hash: item.tilesSha256, type: 'application/vnd.pmtiles' })),
-        ...result.receipts.map(item => ({ key: item.key, hash: item.sha256, type: 'application/json' }))];
+        ...provenance.map(item => ({ key: item.key, hash: item.sha256, type: 'application/json' }))];
       for (const file of files) {
         const upload = async (bytes: Buffer): Promise<void> => {
           if (sha256(bytes) !== file.hash) throw new Error(`Local hash mismatch: ${file.key}`);
@@ -363,7 +365,7 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       } else numericObjects.push({ key: file.key, bytes: file.bytes, sha256: file.sha256 });
     }
     const receipt: WholeDomainReceipt = wholeDomainReceiptSchema.parse({ version: 2, planHash: planHash(plan), shard,
-      artifacts: result.artifacts, provenance: result.receipts,
+      artifacts: result.artifacts, provenance,
       surfaces: result.surfaces.map(surface => ({ id: surface.id, channelCount: surface.layout.channelCount,
         shards: surface.shards!.map(item => ({ ...item, key: item.key })),
         ...(surface.profiles ? { profiles: { levelCount: surface.profiles.levelCount, recordBytes: surface.profiles.recordBytes, shards: surface.profiles.shards } } : {}) })), metrics: withProcessPeakRss(result.metrics), ...(objects.length ? { objects } : {}), ...(plan.numericWind ? { numeric: { frames: numericResult.frames, objects: numericObjects } } : {}) });

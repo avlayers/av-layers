@@ -270,9 +270,14 @@ export class ApiClient {
   }
 
   async catalog(options: RequestOptions = {}): Promise<CatalogModelEntry[]> {
+    return (await this.catalogResponse(options)).models;
+  }
+
+  /** The catalog with the Worker deployment that built it (absent from unmarked local Workers). */
+  async catalogResponse(options: RequestOptions = {}): Promise<{ models: CatalogModelEntry[]; deploymentId?: string }> {
     const parsed = await this.getJson('catalog', '/v1/catalog', options.signal, value => admit(() => catalogSchema.safeParse(projectKnownResponse(value)), 'catalog response does not match contract schema'));
     if (!parsed.success) throw new InvalidApiResponseError('catalog response does not match contract schema');
-    return parsed.data.models;
+    return parsed.data;
   }
 
   async latest(model: ModelId, options: RequestOptions & { requireLive?: boolean } = {}): Promise<PinnedBuild> {

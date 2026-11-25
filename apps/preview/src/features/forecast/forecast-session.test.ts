@@ -29,8 +29,9 @@ function harness() {
   let center = { lat: 40, lon: -100 };
   let globe = false;
   const latest = vi.fn(async (model: string) => { calls.push(model); return builds[0]!; });
+  const catalog = vi.fn(async () => [] as { model: string; available: boolean; cycle?: string }[]);
   const session = createForecastSession({
-    api: { latest } as unknown as ApiClient,
+    api: { latest, catalog } as unknown as ApiClient,
     writer: {
       forecast: update => { calls.push(`forecast:${JSON.stringify(update)}`); },
       intent: update => { current = { ...current, ...update }; calls.push(`intent:${JSON.stringify(update)}`); },
@@ -55,7 +56,7 @@ function harness() {
     }
   });
   return {
-    session, calls, latest, builds, current: () => current,
+    session, calls, latest, catalog, builds, current: () => current,
     setCenter(next: typeof center) { center = next; },
     setGlobe(next: boolean) { globe = next; }
   };
@@ -149,5 +150,42 @@ describe('forecast session', () => {
     expect(resumed).toBe('gfs');
     test.session.resume(resumed!);
     expect(test.latest).toHaveBeenCalledTimes(2);
+  });
+
+  it('notices a newer cycle of the pinned model without reloading, throttles the check and adopts it on update', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const test = harness(), later = () => vi.setSystemTime(Date.now() + 5 * 60_000);
+      await test.session.load('gfs');
+      const pinned = test.builds[0]!, newer = fixtureBuild({ buildId: '20261030T060000Z-00000000-0000-4000-8000-000000000009',
+        expiresAt: new Date(Date.now() + 86_400_000).toISOString(), createdAt: new Date().toISOString() });
+      (newer.manifest as { cycle: string }).cycle = '2026-10-30T06:00:00.000Z';
+      test.catalog.mockResolvedValue([{ model: 'gfs', available: true, cycle: newer.manifest.cycle }]);
+      await test.session.checkNewRun();
+      expect(test.catalog).not.toHaveBeenCalled();
+      later();
+      await test.session.checkNewRun();
+      expect(test.calls).toContain('notices:{"newRun":"A newer gfs run is available."}');
+      expect(test.session.build).toBe(pinned);
+      await test.session.checkNewRun();
+      expect(test.catalog).toHaveBeenCalledTimes(1);
+
+      // A latest pointer that still lags keeps the pinned build and clears the offer until the next check.
+      test.calls.length = 0;
+      await test.session.updateRun();
+      expect(test.session.build).toBe(pinned);
+      expect(test.calls).toContain('notices:{"newRun":""}');
+
+      test.latest.mockResolvedValueOnce(newer);
+      test.calls.length = 0;
+      await test.session.updateRun();
+      expect(test.session.build).toBe(newer);
+      expect(test.calls).not.toContain('forecast:{"build":null,"selectedFrame":null}');
+      later();
+      test.calls.length = 0;
+      await test.session.checkNewRun();
+      expect(test.catalog).toHaveBeenCalledTimes(2);
+      expect(test.calls.some(call => call.includes('"newRun":"A newer'))).toBe(false);
+    } finally { vi.useRealTimers(); }
   });
 });

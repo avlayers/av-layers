@@ -164,7 +164,7 @@ export const catalogModelSchema = z.object({
   freshness: freshnessSchema.optional(),
   error: z.string().optional()
 });
-export const catalogSchema = z.object({ models: z.array(catalogModelSchema).max(256) });
+export const catalogSchema = z.object({ models: z.array(catalogModelSchema).max(256), deploymentId: z.string().max(128).optional() });
 export type CatalogModelEntry = z.infer<typeof catalogModelSchema>;
 
 export function validateArtifactRecordsV5(manifest: ManifestV5): void {

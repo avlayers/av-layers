@@ -8,7 +8,7 @@ import type { BrowserLifecycleOptions } from '../platform/browser-lifecycle';
 import type { OverlayState, RasterOverlayOptions } from '../features/raster/raster-overlay';
 import { emptyOverlay } from '../stores/app-store';
 
-const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, rasterOptions: null as RasterOverlayOptions | null, windInstalled: null as unknown, windStaged: null as unknown, windMemory: vi.fn(() => ({ horizonNumericRemaining: 4096 })), windHorizonRemaining: vi.fn(() => 4096), windDestroy: vi.fn(), rasterDestroy: vi.fn(), overlayDestroy: vi.fn(), schedulerDispose: vi.fn(), windControls: null as WindControlsOptions | null, windClear: vi.fn(), rasterClear: vi.fn(), locationReset: vi.fn(), lifecycle: null as BrowserLifecycleOptions | null }));
+const mocks = vi.hoisted(() => ({ resolveAutoBuild: vi.fn(), reconcileWind: vi.fn(), budget: null as PreparationBudget | null, pointOptions: null as PointSessionOptions | null, point: null as { frameId: string | null; current: unknown } | null, overlayState: null as ((state: OverlayState) => void) | null, rasterOptions: null as RasterOverlayOptions | null, windInstalled: null as unknown, windStaged: null as unknown, windMemory: vi.fn(() => ({ horizonNumericRemaining: 4096 })), windHorizonRemaining: vi.fn(() => 4096), windDestroy: vi.fn(), rasterDestroy: vi.fn(), overlayDestroy: vi.fn(), schedulerDispose: vi.fn(), windControls: null as WindControlsOptions | null, windClear: vi.fn(), rasterClear: vi.fn(), locationReset: vi.fn(), lifecycle: null as BrowserLifecycleOptions | null, rasterSelect: null as unknown, skySelect: vi.fn(), skyPrepare: vi.fn() }));
 
 vi.mock('@av/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@av/client')>();
@@ -50,7 +50,8 @@ vi.mock('../features/map/map-controller', () => ({
   createMapCamera: () => ({ home: { lat: 40, lng: -100 }, followsPlace: () => false, sync: () => ({ center: map.getCenter(), changed: false }), offsetMinutes: () => 0, scale: () => ({ width: 1, text: '' }), focusRegion() {} }),
   maplibregl: { GPUInitializationError: class extends Error {} }
 }));
-vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { update() {} constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void, _fetch: unknown, _request: unknown, options: RasterOverlayOptions) { mocks.overlayState = onState; mocks.rasterOptions = options; } select() {} prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() { mocks.rasterClear(); } destroy() { mocks.rasterDestroy(); } } }));
+vi.mock('../features/raster/raster-overlay', () => ({ RasterOverlay: class { update() {} constructor(_map: unknown, _baseUrl: string, _opacity: number, onState: (state: OverlayState) => void, _fetch: unknown, _request: unknown, options: RasterOverlayOptions) { mocks.overlayState = onState; mocks.rasterOptions = options; } select(...args: unknown[]) { (mocks.rasterSelect as ((...a: unknown[]) => void) | null)?.(...args); } prepare() {} refresh() {} setWindActive() {} setOpacity() {} setPlayback() {} clear() { mocks.rasterClear(); } destroy() { mocks.rasterDestroy(); } } }));
+vi.mock('../features/sky/sky-composite', () => ({ SkyComposite: class { select(...args: unknown[]) { mocks.skySelect(...args); } prepare(...args: unknown[]) { mocks.skyPrepare(...args); } update() {} clear() {} destroy() {} } }));
 vi.mock('../features/map/coverage-seam', () => ({ CoverageSeam: class { sync() {} markReady() {} destroy() {} } }));
 vi.mock('../features/wind/wind-overlay', () => ({ WindOverlay: class { update() {} setOptions() {} clear() {} destroy() { mocks.overlayDestroy(); } } }));
 vi.mock('../features/wind/wind-session', () => ({ createWindSession: () => ({ ready: new Map(), preparation: { limited: false }, resident: false, get installed() { return mocks.windInstalled; }, get staged() { return mocks.windStaged; }, get memory() { return mocks.windMemory(); }, get horizonNumericRemaining() { return mocks.windHorizonRemaining(); }, clear() { mocks.windClear(); }, destroy() { mocks.windDestroy(); }, update() {}, reconcile: mocks.reconcileWind, playbackChanged() {}, heightChanged() {}, beforeRasterReveal() {} }) }));
@@ -112,7 +113,7 @@ async function harness(wind = false) {
   mocks.point = null; mocks.pointOptions = null; mocks.overlayState = null; mocks.rasterOptions = null; mocks.windInstalled = null; mocks.windStaged = null; cancelled = null;
   mocks.windMemory.mockClear(); mocks.windHorizonRemaining.mockClear();
   mocks.windDestroy.mockReset(); mocks.rasterDestroy.mockReset(); mocks.overlayDestroy.mockReset(); mocks.schedulerDispose.mockReset(); mocks.windControls = null;
-  mocks.windClear.mockReset(); mocks.rasterClear.mockReset(); mocks.locationReset.mockReset(); mocks.lifecycle = null;
+  mocks.windClear.mockReset(); mocks.rasterClear.mockReset(); mocks.rasterSelect = null; mocks.skySelect.mockReset(); mocks.skyPrepare.mockReset(); mocks.locationReset.mockReset(); mocks.lifecycle = null;
   const app = createPreviewApp();
   app.start(root);
   map.fire('style.load');
@@ -331,5 +332,35 @@ it('closes an open windgram on map click instead of selecting a new point, then 
   // Once closed, the next map click opens the windgram at the newly clicked coordinate.
   map.fire('click', { lngLat: { lat: 42.5, lng: -98.25 } });
   await vi.waitFor(() => expect(mocks.point?.current).toEqual({ build: test.build, point: { lat: 42.5, lon: -98.25 } }));
+  test.app.dispose();
+});
+
+it('keeps sky on the hour the raster shows, including a reveal inside select, and follows the selection with lift hidden', async () => {
+  const test = await harness();
+  const layer = 'usable-lift-agl' as const, [f0, f1] = [test.frames[0]!, test.frames[1]!];
+  const shown = (frame: string) => mocks.overlayState!({ ...emptyOverlay, requested: { build: test.build, layer, frame }, displayed: { build: test.build, layer, frame } });
+  shown(f0.id);
+  mocks.skySelect.mockClear(); mocks.skyPrepare.mockClear();
+
+  // Cold frame: the raster keeps f0 on screen, so sky stays on f0 and only warms f1.
+  test.app.commands.selectFrame(1, 'push');
+  expect(mocks.skySelect).toHaveBeenLastCalledWith(test.build, f0.id);
+  expect(mocks.skySelect).not.toHaveBeenCalledWith(test.build, f1.id);
+  expect(mocks.skyPrepare).toHaveBeenCalledWith(test.build, f1.id);
+  shown(f1.id);
+  expect(mocks.skySelect).toHaveBeenLastCalledWith(test.build, f1.id);
+
+  // Warm frame: the raster reveals synchronously inside select, before its displayed state commits.
+  mocks.rasterSelect = (_build: unknown, _layer: unknown, frame: unknown) => mocks.rasterOptions!.beforeReveal!({ build: test.build, layer, frame: frame as string });
+  test.app.commands.selectFrame(0, 'push');
+  expect(mocks.skySelect).toHaveBeenLastCalledWith(test.build, f0.id);
+  shown(f0.id);
+  expect(mocks.skySelect).toHaveBeenLastCalledWith(test.build, f0.id);
+
+  // Lift hidden: nothing visible owns the clock, so sky follows the selection directly.
+  mocks.rasterSelect = null;
+  test.app.store.writer.intent({ liftVisible: false });
+  test.app.commands.selectFrame(1, 'push');
+  expect(mocks.skySelect).toHaveBeenLastCalledWith(test.build, f1.id);
   test.app.dispose();
 });

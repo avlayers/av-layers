@@ -1,7 +1,7 @@
 import { formatZoneTime, type PinnedBuild } from '@av/client';
 import type { OverlayState } from '../features/raster/raster-overlay';
 
-function sameSelection(a: OverlayState['displayed'], b: OverlayState['displayed']): boolean {
+export function sameSelection(a: OverlayState['displayed'], b: OverlayState['displayed']): boolean {
   return a === b || (!!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame);
 }
 

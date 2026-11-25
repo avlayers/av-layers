@@ -309,7 +309,7 @@ describe('wind controls', () => {
     controls.setUnits('imperial');
     expect(controls.state.height).toBe(4000);
     expect(range.value).toBe('9');
-    expect(range.getAttribute('aria-valuetext')).toBe('13,000 ft AGL');
+    expect(range.getAttribute('aria-valuetext')).toBe('13,100 ft AGL');
     controls.destroy();
   });
 
@@ -448,12 +448,12 @@ describe('wind controls', () => {
     controls.destroy();
   });
 
-  it('uses logical pilot-friendly imperial AGL stops (100 / 800 / 3k / 13k) for labels and value text', () => {
+  it('labels imperial AGL stops with the real conversion of the sampled metre heights', () => {
     const { controls, root } = create();
     controls.setUnits('imperial');
     expect(one(root, 'wind-controls-unit').textContent).toBe('ft AGL');
-    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['100', '800', '3k', '13k']);
-    expect(one(root, 'wind-controls-value').textContent).toBe('100');
+    expect(byClass(root, 'wind-controls-tick').map(tick => tick.textContent).filter(Boolean)).toEqual(['70', '820', '3.3k', '13.1k']);
+    expect(one(root, 'wind-controls-value').textContent).toBe('70');
     expect(one(root, 'wind-controls-range').getAttribute('aria-valuetext')).toBe('Surface');
     expect(controls.state.height).toBe('surface');
     controls.destroy();
@@ -573,5 +573,16 @@ describe('wind controls', () => {
     controls.setState?.({ visible: true });
     expect(one(root, 'wind-controls-rail').hidden).toBe(false);
     controls.destroy();
+  });
+});
+
+describe('imperial wind heights', () => {
+  it('converts each canonical sampled height within its rounding step', async () => {
+    const { windStopValue } = await import('./wind-model');
+    for (const metres of [20, 100, 250, 500, 750, 1000, 1500, 2000, 3000, 4000]) {
+      const feet = metres / 0.3048;
+      expect(Math.abs(windStopValue(metres, 'imperial') - feet)).toBeLessThanOrEqual(feet < 1000 ? 5 : 50);
+    }
+    expect(windStopValue(1500, 'metric')).toBe(1500);
   });
 });

@@ -66,7 +66,8 @@ export function createPointDataSource(
         },
       ]),
     );
-    const bestDayKey = findBestSoaringDayKey(calendar.dayKeys, calendar.days, forecastMap);
+    // While frames are still loading the ranking is provisional, so no day is starred yet.
+    const bestDayKey = frames.every(({ id }) => loaded.has(id)) ? findBestSoaringDayKey(calendar.dayKeys, calendar.days, forecastMap) : null;
     const siteTerrainKey = nextInput.siteTerrain
       ? `${nextInput.siteTerrain.status}:${nextInput.siteTerrain.elevationM ?? 'null'}`
       : '';

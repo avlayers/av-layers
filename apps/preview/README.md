@@ -22,8 +22,18 @@ pnpm --filter @av/preview build
 
 `AV_API_BASE` defaults to `http://localhost:8787`. Set
 `VITE_OFFLINE_FIXTURE=true` when serving the synthetic fixture (`pnpm dev`).
-Reload the page to pick up a newly published build (subject to the API's
-15-second [pointer cache](../../docs/serving-budgets.md)).
+An open page stays on its pinned build while you compare times. Every few
+minutes, and when the tab regains focus, it asks the catalog whether the
+model has a newer cycle and offers **Update**, which adopts the new run and
+keeps the map, wind height, requested time and an open point forecast where
+the run covers them
+(subject to the API's 15-second [pointer cache](../../docs/serving-budgets.md)).
+
+Keyboard: **F** (or the first Tab stop, *Forecast at map center*) opens the
+point forecast at the map center and Escape closes it, returning focus. The
+arrow keys step hours, **W** and **I** toggle wind and isobars, **P** or held
+Space peeks at the terrain, **1**/**3** switch the point view and **[**/**]**
+cycle themes.
 
 Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
 A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.
@@ -74,8 +84,8 @@ scalar chart covers builds that publish no native profiles.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
 - [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): the lift raster facade. It composes frame slots and budgets ([raster-slots.ts](src/features/raster/raster-slots.ts)), the overview-to-detail handoff ([raster-staging.ts](src/features/raster/raster-staging.ts)), prefetch planning ([raster-prefetch.ts](src/features/raster/raster-prefetch.ts)) and the low-zoom overview ([raster-overview.ts](src/features/raster/raster-overview.ts)). [ADR 0004](../../docs/decisions/0004-raster-stays-on-maplibre.md) says why it stays on MapLibre sources.
 - [src/layers/registry.ts](src/layers/registry.ts), [channels.ts](src/layers/channels.ts): one record per layer id (lift pairing, legend text, remap ramp and mask) and per dock channel (copy, shortcut, glyph, visibility field).
-- [src/features/sky/sky-composite.ts](src/features/sky/sky-composite.ts): clouds, pressure and rain for one selected build and frame. A channel without that hour's data stays empty (during playback it keeps the previous hour of the same build until the next arrives) and its layer button shows `loading` or `unavailable`. Cloud contours trace total cloud at the shared `SKY_COVER_TIERS` (65 % broken, 85 % overcast; [cloud-layer.ts](src/features/sky/cloud-layer.ts)), the same tiers as the legends and the Windgram sky strip; themes restyle them. [lon-window.ts](src/features/sky/lon-window.ts) keeps view windows whole across the dateline.
-- [src/features/sky/rain-layer.ts](src/features/sky/rain-layer.ts): rain channel, composing the field source, cuff and contour layers; [rain-animator.ts](src/features/sky/rain-animator.ts) draws the falling rain and [contours.ts](src/features/sky/contours.ts) is the one contour routine for isobars, cloud and rain edges.
+- [src/features/sky/sky-composite.ts](src/features/sky/sky-composite.ts): clouds, pressure and rain for the build and hour the lift raster shows ([display-ops.ts](src/app/display-ops.ts) `syncSky` advances it on each raster reveal, and follows the selection while lift is hidden). A channel without that hour's data stays empty (during playback it keeps the previous hour of the same build until the next arrives) and its layer button shows `loading` or `unavailable`. Cloud contours trace total cloud at the shared `SKY_COVER_TIERS` (65 % broken, 85 % overcast; [cloud-layer.ts](src/features/sky/cloud-layer.ts)), the same tiers as the legends and the Windgram sky strip; themes restyle them. [lon-window.ts](src/features/sky/lon-window.ts) keeps view windows whole across the dateline.
+- [src/features/sky/rain-layer.ts](src/features/sky/rain-layer.ts): rain channel, composing the field source (tiles and decoded fields charged to the shared preparation budget), cuff and contour layers; [rain-animator.ts](src/features/sky/rain-animator.ts) draws the falling rain and [contours.ts](src/features/sky/contours.ts) is the one contour routine for isobars, cloud and rain edges.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
 - [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
@@ -96,8 +106,10 @@ values and typed commands. URL/history behavior is tested through
 To change a control, update its store intent, command and component; leave the
 graphics engine alone. To add a map layer group, implement `MapChannel` and add
 it to the root's channel list, which updates, clears and destroys every channel.
-A group that loads forecast data also needs a select call beside the raster and
-sky selects in [display-ops.ts](src/app/display-ops.ts);
+A group that loads forecast data must show the hour the raster shows: follow
+`syncSky` in [display-ops.ts](src/app/display-ops.ts) (or wind's
+`beforeRasterReveal`) and charge large retained data to the shared
+`PreparationBudget`;
 to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 
