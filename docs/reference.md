@@ -130,9 +130,9 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
-- Execution: 40 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
-- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
-- Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
+- Execution: 42 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 84; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 25.
 - Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
 - Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
@@ -951,7 +951,7 @@ Complete-build limits:
 
 - `elapsedMs`: `10800000`.
 - `gridCells`: `4000000`.
-- `numericBytes`: `68719476736`.
+- `numericBytes`: `137438953472`.
 - `peakRssBytes`: `4294967296`.
 - `samplePackBytes`: `268435456`.
 - `tiles`: `5000000`.
@@ -969,7 +969,7 @@ Shared limits and storage constants:
 - `MAX_GRID_DIMENSION`: `2147483647`.
 - `MAX_JSON_CONTAINER_ENTRIES`: `256`.
 - `MAX_MANIFEST_BYTES`: `524288`.
-- `MAX_MANIFEST_JSON_TOKENS`: `16384`.
+- `MAX_MANIFEST_JSON_TOKENS`: `32768`.
 - `MAX_METADATA_JSON_TOKENS`: `8192`.
 - `MAX_MODEL_WORKERS`: `3`.
 - `MAX_NATIVE_ZOOM`: `10`.

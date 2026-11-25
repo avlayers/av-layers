@@ -84,7 +84,7 @@ column for each output cell before terrain refinement and point interpolation.
 and source intervals.
 Current products emit native weather and profiles through the complete
 selected horizon, including night. Precipitation retains its trailing interval
-at night. GFS and RRFS hour 27 covers f026–f027: the precipitation rate is the
+at night. GFS hour 27 covers f026–f027: the precipitation rate is the
 one-hour mean recovered from the reset-bucket accumulation, and an amount for
 that frame is the rate multiplied by one hour. From hour 123 the GFS source
 interval is three hours, and the amount uses that duration. `mapFrameCount` selects the tiles and fine-lift prefix; native samples and

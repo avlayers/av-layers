@@ -331,7 +331,7 @@
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": 1,
-        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
+        "window": {"hourlyThrough": 84, "endHour": 84, "tailStepHours": 1, "minHorizonHours": 48, "framesPerShard": 2}
       },
       "freshness": {"maxCycleAgeHours": 12},
       "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 12, "minHorizonHours": 48},
