@@ -1,7 +1,7 @@
 import { INDEXED_GRID, SPLIT_GRID } from '../../../tests/model-fixtures.js';
 import { describe, expect, it } from 'vitest';
 import { getBit } from './coverage.js';
-import { geographicToGrid, gridToGeographic, snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
+import { geographicToGrid, gridToGeographic, snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid, type RotatedLatLonGrid } from './geometry.js';
 
 import { assertWholeDomainDonorsActive, planWholeDomainGrid, wholeDomainDonorSupport } from './whole-domain-grid.js';
 
@@ -52,6 +52,13 @@ describe('whole-domain fine grid', () => {
       x0M: -6000, y0M: -3000, dxM: 3000, dyM: 3000, wrapLongitude: false };
     const plan = expectMatchesReference(grid, 2);
     expect(plan.fine).toEqual({ ...grid, width: 9, height: 5, dxM: 1500, dyM: 1500 });
+    const rotated: RotatedLatLonGrid = {
+      kind: 'rotated-latlon', width: 5, height: 3, earthRadiusM: 6371229,
+      lon0: -14.82, lat0: -12.3025, dx: 0.0225, dy: 0.0225,
+      southPoleLatDeg: -36.0885, southPoleLonDeg: -114.695, wrapLongitude: false
+    };
+    const rotatedPlan = expectMatchesReference(rotated, 2);
+    expect(rotatedPlan.fine).toEqual({ ...rotated, width: 9, height: 5, dx: 0.01125, dy: 0.01125 });
   });
   it('derives configured wrap and regional dimensions with signed native spacing', () => {
     const gfs = planWholeDomainGrid(INDEXED_GRID, 10);

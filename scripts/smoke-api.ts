@@ -118,16 +118,17 @@ async function probeSamples(client: ApiClient, build: PinnedBuild, signal?: Abor
 }
 
 export async function probeWeatherScalars(client: ApiClient, build: PinnedBuild, signal?: AbortSignal): Promise<void> {
-  if (!WEATHER_LAYER_IDS.every(layer => build.manifest.layers.includes(layer))) return;
-  for (const layer of WEATHER_LAYER_IDS) {
-    const definition = build.manifest.descriptors.layers[layer].definition;
+  const weatherLayers = WEATHER_LAYER_IDS.filter(layer => build.manifest.layers.includes(layer));
+  if (!(['precip-rate', 'cloud-cover-total', 'cape-jkg'] as const).every(layer => weatherLayers.includes(layer))) return;
+  for (const layer of weatherLayers) {
+    const definition = build.manifest.descriptors.layers[layer]?.definition;
     if (!definition) continue;
     invariant(definition.version === 1 && definition.id.length > 0, `Weather definition for ${layer} is incomplete`);
   }
-  const point = await coveredPoint(client, build, WEATHER_LAYER_IDS, signal);
-  const payload = await client.fieldSeries(build, { ...point, layers: [...WEATHER_LAYER_IDS], signal });
+  const point = await coveredPoint(client, build, weatherLayers, signal);
+  const payload = await client.fieldSeries(build, { ...point, layers: [...weatherLayers], signal });
   for (const frame of payload.frames) {
-    for (const layer of WEATHER_LAYER_IDS) {
+    for (const layer of weatherLayers) {
       const sample = frame.layers[layer];
       invariant(sample, `Weather sample omitted ${layer}`);
       if (sample.status === 'valid') invariant(typeof sample.value === 'number', `${layer} valid sample has no number`);

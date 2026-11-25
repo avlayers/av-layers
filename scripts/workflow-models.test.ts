@@ -13,7 +13,7 @@ it('selects registered models with their fixed configured caps', () => {
   expect(selectWorkflowModels()).toEqual(all.filter(model => PRODUCTS.find(product => product.modelId === model.model)!.execution.schedule.length));
   expect(selectWorkflowModels({ kind: 'health' })).toEqual(enrolled('production'));
   expect(selectWorkflowModels({ kind: 'health', environment: 'staging' })).toEqual(enrolled('staging'));
-  expect(enrolled('production').map(model => model.model)).toEqual(['gfs', 'icon-eu', 'rrfs', 'av-wrf']);
+  expect(enrolled('production').map(model => model.model)).toEqual(['gfs', 'icon-eu', 'rrfs', 'av-wrf', 'hrdps']);
   expect(selectWorkflowModels({ kind: 'health', selection: 'wrf-va-1km' })).toEqual([all.find(model => model.model === 'wrf-va-1km')]);
   for (const model of all) expect(selectWorkflowModels({ selection: model.model })).toEqual([model]);
   for (const value of ['', 'unknown', 'constructor', 'toString', all.map(model => model.model).join(',')]) {

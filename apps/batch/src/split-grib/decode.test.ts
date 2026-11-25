@@ -34,7 +34,7 @@ it('rejects exhausted fixed-width and unary payloads within a bounded subprocess
   expect(() => execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', source], { timeout: 5000, stdio: 'pipe' })).not.toThrow();
 });
 
-const nativeGrid = { ...splitSource(SPLIT_PRODUCT).upstream.nativeGrid, pointCount: 4 };
+const nativeGrid = { ...splitSource(SPLIT_PRODUCT).upstream.nativeGrid!, pointCount: 4 };
 const profile = splitSource({ ...SPLIT_PRODUCT, grid: { ...SPLIT_PRODUCT.grid, width: 2, height: 2 },
   upstream: { ...SPLIT_PRODUCT.upstream, nativeGrid } });
 const SECTION_3 = 16 + 21, SECTION_4 = SECTION_3 + 35, SECTION_5 = SECTION_4 + 34;

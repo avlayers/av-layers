@@ -28,7 +28,8 @@ const MODEL_REGION_SUBTITLES: Readonly<Record<ConfiguredModelId, string>> = {
   'icon-eu': 'Europe',
   rrfs: 'North America',
   'av-wrf': 'Caucasus',
-  'wrf-va-1km': 'Northern Virginia'
+  'wrf-va-1km': 'Northern Virginia',
+  hrdps: 'Canada'
 };
 
 export function modelRegionSubtitle(modelId: string | null | undefined): string | undefined {

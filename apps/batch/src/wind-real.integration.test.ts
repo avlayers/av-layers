@@ -69,9 +69,9 @@ for (const testCase of realCases) it.skipIf(!testCase.enabled)(`round-trips real
         expect({ u: result.u, v: result.v }).toEqual(expected ?? { u: null, v: null });
       }
     }
-    const grid = product.grid.kind === 'regular-latlon'
-      ? { ...product.grid, width: 8, height: 8, lon0: product.grid.lon0 + x * product.grid.dx, lat0: product.grid.lat0 + y * product.grid.dy, wrapLongitude: false }
-      : { ...product.grid, width: 8, height: 8, x0M: product.grid.x0M + x * product.grid.dxM, y0M: product.grid.y0M + y * product.grid.dyM };
+    const grid = product.grid.kind === 'lambert-conformal'
+      ? { ...product.grid, width: 8, height: 8, x0M: product.grid.x0M + x * product.grid.dxM, y0M: product.grid.y0M + y * product.grid.dyM }
+      : { ...product.grid, width: 8, height: 8, lon0: product.grid.lon0 + x * product.grid.dx, lat0: product.grid.lat0 + y * product.grid.dy, wrapLongitude: false as const };
     const coverage = sparseCoverageFromDense({ width: 8, height: 8, wrapLongitude: false, gridHash: 'a'.repeat(64), output: new Uint8Array(8).fill(255), halo: new Uint8Array(8) });
     const prepared = { plan: { native: grid, fine: grid }, fine: { mask: { coverage } } } as unknown as WholeDomainPrepared;
     const cropped = { ...frame, grid, activeIndices: Uint32Array.from({ length: 64 }, (_, i) => i) };

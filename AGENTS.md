@@ -24,7 +24,7 @@ tests, commands, comments, config, and UI.
   and [serving budgets](docs/serving-budgets.md). A path that keeps the forecast
   result and does less work replaces the heavier one. Raise a limit only with
   a measurement.
-- GFS, ICON-EU, RRFS, av-wrf, and the current layers are the implemented scope. A new model or product waits
+- GFS, ICON-EU, RRFS, HRDPS, av-wrf, and the current layers are the implemented scope. A new model or product waits
   for a real caller and follows [extensions](docs/extensions.md).
 - Use a maintained library or the platform for generic infrastructure (caches,
   retries, queues, HTTP, storage clients). New in-repo infrastructure needs a

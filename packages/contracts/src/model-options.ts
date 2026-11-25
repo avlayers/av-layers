@@ -55,5 +55,16 @@ export const MODEL_OPTIONS = [
       -77.594466,
       39.212755
     ]
+  },
+  {
+    "modelId": "hrdps",
+    "label": "HRDPS",
+    "nominalDxMeters": 2502,
+    "bounds": [
+      -141,
+      41.6,
+      -52,
+      65
+    ]
   }
 ] as const;

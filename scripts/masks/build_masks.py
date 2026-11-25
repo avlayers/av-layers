@@ -408,7 +408,7 @@ def main() -> None:
         geos_version_string != "3.13.1" or proj_version_str != "9.5.1"
     ):
         raise SystemExit("Mask regeneration requires GEOS 3.13.1 and PROJ 9.5.1 (or --allow-local-libs)")
-    if grid['kind'] == 'lambert-conformal':
+    if grid['kind'] in ('lambert-conformal', 'rotated-latlon'):
         write_projected_masks(settings, args)
         return
     if grid["kind"] != "regular-latlon":

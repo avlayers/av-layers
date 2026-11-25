@@ -182,6 +182,12 @@ Deutscher Wetterdienst (DWD) distributes ICON-EU open data under CC BY 4.0
 (https://www.dwd.de/EN/service/copyright/copyright_node.html). Forecast lift
 fields are derived by this project; DWD supplies the meteorological inputs.
 
+ECCC HRDPS operational data
+Dataset and attribution: https://dd.weather.gc.ca/WXO-DD/model_hrdps/continental/2.5km/
+Environment and Climate Change Canada (ECCC) distributes HRDPS open data under the
+Open Government Licence – Canada (https://open.canada.ca/en/open-government-licence-canada).
+Forecast lift fields are derived by this project; ECCC supplies the meteorological inputs.
+
 Copernicus DEM GLO-90 (2021 AWS distribution)
 Data attribution: DLR e.V. (2010–2014), Airbus Defence and Space GmbH
 (2014–2018); supplied under Copernicus by the European Union and ESA.

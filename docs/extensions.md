@@ -104,8 +104,8 @@ Keep at most two versions (`N` and `N - 1`) in the codebase during an active
 
 ## Add a grid or neighboring-cell calculation
 
-[geometry.ts](../packages/contracts/src/geometry.ts) implements `regular-latlon`
-and spherical `lambert-conformal` projections; test new projections against PROJ
+[geometry.ts](../packages/contracts/src/geometry.ts) implements `regular-latlon`,
+spherical `lambert-conformal` and `rotated-latlon` projections; test new projections against PROJ
 control points. A new model’s coverage seam and Auto admission both come from that grid and its coverage bounds. [support.ts](../packages/forecast/src/support.ts) resolves
 neighboring cells for stencil operations, and
 [coverage.ts](../apps/batch/src/coverage.ts) separates public output cells from

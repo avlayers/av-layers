@@ -1,7 +1,7 @@
 import { SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { splitSource } from './source.js';
 // Two native cells sit on output cells 0 and 1 (70.5N, 23.5W and 23.4375W).
-const product = { ...SPLIT_PRODUCT, upstream: { ...SPLIT_PRODUCT.upstream, nativeGrid: { ...splitSource(SPLIT_PRODUCT).upstream.nativeGrid, pointCount: 2 } } as Record<string, unknown> };
+const product = { ...SPLIT_PRODUCT, upstream: { ...SPLIT_PRODUCT.upstream, nativeGrid: { ...splitSource(SPLIT_PRODUCT).upstream.nativeGrid!, pointCount: 2 } } as Record<string, unknown> };
 const profile = splitSource(product);
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -149,7 +149,7 @@ function buildSyntheticSplitGrib2(options: {
   const cacheKey = JSON.stringify(options);
   const cached = gribCache.get(cacheKey);
   if (cached) return cached;
-  const native = profile.upstream.nativeGrid, pointCount = native.pointCount;
+  const native = profile.upstream.nativeGrid!, pointCount = native.pointCount;
   const ref = new Date(options.referenceTimeIso);
 
   // Section 1 (21 bytes)
@@ -533,7 +533,7 @@ describe('DWD ICON-EU native adapter', () => {
       expect(direct[field]).toBe(target[field]); expect(direct[field]).toEqual(frame4[field]);
     }
     for (const field of ['hgtM', 'tempK', 'pressurePa'] as const) for (let i = 0; i < profile.modelLevels.length; i++) {
-      expect(direct[field][i]).toBe(target[field]![i]); expect(direct[field][i]).toEqual(frame4[field][i]);
+      expect(direct[field]![i]).toBe(target[field]![i]); expect(direct[field]![i]).toEqual(frame4[field]![i]);
     }
     expect(direct.missing).toEqual(frame4.missing);
     validateNormalizedFrame(
@@ -849,5 +849,307 @@ describe('DWD ICON-EU native adapter', () => {
     expect(daylightHours).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);
 
     expect(() => assertForecastInputs(mask, regionalProduct)).not.toThrow();
+  });
+});
+
+describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
+  const hrdpsGrid = {
+    kind: 'rotated-latlon' as const,
+    width: 2,
+    height: 2,
+    earthRadiusM: 6371229,
+    lon0: -14.82122,
+    lat0: -12.302501,
+    dx: 0.0225,
+    dy: 0.0225,
+    southPoleLatDeg: -36.08852,
+    southPoleLonDeg: -114.694858,
+    wrapLongitude: false as const
+  };
+  const hrdpsProduct = {
+    ...SPLIT_PRODUCT,
+    modelId: 'hrdps',
+    label: 'ECCC HRDPS Continental 2.5 km',
+    grid: hrdpsGrid,
+    layers: ['usable-lift-msl', 'usable-lift-agl', 'precip-rate', 'cloud-cover-total', 'cape-jkg', 'wind-10m-u', 'wind-10m-v', 'bl-mean-wind-u', 'bl-mean-wind-v'] as const,
+    capabilities: {
+      ...SPLIT_PRODUCT.capabilities,
+      verticalCoordinate: 'isobaric' as const,
+      maxVerticalLevels: 2
+    },
+    forecast: {
+      ...SPLIT_PRODUCT.forecast,
+      cycleHoursUtc: [0, 6, 12, 18],
+      hours: [1, 2],
+      statisticsResetHours: 1
+    },
+    upstream: {
+      protocol: 'split-grib2',
+      provider: 'ECCC',
+      centre: 54,
+      urlTemplate: 'https://dd.weather.gc.ca/{date}/WXO-DD/model_hrdps/continental/2.5km/{cycleHour}/{forecastHour}/{date}T{cycleHour}Z_MSC_HRDPS_{field}{levelPath}_RLatLon0.0225_PT{forecastHour}H.grib2',
+      pressureLevelsHpa: [1000, 850],
+      discoveryLagHours: 3,
+      discoveryCandidates: 4,
+      auxSurface: {
+        cloudTotalPct: { field: 'TCDC_Sfc', kind: 'single-level', parameter: [6, 1], surface: [10, 0], unit: '%' },
+        capeJkg: { field: 'CAPE_Sfc', kind: 'single-level', parameter: [7, 6], surface: [1, 0], unit: 'J/kg', sentinel: -1 },
+        pblHeightM: { field: 'HPBL_Sfc', kind: 'single-level', parameter: [3, 18], surface: [1, 0], unit: 'm' },
+        u10mMps: { field: 'UGRD_TGL_10', kind: 'single-level', parameter: [2, 2], surface: [103, 10], unit: 'm/s' },
+        v10mMps: { field: 'VGRD_TGL_10', kind: 'single-level', parameter: [2, 3], surface: [103, 10], unit: 'm/s' }
+      },
+      auxLevels: {
+        spfhKgKg: { field: 'SPFH', kind: 'isobaric-level', parameter: [1, 0], surface: [100], unit: 'kg/kg' },
+        uWindMps: { field: 'UGRD', kind: 'isobaric-level', parameter: [2, 2], surface: [100], unit: 'm/s' },
+        vWindMps: { field: 'VGRD', kind: 'isobaric-level', parameter: [2, 3], surface: [100], unit: 'm/s' }
+      },
+      fields: {
+        staticTerrain: { field: 'HGT_Sfc', kind: 'time-invariant', parameter: [3, 5], surface: [1, 0] },
+        height: { field: 'HGT', kind: 'isobaric-level', parameter: [3, 5], surface: [100] },
+        surfacePressure: { field: 'PRES_Sfc', kind: 'single-level', parameter: [3, 0], surface: [1, 0] },
+        temperature2m: { field: 'TMP_TGL_2', kind: 'single-level', parameter: [0, 0], surface: [103, 2] },
+        specificHumidity2m: { field: 'SPFH_TGL_2', kind: 'single-level', parameter: [1, 0], surface: [103, 2] },
+        sensibleHeatFlux: { field: 'SHTFL_Sfc', kind: 'single-level', parameter: [0, 11], surface: [1, 0], scale: 1 },
+        latentHeatFlux: { field: 'LHTFL_Sfc', kind: 'single-level', parameter: [0, 10], surface: [1, 0], scale: 1 },
+        temperature: { field: 'TMP', kind: 'isobaric-level', parameter: [0, 0], surface: [100] },
+        precipitation: { field: 'APCP-Accum1h_Sfc', kind: 'single-level', parameter: [1, 8], surface: [1, 0], statistic: 1 }
+      }
+    }
+  };
+  const hrdpsSource = splitSource(hrdpsProduct);
+
+  function buildRotatedGrib2(options: {
+    referenceTimeIso: string;
+    templateNumber: 0 | 8;
+    statisticalProcess?: 0 | 1 | 2;
+    parameterCategory: number;
+    parameterNumber: number;
+    firstFixedSurfaceType: number;
+    firstFixedSurfaceValue: number | null;
+    hour: number;
+    startHour?: number;
+    constantValue: number;
+    overrides?: Readonly<Record<number, number>>;
+    uvRelativeToGrid?: boolean;
+  }): Uint8Array {
+    const pointCount = hrdpsGrid.width * hrdpsGrid.height;
+    const ref = new Date(options.referenceTimeIso);
+    const s1 = new Uint8Array(21);
+    const v1 = new DataView(s1.buffer);
+    v1.setUint32(0, 21, false);
+    v1.setUint8(4, 1);
+    v1.setUint16(5, 54, false);
+    v1.setUint16(7, 0, false);
+    v1.setUint8(9, 28);
+    v1.setUint8(10, 1);
+    v1.setUint8(11, 1);
+    v1.setUint16(12, ref.getUTCFullYear(), false);
+    v1.setUint8(14, ref.getUTCMonth() + 1);
+    v1.setUint8(15, ref.getUTCDate());
+    v1.setUint8(16, ref.getUTCHours());
+    v1.setUint8(17, ref.getUTCMinutes());
+    v1.setUint8(18, ref.getUTCSeconds());
+    v1.setUint8(19, 0);
+    v1.setUint8(20, 1);
+
+    const setSigned32 = (view: DataView, offset: number, deg: number) => {
+      const micro = Math.round(Math.abs(deg) * 1e6);
+      view.setUint32(offset, deg < 0 ? ((0x80000000 | micro) >>> 0) : micro, false);
+    };
+    const setLon32 = (view: DataView, offset: number, deg: number) => {
+      const wrapped = ((deg % 360) + 360) % 360;
+      view.setUint32(offset, Math.round(wrapped * 1e6), false);
+    };
+    const s3 = new Uint8Array(84);
+    const v3 = new DataView(s3.buffer);
+    v3.setUint32(0, 84, false);
+    v3.setUint8(4, 3);
+    v3.setUint8(5, 0);
+    v3.setUint32(6, pointCount, false);
+    v3.setUint16(12, 1, false);
+    v3.setUint8(14, 6);
+    v3.setUint32(30, hrdpsGrid.width, false);
+    v3.setUint32(34, hrdpsGrid.height, false);
+    setSigned32(v3, 46, hrdpsGrid.lat0);
+    setLon32(v3, 50, hrdpsGrid.lon0);
+    v3.setUint8(54, options.uvRelativeToGrid === false ? 48 : 56);
+    setSigned32(v3, 55, hrdpsGrid.lat0 + (hrdpsGrid.height - 1) * hrdpsGrid.dy);
+    setLon32(v3, 59, hrdpsGrid.lon0 + (hrdpsGrid.width - 1) * hrdpsGrid.dx);
+    v3.setUint32(63, Math.round(hrdpsGrid.dx * 1e6), false);
+    v3.setUint32(67, Math.round(hrdpsGrid.dy * 1e6), false);
+    v3.setUint8(71, 64);
+    setSigned32(v3, 72, hrdpsGrid.southPoleLatDeg);
+    setLon32(v3, 76, hrdpsGrid.southPoleLonDeg);
+    v3.setFloat32(80, 0, false);
+
+    const s4Len = options.templateNumber === 0 ? 34 : 58;
+    const s4 = new Uint8Array(s4Len);
+    const v4 = new DataView(s4.buffer);
+    v4.setUint32(0, s4Len, false);
+    v4.setUint8(4, 4);
+    v4.setUint16(7, options.templateNumber, false);
+    v4.setUint8(9, options.parameterCategory);
+    v4.setUint8(10, options.parameterNumber);
+    v4.setUint8(11, 2);
+    v4.setUint8(17, 1); // hours
+    v4.setUint32(18, options.templateNumber === 0 ? options.hour : options.startHour ?? 0, false);
+    v4.setUint8(22, options.firstFixedSurfaceType);
+    if (options.firstFixedSurfaceValue === null) {
+      v4.setUint8(23, 0xff);
+      v4.setUint32(24, 0xffffffff, false);
+    } else {
+      v4.setUint8(23, 0);
+      v4.setUint32(24, options.firstFixedSurfaceValue, false);
+    }
+    v4.setUint8(28, 255);
+    v4.setUint8(29, 0xff);
+    v4.setUint32(30, 0xffffffff, false);
+    if (options.templateNumber === 8) {
+      const end = new Date(ref.getTime() + options.hour * 3_600_000);
+      v4.setUint16(34, end.getUTCFullYear(), false);
+      v4.setUint8(36, end.getUTCMonth() + 1);
+      v4.setUint8(37, end.getUTCDate());
+      v4.setUint8(38, end.getUTCHours());
+      v4.setUint8(41, 1);
+      v4.setUint8(46, options.statisticalProcess ?? 1);
+      v4.setUint8(47, 2);
+      v4.setUint8(48, 1);
+      v4.setUint32(49, options.hour - (options.startHour ?? 0), false);
+      v4.setUint8(53, 255);
+    }
+
+    const hasOverride = options.overrides !== undefined;
+    const s5 = new Uint8Array(21);
+    const v5 = new DataView(s5.buffer);
+    v5.setUint32(0, 21, false);
+    v5.setUint8(4, 5);
+    v5.setUint32(5, pointCount, false);
+    v5.setUint16(9, 0, false);
+    v5.setFloat32(11, options.constantValue, false);
+    v5.setUint16(15, 0, false);
+    v5.setUint16(17, 0, false);
+    v5.setUint8(19, hasOverride ? 8 : 0);
+
+    const s6 = new Uint8Array(6);
+    new DataView(s6.buffer).setUint32(0, 6, false);
+    s6[4] = 6;
+    s6[5] = 255;
+
+    const payloadLen = hasOverride ? pointCount : 0;
+    const s7 = new Uint8Array(5 + payloadLen);
+    new DataView(s7.buffer).setUint32(0, s7.byteLength, false);
+    s7[4] = 7;
+    for (const [index, value] of Object.entries(options.overrides ?? {})) {
+      s7[5 + Number(index)] = Math.round(value - options.constantValue);
+    }
+
+    const totalLen = 16 + s1.byteLength + s3.byteLength + s4.byteLength + s5.byteLength + s6.byteLength + s7.byteLength + 4;
+    const out = new Uint8Array(totalLen);
+    const vOut = new DataView(out.buffer);
+    out.set([0x47, 0x52, 0x49, 0x42], 0);
+    vOut.setUint8(6, 0);
+    vOut.setUint8(7, 2);
+    vOut.setBigUint64(8, BigInt(totalLen), false);
+    let offset = 16;
+    for (const sec of [s1, s3, s4, s5, s6, s7]) {
+      out.set(sec, offset);
+      offset += sec.byteLength;
+    }
+    out.set([0x37, 0x37, 0x37, 0x37], offset);
+    return out;
+  }
+
+  it('constructs MSC Datamart URLs, sentinel probes, and acquires rotated-latlon isobaric frames with CAPE sentinel masking and wind rotation', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    expect(splitGribFieldUrl(hrdpsSource, 'HGT_Sfc', cycle)).toBe(
+      'https://dd.weather.gc.ca/20261008/WXO-DD/model_hrdps/continental/2.5km/00/000/20261008T00Z_MSC_HRDPS_HGT_Sfc_RLatLon0.0225_PT000H.grib2'
+    );
+    expect(splitGribFieldUrl(hrdpsSource, 'TMP', cycle, { hour: 2, level: 850, baseUrl: 'https://mirror.example.com/eccc/' })).toBe(
+      'https://mirror.example.com/eccc/20261008/WXO-DD/model_hrdps/continental/2.5km/00/002/20261008T00Z_MSC_HRDPS_TMP_ISBL_0850_RLatLon0.0225_PT002H.grib2'
+    );
+    const sentinels = splitGribRunSentinelUrls(hrdpsSource, cycle);
+    expect(sentinels).toContain(splitGribFieldUrl(hrdpsSource, 'HGT_Sfc', cycle));
+    expect(sentinels).toContain(splitGribFieldUrl(hrdpsSource, 'HGT', cycle, { hour: 2, level: 1000 }));
+    expect(sentinels).toContain(splitGribFieldUrl(hrdpsSource, 'TMP', cycle, { hour: 2, level: 850 }));
+    expect(sentinels).toContain(splitGribFieldUrl(hrdpsSource, 'APCP-Accum1h_Sfc', cycle, { hour: 2 }));
+
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-session-'));
+    tempDirs.push(cacheDir);
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      const match = /_MSC_HRDPS_(.+?)(?:_ISBL_(\d{4}))?_RLatLon0\.0225_PT(\d{3})H\.grib2$/.exec(url);
+      if (!match) throw new Error(`Unexpected HRDPS URL ${url}`);
+      const [, field, levelRaw, hourRaw] = match;
+      const level = levelRaw ? Number(levelRaw) : null;
+      const hour = Number(hourRaw);
+      const spec = hrdpsSource.specs[field!]!;
+      const isAccum = spec.templateNumber === 8;
+      const surfaceValue = level !== null ? level * 100 : spec.firstFixedSurfaceValue;
+      const constantValue =
+        field === 'HGT_Sfc' ? 250 :
+        field === 'HGT' ? (level === 1000 ? 150 : 1500) :
+        field === 'TMP' ? (level === 1000 ? 290 : 280) :
+        field === 'PRES_Sfc' ? 98500 :
+        field === 'TMP_TGL_2' ? 293 :
+        field === 'SPFH_TGL_2' ? 0.008 :
+        field === 'SHTFL_Sfc' ? 180 :
+        field === 'LHTFL_Sfc' ? 90 :
+        field === 'APCP-Accum1h_Sfc' ? 1.5 :
+        field === 'TCDC_Sfc' ? 40 :
+        field === 'CAPE_Sfc' ? -1 :
+        field === 'HPBL_Sfc' ? 1200 :
+        field === 'SPFH' ? 0.006 :
+        field === 'UGRD_TGL_10' || field === 'UGRD' ? 10 :
+        field === 'VGRD_TGL_10' || field === 'VGRD' ? 0 : 0;
+      const overrides = field === 'CAPE_Sfc' ? { 1: 200 } : undefined;
+      return new Response(Buffer.from(buildRotatedGrib2({
+        referenceTimeIso: cycle,
+        templateNumber: isAccum ? 8 : 0,
+        statisticalProcess: 1,
+        parameterCategory: spec.parameterCategory,
+        parameterNumber: spec.parameterNumber,
+        firstFixedSurfaceType: spec.firstFixedSurfaceType,
+        firstFixedSurfaceValue: surfaceValue,
+        hour,
+        startHour: isAccum ? hour - 1 : undefined,
+        constantValue,
+        overrides
+      })));
+    };
+
+    const active = Uint32Array.of(0, 1);
+    const target = createNormalizedFrameTarget(2, 2, false, true);
+    const session = await createSplitGribAcquisitionSession(hrdpsSource, {
+      cycle,
+      activeIndices: active,
+      cacheDir,
+      fetchImpl,
+      concurrency: 16
+    });
+    try {
+      const frame = await session.acquire(2, target);
+      validateNormalizedFrame(frame, active, hrdpsGrid, 2, hrdpsProduct.layers, 'isobaric');
+      expect(frame.pressureLevelsHpa).toEqual([1000, 850]);
+      expect(frame.pressurePa).toBeUndefined();
+      expect([...frame.terrainM]).toEqual([250, 250]);
+      expect(frame.hgtM.map(level => [...level])).toEqual([[150, 150], [1500, 1500]]);
+      expect([...frame.sensibleHeatFluxWm2]).toEqual([180, 180]);
+      expect([...frame.latentHeatFluxWm2]).toEqual([90, 90]);
+      expect([...frame.precipitationMmPerHour!]).toEqual([1.5, 1.5]);
+      expect(frame.intervals.fluxWindow).toEqual({ start: '2026-10-08T01:00:00.000Z', end: '2026-10-08T02:00:00.000Z' });
+      expect(frame.intervals.fluxSourceWindow).toEqual({ start: '2026-10-08T02:00:00.000Z', end: '2026-10-08T02:00:00.000Z' });
+      expect(frame.intervals.usedCompanion).toBe(false);
+      expect(frame.auxSurface!.capeJkg!.missing[0]).toBe(1);
+      expect(Number.isNaN(frame.auxSurface!.capeJkg!.values[0])).toBe(true);
+      expect(frame.auxSurface!.capeJkg!.missing[1]).toBe(0);
+      expect(frame.auxSurface!.capeJkg!.values[1]).toBe(200);
+      // Grid-relative (u=10, v=0) rotated to Earth-relative preserves speed 10 m/s with nonzero meridional component
+      const u10 = frame.auxSurface!.u10mMps!.values[0]!;
+      const v10 = frame.auxSurface!.v10mMps!.values[0]!;
+      expect(Math.hypot(u10, v10)).toBeCloseTo(10, 5);
+      expect(Math.abs(v10)).toBeGreaterThan(1);
+    } finally {
+      await session.close();
+    }
   });
 });

@@ -96,6 +96,29 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Publication timing: cycle age at most 18 hours; remaining horizon at least 48 hours.
 - Monitoring: environments `staging`, `production`; cycle age at most 18 hours; remaining horizon at least 48 hours.
 
+### HRDPS (hrdps-continental-soaring)
+
+- Public model ID: `hrdps`; model family: `gem`; source configuration: `eccc-hrdps-continental-2p5km`; domain: `canada-continental`.
+- Attribution: ECCC HRDPS (Open Government Licence – Canada) · Aviation Forecast Layers.
+- Resolution tier: `medium`.
+- Grid: `rotated-latlon`; 2540 columns × 1290 rows; spherical Earth radius 6371229 m; periodic longitude: false.
+- Terrain subdivision factor: `2`; fine grid: 5079 columns × 2579 rows.
+- Bounds [west, south, east, north]: `[-141,41.6,-52,65]`.
+- Coverage: `hrdps-continental-land-10km-v1`. Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.
+- Native tile zoom: 0–10.
+- Execution: 32 target shards; at most 32 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["15 5,11,17,23 * * *"]`.
+- Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48]`; interval: 1 hours; frame policy: `all-hours`.
+- Map prefix ends at forecast hour 48; native samples and profiles retain the full selected axis.
+- Vertical coordinate: `isobaric`; maximum levels: 18.
+- Calculation methods: `supported-terrain-column-1p2-v2`, `trailing-precipitation-rate-v2`, `native-soaring-v1`, `native-cloud-v1`, `native-surface-v1`, `native-wind-v1`.
+- Required calculation inputs: `terrainM`, `surfacePressurePa`, `temp2mK`, `specificHumidity2mKgKg`, `sensibleHeatFluxWm2`, `latentHeatFluxWm2`, `pressureLevelsHpa`, `hgtM`, `tempK`, `convectiveDepthTopMslM`, `buoyancyM2S3`, `branch`, `terrainElevationM`, `nativeCloudSupport`, `precipitationMmPerHour`, `pblHeightM`, `spfhKgKg`, `rhPercent`, `mslpPa`, `capeJkg`, `cloudTotalPct`, `cloudLowPct`, `uWindMps`, `vWindMps`, `u10mMps`, `v10mMps`, `gust10mMps`.
+- Layers: `usable-lift-msl`, `usable-lift-agl`, `precip-rate`, `thermal-velocity`, `thermal-top-msl`, `pbl-height-agl`, `sensible-heat-flux`, `latent-heat-flux`, `surface-lcl-msl`, `cape-jkg`, `cloud-cover-total`, `sfc-temp-c`, `sfc-dewpoint-c`, `mslp-hpa`, `wind-10m-u`, `wind-10m-v`, `wind-gust-10m`, `bl-mean-wind-u`, `bl-mean-wind-v`.
+- `precip-rate` definition: `eccc-hrdps-apcp-accum1h-v1`.
+- `cape-jkg` definition: `eccc-hrdps-surface-cape-v1`.
+- `cloud-cover-total` definition: `eccc-hrdps-tcdc-total-v1`.
+- Publication timing: cycle age at most 12 hours; remaining horizon at least 36 hours.
+- Monitoring: environments `staging`, `production`; cycle age at most 12 hours; remaining horizon at least 36 hours.
+
 ### ICON-EU (icon-eu-soaring)
 
 - Public model ID: `icon-eu`; model family: `icon`; source configuration: `dwd-icon-eu-regular-0p0625`; domain: `europe`.

@@ -25,7 +25,17 @@ export const lambertConformalGridSchema = z.object({
   x0M: finite, y0M: finite, dxM: step, dyM: step,
   wrapLongitude: z.literal(false)
 });
-export const gridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema, lambertConformalGridSchema]).superRefine((grid, ctx) => {
+export const rotatedLatLonGridSchema = z.object({
+  kind: z.literal('rotated-latlon'), ...common,
+  lon0: finite.min(-180).max(360),
+  lat0: latitude,
+  dx: step,
+  dy: step,
+  southPoleLatDeg: interiorLatitude,
+  southPoleLonDeg: finite.min(-180).max(360),
+  wrapLongitude: z.literal(false)
+});
+export const gridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema, lambertConformalGridSchema, rotatedLatLonGridSchema]).superRefine((grid, ctx) => {
   if (!validGridCellCount(grid)) {
     ctx.addIssue({ code: 'custom', message: 'Grid cell indices exceed uint32' });
   }
@@ -35,6 +45,7 @@ export const gridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema,
 });
 export type RegularLatLonGrid = z.infer<typeof regularLatLonGridSchema>;
 export type LambertConformalGrid = z.infer<typeof lambertConformalGridSchema>;
+export type RotatedLatLonGrid = z.infer<typeof rotatedLatLonGridSchema>;
 export type Grid = z.infer<typeof gridSchema>;
 
 /** Compare declared geometry, independent of JSON property insertion order. */

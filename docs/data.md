@@ -11,9 +11,10 @@ and point queries evaluate the same grids and interpolation rules.
   `model-AGL` for native model ground or `terrain-AGL` for the prepared surface
   elevation. Current fine grids use Copernicus GLO-90, a digital surface model
   that includes vegetation and buildings.
-- `precip-rate`: liquid-water-equivalent interval mean in mm/h. GFS and RRFS
-  recover accumulated `APCP`; ICON-EU recovers accumulated `TOT_PREC`; av-wrf
-  publishes the producer window rate `precip_mm_hr`.
+- `precip-rate`: liquid-water-equivalent interval mean in mm/h. GFS, RRFS and
+  HRDPS recover accumulated `APCP` (`APCP-Accum1h_Sfc` on HRDPS); ICON-EU
+  recovers accumulated `TOT_PREC`; av-wrf publishes the producer window rate
+  `precip_mm_hr`.
 - `cloud-cover-total` and `cloud-cover-low`: cloud cover in percent. Finite
   values from 0 through 100 are valid, including a boundary tolerance of
   0.0001. The stored sample keeps the original number. A value farther outside
@@ -32,10 +33,12 @@ Each build's manifest descriptors list its available layers and delivery.
 surface, cloud, stability and wind samples. Map layers carry palettes; native
 scalar channels use point queries.
 
-GFS and RRFS use surface CAPE and valid-time `GUST`. ICON-EU uses mixed-layer
-`CAPE_ML` and the 10 m interval maximum `VMAX_10M`. RRFS mean sea-level pressure
-uses the Eta reduction (`MSLET`). See the [model registry](../packages/contracts/config/models.json)
-for the source fields and levels behind each layer.
+GFS, RRFS and HRDPS use surface CAPE and valid-time 10 m gusts (`GUST` or
+`GUST_AGL-10m`); HRDPS masks `CAPE_Sfc = -1` as unavailable. ICON-EU uses
+mixed-layer `CAPE_ML` and the 10 m interval maximum `VMAX_10M`. RRFS mean
+sea-level pressure uses the Eta reduction (`MSLET`). See the
+[model registry](../packages/contracts/config/models.json) for the source fields
+and levels behind each layer.
 
 Every sample carries a status:
 

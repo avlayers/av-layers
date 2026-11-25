@@ -132,8 +132,8 @@ async function encodeOverview(directory: string, id: string, stride: number, x0:
       children.set(tile, new DataView(data.buffer));
     }
   }
-  const factor = native.kind === 'regular-latlon' && fine.kind === 'regular-latlon' ? native.dx / fine.dx
-    : native.kind === 'lambert-conformal' && fine.kind === 'lambert-conformal' ? native.dxM / fine.dxM : 1;
+  const factor = native.kind === 'lambert-conformal' && fine.kind === 'lambert-conformal' ? native.dxM / fine.dxM
+    : native.kind !== 'lambert-conformal' && fine.kind !== 'lambert-conformal' ? native.dx / fine.dx : 1;
   const sumU = new Float64Array(WIND_OVERVIEW_VALUES), sumV = new Float64Array(WIND_OVERVIEW_VALUES);
   const counts = new Uint16Array(WIND_OVERVIEW_VALUES), noLift = new Uint16Array(WIND_OVERVIEW_VALUES), unavail = new Uint16Array(WIND_OVERVIEW_VALUES);
   for (let i = 0; i < size * size; i++) {

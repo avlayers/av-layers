@@ -1,6 +1,6 @@
 import { sourceIntervalHours } from '@av/contracts';
 import type { SplitSource } from './source.js';
-import { sourceCycle, sourceUrl, sourceWindowStart } from '../source.js';
+import { sourceCycle, sourceCycleParts, sourceUrl, sourceWindowStart } from '../source.js';
 import type { DecodedSplitGribField } from './grib.js';
 
 export function validateSplitGribCycle(source: SplitSource, cycleIso: string): string {
@@ -12,7 +12,7 @@ export function formatSplitGribRunStamp(source: SplitSource, cycleIso: string): 
   return normalized.slice(0, 13).replace(/[-T]/g, '');
 }
 
-/** Construct a configured field URL, including native-grid vertical selectors. */
+/** Construct a configured field URL, including native-grid and isobaric vertical selectors. */
 export function splitGribFieldUrl(source: SplitSource,
   field: string,
   cycleIso: string,
@@ -27,15 +27,33 @@ export function splitGribFieldUrl(source: SplitSource,
     throw new Error(`Unsupported Split GRIB field ${field}`);
   }
   const level = options.level;
-  const levelRequired = spec.kind === 'model-level' || field === source.upstream.fields.halfLevelHeight.field;
-  if (levelRequired && (!Number.isInteger(level) || level! < 1 || level! > (spec.kind === 'model-level' ? source.modelLevels[0]! : source.halfLevels.at(-1)!))) throw new Error('Invalid source vertical level');
+  const isHalfLevel = source.upstream.fields.halfLevelHeight !== undefined && field === source.upstream.fields.halfLevelHeight.field;
+  const levelRequired = spec.kind === 'model-level' || spec.kind === 'isobaric-level' || isHalfLevel;
+  if (spec.kind === 'isobaric-level') {
+    if (!Number.isInteger(level) || !source.pressureLevelsHpa.includes(level!)) throw new Error('Invalid source vertical level');
+  } else if (levelRequired && (!Number.isInteger(level) || level! < 1 || level! > (spec.kind === 'model-level' ? source.modelLevels[0]! : source.halfLevels.at(-1)!))) {
+    throw new Error('Invalid source vertical level');
+  }
   const hour = options.hour ?? 0;
   if (!Number.isInteger(hour) || hour < 0 || hour > 120) throw new Error(`Source forecast hour out of range: ${hour}`);
-  const template = options.baseUrl ? options.baseUrl.replace(/\/+$/, '') + source.upstream.urlTemplate.slice(source.upstream.urlTemplate.indexOf('/{field}')) : source.upstream.urlTemplate;
-  return sourceUrl(template, { field,
-    levelPath: levelRequired ? `/lvt1/${spec.firstFixedSurfaceType}/lv1/${level}` : '',
-    referenceTime: validateSplitGribCycle(source, cycleIso).slice(0, 16).replace(':', '%3A'),
-    forecastHour: String(spec.kind === 'time-invariant' ? 0 : hour).padStart(3, '0') });
+  const normalizedCycle = validateSplitGribCycle(source, cycleIso);
+  let template = source.upstream.urlTemplate;
+  if (options.baseUrl) {
+    const suffixIndex = template.includes('/{field}') ? template.indexOf('/{field}') : template.indexOf('/{date}');
+    template = options.baseUrl.replace(/\/+$/, '') + (suffixIndex >= 0 ? template.slice(suffixIndex) : '');
+  }
+  const levelPath = spec.kind === 'isobaric-level'
+    ? `_ISBL_${String(level).padStart(4, '0')}`
+    : levelRequired
+      ? `/lvt1/${spec.firstFixedSurfaceType}/lv1/${level}`
+      : '';
+  return sourceUrl(template, {
+    ...sourceCycleParts(normalizedCycle),
+    field,
+    levelPath,
+    referenceTime: normalizedCycle.slice(0, 16).replace(':', '%3A'),
+    forecastHour: String(spec.kind === 'time-invariant' ? 0 : hour).padStart(3, '0')
+  });
 }
 
 /**
@@ -107,9 +125,10 @@ export function verifySplitGribFieldMetadata(source: SplitSource,
   }
 
   if (options.level !== undefined && options.level !== null) {
-    if (p.firstFixedSurfaceValue !== options.level) {
+    const expectedSurfaceValue = spec.kind === 'isobaric-level' ? options.level * 100 : options.level;
+    if (p.firstFixedSurfaceValue !== expectedSurfaceValue) {
       throw new Error(
-        `Split GRIB ${field} model level mismatch: expected ${options.level}, got ${String(p.firstFixedSurfaceValue)}`
+        `Split GRIB ${field} model level mismatch: expected ${expectedSurfaceValue}, got ${String(p.firstFixedSurfaceValue)}`
       );
     }
     if (spec.kind === 'model-level' && p.secondFixedSurfaceValue !== options.level + 1) {

@@ -1,9 +1,10 @@
-import type { Grid, LambertConformalGrid } from './grid-schema.js';
-export type { Grid, LambertConformalGrid, RegularLatLonGrid } from './grid-schema.js';
+import type { Grid, LambertConformalGrid, RotatedLatLonGrid } from './grid-schema.js';
+export type { Grid, LambertConformalGrid, RegularLatLonGrid, RotatedLatLonGrid } from './grid-schema.js';
 
 export const MAX_GRID_DIMENSION = 0x7fffffff;
 export const LAMBERT_GRID_FIELDS = ['kind', 'width', 'height', 'earthRadiusM', 'centralMeridianDeg', 'latitudeOfOriginDeg',
   'standardParallel1Deg', 'standardParallel2Deg', 'x0M', 'y0M', 'dxM', 'dyM', 'wrapLongitude'] as const satisfies readonly (keyof LambertConformalGrid)[];
+export const ROTATED_GRID_FIELDS = ['kind', 'width', 'height', 'earthRadiusM', 'lon0', 'lat0', 'dx', 'dy', 'southPoleLatDeg', 'southPoleLonDeg', 'wrapLongitude'] as const satisfies readonly (keyof RotatedLatLonGrid)[];
 
 export type GeographicBounds = readonly [west: number, south: number, east: number, north: number];
 export interface GridPoint { x: number; y: number }
@@ -123,6 +124,14 @@ export function isValidGridGeometry(grid: Grid): boolean {
     return Number.isFinite(grid.lon0) && Number.isFinite(grid.lat0) && Math.abs(grid.lat0) <= 90
       && finiteStep(grid.dx) && finiteStep(grid.dy) && typeof grid.wrapLongitude === 'boolean';
   }
+  if (grid.kind === 'rotated-latlon') {
+    return grid.wrapLongitude === false
+      && Number.isFinite(grid.lon0) && grid.lon0 >= -180 && grid.lon0 <= 360
+      && Number.isFinite(grid.lat0) && Math.abs(grid.lat0) <= 90
+      && finiteStep(grid.dx) && finiteStep(grid.dy)
+      && Number.isFinite(grid.southPoleLatDeg) && Math.abs(grid.southPoleLatDeg) < 90
+      && Number.isFinite(grid.southPoleLonDeg) && grid.southPoleLonDeg >= -180 && grid.southPoleLonDeg <= 360;
+  }
   return grid.kind === 'lambert-conformal' && grid.wrapLongitude === false
     && Number.isFinite(grid.centralMeridianDeg) && Math.abs(grid.centralMeridianDeg) <= 180
     && [grid.latitudeOfOriginDeg, grid.standardParallel1Deg, grid.standardParallel2Deg].every(angle => Number.isFinite(angle) && Math.abs(angle) < 90)
@@ -168,6 +177,59 @@ export function prepareGridGeometry(raw: Grid): GridGeometry {
       rotationAndMetrics(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) >= 90) return null;
         return { cos: 1, sin: 0, mapScale: null, metersPerColumn: Math.abs(dx) * RAD * earthRadiusM * Math.cos(lat * RAD), metersPerRow: Math.abs(dy) * RAD * earthRadiusM };
+      }
+    };
+  }
+  if (raw.kind === 'rotated-latlon') {
+    const { lon0, lat0, dx, dy, earthRadiusM, southPoleLatDeg, southPoleLonDeg } = raw;
+    const zAngle = southPoleLonDeg * RAD, yAngle = (90 + southPoleLatDeg) * RAD;
+    const cosZ = Math.cos(zAngle), sinZ = Math.sin(zAngle), cosY = Math.cos(yAngle), sinY = Math.sin(yAngle);
+    const toRotatedRad = (lat: number, lon: number) => {
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || lat < -90 || lat > 90) return null;
+      const latRad = lat * RAD, lonRad = lon * RAD, cosLat = Math.cos(latRad), sinLat = Math.sin(latRad);
+      const vx = cosLat * Math.cos(lonRad), vy = cosLat * Math.sin(lonRad);
+      const rx = vx * cosZ + vy * sinZ, gy = -vx * sinZ + vy * cosZ;
+      const gx = rx * cosY + sinLat * sinY, gz = -rx * sinY + sinLat * cosY;
+      return { gx, gy, gz, rotLatRad: Math.asin(Math.max(-1, Math.min(1, gz))), rotLonRad: Math.atan2(gy, gx) };
+    };
+    return {
+      geographicToGrid(lat, lon) {
+        const rotated = toRotatedRad(lat, lon);
+        if (!rotated) return null;
+        const x = snapGridCoordinate(wrapDegrees(rotated.rotLonRad / RAD - lon0) / dx);
+        const y = snapGridCoordinate((rotated.rotLatRad / RAD - lat0) / dy);
+        return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+      },
+      gridToGeographic(x, y) {
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+        const rotLat = lat0 + y * dy, rotLon = lon0 + x * dx;
+        if (!Number.isFinite(rotLat) || rotLat < -90 || rotLat > 90 || !Number.isFinite(rotLon)) return null;
+        const rotLatRad = rotLat * RAD, rotLonRad = rotLon * RAD, cosRotLat = Math.cos(rotLatRad);
+        const gx = cosRotLat * Math.cos(rotLonRad), gy = cosRotLat * Math.sin(rotLonRad), gz = Math.sin(rotLatRad);
+        const rx = gx * cosY - gz * sinY, vz = gx * sinY + gz * cosY;
+        const vx = rx * cosZ - gy * sinZ, vy = rx * sinZ + gy * cosZ;
+        const lat = Math.asin(Math.max(-1, Math.min(1, vz))) / RAD;
+        const lon = wrapDegrees(Math.atan2(vy, vx) / RAD);
+        return Number.isFinite(lat) && Number.isFinite(lon) ? { lat, lon } : null;
+      },
+      rotationAndMetrics(lat, lon) {
+        if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) >= 90) return null;
+        const rotated = toRotatedRad(lat, lon);
+        if (!rotated || Math.hypot(rotated.gx, rotated.gy) < 1e-12) return null;
+        const eastRotX = -Math.sin(rotated.rotLonRad), eastRotY = Math.cos(rotated.rotLonRad);
+        const ex = eastRotX * cosY, ez = eastRotX * sinY;
+        const geoEastX = ex * cosZ - eastRotY * sinZ, geoEastY = ex * sinZ + eastRotY * cosZ;
+        const latRad = lat * RAD, lonRad = lon * RAD;
+        const sinLat = Math.sin(latRad), cosLat = Math.cos(latRad), sinLon = Math.sin(lonRad), cosLon = Math.cos(lonRad);
+        const cos = -geoEastX * sinLon + geoEastY * cosLon;
+        const sin = geoEastX * sinLat * cosLon + geoEastY * sinLat * sinLon - ez * cosLat;
+        return {
+          cos,
+          sin,
+          mapScale: null,
+          metersPerColumn: Math.abs(dx) * RAD * earthRadiusM * Math.cos(rotated.rotLatRad),
+          metersPerRow: Math.abs(dy) * RAD * earthRadiusM
+        };
       }
     };
   }
@@ -232,8 +294,8 @@ export function gridOutline(grid: Grid): GeographicPoint[][] {
   if (!isValidGridGeometry(grid) || grid.wrapLongitude) return [];
   const geometry = prepareGridGeometry(grid);
   const width = grid.width - 1, height = grid.height - 1;
-  // Lambert visits every cell. A coarser step can cross a null cell and still look continuous.
-  const step = grid.kind === 'lambert-conformal' ? 1 : Math.max(width, height, 1);
+  // Curved projections visit every cell. A coarser step can cross a null cell and still look continuous.
+  const step = grid.kind === 'regular-latlon' ? Math.max(width, height, 1) : 1;
   const lines: GeographicPoint[][] = [];
   let current: GeographicPoint[] = [], broke = false;
   const commit = (split: boolean) => {

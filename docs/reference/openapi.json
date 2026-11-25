@@ -846,6 +846,81 @@
                         "wrapLongitude"
                       ],
                       "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "dx": {
+                          "type": "number"
+                        },
+                        "dy": {
+                          "type": "number"
+                        },
+                        "earthRadiusM": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        "height": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "kind": {
+                          "enum": [
+                            "rotated-latlon"
+                          ],
+                          "type": "string"
+                        },
+                        "lat0": {
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "lon0": {
+                          "maximum": 360,
+                          "minimum": -180,
+                          "type": "number"
+                        },
+                        "southPoleLatDeg": {
+                          "exclusiveMaximum": true,
+                          "exclusiveMinimum": true,
+                          "maximum": 90,
+                          "minimum": -90,
+                          "type": "number"
+                        },
+                        "southPoleLonDeg": {
+                          "maximum": 360,
+                          "minimum": -180,
+                          "type": "number"
+                        },
+                        "width": {
+                          "exclusiveMinimum": true,
+                          "maximum": 2147483647,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        "wrapLongitude": {
+                          "enum": [
+                            false
+                          ],
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "kind",
+                        "width",
+                        "height",
+                        "earthRadiusM",
+                        "lon0",
+                        "lat0",
+                        "dx",
+                        "dy",
+                        "southPoleLatDeg",
+                        "southPoleLonDeg",
+                        "wrapLongitude"
+                      ],
+                      "type": "object"
                     }
                   ]
                 },
