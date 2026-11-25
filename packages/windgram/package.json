@@ -15,6 +15,10 @@
     "@av/contracts": "workspace:*",
     "@av/soaring": "workspace:*",
     "@av/solar": "workspace:*",
-    "@av/thermodynamics": "workspace:*"
+    "@av/thermodynamics": "workspace:*",
+    "d3-contour": "4.0.2"
+  },
+  "devDependencies": {
+    "@types/d3-contour": "3.0.6"
   }
 }
