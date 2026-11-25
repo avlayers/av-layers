@@ -114,6 +114,16 @@ export function pilotHorizonFrameOrder(build: PinnedBuild, anchorFrame: string):
   return ordered;
 }
 
+/** Fraction 0..1 from a cloud cover percentage, clamped. */
+export function cloudFraction(percent: number): number {
+  return Math.max(0, Math.min(100, percent)) * 0.01;
+}
+
+function cellValue(cell: { readonly status: string; readonly value: number | null } | undefined): number | null {
+  if (!cell || cell.status === 'unavailable' || cell.status === 'outside-domain') return null;
+  return typeof cell.value === 'number' && Number.isFinite(cell.value) ? cell.value : null;
+}
+
 function fieldSatisfies(field: SynopticField, wantClouds: boolean, wantMslp: boolean): boolean {
   return (!wantClouds || field.hasClouds || Boolean(field.cloudsEvaluated)) &&
     (!wantMslp || field.hasMslp || Boolean(field.mslpEvaluated));
@@ -384,23 +394,11 @@ export class SynopticSampler {
             : sampleFrames.find(entry => entry.id === frameId);
           const frameLayers = frameEntry?.layers;
           if (spec.fetchClouds) {
-            const tCell = frameLayers?.['cloud-cover-total'];
-            const tVal = tCell && tCell.status !== 'unavailable' && tCell.status !== 'outside-domain' ? tCell.value : null;
-            const lCell = spec.hasLow ? frameLayers?.['cloud-cover-low'] : undefined;
-            const lVal = spec.hasLow
-              ? (lCell && lCell.status !== 'unavailable' && lCell.status !== 'outside-domain' ? lCell.value : null)
-              : (typeof tVal === 'number' && Number.isFinite(tVal) ? tVal * 0.55 : null);
-            if (typeof tVal === 'number' && Number.isFinite(tVal)) {
-              const clampedTotal = Math.max(0, Math.min(100, tVal)) * 0.01;
-              total[i] = clampedTotal;
-              low[i] = typeof lVal === 'number' && Number.isFinite(lVal)
-                ? Math.max(0, Math.min(100, lVal)) * 0.01
-                : clampedTotal * 0.55;
-              validCloudCells++;
-            } else {
-              total[i] = Number.NaN;
-              low[i] = Number.NaN;
-            }
+            const tVal = cellValue(frameLayers?.['cloud-cover-total']);
+            const lVal = spec.hasLow ? cellValue(frameLayers?.['cloud-cover-low']) : null;
+            total[i] = tVal === null ? Number.NaN : cloudFraction(tVal);
+            low[i] = lVal === null ? Number.NaN : cloudFraction(lVal);
+            if (tVal !== null) validCloudCells++;
           }
           if (spec.fetchMslp) {
             const pCell = frameLayers?.['mslp-hpa'];

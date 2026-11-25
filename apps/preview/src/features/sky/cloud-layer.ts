@@ -9,7 +9,14 @@ import {
   OwnedImageBitmapRetirer,
   weatherContourBeforeId
 } from './sky-layer-order';
-import type { SynopticField } from './synoptic-sampler';
+import { CLOUD_EDGES } from '@av/contracts/layers';
+import { cloudFraction, type SynopticField } from './synoptic-sampler';
+
+/** Total cloud cover contours, the same in every theme; themes only restyle them. */
+export const CLOUD_CONTOUR_LEVELS = [
+  { tier: 'broken', percent: CLOUD_EDGES[3] },
+  { tier: 'overcast', percent: CLOUD_EDGES[4] }
+] as const;
 import { invMercY, mercY } from './mercator';
 
 type Coordinates = [[number, number], [number, number], [number, number], [number, number]];
@@ -85,7 +92,7 @@ function sampleBillowBilinear(lut: Float32Array, fx: number, fy: number): number
   return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 }
 
-function sampleGridSmooth(grid: Float32Array, cols: number, rows: number, u: number, v: number): number {
+function sampleGridSmooth(grid: Float32Array, cols: number, rows: number, u: number, v: number, strict = false): number {
   const gx = Math.max(0, Math.min(cols - 1, u * (cols - 1)));
   const gy = Math.max(0, Math.min(rows - 1, v * (rows - 1)));
   const x0 = gx | 0, y0 = gy | 0;
@@ -98,6 +105,7 @@ function sampleGridSmooth(grid: Float32Array, cols: number, rows: number, u: num
   if (Number.isFinite(v00) && Number.isFinite(v10) && Number.isFinite(v01) && Number.isFinite(v11)) {
     return (v00 * (1 - sx) + v10 * sx) * (1 - sy) + (v01 * (1 - sx) + v11 * sx) * sy;
   }
+  if (strict) return Number.NaN;
   const w00 = (1 - sx) * (1 - sy), w10 = sx * (1 - sy), w01 = (1 - sx) * sy, w11 = sx * sy;
   let sum = 0, wSum = 0;
   if (Number.isFinite(v00)) { sum += v00 * w00; wSum += w00; }
@@ -133,11 +141,13 @@ export function renderSmoothCloudRgba(
       const off = (py * w + px) * 4;
       const u = px / (w - 1);
       const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
-      const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
-      if (!Number.isFinite(tot) || !Number.isFinite(lo)) {
+      if (!Number.isFinite(tot)) {
         outData[off + 3] = 0;
         continue;
       }
+      // Texture only: unknown low cloud draws as a typical low share of total cloud.
+      const sampledLow = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
+      const lo = Number.isFinite(sampledLow) ? sampledLow : tot * 0.55;
       const highOnly = Math.max(0, tot - lo);
       // Soaring-weighted optical depth for BL modes; satellite-ir weights upper cold decks directly.
       const opticalCover = style === 'satellite-ir'
@@ -214,7 +224,7 @@ type CloudContourGeoJson = {
   }>;
 };
 
-export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyleId): CloudContourGeoJson {
+export function buildCloudContourGeoJson(field: SynopticField): CloudContourGeoJson {
   const features: CloudContourGeoJson['features'] = [];
 
   if (!field.hasClouds) return { type: 'FeatureCollection' as const, features };
@@ -229,16 +239,7 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
     const lat = invMercY(my);
     const v = (field.north - lat) * invSpanLat;
     for (let x = 0; x < CONTOUR_GRID_W; x++) {
-      const u = x / (CONTOUR_GRID_W - 1);
-      const tot = sampleGridSmooth(field.total, field.cols, field.rows, u, v);
-      const lo = sampleGridSmooth(field.low, field.cols, field.rows, u, v);
-      if (!Number.isFinite(tot) || !Number.isFinite(lo)) {
-        grid[y * CONTOUR_GRID_W + x] = Number.NaN;
-        continue;
-      }
-      const c = style === 'satellite-ir'
-        ? Math.min(1, Math.max(lo, tot * 0.88))
-        : Math.min(1, Math.max(lo, lo + Math.max(0, tot - lo) * 0.55));
+      const c = sampleGridSmooth(field.total, field.cols, field.rows, x / (CONTOUR_GRID_W - 1), v, true);
       grid[y * CONTOUR_GRID_W + x] = c;
       if (c > maxCover) maxCover = c;
     }
@@ -250,11 +251,8 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
     return [lon, invMercY(my)];
   };
 
-  const levels: Array<{ tier: 'broken' | 'overcast'; threshold: number }> = style === 'nephanalysis'
-    ? [{ tier: 'broken', threshold: 0.42 }, { tier: 'overcast', threshold: 0.72 }]
-    : [{ tier: 'overcast', threshold: 0.74 }];
-
-  for (const { tier, threshold } of levels) {
+  for (const { tier, percent } of CLOUD_CONTOUR_LEVELS) {
+    const threshold = cloudFraction(percent);
     if (maxCover < threshold) continue;
     for (const coordinates of contourLines(grid, CONTOUR_GRID_W, CONTOUR_GRID_H, threshold, toGeo, { minVertices: 4 })) {
       features.push({
@@ -408,13 +406,13 @@ export class CloudLayerController {
   }
 
   private paintContours(field: SynopticField, styles: ResolvedChannelStyles, visible: boolean): void {
-    const contourKey = `${field.id}:${styles.cloudStyle}`;
+    const contourKey = field.id;
     let geo = this.contours.get(contourKey);
     if (geo) {
       this.contours.delete(contourKey);
       this.contours.set(contourKey, geo);
     } else {
-      geo = buildCloudContourGeoJson(field, styles.cloudStyle);
+      geo = buildCloudContourGeoJson(field);
       if (this.contours.size >= MAX_CONTOUR_CACHE) {
         const oldest = this.contours.keys().next().value;
         if (oldest !== undefined) this.contours.delete(oldest);
