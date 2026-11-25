@@ -888,6 +888,11 @@ button:disabled { opacity: 0.45; cursor: default; }
 @media (max-width: 720px) {
   .capsule-legend:not([hidden]) { justify-self: end; }
 }
+/* Very narrow (or 200 % text): Key and AGL drop below the readout so the time keeps its width. */
+@media (max-width: 359px) {
+  #map-dock { grid-template-columns: minmax(0, 1fr); grid-template-areas: "readout" "key" "rail" "days"; }
+  .capsule-legend:not([hidden]) { justify-self: start; }
+}
 
 .capsule-inline-controls {
   display: inline-flex;
@@ -1038,7 +1043,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 #app[data-chrome="dark"] .hover-card-title,
 #app[data-chrome="dark"] .model-button,
 #app[data-chrome="dark"] #display-units button,
-#app[data-chrome="dark"] .dock-view-pill,
+#app[data-chrome="dark"] .dock-view-pill { color: #dce6f2; }
 #app[data-chrome="dark"] .theme-selected-eyebrow,
 #app[data-chrome="dark"] .theme-selected-caret,
 #app[data-chrome="dark"] .theme-menu-heading,
@@ -1283,9 +1288,7 @@ th, td { padding: 3px 4px; border-bottom: 1px solid #e6ebf0; text-align: left; w
 th { color: #6b7785; font-weight: 650; }
 a { color: #1c6b8a; }
 .maplibregl-ctrl-bottom-left { bottom: 0; }
-@media (max-width: 900px) {
-  .maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: var(--dock-clearance, 0px); }
-}
+.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: var(--dock-clearance, 0px); }
 
 @media (max-width: 760px) {
   #point-card {

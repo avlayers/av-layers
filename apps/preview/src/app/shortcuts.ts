@@ -37,7 +37,11 @@ export function installShortcuts(options: ShortcutOptions): void {
       let closed = false;
       for (const selector of POPOVERS) {
         const open = root.querySelector<HTMLDetailsElement>(selector);
-        if (open) { open.open = false; closed = true; }
+        if (!open) continue;
+        // Focus inside the closing popup returns to its summary instead of falling to <body>.
+        const inside = event.target instanceof Node && open.contains(event.target);
+        open.open = false; closed = true;
+        if (inside) open.querySelector<HTMLElement>('summary')?.focus();
       }
       if (closed) event.preventDefault();
       else if (point.isOpen() && !insidePointBody(event.target)) {
