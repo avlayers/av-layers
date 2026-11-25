@@ -850,9 +850,13 @@
                     {
                       "properties": {
                         "dx": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
                           "type": "number"
                         },
                         "dy": {
+                          "exclusiveMinimum": true,
+                          "minimum": 0,
                           "type": "number"
                         },
                         "earthRadiusM": {
@@ -878,7 +882,7 @@
                           "type": "number"
                         },
                         "lon0": {
-                          "maximum": 360,
+                          "maximum": 180,
                           "minimum": -180,
                           "type": "number"
                         },
@@ -890,7 +894,7 @@
                           "type": "number"
                         },
                         "southPoleLonDeg": {
-                          "maximum": 360,
+                          "maximum": 180,
                           "minimum": -180,
                           "type": "number"
                         },

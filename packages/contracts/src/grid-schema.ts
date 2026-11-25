@@ -27,12 +27,12 @@ export const lambertConformalGridSchema = z.object({
 });
 export const rotatedLatLonGridSchema = z.object({
   kind: z.literal('rotated-latlon'), ...common,
-  lon0: finite.min(-180).max(360),
+  lon0: finite.min(-180).max(180),
   lat0: latitude,
-  dx: step,
-  dy: step,
+  dx: finite.positive(),
+  dy: finite.positive(),
   southPoleLatDeg: interiorLatitude,
-  southPoleLonDeg: finite.min(-180).max(360),
+  southPoleLonDeg: finite.min(-180).max(180),
   wrapLongitude: z.literal(false)
 });
 export const gridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema, lambertConformalGridSchema, rotatedLatLonGridSchema]).superRefine((grid, ctx) => {

@@ -126,7 +126,7 @@
       "--model",
       "hrdps",
       "--output",
-      "packages/contracts/coverage/hrdps-continental-land-10km-v1/fine"
+      "packages/contracts/coverage/hrdps-continental-land-v1/fine"
     ]
   }
 }

@@ -104,9 +104,9 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Grid: `rotated-latlon`; 2540 columns × 1290 rows; spherical Earth radius 6371229 m; periodic longitude: false.
 - Terrain subdivision factor: `2`; fine grid: 5079 columns × 2579 rows.
 - Bounds [west, south, east, north]: `[-141,41.6,-52,65]`.
-- Coverage: `hrdps-continental-land-10km-v1`. Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.
+- Coverage: `hrdps-continental-land-v1`. Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.
 - Native tile zoom: 0–10.
-- Execution: 32 target shards; at most 32 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["15 5,11,17,23 * * *"]`.
+- Execution: 32 target shards; at most 32 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["5 4,10,16,22 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 48; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 18.
@@ -117,7 +117,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - `cape-jkg` definition: `eccc-hrdps-surface-cape-v1`.
 - `cloud-cover-total` definition: `eccc-hrdps-tcdc-total-v1`.
 - Publication timing: cycle age at most 12 hours; remaining horizon at least 36 hours.
-- Monitoring: environments `staging`, `production`; cycle age at most 12 hours; remaining horizon at least 36 hours.
+- Monitoring: environments none; cycle age at most 12 hours; remaining horizon at least 36 hours.
 
 ### ICON-EU (icon-eu-soaring)
 

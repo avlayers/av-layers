@@ -587,7 +587,7 @@
     {
       "modelId": "hrdps",
       "id": "hrdps-continental-soaring",
-      "coverageDir": "coverage/hrdps-continental-land-10km-v1",
+      "coverageDir": "coverage/hrdps-continental-land-v1",
       "source": {"modelFamily": "gem", "configurationId": "eccc-hrdps-continental-2p5km", "domainId": "canada-continental"},
       "tier": "medium",
       "label": "HRDPS",
@@ -634,9 +634,9 @@
         "window": {"hourlyThrough": 24, "endHour": 48, "tailStepHours": 3, "minHorizonHours": 36, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 12},
-      "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 12, "minHorizonHours": 36},
+      "monitoring": {"environments": [], "maxCycleAgeHours": 12, "minHorizonHours": 36},
       "coverage": {
-        "id": "hrdps-continental-land-10km-v1",
+        "id": "hrdps-continental-land-v1",
         "description": "Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.",
         "west": -141.0,
         "south": 41.6,
@@ -688,7 +688,7 @@
           "u10mMps": {"field": "UGRD_AGL-10m", "kind": "single-level", "parameter": [2, 2], "surface": [103, 10], "unit": "m/s"},
           "v10mMps": {"field": "VGRD_AGL-10m", "kind": "single-level", "parameter": [2, 3], "surface": [103, 10], "unit": "m/s"},
           "cloudTotalPct": {"field": "TCDC_Sfc", "kind": "single-level", "parameter": [6, 1], "surface": [1], "unit": "%"},
-          "capeJkg": {"field": "CAPE_Sfc", "kind": "single-level", "parameter": [7, 6], "surface": [1], "sentinel": -1, "unit": "J/kg"}
+          "capeJkg": {"field": "CAPE_Sfc", "kind": "single-level", "parameter": [7, 6], "surface": [1], "sentinel": [-1, -999], "unit": "J/kg"}
         },
         "auxLevels": {
           "spfhKgKg": {"field": "SPFH", "kind": "isobaric-level", "parameter": [1, 0], "surface": [100], "unit": "kg/kg"},
@@ -697,7 +697,7 @@
         }
       },
       "terrainSubdivisionFactor": 2,
-      "execution": {"zoom": 10, "parallelism": 32, "schedule": ["15 5,11,17,23 * * *"]}
+      "execution": {"zoom": 10, "parallelism": 32, "schedule": ["5 4,10,16,22 * * *"]}
     }
   ]
 }

@@ -31,8 +31,10 @@ class ProjectedFootprints:
         else:
             if not all(math.isfinite(grid[key]) and grid[key] > 0 for key in ('dx', 'dy')):
                 raise ValueError('Rotated grid spacing must be finite and positive')
-            if not (math.isfinite(grid['southPoleLatDeg']) and -90 <= grid['southPoleLatDeg'] < 90):
-                raise ValueError('Rotated grid southPoleLatDeg must be in [-90, 90)')
+            if not (math.isfinite(grid['lon0']) and -180 <= grid['lon0'] <= 180):
+                raise ValueError('Rotated grid lon0 must be in [-180, 180]')
+            if not (math.isfinite(grid['southPoleLatDeg']) and -90 < grid['southPoleLatDeg'] < 90):
+                raise ValueError('Rotated grid southPoleLatDeg must be in (-90, 90)')
             if not (math.isfinite(grid['southPoleLonDeg']) and -180 <= grid['southPoleLonDeg'] <= 180):
                 raise ValueError('Rotated grid southPoleLonDeg must be in [-180, 180]')
             self.x0, self.dx = grid['lon0'], grid['dx']
@@ -84,4 +86,5 @@ class ProjectedFootprints:
 
     def nearest(self, lat, lon):
         x, y = self.forward_transform(lon, lat)
-        return float((x - self.x0) / self.dx), float((y - self.y0) / self.dy)
+        dx_num = ((x - self.x0 + 180.0) % 360.0 - 180.0) if self.grid['kind'] == 'rotated-latlon' else (x - self.x0)
+        return float(dx_num / self.dx), float((y - self.y0) / self.dy)

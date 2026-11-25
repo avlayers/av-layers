@@ -95,7 +95,7 @@ describe('model configuration', () => {
       ['icon-eu', { environments: ['staging', 'production'], maxCycleAgeHours: 18, minHorizonHours: 48 }],
       ['rrfs', { environments: ['staging', 'production'], maxCycleAgeHours: 12, minHorizonHours: 48 }],
       ['av-wrf', { environments: ['staging', 'production'], maxCycleAgeHours: 36, minHorizonHours: 36 }],
-      ['hrdps', { environments: ['staging', 'production'], maxCycleAgeHours: 12, minHorizonHours: 36 }]
+      ['hrdps', { environments: [], maxCycleAgeHours: 12, minHorizonHours: 36 }]
     ] as const) {
       const existing = getProduct(modelId)!;
       expect(existing.monitoring).toEqual(monitoring);

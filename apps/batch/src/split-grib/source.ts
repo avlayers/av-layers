@@ -8,7 +8,7 @@ const field = z.object({ field: z.string().min(1), kind: z.enum(['time-invariant
   surface: z.union([z.tuple([z.number().int()]), z.tuple([z.number().int(), z.number().nullable()]),
     z.tuple([z.number().int(), z.number().nullable(), z.number().int()]), z.tuple([z.number().int(), z.number().nullable(), z.number().int(), z.number().nullable()])]),
   statistic: z.number().int().optional(),
-  sentinel: z.number().finite().optional() }).strict();
+  sentinel: z.union([z.number().finite(), z.array(z.number().finite()).min(1).max(8)]).optional() }).strict();
 const flux = field.extend({ scale: z.union([z.literal(1), z.literal(-1)]) });
 const auxiliary = field.omit({ statistic: true }).extend({ unit: z.string().min(1), scale: z.number().finite().positive().default(1) });
 const auxSurfaceSchema = z.partialRecord(z.enum(Object.keys(AUX_SURFACE_UNITS) as [keyof typeof AUX_SURFACE_UNITS, ...Array<keyof typeof AUX_SURFACE_UNITS>]),
@@ -82,7 +82,7 @@ export function splitSource(model: ModelDefinition, requirements?: AuxiliaryRequ
     secondFixedSurfaceValue: value.surface.length === 4 ? value.surface[3] : undefined,
     normalization: 'unit' in value ? { units: value.unit, scale: value.scale } : undefined,
     statisticalProcessCode: 'statistic' in value ? value.statistic ?? null : null,
-    sentinel: value.sentinel }]));
+    sentinel: value.sentinel === undefined ? undefined : Array.isArray(value.sentinel) ? value.sentinel : [value.sentinel] }]));
   const fields = Object.fromEntries(Object.entries(upstream.fields).filter(([, spec]) => spec !== undefined).map(([role, spec]) => [role, spec!.field])) as {
     staticTerrain: string;
     halfLevelHeight?: string;

@@ -224,14 +224,14 @@ function sourceGrid(source: SplitSource, section3: Uint8Array): DecodedSplitGrib
     parsed.earthRadiusM !== expected.earthRadiusM ||
     parsed.scanningMode !== 64 ||
     parsed.angleOfRotation !== 0 ||
-    Math.abs(parsed.iDirectionIncrement - Math.abs(expected.dx)) > 1e-6 ||
-    Math.abs(parsed.jDirectionIncrement - Math.abs(expected.dy)) > 1e-6 ||
+    Math.abs(parsed.iDirectionIncrement - expected.dx) > 1e-6 ||
+    Math.abs(parsed.jDirectionIncrement - expected.dy) > 1e-6 ||
     Math.abs(parsed.latitudeOfFirstGridPoint - expected.lat0) > 1e-5 ||
-    Math.abs(normalizeLon(parsed.longitudeOfFirstGridPoint) - normalizeLon(expected.lon0)) > 1e-5 ||
+    Math.abs(normalizeLon(parsed.longitudeOfFirstGridPoint - expected.lon0)) > 1e-5 ||
     Math.abs(parsed.southPoleLatitude - expected.southPoleLatDeg) > 1e-5 ||
-    Math.abs(normalizeLon(parsed.southPoleLongitude) - normalizeLon(expected.southPoleLonDeg)) > 1e-5 ||
+    Math.abs(normalizeLon(parsed.southPoleLongitude - expected.southPoleLonDeg)) > 1e-5 ||
     Math.abs(parsed.latitudeOfLastGridPoint - lastLat) > 1e-4 ||
-    Math.abs(normalizeLon(parsed.longitudeOfLastGridPoint) - normalizeLon(lastLon)) > 1e-4
+    Math.abs(normalizeLon(parsed.longitudeOfLastGridPoint - lastLon)) > 1e-4
   ) {
     throw new Error('Split GRIB rotated grid geometry mismatch');
   }
@@ -287,6 +287,9 @@ function prepareSplitGribDecode(
   const binaryScale = 2 ** binaryScaleFactor;
   const decimalScale = 10 ** -decimalScaleFactor;
   const packingError = bitsPerValue === 0 ? 0 : 0.5 * binaryScale * decimalScale;
+  if (!Number.isFinite(referenceValue) || !Number.isFinite(binaryScale) || !Number.isFinite(decimalScale) || !Number.isFinite(packingError) || packingError < 0) {
+    throw new Error('Invalid Split GRIB Section 5 scaling factors');
+  }
 
   const s6 = field.section6 as Uint8Array | null | undefined;
   let hasBitmap = false;
@@ -323,31 +326,82 @@ function prepareSplitGribDecode(
   };
 }
 
-/** Decode selected native mesh or structured grid cells into caller-owned targets. */
-export function decodeSplitGribField(source: SplitSource,
+function normalizeSentinels(sentinel: number | readonly number[] | undefined): readonly number[] | undefined {
+  if (sentinel === undefined) return undefined;
+  return typeof sentinel === 'number' ? [sentinel] : sentinel.length ? sentinel : undefined;
+}
+
+function finishSplitGribDecode(
+  prepared: ReturnType<typeof prepareSplitGribDecode>,
+  gribBytes: Uint8Array,
+  activeIndices: Uint32Array,
+  target: { values: Float32Array; missing: Uint8Array } | undefined,
+  sentinelOpt: number | readonly number[] | undefined,
+  sampleAt: (slot: number, gridIndex: number) => { value: number; masked: boolean }
+): DecodedSplitGribField {
+  const outValues = target?.values ?? prepared.allocValues(activeIndices.length);
+  const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
+  const sentinels = normalizeSentinels(sentinelOpt);
+  const sentinelTolerance = Math.min(0.25, Math.max(prepared.packingError, 1e-5));
+  for (let i = 0; i < activeIndices.length; i += 1) {
+    const { value, masked } = sampleAt(i, activeIndices[i]!);
+    const isSentinel = sentinels !== undefined && sentinels.some(s => Math.abs(value - s) <= sentinelTolerance);
+    if (!masked && Number.isFinite(value) && !isSentinel) {
+      outValues[i] = value;
+      outMissing[i] = 0;
+    } else {
+      outValues[i] = NaN;
+      outMissing[i] = 1;
+    }
+  }
+  return {
+    discipline: prepared.field.discipline,
+    identification: prepared.field.identification,
+    grid: prepared.grid,
+    product: prepared.product,
+    representation: {
+      dataRepresentationTemplateNumber: prepared.drt,
+      codedValueCount: prepared.codedValueCount,
+      bitsPerValue: prepared.bitsPerValue,
+      referenceValue: prepared.referenceValue,
+      binaryScaleFactor: prepared.binaryScaleFactor,
+      decimalScaleFactor: prepared.decimalScaleFactor,
+      packingError: prepared.packingError
+    },
+    expandedBytes: gribBytes.byteLength,
+    values: outValues,
+    missing: outMissing
+  };
+}
+
+function decodePreparedSplitGribField(
+  prepared: ReturnType<typeof prepareSplitGribDecode>,
   gribBytes: Uint8Array,
   activeIndices: Uint32Array,
   target?: { values: Float32Array; missing: Uint8Array },
-  options?: { readonly sentinel?: number }
+  sentinel?: number | readonly number[]
 ): DecodedSplitGribField {
   const {
-    field, grid, pointCount, product, s5, s5View, drt, codedValueCount, bitsPerValue,
-    referenceValue, binaryScaleFactor, decimalScaleFactor, binaryScale, decimalScale,
-    packingError, hasBitmap, bitmapBytes, allocValues
-  } = prepareSplitGribDecode(source, gribBytes, activeIndices, target);
+    field, pointCount, s5, s5View, drt, codedValueCount, bitsPerValue,
+    referenceValue, binaryScale, decimalScale, hasBitmap, bitmapBytes, allocValues
+  } = prepared;
   if (drt !== 0 && drt !== 42) throw new Error(`Unsupported Split GRIB data representation template 5.${drt}`);
   if (drt === 42 && s5.byteLength < 25) throw new Error(`Truncated GRIB2 Section 5.42 (${s5.byteLength} bytes)`);
-  let fullValues: Float64Array | Float32Array;
-  if ((drt === 0 || drt === 42) && bitsPerValue === 0) {
+  if (bitsPerValue === 0) {
     // ecCodes treats zero-bit 5.0/5.42 fields as the unscaled reference value.
-    fullValues = allocValues(pointCount).fill(referenceValue);
-    if (hasBitmap) for (let i = 0; i < pointCount; i++) {
-      if (!(bitmapBytes![i >> 3]! & (0x80 >> (i & 7)))) fullValues[i] = NaN;
-    }
-  } else if (drt === 42) {
+    return finishSplitGribDecode(prepared, gribBytes, activeIndices, target, sentinel, (_slot, gridIndex) => ({
+      value: referenceValue,
+      masked: hasBitmap && !(bitmapBytes![gridIndex >> 3]! & (0x80 >> (gridIndex & 7)))
+    }));
+  }
+  let fullValues: Float64Array | Float32Array;
+  if (drt === 42) {
     const flags = s5View.getUint8(21);
     const blockSize = s5View.getUint8(22);
     const rsi = s5View.getUint16(23, false);
+    if (rsi * blockSize + blockSize > Math.max(pointCount, 4096) + 256) {
+      throw new Error('Split GRIB CCSDS reference sample interval exceeds grid size');
+    }
     const payload = field.section7.subarray(5);
 
     const decodedCoded = allocValues(codedValueCount);
@@ -392,51 +446,32 @@ export function decodeSplitGribField(source: SplitSource,
     fullValues = decodeFieldValues(field, { missingValue: NaN }).values;
   }
 
-  const outValues = target?.values ?? allocValues(activeIndices.length);
-  const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
-  const sentinel = options?.sentinel;
-  const sentinelTolerance = Math.max(packingError, 1e-5);
+  return finishSplitGribDecode(prepared, gribBytes, activeIndices, target, sentinel, (_slot, gridIndex) => ({
+    value: fullValues[gridIndex]!,
+    masked: false
+  }));
+}
 
-  for (let i = 0; i < activeIndices.length; i += 1) {
-    const value = fullValues[activeIndices[i]!]!;
-    if (Number.isFinite(value) && (sentinel === undefined || Math.abs(value - sentinel) > sentinelTolerance)) {
-      outValues[i] = value;
-      outMissing[i] = 0;
-    } else {
-      outValues[i] = NaN;
-      outMissing[i] = 1;
-    }
-  }
-
-  return {
-    discipline: field.discipline,
-    identification: field.identification,
-    grid,
-    product,
-    representation: {
-      dataRepresentationTemplateNumber: drt,
-      codedValueCount,
-      bitsPerValue,
-      referenceValue,
-      binaryScaleFactor,
-      decimalScaleFactor,
-      packingError
-    },
-    expandedBytes: gribBytes.byteLength,
-    values: outValues,
-    missing: outMissing
-  };
+/** Decode selected native mesh or structured grid cells into caller-owned targets. */
+export function decodeSplitGribField(source: SplitSource,
+  gribBytes: Uint8Array,
+  activeIndices: Uint32Array,
+  target?: { values: Float32Array; missing: Uint8Array },
+  options?: { readonly sentinel?: number | readonly number[] }
+): DecodedSplitGribField {
+  const prepared = prepareSplitGribDecode(source, gribBytes, activeIndices, target);
+  return decodePreparedSplitGribField(prepared, gribBytes, activeIndices, target, options?.sentinel);
 }
 
 export async function decodeSplitGribFieldAsync(source: SplitSource,
   gribBytes: Uint8Array,
   activeIndices: Uint32Array,
   target?: { values: Float32Array; missing: Uint8Array },
-  options?: { readonly sentinel?: number; readonly j2kPool?: J2kDecoderPool | (() => Promise<J2kDecoderPool>) }
+  options?: { readonly sentinel?: number | readonly number[]; readonly j2kPool?: J2kDecoderPool | (() => Promise<J2kDecoderPool>) }
 ): Promise<DecodedSplitGribField> {
   const prepared = prepareSplitGribDecode(source, gribBytes, activeIndices, target);
   if (prepared.drt === 0 || prepared.drt === 42) {
-    return decodeSplitGribField(source, gribBytes, activeIndices, target, options);
+    return decodePreparedSplitGribField(prepared, gribBytes, activeIndices, target, options?.sentinel);
   }
   if (prepared.drt !== 40 || !options?.j2kPool) {
     throw new Error(`Unsupported Split GRIB data representation template 5.${prepared.drt}`);
@@ -444,42 +479,20 @@ export async function decodeSplitGribFieldAsync(source: SplitSource,
   if (prepared.s5.byteLength < 23) {
     throw new Error(`Truncated GRIB2 Section 5.40 (${prepared.s5.byteLength} bytes)`);
   }
+  if (prepared.bitsPerValue === 0) {
+    return finishSplitGribDecode(prepared, gribBytes, activeIndices, target, options.sentinel, (_slot, gridIndex) => ({
+      value: prepared.referenceValue * prepared.decimalScale,
+      masked: prepared.hasBitmap && !(prepared.bitmapBytes![gridIndex >> 3]! & (0x80 >> (gridIndex & 7)))
+    }));
+  }
   const pool = typeof options.j2kPool === 'function' ? await options.j2kPool() : options.j2kPool;
   const sampled = await sampleFieldValuesAsync(prepared.field, activeIndices, {
     missingValue: NaN,
     decodeJ2k: pool.decode,
     decodeJ2kSampled: pool.decodeSampled
   });
-  const outValues = target?.values ?? prepared.allocValues(activeIndices.length);
-  const outMissing = target?.missing ?? new Uint8Array(activeIndices.length);
-  const sentinel = options.sentinel;
-  const sentinelTolerance = Math.max(prepared.packingError, 1e-5);
-  for (let i = 0; i < activeIndices.length; i += 1) {
-    const value = sampled.values[i]!;
-    if (sampled.missingMask?.[i] !== 1 && Number.isFinite(value) && (sentinel === undefined || Math.abs(value - sentinel) > sentinelTolerance)) {
-      outValues[i] = value;
-      outMissing[i] = 0;
-    } else {
-      outValues[i] = NaN;
-      outMissing[i] = 1;
-    }
-  }
-  return {
-    discipline: prepared.field.discipline,
-    identification: prepared.field.identification,
-    grid: prepared.grid,
-    product: prepared.product,
-    representation: {
-      dataRepresentationTemplateNumber: prepared.drt,
-      codedValueCount: prepared.codedValueCount,
-      bitsPerValue: prepared.bitsPerValue,
-      referenceValue: prepared.referenceValue,
-      binaryScaleFactor: prepared.binaryScaleFactor,
-      decimalScaleFactor: prepared.decimalScaleFactor,
-      packingError: prepared.packingError
-    },
-    expandedBytes: gribBytes.byteLength,
-    values: outValues,
-    missing: outMissing
-  };
+  return finishSplitGribDecode(prepared, gribBytes, activeIndices, target, options.sentinel, slot => ({
+    value: sampled.values[slot]!,
+    masked: sampled.missingMask?.[slot] === 1
+  }));
 }

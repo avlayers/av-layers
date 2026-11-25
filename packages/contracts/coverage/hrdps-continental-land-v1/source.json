@@ -233,7 +233,7 @@
     ]
   },
   "regeneration": {
-    "command": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model hrdps --output packages/contracts/coverage/hrdps-continental-land-10km-v1",
+    "command": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model hrdps --output packages/contracts/coverage/hrdps-continental-land-v1",
     "toolingSha256": "640a762ef6afae89b572cf36969ee16b9a9f905a830306f65487dcc9c60ea282",
     "rasterizerSha256": "1718730b25dca09e20c58cd925273db25eb85b4e786ec49dc946eb39c4517195",
     "geometrySha256": "19861d4207889c1efb05e169c0e115228171d1258377aa7245c258c4276fa3d3",

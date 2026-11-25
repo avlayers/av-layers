@@ -140,6 +140,7 @@ async function loadSplitGribField(
     cached = await readLocalFile(cachePath, MAX_SPLIT_OBJECT_BYTES);
     options.signal?.throwIfAborted();
     const decoded = await decode(cached);
+    options.signal?.throwIfAborted();
     stats.cacheHits += 1;
     return { decoded, compressedBytes: cached.byteLength, sha256: sha256Hex(cached), cacheHit: true };
   } catch (error) {
@@ -171,6 +172,7 @@ async function loadSplitGribField(
   stats.downloads += 1;
   stats.downloadedBytes += buffer.byteLength;
   const decoded = await decode(buffer);
+  options.signal?.throwIfAborted();
   await mkdir(dirname(cachePath), { recursive: true });
   const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
   try {
@@ -314,21 +316,44 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   let staticGeometryPromise: Promise<SplitGribStaticGeometryCache> | null = null;
   let nativeMappingPromise: Promise<{ indices: Uint32Array; receipts: SplitGribObjectReceipt[]; sha256: string }> | null = null;
   let j2kPoolPromise: Promise<J2kDecoderPool> | null = null;
-  const getJ2kPool = () => j2kPoolPromise ??= createNodeJ2kDecoderPool({ size: Math.min(concurrency, 4) })
-    .catch(error => { j2kPoolPromise = null; throw error; });
+  let closingPromise: Promise<void> | null = null;
   const controller = new AbortController();
   const signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
+  const closeJ2kPool = async (): Promise<void> => {
+    const pending = j2kPoolPromise;
+    j2kPoolPromise = null;
+    if (pending) {
+      const pool = await pending.catch(() => null);
+      await pool?.close();
+    }
+  };
+  signal.addEventListener('abort', () => { void closeJ2kPool(); }, { once: true });
+  const getJ2kPool = (): Promise<J2kDecoderPool> => {
+    signal.throwIfAborted();
+    return j2kPoolPromise ??= createNodeJ2kDecoderPool({ size: Math.min(concurrency, 4) }).then(async pool => {
+      if (signal.aborted) {
+        await pool.close();
+        signal.throwIfAborted();
+      }
+      return pool;
+    }, error => {
+      j2kPoolPromise = null;
+      throw error;
+    });
+  };
   let active: Promise<NormalizedFrame> | undefined;
   const fluxCache = new Map<
     string,
     Promise<{ readonly decoded: DecodedSplitGribField; readonly receipt: SplitGribObjectReceipt }>
   >();
   const isIsobaric = source.model.capabilities.verticalCoordinate === 'isobaric';
-  const windRotations = source.grid.kind === 'rotated-latlon' ? (() => {
+  const needsWindRotation = source.grid.kind === 'rotated-latlon' &&
+    Boolean(source.upstream.auxSurface?.u10mMps || source.upstream.auxLevels?.uWindMps);
+  let windRotations: { cos: Float32Array; sin: Float32Array } | null = needsWindRotation ? (() => {
     const geometry = prepareGridGeometry(source.grid);
     const width = source.grid.width;
-    const cos = new Float64Array(activeIndices.length);
-    const sin = new Float64Array(activeIndices.length);
+    const cos = new Float32Array(activeIndices.length);
+    const sin = new Float32Array(activeIndices.length);
     for (let i = 0; i < activeIndices.length; i++) {
       const cell = activeIndices[i]!;
       const x = cell % width, y = (cell - x) / width;
@@ -423,6 +448,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     }
     staticGeometryPromise = (async () => {
       const hsurfRes = await loadDecodedField(source.fields.staticTerrain, 0, null);
+      const mappingReceipts = source.upstream.nativeGrid ? (await getNativeMapping()).receipts : [];
       if (isIsobaric) {
         return {
           cycle,
@@ -430,7 +456,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
           missingTerrain: hsurfRes.decoded.missing,
           hgtM: [],
           missingHgt: [],
-          receipts: [hsurfRes.receipt]
+          receipts: [...mappingReceipts, hsurfRes.receipt]
         };
       }
       const hhlResults = await mapConcurrent(source.halfLevels, concurrency, level =>
@@ -451,7 +477,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         missingTerrain: hsurfRes.decoded.missing,
         hgtM,
         missingHgt,
-        receipts: [...(await getNativeMapping()).receipts, hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
+        receipts: [...mappingReceipts, hsurfRes.receipt, ...hhlResults.map(r => r.receipt)]
       };
     })().catch(error => {
       staticGeometryPromise = null;
@@ -462,15 +488,15 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
 
   const scaleInstantaneousFlux = (role: 'sensibleHeatFlux' | 'latentHeatFlux', decoded: DecodedSplitGribField): { readonly values: Float32Array; readonly missing: Uint8Array } => {
     const scale = source.upstream.fields[role].scale;
-    const raw = frameValues(decoded);
-    const values = new Float32Array(raw.length);
-    const missing = new Uint8Array(decoded.missing);
-    for (let i = 0; i < raw.length; i++) {
-      if (missing[i] || !Number.isFinite(raw[i]!)) {
+    const values = frameValues(decoded);
+    const missing = decoded.missing;
+    for (let i = 0; i < values.length; i++) {
+      if (missing[i] || !Number.isFinite(values[i]!)) {
         values[i] = NaN;
         missing[i] = 1;
       } else {
-        values[i] = raw[i]! * scale;
+        const scaled = values[i]! * scale;
+        values[i] = Object.is(scaled, -0) ? 0 : scaled;
       }
     }
     return { values, missing };
@@ -485,6 +511,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       source.specs[source.fields.latentHeatFlux]!.templateNumber === 0;
     const windowNeedsCompanion = previousHour > sourceWindowStart(source.model.forecast, hour);
     const fluxNeedsCompanion = !instantaneousFluxes && windowNeedsCompanion;
+    const resetHours = source.model.forecast.statisticsResetHours;
+    const retainCompanion = resetHours === null || hour % resetHours !== 0;
     const { auxSurface, auxLevels } = createAuxiliaryTargets(activeIndices.length, levels.length,
       Object.keys(source.upstream.auxSurface ?? {}) as AuxSurfaceId[], Object.keys(source.upstream.auxLevels ?? {}) as AuxLevelId[], target);
     const auxiliaryTargets = new Map<string, AuxField>();
@@ -516,20 +544,24 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       ...precipitationRequests,
       ...auxiliaryRequests
     ];
-    const fields = await mapConcurrent(requests, concurrency, request =>
-      ((request.field === source.fields.sensibleHeatFlux || request.field === source.fields.latentHeatFlux) && !instantaneousFluxes) || request.field === precipitationField
-        ? getFluxField(request.field, request.hour)
-        : loadDecodedField(request.field, request.hour, request.level, auxiliaryTargets.get(`${request.field}:${request.level}`) ?? (target ? (() => {
-          if (request.field === source.fields.surfacePressure) return { values: target.surfacePressurePa, missing: target.missing.surfacePressure };
-          if (request.field === source.fields.temperature2m) return { values: target.temp2mK, missing: target.missing.temp2m };
-          if (request.field === source.fields.specificHumidity2m) return { values: target.specificHumidity2mKgKg, missing: target.missing.humidity2m };
-          if (request.field === source.fields.sensibleHeatFlux || request.field === source.fields.latentHeatFlux) return undefined;
-          const index = levels.indexOf(request.level!);
-          if (request.field === source.fields.height) return { values: target.hgtM[index]!, missing: target.missing.hgt[index]! };
-          return request.field === source.fields.temperature ? { values: target.tempK[index]!, missing: target.missing.temp[index]! }
-            : { values: target.pressurePa![index]!, missing: target.missing.pressure![index]! };
-        })() : undefined))
-    );
+    const fields = await mapConcurrent(requests, concurrency, request => {
+      const isStatisticalWindow = ((request.field === source.fields.sensibleHeatFlux || request.field === source.fields.latentHeatFlux) && !instantaneousFluxes) || request.field === precipitationField;
+      if (isStatisticalWindow && (request.hour === previousHour || retainCompanion)) {
+        return getFluxField(request.field, request.hour);
+      }
+      return loadDecodedField(request.field, request.hour, request.level, auxiliaryTargets.get(`${request.field}:${request.level}`) ?? (target ? (() => {
+        if (request.field === source.fields.surfacePressure) return { values: target.surfacePressurePa, missing: target.missing.surfacePressure };
+        if (request.field === source.fields.temperature2m) return { values: target.temp2mK, missing: target.missing.temp2m };
+        if (request.field === source.fields.specificHumidity2m) return { values: target.specificHumidity2mKgKg, missing: target.missing.humidity2m };
+        if (request.field === source.fields.sensibleHeatFlux) return instantaneousFluxes ? { values: target.sensibleHeatFluxWm2, missing: target.missing.sensibleHeatFlux } : undefined;
+        if (request.field === source.fields.latentHeatFlux) return instantaneousFluxes ? { values: target.latentHeatFluxWm2, missing: target.missing.latentHeatFlux } : undefined;
+        if (request.field === precipitationField) return undefined;
+        const index = levels.indexOf(request.level!);
+        if (request.field === source.fields.height) return { values: target.hgtM[index]!, missing: target.missing.hgt[index]! };
+        return request.field === source.fields.temperature ? { values: target.tempK[index]!, missing: target.missing.temp[index]! }
+          : { values: target.pressurePa![index]!, missing: target.missing.pressure![index]! };
+      })() : undefined));
+    });
     const [psRes, t2mRes, qv2mRes, ashflCurr, alhflCurr] = fields;
     const ashflPrev = fluxNeedsCompanion ? fields[surfaceFields.length] : null;
     const alhflPrev = fluxNeedsCompanion ? fields[surfaceFields.length + 1] : null;
@@ -547,21 +579,34 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         }
       }
     }
-    const rotateWinds = fields.some(item => item.decoded.grid.kind === 'rotated-latlon' && item.decoded.grid.uvRelativeToGrid);
-    const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined) => {
+    const gridRelativeByKey = new Map<string, boolean>();
+    for (let i = 0; i < requests.length; i++) {
+      const req = requests[i]!, grid = fields[i]!.decoded.grid;
+      gridRelativeByKey.set(`${req.field}:${req.level}`, grid.kind === 'rotated-latlon' && grid.uvRelativeToGrid);
+    }
+    const shouldRotatePair = (uField: string | undefined, vField: string | undefined, level: number | null): boolean => {
+      if (!uField || !vField || source.grid.kind !== 'rotated-latlon') return false;
+      const uRel = gridRelativeByKey.get(`${uField}:${level}`) ?? false;
+      const vRel = gridRelativeByKey.get(`${vField}:${level}`) ?? false;
+      if (uRel !== vRel) throw new Error(`Split GRIB wind component uvRelativeToGrid mismatch for ${uField}/${vField}`);
+      return uRel;
+    };
+    const normalizeWind = (u: AuxField | undefined, v: AuxField | undefined, rotate: boolean) => {
       if (!u || !v) return;
       for (let i = 0; i < activeIndices.length; i++) {
         if (u.missing[i] || v.missing[i] || !Number.isFinite(u.values[i]) || !Number.isFinite(v.values[i])) {
           u.missing[i] = v.missing[i] = 1; u.values[i] = v.values[i] = NaN;
-        } else if (rotateWinds && windRotations) {
+        } else if (rotate && windRotations) {
           const earth = gridVectorToEarth(u.values[i]!, v.values[i]!, { cos: windRotations.cos[i]!, sin: windRotations.sin[i]! });
           u.values[i] = earth.east;
           v.values[i] = earth.north;
         }
       }
     };
-    normalizeWind(auxSurface.u10mMps, auxSurface.v10mMps);
-    for (let i = 0; i < levels.length; i++) normalizeWind(auxLevels.uWindMps?.[i], auxLevels.vWindMps?.[i]);
+    normalizeWind(auxSurface.u10mMps, auxSurface.v10mMps, shouldRotatePair(source.upstream.auxSurface?.u10mMps?.field, source.upstream.auxSurface?.v10mMps?.field, null));
+    for (let i = 0; i < levels.length; i++) {
+      normalizeWind(auxLevels.uWindMps?.[i], auxLevels.vWindMps?.[i], shouldRotatePair(source.upstream.auxLevels?.uWindMps?.field, source.upstream.auxLevels?.vWindMps?.field, levels[i]!));
+    }
 
     const sensible = instantaneousFluxes
       ? scaleInstantaneousFlux('sensibleHeatFlux', ashflCurr.decoded)
@@ -574,8 +619,10 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       if (!isIsobaric) {
         for (let i = 0; i < staticGeom.hgtM.length; i++) { target.hgtM[i]!.set(staticGeom.hgtM[i]!); target.missing.hgt[i]!.set(staticGeom.missingHgt[i]!); }
       }
-      target.sensibleHeatFluxWm2.set(sensible.values); target.missing.sensibleHeatFlux.set(sensible.missing);
-      target.latentHeatFluxWm2.set(latent.values); target.missing.latentHeatFlux.set(latent.missing);
+      if (!instantaneousFluxes) {
+        target.sensibleHeatFluxWm2.set(sensible.values); target.missing.sensibleHeatFlux.set(sensible.missing);
+        target.latentHeatFluxWm2.set(latent.values); target.missing.latentHeatFlux.set(latent.missing);
+      }
       if (precipitation && target.precipitationMmPerHour && target.missing.precipitation) {
         target.precipitationMmPerHour.set(precipitation.values); target.missing.precipitation.set(precipitation.missing);
       }
@@ -616,6 +663,14 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       }
     };
 
+    const gridReceipt = source.upstream.nativeGrid ? {
+      gridKind: 'regridded-regular-lat-lon',
+      nativeGrid: { number: source.upstream.nativeGrid.number, uuid: source.upstream.nativeGrid.uuid, pointCount: source.upstream.nativeGrid.pointCount },
+      remapping: { method: 'nearest-cell', maxDistanceM: MAX_NATIVE_MAPPING_DISTANCE_M, sha256: (await getNativeMapping()).sha256 }
+    } : {
+      gridKind: source.grid.kind
+    };
+
     if (isIsobaric) {
       const hgtResults = firstProfileResults;
       const tempResults = secondProfileResults;
@@ -639,7 +694,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
           schemaVersion: 1,
           provider: source.upstream.provider,
           model: source.model.modelId,
-          gridKind: source.grid.kind,
+          ...gridReceipt,
           runStamp,
           cycle,
           hour,
@@ -677,9 +732,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         schemaVersion: 1,
         provider: source.upstream.provider,
         model: source.model.modelId,
-        gridKind: 'regridded-regular-lat-lon',
-        nativeGrid: { number: source.upstream.nativeGrid!.number, uuid: source.upstream.nativeGrid!.uuid, pointCount: source.upstream.nativeGrid!.pointCount },
-        remapping: { method: 'nearest-cell', maxDistanceM: MAX_NATIVE_MAPPING_DISTANCE_M, sha256: (await getNativeMapping()).sha256 },
+        ...gridReceipt,
         runStamp,
         cycle,
         hour,
@@ -716,17 +769,15 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
         active = undefined;
       }
     },
-    async close(): Promise<void> {
+    close(): Promise<void> {
       controller.abort(new Error('Split GRIB acquisition session is closed'));
-      await Promise.allSettled([active]);
-      if (j2kPoolPromise) {
-        const pool = await j2kPoolPromise.catch(() => null);
-        j2kPoolPromise = null;
-        await pool?.close();
-      }
-      fluxCache.clear();
-      staticGeometryPromise = null;
-      nativeMappingPromise = null;
+      return closingPromise ??= (async () => {
+        await Promise.allSettled([active, closeJ2kPool()]);
+        fluxCache.clear();
+        staticGeometryPromise = null;
+        nativeMappingPromise = null;
+        windRotations = null;
+      })();
     }
   };
 }

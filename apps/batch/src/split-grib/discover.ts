@@ -43,8 +43,13 @@ export function splitGribRunSentinelUrls(source: SplitSource,
     ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
     ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
   ];
+  const coordinateSentinels = source.upstream.nativeGrid
+    ? [source.upstream.nativeGrid.latitude.field, source.upstream.nativeGrid.longitude.field]
+        .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl }))
+    : [];
   if (source.model.capabilities.verticalCoordinate === 'isobaric') {
     return [
+      ...coordinateSentinels,
       splitGribFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
       ...surfaceTail,
       ...[source.fields.height!, source.fields.temperature].flatMap(field => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
@@ -53,8 +58,7 @@ export function splitGribRunSentinelUrls(source: SplitSource,
   const topHalfLevel = source.halfLevels[0]!;
   const bottomHalfLevel = source.halfLevels.at(-1)!;
   return [
-    ...[source.upstream.nativeGrid!.latitude.field, source.upstream.nativeGrid!.longitude.field]
-      .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl })),
+    ...coordinateSentinels,
     splitGribFieldUrl(source, source.fields.staticTerrain, cycle, { baseUrl: options.baseUrl }),
     ...[topHalfLevel, bottomHalfLevel].map(level => splitGribFieldUrl(source, source.fields.halfLevelHeight!, cycle, { level, baseUrl: options.baseUrl })),
     ...surfaceTail,

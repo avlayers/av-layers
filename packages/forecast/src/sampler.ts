@@ -452,7 +452,7 @@ const RAD = Math.PI / 180;
 const wrapRadians = (value: number) => ((value + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
 const wrapDegrees = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
 
-/** Projected coordinates are not separable in grid space, but 1D trig factors along the axes. */
+/** Factor 1D trigonometric terms along latitude and longitude axes for projected grids. */
 function prepareProjectedSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid;
   if (grid.kind === 'regular-latlon') throw new RangeError('Projected sampling requires a projected grid');

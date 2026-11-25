@@ -5,10 +5,11 @@ import { splitSource } from './source.js';
 
 export function createSplitGribProvider(model: ModelDefinition, requirements?: AuxiliaryRequirements): ResolvableForecastProvider {
   const source = splitSource(model, requirements);
+  const rotatesWinds = source.grid.kind === 'rotated-latlon' && Boolean(source.upstream.auxSurface?.u10mMps || source.upstream.auxLevels?.uWindMps);
   return { id: model.source.configurationId, provider: source.upstream.provider,
     maxLevels: model.capabilities.maxVerticalLevels, directTargets: true,
-    retainedGeometryFields: source.upstream.nativeGrid ? source.modelLevels.length + 1 : 1,
-    sourceMappingBytesPerCell: source.upstream.nativeGrid ? Uint32Array.BYTES_PER_ELEMENT : 0,
+    retainedGeometryFields: source.modelLevels.length + 1,
+    sourceMappingBytesPerCell: source.upstream.nativeGrid ? Uint32Array.BYTES_PER_ELEMENT : rotatesWinds ? 2 * Float32Array.BYTES_PER_ELEMENT : 0,
     auxiliarySurfaceFields: Object.keys(source.upstream.auxSurface ?? {}).length,
     auxiliaryLevelFields: Object.keys(source.upstream.auxLevels ?? {}).length,
     async resolveCycle(options) {

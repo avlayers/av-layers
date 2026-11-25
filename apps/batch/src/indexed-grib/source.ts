@@ -1,8 +1,13 @@
 import z from 'zod';
-import { gridSchema, normalizeLon, prepareGridGeometry, type ModelDefinition } from '@av/contracts';
+import { lambertConformalGridSchema, normalizeLon, prepareGridGeometry, regularLatLonGridSchema, validGridCellCount, validLambertProjection, type ModelDefinition } from '@av/contracts';
 import { AUX_SURFACE_UNITS, AUX_LEVEL_UNITS } from '@av/forecast/inputs';
 import { assertIndexedWeatherBindings, requiredAuxiliaryFields, selectConfiguredFields, type AuxiliaryRequirements } from '@av/forecast/direct-scalars';
 import { isPrivateUpstreamKey, privateUpstreamPrefix, sourceUrl } from '../source.js';
+
+const indexedGridSchema = z.discriminatedUnion('kind', [regularLatLonGridSchema, lambertConformalGridSchema]).superRefine((grid, ctx) => {
+  if (!validGridCellCount(grid)) ctx.addIssue({ code: 'custom', message: 'Grid cell indices exceed uint32' });
+  if (grid.kind === 'lambert-conformal' && !validLambertProjection(grid)) ctx.addIssue({ code: 'custom', message: 'Degenerate Lambert standard parallels or origin' });
+});
 
 const levels = z.array(z.number().int().positive()).min(1).max(256);
 const field = z.tuple([z.string().min(1), z.string().min(1)]);
@@ -33,7 +38,7 @@ const upstreamSchema = z.object({
 
 export function indexedSource(model: ModelDefinition, requirements?: AuxiliaryRequirements) {
   if (model.capabilities.verticalCoordinate !== 'isobaric' || model.forecast.statisticsResetHours === null) throw new Error('Indexed GRIB input requires isobaric levels and a statistical reset interval');
-  const upstream = upstreamSchema.parse(model.upstream), grid = gridSchema.parse(model.grid);
+  const upstream = upstreamSchema.parse(model.upstream), grid = indexedGridSchema.parse(model.grid);
   const privateR2 = upstream.urlTemplate.startsWith('r2:');
   if (privateR2) {
     const cycleTemplate = privateUpstreamPrefix(model.modelId, { date: '{date}', cycleHour: '{cycleHour}' });

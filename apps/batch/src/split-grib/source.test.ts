@@ -28,7 +28,7 @@ import { loadCoverage } from '../coverage.js';
 import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
-import { decodeSplitGribField } from './grib.js';
+import { decodeSplitGribField, decodeSplitGribFieldAsync } from './grib.js';
 import { splitGribFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
 
@@ -892,11 +892,11 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
       discoveryLagHours: 3,
       discoveryCandidates: 4,
       auxSurface: {
-        cloudTotalPct: { field: 'TCDC_Sfc', kind: 'single-level', parameter: [6, 1], surface: [10, 0], unit: '%' },
-        capeJkg: { field: 'CAPE_Sfc', kind: 'single-level', parameter: [7, 6], surface: [1, 0], unit: 'J/kg', sentinel: -1 },
+        cloudTotalPct: { field: 'TCDC_Sfc', kind: 'single-level', parameter: [6, 1], surface: [1], unit: '%' },
+        capeJkg: { field: 'CAPE_Sfc', kind: 'single-level', parameter: [7, 6], surface: [1], unit: 'J/kg', sentinel: [-1, -999] },
         pblHeightM: { field: 'HPBL_Sfc', kind: 'single-level', parameter: [3, 18], surface: [1, 0], unit: 'm' },
-        u10mMps: { field: 'UGRD_TGL_10', kind: 'single-level', parameter: [2, 2], surface: [103, 10], unit: 'm/s' },
-        v10mMps: { field: 'VGRD_TGL_10', kind: 'single-level', parameter: [2, 3], surface: [103, 10], unit: 'm/s' }
+        u10mMps: { field: 'UGRD_AGL-10m', kind: 'single-level', parameter: [2, 2], surface: [103, 10], unit: 'm/s' },
+        v10mMps: { field: 'VGRD_AGL-10m', kind: 'single-level', parameter: [2, 3], surface: [103, 10], unit: 'm/s' }
       },
       auxLevels: {
         spfhKgKg: { field: 'SPFH', kind: 'isobaric-level', parameter: [1, 0], surface: [100], unit: 'kg/kg' },
@@ -906,9 +906,9 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
       fields: {
         staticTerrain: { field: 'HGT_Sfc', kind: 'time-invariant', parameter: [3, 5], surface: [1, 0] },
         height: { field: 'HGT', kind: 'isobaric-level', parameter: [3, 5], surface: [100] },
-        surfacePressure: { field: 'PRES_Sfc', kind: 'single-level', parameter: [3, 0], surface: [1, 0] },
-        temperature2m: { field: 'TMP_TGL_2', kind: 'single-level', parameter: [0, 0], surface: [103, 2] },
-        specificHumidity2m: { field: 'SPFH_TGL_2', kind: 'single-level', parameter: [1, 0], surface: [103, 2] },
+        surfacePressure: { field: 'PRES_Sfc', kind: 'single-level', parameter: [3, 0], surface: [1] },
+        temperature2m: { field: 'TMP_AGL-2m', kind: 'single-level', parameter: [0, 0], surface: [103, 2] },
+        specificHumidity2m: { field: 'SPFH_AGL-2m', kind: 'single-level', parameter: [1, 0], surface: [103, 2] },
         sensibleHeatFlux: { field: 'SHTFL_Sfc', kind: 'single-level', parameter: [0, 11], surface: [1, 0], scale: 1 },
         latentHeatFlux: { field: 'LHTFL_Sfc', kind: 'single-level', parameter: [0, 10], surface: [1, 0], scale: 1 },
         temperature: { field: 'TMP', kind: 'isobaric-level', parameter: [0, 0], surface: [100] },
@@ -931,6 +931,8 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
     constantValue: number;
     overrides?: Readonly<Record<number, number>>;
     uvRelativeToGrid?: boolean;
+    drt?: 0 | 40;
+    decimalScale?: number;
   }): Uint8Array {
     const pointCount = hrdpsGrid.width * hrdpsGrid.height;
     const ref = new Date(options.referenceTimeIso);
@@ -1019,15 +1021,18 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
     }
 
     const hasOverride = options.overrides !== undefined;
-    const s5 = new Uint8Array(21);
+    const drt = options.drt ?? 0;
+    const s5Len = drt === 40 ? 23 : 21;
+    const s5 = new Uint8Array(s5Len);
     const v5 = new DataView(s5.buffer);
-    v5.setUint32(0, 21, false);
+    v5.setUint32(0, s5Len, false);
     v5.setUint8(4, 5);
     v5.setUint32(5, pointCount, false);
-    v5.setUint16(9, 0, false);
+    v5.setUint16(9, drt, false);
     v5.setFloat32(11, options.constantValue, false);
     v5.setUint16(15, 0, false);
-    v5.setUint16(17, 0, false);
+    const decimalScale = options.decimalScale ?? 0;
+    v5.setUint16(17, Math.abs(decimalScale) | (decimalScale < 0 ? 0x8000 : 0), false);
     v5.setUint8(19, hasOverride ? 8 : 0);
 
     const s6 = new Uint8Array(6);
@@ -1090,18 +1095,18 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
         field === 'HGT' ? (level === 1000 ? 150 : 1500) :
         field === 'TMP' ? (level === 1000 ? 290 : 280) :
         field === 'PRES_Sfc' ? 98500 :
-        field === 'TMP_TGL_2' ? 293 :
-        field === 'SPFH_TGL_2' ? 0.008 :
+        field === 'TMP_AGL-2m' ? 293 :
+        field === 'SPFH_AGL-2m' ? 0.008 :
         field === 'SHTFL_Sfc' ? 180 :
         field === 'LHTFL_Sfc' ? 90 :
         field === 'APCP-Accum1h_Sfc' ? 1.5 :
         field === 'TCDC_Sfc' ? 40 :
-        field === 'CAPE_Sfc' ? -1 :
+        field === 'CAPE_Sfc' ? -999 :
         field === 'HPBL_Sfc' ? 1200 :
         field === 'SPFH' ? 0.006 :
-        field === 'UGRD_TGL_10' || field === 'UGRD' ? 10 :
-        field === 'VGRD_TGL_10' || field === 'VGRD' ? 0 : 0;
-      const overrides = field === 'CAPE_Sfc' ? { 1: 200 } : undefined;
+        field === 'UGRD_AGL-10m' || field === 'UGRD' ? 10 :
+        field === 'VGRD_AGL-10m' || field === 'VGRD' ? 0 : 0;
+      const overrides = field === 'CAPE_Sfc' ? { 1: -799 } : undefined;
       return new Response(Buffer.from(buildRotatedGrib2({
         referenceTimeIso: cycle,
         templateNumber: isAccum ? 8 : 0,
@@ -1142,7 +1147,45 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
       expect(frame.auxSurface!.capeJkg!.missing[0]).toBe(1);
       expect(Number.isNaN(frame.auxSurface!.capeJkg!.values[0])).toBe(true);
       expect(frame.auxSurface!.capeJkg!.missing[1]).toBe(0);
-      expect(frame.auxSurface!.capeJkg!.values[1]).toBe(200);
+      expect(frame.auxSurface!.capeJkg!.values[1]).toBe(-799);
+      const capeSentinelBytes = buildRotatedGrib2({
+        referenceTimeIso: cycle,
+        templateNumber: 0,
+        parameterCategory: 7,
+        parameterNumber: 6,
+        firstFixedSurfaceType: 1,
+        firstFixedSurfaceValue: null,
+        hour: 2,
+        constantValue: -1,
+        overrides: { 1: 0, 2: 200 }
+      });
+      const decodedCape = decodeSplitGribField(hrdpsSource, capeSentinelBytes, Uint32Array.of(0, 1, 2), undefined, { sentinel: [-1, -999] });
+      expect([...decodedCape.missing]).toEqual([1, 0, 0]);
+      expect(Number.isNaN(decodedCape.values[0])).toBe(true);
+      expect([...decodedCape.values.slice(1)]).toEqual([0, 200]);
+      const constantJ2kCapeBytes = buildRotatedGrib2({
+        referenceTimeIso: cycle,
+        templateNumber: 0,
+        parameterCategory: 7,
+        parameterNumber: 6,
+        firstFixedSurfaceType: 1,
+        firstFixedSurfaceValue: null,
+        hour: 2,
+        constantValue: -10,
+        drt: 40,
+        decimalScale: 1
+      });
+      const unmaskedJ2k = await decodeSplitGribFieldAsync(hrdpsSource, constantJ2kCapeBytes, Uint32Array.of(0, 1), undefined, {
+        j2kPool: async () => { throw new Error('zero-bit DRT 5.40 must not spawn J2K workers'); }
+      });
+      expect([...unmaskedJ2k.values]).toEqual([-1, -1]);
+      expect([...unmaskedJ2k.missing]).toEqual([0, 0]);
+      const maskedJ2k = await decodeSplitGribFieldAsync(hrdpsSource, constantJ2kCapeBytes, Uint32Array.of(0, 1), undefined, {
+        sentinel: [-1, -999],
+        j2kPool: async () => { throw new Error('zero-bit DRT 5.40 must not spawn J2K workers'); }
+      });
+      expect([...maskedJ2k.missing]).toEqual([1, 1]);
+      expect(maskedJ2k.values.every(Number.isNaN)).toBe(true);
       // Grid-relative (u=10, v=0) rotated to Earth-relative preserves speed 10 m/s with nonzero meridional component
       const u10 = frame.auxSurface!.u10mMps!.values[0]!;
       const v10 = frame.auxSurface!.v10mMps!.values[0]!;

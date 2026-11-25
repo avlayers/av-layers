@@ -63,12 +63,14 @@ describe('coverage integrity', () => {
   });
 });
 
-it('retains RRFS night hours throughout its native point horizon', async () => {
-  const product = getProduct('rrfs');
-  if (!product) throw new Error('RRFS product');
-  const mask = await loadCoverage(product);
-  expect(resolveProductFrameHours(product, mask, '2026-12-21T00:00:00Z', { outputIndices: coverageIndices(mask).output }))
-    .toEqual(product.frameHours);
+it('retains RRFS and HRDPS night hours throughout their native point horizons and verifies HRDPS coverage', async () => {
+  for (const modelId of ['rrfs', 'hrdps'] as const) {
+    const product = getProduct(modelId);
+    if (!product) throw new Error(`${modelId} product`);
+    const mask = await loadCoverage(product);
+    expect(resolveProductFrameHours(product, mask, '2026-12-21T00:00:00Z', { outputIndices: coverageIndices(mask).output }))
+      .toEqual(product.frameHours);
+  }
 });
 
 it('writes and verifies sparse coverage artifacts without changing dense descriptors', async () => {

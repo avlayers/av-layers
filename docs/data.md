@@ -34,7 +34,7 @@ surface, cloud, stability and wind samples. Map layers carry palettes; native
 scalar channels use point queries.
 
 GFS, RRFS and HRDPS use surface CAPE and valid-time 10 m gusts (`GUST` or
-`GUST_AGL-10m`); HRDPS masks `CAPE_Sfc = -1` as unavailable. ICON-EU uses
+`GUST_AGL-10m`); HRDPS masks `CAPE_Sfc` sentinels (`-1`, `-999`) as unavailable. ICON-EU uses
 mixed-layer `CAPE_ML` and the 10 m interval maximum `VMAX_10M`. RRFS mean
 sea-level pressure uses the Eta reduction (`MSLET`). See the
 [model registry](../packages/contracts/config/models.json) for the source fields

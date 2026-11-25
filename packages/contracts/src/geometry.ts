@@ -126,11 +126,11 @@ export function isValidGridGeometry(grid: Grid): boolean {
   }
   if (grid.kind === 'rotated-latlon') {
     return grid.wrapLongitude === false
-      && Number.isFinite(grid.lon0) && grid.lon0 >= -180 && grid.lon0 <= 360
+      && Number.isFinite(grid.lon0) && Math.abs(grid.lon0) <= 180
       && Number.isFinite(grid.lat0) && Math.abs(grid.lat0) <= 90
-      && finiteStep(grid.dx) && finiteStep(grid.dy)
+      && Number.isFinite(grid.dx) && grid.dx > 0 && Number.isFinite(grid.dy) && grid.dy > 0
       && Number.isFinite(grid.southPoleLatDeg) && Math.abs(grid.southPoleLatDeg) < 90
-      && Number.isFinite(grid.southPoleLonDeg) && grid.southPoleLonDeg >= -180 && grid.southPoleLonDeg <= 360;
+      && Number.isFinite(grid.southPoleLonDeg) && Math.abs(grid.southPoleLonDeg) <= 180;
   }
   return grid.kind === 'lambert-conformal' && grid.wrapLongitude === false
     && Number.isFinite(grid.centralMeridianDeg) && Math.abs(grid.centralMeridianDeg) <= 180
@@ -215,8 +215,10 @@ export function prepareGridGeometry(raw: Grid): GridGeometry {
       rotationAndMetrics(lat, lon) {
         if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) >= 90) return null;
         const rotated = toRotatedRad(lat, lon);
-        if (!rotated || Math.hypot(rotated.gx, rotated.gy) < 1e-12) return null;
-        const eastRotX = -Math.sin(rotated.rotLonRad), eastRotY = Math.cos(rotated.rotLonRad);
+        if (!rotated) return null;
+        const r = Math.hypot(rotated.gx, rotated.gy);
+        if (r < 1e-12) return null;
+        const eastRotX = -rotated.gy / r, eastRotY = rotated.gx / r;
         const ex = eastRotX * cosY, ez = eastRotX * sinY;
         const geoEastX = ex * cosZ - eastRotY * sinZ, geoEastY = ex * sinZ + eastRotY * cosZ;
         const latRad = lat * RAD, lonRad = lon * RAD;
@@ -227,8 +229,8 @@ export function prepareGridGeometry(raw: Grid): GridGeometry {
           cos,
           sin,
           mapScale: null,
-          metersPerColumn: Math.abs(dx) * RAD * earthRadiusM * Math.cos(rotated.rotLatRad),
-          metersPerRow: Math.abs(dy) * RAD * earthRadiusM
+          metersPerColumn: dx * RAD * earthRadiusM * r,
+          metersPerRow: dy * RAD * earthRadiusM
         };
       }
     };

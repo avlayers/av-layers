@@ -44,7 +44,7 @@ function validateGrid(source: IndexedSource, grid: Grid): void {
       grid.iScansNegatively || grid.jScansPositively || grid.uvRelativeToGrid) {
       refuse('unsupported-grid', 'Indexed GRIB grid geometry or scanning mode is unsupported');
     }
-  } else if (expected.kind === 'lambert-conformal') {
+  } else {
     const southernCone = expected.standardParallel1Deg + expected.standardParallel2Deg < 0;
     const projectionCentreFlag = southernCone ? 0x80 : 0;
     if (grid.kind !== 'lambert' || grid.gridDefinitionTemplateNumber !== 30 ||
@@ -64,8 +64,6 @@ function validateGrid(source: IndexedSource, grid: Grid): void {
     if (!first || Math.hypot(first.x * expected.dxM, first.y * expected.dyM) > LAMBERT_FIRST_CELL_TOLERANCE_M) {
       refuse('unsupported-grid', 'Indexed GRIB Lambert first cell differs from the configured grid');
     }
-  } else {
-    refuse('unsupported-grid', 'Indexed GRIB grid geometry or scanning mode is unsupported');
   }
 }
 
