@@ -4,6 +4,7 @@ import { WIND_FRAME_LIMIT, parseWindFrame } from '@av/contracts/wind-data';
 import { ApiClient, type ApiClientMetric, type PinnedBuild } from '@av/client';
 import { PRODUCTS } from '@av/contracts/models';
 import pRetry from 'p-retry';
+import { setTimeout as delay } from 'node:timers/promises';
 
 function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -253,20 +254,35 @@ async function verifyTileCache(baseUrl: string, manifest: ManifestV5, request: t
 
 /**
  * Deployment checks every registered model. A model without a servable publication (absent, expired,
- * invalid or incomplete) is a forecast-data problem the health monitor reports, so it only warns here;
- * worker readiness, the catalog contract and every published model's serving path stay strict.
+ * invalid or incomplete) is a forecast-data problem the health monitor reports, so it only warns here.
+ * A model the catalog omits is retried while the new Worker version propagates (an old isolate can still
+ * answer after /healthz reports the new deployment), then warned about. Worker readiness, the catalog
+ * contract and every published model's serving path stay strict.
  */
 export async function verifyApiDeployment(options: {
   baseUrl: string; expectedDeploymentId: string; signal?: AbortSignal; fetchImpl?: typeof fetch;
+  catalogRetries?: number; catalogRetryDelayMs?: number;
 }): Promise<void> {
   const baseUrl = options.baseUrl.replace(/\/+$/, '');
   await verifyWorkerReadiness({ ...options, url: `${baseUrl}/healthz` });
   const client = new ApiClient({ baseUrl, fetchImpl: options.fetchImpl, requestTimeoutMs: DEFAULT_PROBE_TIMEOUT_MS });
-  const catalog = await client.catalog({ signal: options.signal });
-  invariant(new Set(catalog.map(entry => entry.model)).size === catalog.length, 'Catalog repeats a forecast model');
+  const retries = options.catalogRetries ?? 12;
+  let catalog: Awaited<ReturnType<ApiClient['catalog']>>;
+  let omitted: string[];
+  for (let attempt = 0; ; attempt++) {
+    catalog = await client.catalog({ signal: options.signal });
+    invariant(new Set(catalog.map(entry => entry.model)).size === catalog.length, 'Catalog repeats a forecast model');
+    omitted = PRODUCTS.map(product => product.modelId).filter(model => !catalog.some(entry => entry.model === model));
+    if (omitted.length === 0 || attempt >= retries) break;
+    console.log(`Deployment: catalog does not list ${omitted.join(', ')} yet; waiting for the new Worker version`);
+    await delay(options.catalogRetryDelayMs ?? 5000, undefined, { signal: options.signal });
+  }
   const published = PRODUCTS.filter(product => {
     const entry = catalog.find(entry => entry.model === product.modelId);
-    invariant(entry, `Catalog omitted registered forecast model ${product.modelId}`);
+    if (!entry) {
+      console.warn(`Deployment warning: catalog omitted registered forecast model ${product.modelId}; skipping its serving probe`);
+      return false;
+    }
     if (entry.available) return true;
     const reason = entry.error ?? 'unknown error';
     if (product.execution.schedule.length === 0 && (reason === 'publication-unavailable' || reason === 'not-retained')) {

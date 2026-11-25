@@ -323,13 +323,37 @@ describe('deployment publication readiness', () => {
   });
 
   it.each([
-    { models: catalog().filter(entry => entry.model !== eventModel), error: 'Catalog omitted' },
     { models: [...catalog(), { model: eventModel, available: true }], error: 'Catalog repeats' },
     { models: catalog().map(entry => entry.model === eventModel ? { ...entry, available: 'false' } : entry), error: 'catalog response does not match' }
-  ])('rejects missing, duplicate or malformed catalog entries: $error', async ({ models, error }) => {
+  ])('rejects duplicate or malformed catalog entries: $error', async ({ models, error }) => {
     const { latest, options } = fixture(models);
     await expect(verifyApiDeployment(options)).rejects.toThrow(error);
     expect(latest).not.toHaveBeenCalled();
+  });
+
+  it('waits for a rollout whose catalog still omits a newly registered model', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { latest, options } = fixture(), original = options.fetchImpl.getMockImplementation()!;
+    let catalogRequests = 0;
+    options.fetchImpl.mockImplementation(async (input, init) => {
+      if (new URL(String(input)).pathname === '/v1/catalog' && ++catalogRequests === 1) {
+        return Response.json({ models: catalog().filter(entry => entry.model !== scheduledModel) });
+      }
+      return original(input, init);
+    });
+    await expect(verifyApiDeployment({ ...options, catalogRetryDelayMs: 0 })).resolves.toBeUndefined();
+    expect(log.mock.calls.filter(([line]) => String(line).includes(`does not list ${scheduledModel} yet`))).toHaveLength(1);
+    expect(latest.mock.calls.map(([model]) => model)).toContain(scheduledModel);
+  });
+
+  it('warns and skips a registered model the catalog keeps omitting', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { latest, options } = fixture(catalog().filter(entry => entry.model !== scheduledModel));
+    await expect(verifyApiDeployment({ ...options, catalogRetries: 2, catalogRetryDelayMs: 0 })).resolves.toBeUndefined();
+    expect(log.mock.calls.filter(([line]) => String(line).includes(`does not list ${scheduledModel} yet`))).toHaveLength(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`catalog omitted registered forecast model ${scheduledModel}`));
+    expect(latest.mock.calls.map(([model]) => model)).not.toContain(scheduledModel);
   });
 
   it('propagates serving failures for published models', async () => {
