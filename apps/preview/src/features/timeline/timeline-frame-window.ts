@@ -119,7 +119,7 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
       // The ribbon runs from this local midnight to the next, so 23 h and 25 h days keep both ends.
       const start = localMidnight(day, timeZone), end = localMidnight(nextDay(day), timeZone);
       const offset = timeZoneOffsetMinutesAt(start + DAY_MS / 2, timeZone);
-      const solar = { stops: solarRibbonStops(latitude, longitude, start, end), bounds: solarMinuteBounds(latitude, longitude, day, offset) };
+      const solar = { stops: onLocalClock(solarRibbonStops(latitude, longitude, start, end), start, end, timeZone), bounds: solarMinuteBounds(latitude, longitude, day, offset) };
       solarCache.set(key, solar);
       if (solarCache.size > SOLAR_CACHE_DAYS) solarCache.delete(solarCache.keys().next().value!);
       return solar;
@@ -132,6 +132,21 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
     clearSolar: () => solarCache.clear()
   };
   return win;
+}
+
+type RibbonStops = ReturnType<typeof solarRibbonStops>;
+
+/** Moves ribbon stops from elapsed time to local clock position, where the view and frame markers place them. */
+function onLocalClock(stops: RibbonStops, start: number, end: number, timeZone: string): RibbonStops {
+  if (!stops || end - start === DAY_MS) return stops;
+  const startOffset = timeZoneOffsetMinutesAt(start, timeZone);
+  let floor = 0;
+  return stops.map(stop => {
+    const ms = start + stop.at / 100 * (end - start);
+    const clock = (ms - start + (timeZoneOffsetMinutesAt(ms, timeZone) - startOffset) * 60_000) / DAY_MS * 100;
+    floor = Math.min(100, Math.max(floor, clock));
+    return { ...stop, at: floor };
+  });
 }
 
 /** UTC instant of 00:00 on `day` in `timeZone`, using the offset in force at that midnight. */

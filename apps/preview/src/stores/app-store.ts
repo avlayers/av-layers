@@ -8,6 +8,7 @@ import type { AltitudeReference } from '../layers/registry';
 import { DEFAULT_THEME, type MapTheme } from '../themes/registry';
 import type { OverlayState } from '../features/raster/raster-overlay';
 import type { WindHeight, WindStatus, WindStyle } from '../features/wind/wind-model';
+import type { SkyStatus } from '../features/sky/sky-composite';
 import type { LayerOption } from '../features/forecast/forecast-model';
 
 export interface PreviewIntent {
@@ -86,7 +87,8 @@ interface NoticeView {
   readonly runAge: string;
   readonly frameStatus: string;
   /** Sky channels not drawing the selected hour; empty when every visible one is. */
-  readonly skyStatus: string;
+  /** Sky channels not drawing the selected hour, shown on their layer buttons. */
+  readonly skyStatus: SkyStatus;
   readonly overviewReady: number;
   readonly overviewTotal: number;
   readonly overviewFailed: number;

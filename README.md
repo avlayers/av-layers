@@ -56,7 +56,7 @@ for every theme.
 ## Safety
 
 Forecast guidance only. Not for navigation or flight decisions; check official
-briefings. The map attribution and the Windgram panel show the same line from
+briefings. The model menu and the Windgram panel show the same line from
 [`FORECAST_DISCLAIMER`](packages/contracts/src/safety.ts).
 
 ## More information

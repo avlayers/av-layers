@@ -368,7 +368,7 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
       wind: { status: 'ready', overview: false, displayed: true, supported: true },
       point: { open: false, location: '', horizonSelectable: false, horizonLabel: '24 hours', busy: false, status: '', wind: '' },
       location: { message: '', detail: '', busy: false },
-      notices: { error: '', tileError: '', horizon: '', freshness: '', runAge: '', frameStatus: 'Full detail', skyStatus: '', overviewReady: 40, overviewTotal: 40, overviewFailed: 0, detailReady: 4, preparationLimited: false, scaleWidth: 64, scaleText: '10 km' }
+      notices: { error: '', tileError: '', horizon: '', freshness: '', runAge: '', frameStatus: 'Full detail', skyStatus: {}, overviewReady: 40, overviewTotal: 40, overviewFailed: 0, detailReady: 4, preparationLimited: false, scaleWidth: 64, scaleText: '10 km' }
     });
 
     const noticesBefore = store.view.notices.value;

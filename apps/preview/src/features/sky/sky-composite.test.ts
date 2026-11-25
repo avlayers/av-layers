@@ -161,4 +161,35 @@ describe('SkyComposite selection identity', () => {
     expect(clouds.visible).toBe(true);
     expect(sampler.loads.size).toBe(0);
   });
+
+  it('keeps the previous hour of the same build drawn during playback while the next loads, and drops it on pause', () => {
+    const { sky, statuses } = create();
+    sampler.cache.set('b1:f0', field('b1', 'f0'));
+    sky.select(b1, 'f0');
+    sky.setPlayback(true);
+    sky.select(b1, 'f1');
+    expect(clouds.visible && isobars.visible).toBe(true);
+    expect(statuses.at(-1)).toEqual({ clouds: 'loading', isobars: 'loading' });
+    sky.setPlayback(false);
+    expect(clouds.visible || isobars.visible).toBe(false);
+  });
+
+  it('hides a held hour during playback once the next one fails', async () => {
+    const { sky } = create();
+    sampler.cache.set('b1:f0', field('b1', 'f0'));
+    sky.select(b1, 'f0');
+    sky.setPlayback(true);
+    sky.select(b1, 'f1');
+    sampler.loads.get('b1:f1')!.resolve(null);
+    await flush();
+    expect(clouds.visible || isobars.visible).toBe(false);
+  });
+
+  it('reports a layer the build does not publish as unavailable from the cache too', () => {
+    const { sky, statuses } = create();
+    const cloudsOnly = { ...build('n1'), manifest: { buildId: 'n1', layers: ['cloud-cover-total'] } } as unknown as PinnedBuild;
+    sampler.cache.set('n1:f1', field('n1', 'f1', { hasMslp: false, mslpEvaluated: false }));
+    sky.select(cloudsOnly, 'f1');
+    expect(statuses.at(-1)).toEqual({ clouds: 'ready', isobars: 'unavailable' });
+  });
 });

@@ -4,7 +4,6 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
-import { FORECAST_DISCLAIMER } from '@av/contracts/safety';
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -22,7 +21,6 @@ export function createMap(options: MapOptions): maplibregl.Map {
     center: options.camera?.center ?? [0, 20], zoom: options.camera?.zoom ?? 2,
     maxTileCacheSize: RASTER_PAN_TILES,
     maxTileCacheZoomLevels: 2,
-    attributionControl: { customAttribution: FORECAST_DISCLAIMER },
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : compositeBasemapStyle(options.theme ?? DEFAULT_THEME)
@@ -36,7 +34,7 @@ interface MapCameraOptions {
   readonly followsPlace: boolean;
   /** Zone the clock uses until the camera follows a place: the browser's. */
   readonly browserTimeZone: string;
-  /** Civil zone lookup, loaded lazily so `tz-lookup` stays out of the startup bundle. */
+  /** Civil zone lookup, a separate chunk so `tz-lookup` stays out of the startup bundle. */
   readonly loadZoneLookup?: () => Promise<(lat: number, lng: number) => string>;
 }
 

@@ -1,4 +1,4 @@
-import { LIFT_COLORS } from '@av/contracts/layers';
+import { LIFT_COLORS, SKY_COVER_TIERS } from '@av/contracts/layers';
 import type { ThemeRecord } from './theme';
 import { stone } from './stone';
 
@@ -29,8 +29,8 @@ export const classic: ThemeRecord<'classic'> = {
   rainStops: stone.rainStops,
   cloudLegend: [
     { color: 'rgba(244, 247, 252, 0.78)', label: '30% Cu' },
-    { color: 'rgba(148, 163, 184, 0.48)', label: '60% BKN' },
-    { color: 'rgba(51, 65, 85, 0.64)', label: '85%+ OVC' }
+    { color: 'rgba(148, 163, 184, 0.48)', label: `${SKY_COVER_TIERS.broken}% BKN` },
+    { color: 'rgba(51, 65, 85, 0.64)', label: `${SKY_COVER_TIERS.overcast}%+ OVC` }
   ],
   rainLegend: [
     { color: 'linear-gradient(90deg, #ffffff 0 22%, rgba(20,29,44,0.48) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },

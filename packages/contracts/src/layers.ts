@@ -27,6 +27,8 @@ export function liftRenderStyle(interpolation: PaletteInterpolation | undefined)
   return interpolation === 'linear-rgb' ? LIFT_RENDER_STYLE : LIFT_STEP_RENDER_STYLE;
 }
 export const CLOUD_EDGES = [10, 25, 50, 75, 90] as const;
+/** Total cloud % where map rings, legends and the Windgram sky strip call cover broken and overcast. */
+export const SKY_COVER_TIERS = { broken: 65, overcast: 85 } as const;
 export const CLOUD_COLORS = ['#dce6f2', '#b8cce4', '#8eaadb', '#5b84c4', '#2f5597'] as const;
 export const PALETTE_IDS = ['lift', 'rain', 'cloud'] as const;
 export type PaletteId = (typeof PALETTE_IDS)[number];

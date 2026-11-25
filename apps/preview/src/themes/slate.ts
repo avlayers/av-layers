@@ -1,3 +1,4 @@
+import { SKY_COVER_TIERS } from '@av/contracts/layers';
 import { MAX_LIFT_M, type ThemeRecord } from './theme';
 
 export const slate: ThemeRecord<'slate'> = {
@@ -43,8 +44,8 @@ export const slate: ThemeRecord<'slate'> = {
   ],
   cloudLegend: [
     { color: 'rgba(186, 214, 242, 0.30)', label: '30% Cu' },
-    { color: 'rgba(210, 228, 246, 0.52)', label: '60% BKN' },
-    { color: 'rgba(228, 240, 252, 0.78)', label: '85%+ OVC' }
+    { color: 'rgba(210, 228, 246, 0.52)', label: `${SKY_COVER_TIERS.broken}% BKN` },
+    { color: 'rgba(228, 240, 252, 0.78)', label: `${SKY_COVER_TIERS.overcast}%+ OVC` }
   ],
   rainLegend: [
     { color: 'linear-gradient(90deg, #e0f2fe 0 22%, rgba(186,224,248,0.42) 55%, transparent 100%)', label: 'Dry halo + inner cuff' },

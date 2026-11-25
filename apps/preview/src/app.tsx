@@ -1,3 +1,4 @@
+import { FORECAST_DISCLAIMER } from '@av/contracts/safety';
 import { AUTO_MODEL_ID, formatZoneTime } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
@@ -50,7 +51,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         {
           modelId: AUTO_MODEL_ID as ModelId,
           label: 'Auto',
-          subtitle: 'Finest available for this view',
+          subtitle: 'Finest grid for this view',
           kmBadge: isAutoModel && activeModelKm ? activeModelKm : 'Finest',
           isAuto: true
         },
@@ -116,6 +117,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
                   </button>
                 );
               })}
+              <p class="model-disclaimer">{FORECAST_DISCLAIMER}</p>
             </div>
           </details>
 
@@ -132,7 +134,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
             windStyle={intent.windStyle}
             windPaused={intent.windPaused}
             windHeight={intent.windHeight}
-            windStatus={wind.status}
+            channelStatus={{ ...notices.skyStatus, wind: wind.status }}
             liftVisible={intent.liftVisible}
             cloudsVisible={intent.cloudsVisible}
             rainVisible={intent.rainVisible}
@@ -202,7 +204,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         opacity={intent.opacity}
         scaleWidth={notices.scaleWidth}
         scaleText={notices.scaleText}
-        frameStatus={notices.skyStatus ? `${notices.frameStatus} · ${notices.skyStatus}` : notices.frameStatus}
+        frameStatus={notices.frameStatus}
         quality={overlay.quality ?? 'none'}
         windActive={intent.windVisible && wind.supported}
         overviewReady={notices.overviewReady}

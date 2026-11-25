@@ -175,8 +175,9 @@ export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, sign
     effect(() => {
       const { build, pendingModel, resolving, expired, playing, timeZone } = view.forecast.value;
       const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
-      untracked(() => writer.notices(build ? notices : { ...notices, runAge: '' }));
-    })
+      untracked(() => writer.notices(notices));
+    }),
+    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '' })); })
   ];
   signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });
 }

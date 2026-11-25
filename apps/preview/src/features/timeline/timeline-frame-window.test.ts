@@ -52,3 +52,13 @@ it.each([
   expect(ribbon).toHaveBeenLastCalledWith(40, 0, Date.parse(start), Date.parse(end));
   ribbon.mockRestore();
 });
+
+it('places ribbon stops at their local clock time on a 25-hour day', () => {
+  const win = createFrameWindow({ latitude: 47.4, longitude: 8.5, timeZone: 'Europe/Zurich' });
+  const stops = win.daySolar('2026-10-25').stops!;
+  const linear = solarDay.solarRibbonStops(47.4, 8.5, Date.parse('2026-10-24T22:00:00Z'), Date.parse('2026-10-25T23:00:00Z'))!;
+  const noon = stops[Math.round(stops.length / 2)]!.at, elapsedNoon = linear[Math.round(linear.length / 2)]!.at;
+  expect(noon).toBeLessThan(elapsedNoon);
+  expect(stops.at(-1)!.at).toBe(100);
+  expect(stops.every((stop, i) => i === 0 || stop.at >= stops[i - 1]!.at)).toBe(true);
+});

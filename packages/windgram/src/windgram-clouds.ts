@@ -1,6 +1,7 @@
 // Multi-layer mixed-phase cloud segmentation: 3-tier RH decks (83% SCT / 89% BKN / 94% OVC), Cu/OD tower depth,
 // resolved cloud-top temperature, high-cirrus separation, and top-of-plot sky-cover spans.
 
+import { SKY_COVER_TIERS } from '@av/contracts/layers';
 import type { HourSampling, PublishedForecastHour } from './internal-meteo.ts';
 import type { SkyCoverageCode, WindgramCloudLayerSummary } from './scene-types.ts';
 import { effectiveHourGroundM, effectiveHourUsableLiftTopM } from './windgram-climb.ts';
@@ -16,7 +17,7 @@ export function skyCoverageCode(percent: number | null | undefined): SkyCoverage
   if (percent === null || percent === undefined || !Number.isFinite(percent) || percent < 6) return 'CLR';
   if (percent <= 25) return 'FEW';
   if (percent <= 50) return 'SCT';
-  if (percent <= 87) return 'BKN';
+  if (percent < SKY_COVER_TIERS.overcast) return 'BKN';
   return 'OVC';
 }
 
@@ -267,7 +268,7 @@ export function buildSkyCoverSpans(args: {
     }
     // Model total cloud when published; humidity only stands in for it when it is missing.
     const pct = clamp(totalPct ?? (maxRh >= CLOUD_RH_THRESHOLD_PERCENT ? 95 : maxRh >= CLOUD_BKN_RH_PERCENT ? 70 : 0), 0, 100);
-    const tier: SkyCoverSpan['tier'] | null = pct >= 85 ? 'ovc' : pct >= 65 ? 'bkn' : null;
+    const tier: SkyCoverSpan['tier'] | null = pct >= SKY_COVER_TIERS.overcast ? 'ovc' : pct >= SKY_COVER_TIERS.broken ? 'bkn' : null;
     if (!tier) continue;
     const highLevelOnly =
       totalPct !== null &&

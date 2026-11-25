@@ -233,15 +233,25 @@ const OFFSET_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
   hourCycle: 'h23',
 };
 
+// Zone transitions fall on quarter-hour boundaries, so one offset holds for a whole quarter hour.
+const QUARTER_HOUR_MS = 900_000;
+const offsetCache = new Map<string, number>();
+
 /** UTC offset in minutes (east positive, west negative) for `validMs` in `timeZone`. */
 export function timeZoneOffsetMinutesAt(validMs: number, timeZone: string): number {
   if (!Number.isFinite(validMs) || isUtcZone(timeZone)) return 0;
+  const quarter = Math.floor(validMs / QUARTER_HOUR_MS), key = `${timeZone}|${quarter}`;
+  const cached = offsetCache.get(key);
+  if (cached !== undefined) return cached;
   const formatter = cachedFormatter(offsetFormatters, timeZone, OFFSET_PARTS_OPTIONS);
   if (!formatter) return 0;
-  const parts = formatter.formatToParts(new Date(validMs));
+  const at = quarter * QUARTER_HOUR_MS, parts = formatter.formatToParts(new Date(at));
   const get = (type: string) => Number(parts.find(p => p.type === type)?.value ?? 0);
   const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
-  return Math.round((localAsUtcMs - validMs) / 60_000) || 0;
+  const offset = Math.round((localAsUtcMs - at) / 60_000) || 0;
+  if (offsetCache.size >= 4096) offsetCache.clear();
+  offsetCache.set(key, offset);
+  return offset;
 }
 
 /** Local calendar date `YYYY-MM-DD` of `utcMs` in IANA `timeZone`, with that instant's own UTC offset. */

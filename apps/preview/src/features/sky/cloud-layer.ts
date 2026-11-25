@@ -9,13 +9,13 @@ import {
   OwnedImageBitmapRetirer,
   weatherContourBeforeId
 } from './sky-layer-order';
-import { CLOUD_EDGES } from '@av/contracts/layers';
+import { SKY_COVER_TIERS } from '@av/contracts/layers';
 import { cloudFraction, type SynopticField } from './synoptic-sampler';
 
 /** Total cloud cover contours, the same in every theme; themes only restyle them. */
 export const CLOUD_CONTOUR_LEVELS = [
-  { tier: 'broken', percent: CLOUD_EDGES[3] },
-  { tier: 'overcast', percent: CLOUD_EDGES[4] }
+  { tier: 'broken', percent: SKY_COVER_TIERS.broken },
+  { tier: 'overcast', percent: SKY_COVER_TIERS.overcast }
 ] as const;
 import { invMercY, mercY } from './mercator';
 

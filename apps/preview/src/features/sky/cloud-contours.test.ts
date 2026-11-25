@@ -11,8 +11,8 @@ function field(total: (c: number, r: number) => number, low: (c: number, r: numb
 const ramp = (c: number) => c / (cols - 1);
 
 describe('cloud contours', () => {
-  it('draw total cloud at 75 % and 90 %', () => {
-    expect(CLOUD_CONTOUR_LEVELS.map(level => level.percent)).toEqual([75, 90]);
+  it('draw total cloud at the shared 65 % and 85 % sky-cover tiers', () => {
+    expect(CLOUD_CONTOUR_LEVELS.map(level => level.percent)).toEqual([65, 85]);
     const tiers = new Set(buildCloudContourGeoJson(field(ramp)).features.map(f => f.properties.tier));
     expect([...tiers].sort()).toEqual(['broken', 'overcast']);
   });

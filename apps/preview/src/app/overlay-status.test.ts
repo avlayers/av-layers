@@ -1,17 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { OverlayState } from '../features/raster/raster-overlay';
-import { overlayNotices, skyStatusText } from './overlay-status';
-
-describe('skyStatusText', () => {
-  it('is empty when every visible sky channel draws the selected hour', () => {
-    expect(skyStatusText({ clouds: 'ready', rain: 'ready' })).toBe('');
-    expect(skyStatusText({})).toBe('');
-  });
-
-  it('names waiting and missing channels separately', () => {
-    expect(skyStatusText({ clouds: 'loading', isobars: 'unavailable', rain: 'loading' })).toBe('Clouds, rain loading… · Pressure unavailable');
-  });
-});
+import { overlayNotices } from './overlay-status';
 
 describe('overlayNotices', () => {
   const idle = { displayed: null, requested: null } as unknown as OverlayState;

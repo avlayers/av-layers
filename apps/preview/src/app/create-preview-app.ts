@@ -14,7 +14,7 @@ import { createPreviewContext } from './context';
 import { createDisplayOps, installDerivedViews, type PreviewOps } from './display-ops';
 import { createForecastWiring } from './forecast-wiring';
 import { installMapWiring } from './map-wiring';
-import { overlayUiChanged, skyStatusText } from './overlay-status';
+import { overlayUiChanged } from './overlay-status';
 import { createPageLifecycle } from './page-lifecycle';
 import { createPointWiring } from './point-wiring';
 import type { PreviewCommands } from './preview-commands';
@@ -88,7 +88,7 @@ export function createPreviewApp(): PreviewApp {
     live.sky = new SkyComposite(map, services.api, apiBaseUrl, {
       theme: cur.theme, opacity: cur.opacity, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
       fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec),
-      onStatus: status => writer.notices({ skyStatus: skyStatusText(status) })
+      onStatus: skyStatus => writer.notices({ skyStatus })
     });
     live.seam = new CoverageSeam(map);
     live.channels = [new BasemapChannel(map, ctx.intent().theme), overlay, live.sky, wind.overlay];

@@ -151,8 +151,9 @@ export class SkyComposite implements MapChannel {
       this.cancelWarmTimer();
       this.sampler.pauseWarming();
       this.rain.pauseWarming();
-    } else if (this.build && this.frame && !this.peeking) {
-      this.scheduleHorizonWarm();
+    } else {
+      this.syncShown();
+      if (this.build && this.frame && !this.peeking) this.scheduleHorizonWarm();
     }
   }
 
@@ -236,10 +237,14 @@ export class SkyComposite implements MapChannel {
     return channel === 'clouds' ? this.cloudsVisible : channel === 'isobars' ? this.isobarsVisible : this.rainVisible;
   }
 
-  /** Visible and drawing the selected build and frame. */
+  /**
+   * Visible and drawing the selected build and frame. During playback a channel keeps the previous hour
+   * of the same build while the next one loads, so animation does not flash blank.
+   */
   private shown(channel: SkyChannel): boolean {
-    const selected = this.selection();
-    return this.wanted(channel) && selected !== null && this.painted[channel] === selected;
+    const selected = this.selection(), painted = this.painted[channel];
+    if (!this.wanted(channel) || selected === null || painted === null) return false;
+    return painted === selected || (this.playing && this.pending[channel] === 'loading' && painted.startsWith(`${this.build!.manifest.buildId}:`));
   }
 
   private syncShown(): void {
@@ -248,10 +253,11 @@ export class SkyComposite implements MapChannel {
     this.rain.syncStyleAndVisibility(this.styles, this.opacity, this.shown('rain'));
   }
 
-  /** Hides a channel that draws another hour, so it never stands in for the selection while loading. */
+  /** Marks a channel loading; outside playback it hides another hour so that never stands in for the selection. */
   private awaitChannel(channel: SkyChannel): void {
-    if (this.painted[channel] !== this.selection()) this.painted[channel] = null;
-    if (!this.shown(channel)) this.pending[channel] = 'loading';
+    if (this.painted[channel] === this.selection()) return;
+    this.pending[channel] = 'loading';
+    if (!this.playing) this.painted[channel] = null;
   }
 
   /** Marks a channel still waiting on the selection as unavailable once its load settles. */
@@ -265,7 +271,7 @@ export class SkyComposite implements MapChannel {
     const status: SkyStatus = {};
     for (const channel of SKY_CHANNELS) {
       if (!this.wanted(channel) || !this.selection()) continue;
-      status[channel] = this.shown(channel) ? 'ready' : this.pending[channel] ?? 'loading';
+      status[channel] = this.painted[channel] === this.selection() ? 'ready' : this.pending[channel] ?? 'loading';
     }
     const key = JSON.stringify(status);
     if (key === this.lastStatus) return;
@@ -304,13 +310,14 @@ export class SkyComposite implements MapChannel {
   /** Paints the channels `field` has data for; a channel the field evaluated without valid cells stays empty. */
   private paintSynopticField(field: SynopticField): void {
     const key = `${field.buildId}:${field.frame}`;
+    const published = this.build?.manifest.layers ?? [];
     if (this.wanted('clouds')) {
       if (field.hasClouds) { this.clouds.paint(field, this.styles, this.opacity, true); this.painted.clouds = key; this.pending.clouds = null; }
-      else if (field.cloudsEvaluated) { this.painted.clouds = null; this.pending.clouds = 'unavailable'; }
+      else if (field.cloudsEvaluated || !published.includes('cloud-cover-total')) { this.painted.clouds = null; this.pending.clouds = 'unavailable'; }
     }
     if (this.wanted('isobars')) {
       if (field.hasMslp) { this.isobars.paint(field, this.styles.isobar, true); this.painted.isobars = key; this.pending.isobars = null; }
-      else if (field.mslpEvaluated) { this.painted.isobars = null; this.pending.isobars = 'unavailable'; }
+      else if (field.mslpEvaluated || !published.includes('mslp-hpa')) { this.painted.isobars = null; this.pending.isobars = 'unavailable'; }
     }
     this.syncShown();
   }

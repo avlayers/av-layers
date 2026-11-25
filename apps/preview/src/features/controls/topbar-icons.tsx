@@ -233,7 +233,8 @@ export function WeatherChannelDock(props: {
   windStyle: WindStyle;
   windPaused: boolean;
   windHeight: WindHeight;
-  windStatus: WindStatus;
+  /** Per-layer data state; a visible layer that is loading or unavailable is marked on its button. */
+  channelStatus: Partial<Record<WeatherChannelKey, WindStatus>>;
   liftVisible: boolean;
   cloudsVisible: boolean;
   rainVisible: boolean;
@@ -354,10 +355,11 @@ export function WeatherChannelDock(props: {
     : null;
   const activeIsOn = activeInfoKey ? channelActive(activeInfoKey) : false;
   const windPausedActive = props.windVisible && props.windPaused && props.windStyle !== 'barbs';
-  const windStateBadge = !activeIsOn ? 'OFF'
-    : props.windStatus === 'loading' ? 'LOADING'
-    : props.windStatus === 'unavailable' ? 'UNAVAILABLE'
-    : windPausedActive ? 'PAUSED'
+  const dataState = (key: DockChannelKey) => key === 'peek' ? undefined : props.channelStatus[key];
+  const stateBadge = (key: DockChannelKey) => !activeIsOn ? 'OFF'
+    : dataState(key) === 'loading' ? 'LOADING'
+    : dataState(key) === 'unavailable' ? 'UNAVAILABLE'
+    : key === 'wind' && windPausedActive ? 'PAUSED'
     : 'ON';
 
   const triggerAction = (key: DockChannelKey) => {
@@ -380,15 +382,16 @@ export function WeatherChannelDock(props: {
           const isActive = channelActive(key);
           const mutedByPeek = props.peeking && channelUnderlyingOn(key);
           const isInspected = touchInspectKey === key;
+          const state = isActive ? dataState(key) : undefined, stateLabel = state === 'loading' || state === 'unavailable' ? `, ${state}` : '';
           return (
             <button
               key={key}
               id={channel.id}
               type="button"
-              class={`icon-channel-btn${isActive ? ' is-active' : ''}${mutedByPeek ? ' is-peek-muted' : ''}${isInspected ? ' is-inspected' : ''}`}
-              aria-label={`${channel.title} (${isActive ? (key === 'wind' && windPausedActive ? 'paused' : 'on') : mutedByPeek ? 'temporarily hidden while peeking' : 'off'})`}
+              class={`icon-channel-btn${isActive ? ' is-active' : ''}${mutedByPeek ? ' is-peek-muted' : ''}${isInspected ? ' is-inspected' : ''}${stateLabel ? ` is-${state}` : ''}`}
+              aria-label={`${channel.title} (${isActive ? (key === 'wind' && windPausedActive ? 'paused' : 'on') + stateLabel : mutedByPeek ? 'temporarily hidden while peeking' : 'off'})`}
               aria-pressed={isActive}
-              aria-busy={key === 'wind' ? (isActive && props.windStatus === 'loading') : undefined}
+              aria-busy={state === 'loading' || undefined}
               disabled={props.disabled}
               onPointerEnter={e => { if (e.pointerType !== 'touch') enterChannelHover(key); }}
               onPointerLeave={e => { if (e.pointerType !== 'touch') scheduleHoverLeave(); }}
@@ -496,9 +499,7 @@ export function WeatherChannelDock(props: {
             <span class={activeIsOn ? 'hover-state-pill is-on' : 'hover-state-pill'}>
               {activeDesc.key === 'peek'
                 ? (activeIsOn ? 'PEEKING' : 'READY')
-                : activeDesc.key === 'wind'
-                  ? windStateBadge
-                  : (activeIsOn ? 'ON' : 'OFF')}
+                : stateBadge(activeDesc.key)}
             </span>
             {activeDesc.key === 'wind' ? (
               <span class="hover-state-pill">{formatWindLevelLabel(props.windHeight, props.units)}</span>
