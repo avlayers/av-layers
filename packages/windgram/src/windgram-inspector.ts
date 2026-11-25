@@ -1,12 +1,12 @@
 // Physical readings at an hour and height, with published diagnostic context.
 
 import { windFromComponents } from '@av/soaring';
+import { omegaToVerticalVelocityMps } from './windgram-atmosphere.ts';
 import {
   effectiveHourUsableLiftTopM,
   estimateThermalClimbAtHeight,
   isHourNativeLiftFallback,
-  omegaToVerticalVelocityMps,
-} from './windgram-atmosphere.ts';
+} from './windgram-climb.ts';
 import {
   celsiusToFahrenheit,
   clamp,

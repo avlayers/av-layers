@@ -1,8 +1,7 @@
+// Point popup controller: frame selection, 1-day / 3-day views, day stepping, and the mounted chart lifecycle.
+
 import {
   formatMapLiftCell,
-  formatPlaceTime,
-  formatPointMapLift,
-  formatPointMapTimes,
   hasNativeProfiles,
   pointLiftExpectation,
   pointMapLift,
@@ -10,11 +9,9 @@ import {
   type GeoPoint,
   type PinnedBuild,
   type PointFrame,
-  type PointSeries,
-  type PointTerrain,
   type UnitSystem,
 } from '@av/client';
-import { formatSitePlaceTime, timeZoneOffsetMinutesAt } from '@av/client/timezone';
+import { timeZoneOffsetMinutesAt } from '@av/client/timezone';
 import {
   mountWindgram,
   type WindgramCalloutTrigger,
@@ -26,19 +23,26 @@ import {
   buildStitchedWindgramView,
   buildWindgramView,
   createPointForecast,
-  type SiteForecast,
   type WindgramView,
 } from './model.ts';
+import { adoptPanelStyles } from './panel-dom.ts';
+import {
+  countDaylightDays,
+  groupFrames,
+  navigableDayHours,
+  pickRepresentativeFrameInDay,
+  type Calendar,
+  type DayHour,
+} from './point-calendar.ts';
+import { formatSplitClocks } from './point-clocks.ts';
+import { createPointDataSource, type PointWindgramInput } from './point-data.ts';
+import { buildPointPanel } from './point-panel-dom.ts';
 import { sceneData } from './scene-store.ts';
-import { adoptDocumentStyleSheet } from './style-registry.ts';
-import windgramPanelCss from './styles/windgram-panel.css?inline';
 import {
   DEFAULT_MULTI_DAY_SPAN,
   DEFAULT_POINT_VIEW_MODE,
-  findBestSoaringDayKey,
   formatDayWindowLabel,
   formatShortDayLabel,
-  POINT_VIEW_MODE_SPECS,
   resolveInitialWindowStartKey,
   resolveStitchedDayWindow,
   type PointViewMode,
@@ -47,16 +51,7 @@ import { renderPointSeries } from './scalar-point.ts';
 import { renderWindgramKey } from './svg.ts';
 import { DEFAULT_WINDGRAM_FIELD_MODE, type WindgramFieldMode } from './windgram-atmosphere.ts';
 import { findVisibleChartHourIndex } from './windgram-dom.ts';
-import { clamp } from './windgram-format.ts';
-import { readWindgram } from './windgram-inspector.ts';
-import { formatWindgramHourStamp, formatWindgramReading, type WindgramTelemetryStrip } from './windgram-readout.ts';
-import { daylightForDate } from './windgram-time-axis.ts';
-
-const STYLE_ID = 'av-windgram-document-style';
-
-function ensureDocumentStyles(owner: Document): void {
-  adoptDocumentStyleSheet(owner, STYLE_ID, windgramPanelCss);
-}
+import { formatHourReadout, type WindgramTelemetryStrip } from './windgram-readout.ts';
 
 export interface PointWindgramOptions {
   readonly point: GeoPoint;
@@ -78,9 +73,6 @@ export interface PointWindgramOptions {
 }
 
 type Update = (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean, mapOffsetMinutes?: number) => void;
-type FrameRef = { readonly id: string; readonly validTime: string };
-type DayHour = { readonly id: string; readonly validAt: string };
-type PointWindgramInput = Pick<PointSeries, 'frames' | 'siteTerrain'>;
 
 interface PointWindgramState {
   readonly section: HTMLElement;
@@ -89,93 +81,6 @@ interface PointWindgramState {
   readonly update: Update;
   refresh(input: PointWindgramInput, options: PointWindgramOptions): void;
   dispose(): void;
-}
-
-interface Calendar {
-  frames: readonly FrameRef[];
-  frameIdByValidTime: ReadonlyMap<string, string>;
-  days: ReadonlyMap<string, readonly DayHour[]>;
-  dayKeys: readonly string[];
-}
-
-interface Data extends Calendar {
-  loaded: ReadonlyMap<string, PointFrame>;
-  forecast: SiteForecast;
-  siteTerrainKey: string;
-  bestDayKey: string | null;
-  daylightDayCount: number;
-  hasSounding: boolean;
-  hasValues: boolean;
-  partial: boolean;
-}
-
-function groupFrames(frames: readonly FrameRef[], timeZone: string): Calendar {
-  const frameIdByValidTime = new Map<string, string>();
-  const days = new Map<string, DayHour[]>();
-  const references = frames.map(({ id, validTime }) => {
-    frameIdByValidTime.set(validTime, id);
-    const key = localDateKey(validTime, timeZone);
-    const hour = { id, validAt: validTime };
-    const hours = days.get(key);
-    if (hours) hours.push(hour);
-    else days.set(key, [hour]);
-    return { id, validTime };
-  });
-  return { frames: references, frameIdByValidTime, days, dayKeys: [...days.keys()] };
-}
-
-function localMinutesOfDay(ms: number, timeZone: string): number {
-  const shifted = new Date(ms + timeZoneOffsetMinutesAt(ms, timeZone) * 60_000);
-  return shifted.getUTCHours() * 60 + shifted.getUTCMinutes();
-}
-
-function pickRepresentativeFrameInDay(
-  dayHours: readonly DayHour[],
-  currentValidTime: string | null,
-  timeZone: string,
-): string | null {
-  if (!dayHours.length) return null;
-  const currentMs = currentValidTime ? Date.parse(currentValidTime) : NaN;
-  const targetMinutes = Number.isFinite(currentMs) ? localMinutesOfDay(currentMs, timeZone) : 14 * 60;
-  let best = dayHours[0]!;
-  let bestDist = Infinity;
-  for (const candidate of dayHours) {
-    const ms = Date.parse(candidate.validAt);
-    if (!Number.isFinite(ms)) continue;
-    const dist = Math.abs(localMinutesOfDay(ms, timeZone) - targetMinutes);
-    if (dist < bestDist) {
-      bestDist = dist;
-      best = candidate;
-    }
-  }
-  return best.id;
-}
-
-function formatSplitClocks(
-  point: GeoPoint,
-  explicitTimeZone: string | undefined,
-  isUtcFallback: boolean,
-  pointValidTime: string | null,
-  pointOffsetMinutes: number,
-  mapValidTime: string | null,
-  mapOffsetMinutes: number,
-): string {
-  if (!pointValidTime) return 'Point time unavailable';
-  if (!isUtcFallback) {
-    return formatPointMapTimes(
-      { validTime: pointValidTime, offsetMinutes: pointOffsetMinutes },
-      mapValidTime ? { validTime: mapValidTime, offsetMinutes: mapOffsetMinutes } : null,
-    );
-  }
-  const pointMs = Date.parse(pointValidTime);
-  const pointStamp = formatSitePlaceTime(pointMs, point, 'stamp', explicitTimeZone);
-  if (!mapValidTime) return `Point: ${pointStamp} · Map: unavailable`;
-  const mapMs = Date.parse(mapValidTime);
-  if (pointMs === mapMs && mapOffsetMinutes === 0) return `Point and map: ${pointStamp}`;
-  const mapStamp = mapOffsetMinutes === 0
-    ? formatSitePlaceTime(mapMs, point, 'stamp', explicitTimeZone)
-    : formatPlaceTime(mapMs, mapOffsetMinutes, 'stamp');
-  return `Point: ${pointStamp} · Map: ${mapStamp}`;
 }
 
 const states = new WeakMap<HTMLElement, PointWindgramState>();
@@ -189,14 +94,9 @@ function createPointWindgram(
 ): PointWindgramState {
   const owner = container.ownerDocument;
   const browser = owner.defaultView;
-  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
-    const el = owner.createElement(tag);
-    if (className) el.className = className;
-    if (text !== undefined) el.textContent = text;
-    return el;
-  };
-  ensureDocumentStyles(owner);
-  const { layers: liftLayers, frames: mapFrames } = pointLiftExpectation(build);
+  adoptPanelStyles(owner);
+  const lift = pointLiftExpectation(build);
+  const { layers: liftLayers, frames: mapFrames } = lift;
   const manifestFrameById = new Map(build.manifest.frames.map(frame => [frame.id, frame]));
   const usesDsm = build.manifest.surfaces.some(surface => surface.kind === 'fine' && surface.terrain?.surface === 'DSM');
   const toForecast = createPointForecast(build, options.point, {
@@ -208,161 +108,17 @@ function createPointWindgram(
   const initialProbeForecast = toForecast([], new Map(), input.siteTerrain);
   const initialProbeSite = initialProbeForecast.site;
   const manifestCalendar = groupFrames(build.manifest.frames, initialProbeSite.timeZone);
-  const countDaylightDays = (cal: Calendar): number => {
-    let count = 0;
-    for (const dayKey of cal.dayKeys) {
-      const hours = cal.days.get(dayKey);
-      if (!hours?.length) continue;
-      const daylight = daylightForDate(initialProbeForecast, dayKey, initialProbeSite.timeZone);
-      if (!daylight) { count++; continue; }
-      const firstMs = Date.parse(hours[0]!.validAt);
-      const lastMs = Date.parse(hours.at(-1)!.validAt);
-      if (firstMs <= daylight.sunset && lastMs >= daylight.sunrise) count++;
-    }
-    return count;
-  };
-  const supportsMultiDay = countDaylightDays(manifestCalendar) > 1;
+  const countDays = (cal: Calendar): number => countDaylightDays(cal, initialProbeForecast, initialProbeSite.timeZone);
+  const supportsMultiDay = countDays(manifestCalendar) > 1;
 
-  let grouped: Calendar | undefined;
-  let derivedMemo: {
-    frames: readonly PointFrame[];
-    totalFrames: number | undefined;
-    siteTerrain: PointTerrain | null | undefined;
-    data: Data;
-  } | null = null;
-  const derive = (nextInput: PointWindgramInput, nextOptions: PointWindgramOptions): Data => {
-    if (
-      derivedMemo &&
-      derivedMemo.totalFrames === nextOptions.totalFrames &&
-      derivedMemo.siteTerrain === nextInput.siteTerrain &&
-      derivedMemo.frames.length === nextInput.frames.length &&
-      derivedMemo.frames.every((f, i) => f === nextInput.frames[i])
-    ) {
-      return derivedMemo.data;
-    }
-    const loaded = new Map(nextInput.frames.map(frame => [frame.id, frame]));
-    const frames = nextOptions.totalFrames === undefined
-      ? build.manifest.frames.filter(frame => loaded.has(frame.id))
-      : build.manifest.frames.slice(0, nextOptions.totalFrames);
-    const forecast = toForecast(frames, loaded, nextInput.siteTerrain);
-    const previous = grouped;
-    const calendar = previous && previous.frames.length === frames.length && frames.every(({ id, validTime }, i) => {
-      const old = previous.frames[i]!;
-      return old.id === id && old.validTime === validTime;
-    }) ? previous : groupFrames(frames, forecast.site.timeZone);
-    grouped = calendar;
-
-    const forecastMap = new Map(
-      forecast.hours.map(h => [
-        h.validAt,
-        {
-          usableLiftTopM: h.mapLift.mslM,
-          terrainM: h.fineTerrainM ?? h.modelTerrainM,
-          thermalVelocityMps: h.thermalVelocityMps,
-          surfaceWindMps: h.surface.windSpeedMps,
-        },
-      ]),
-    );
-    const bestDayKey = findBestSoaringDayKey(calendar.dayKeys, calendar.days, forecastMap);
-    const siteTerrainKey = nextInput.siteTerrain
-      ? `${nextInput.siteTerrain.status}:${nextInput.siteTerrain.elevationM ?? 'null'}`
-      : '';
-
-    const result: Data = {
-      ...calendar,
-      loaded,
-      forecast,
-      siteTerrainKey,
-      bestDayKey,
-      daylightDayCount: countDaylightDays(calendar),
-      hasSounding: forecast.hours.some(hour => hour.levels.length > 0),
-      hasValues: nextInput.frames.some(frame => Object.values(frame.layers).some(cell => cell.status === 'valid')),
-      partial: frames.some(({ id }) => {
-        const frame = loaded.get(id);
-        return !frame?.profile || (mapFrames.has(id) && liftLayers.some(layer => !frame.layers[layer]));
-      }),
-    };
-    derivedMemo = {
-      frames: nextInput.frames,
-      totalFrames: nextOptions.totalFrames,
-      siteTerrain: nextInput.siteTerrain,
-      data: result,
-    };
-    return result;
-  };
+  const derive = createPointDataSource(build, toForecast, lift, countDays);
   let data = derive(input, options);
 
-  const section = node('section', 'av-point-series av-windgram-panel');
   const idPrefix = `av-point-windgram-${++nextPanelId}`;
-  const time = node('p', 'av-point-time');
-  const liftSummary = node('p', 'av-windgram-lift-summary');
-  const profileStatus = node('p', 'av-windgram-profile-status');
-  profileStatus.role = 'status';
-  const incomplete = node('p', 'av-point-incomplete', 'Forecast incomplete. Some hours could not be loaded.');
-  incomplete.role = 'status';
-  const chartHost = node('div', 'av-windgram-host');
-
-  const srReadout = node('p', 'windgram-readout');
-  srReadout.id = `${idPrefix}-readout`;
-
-  // Chip-free 1-line bottom bar: [ (1-Day | 3-Day) + (‹ Day/Window ›) + conditional ↺ TOL ] ... [ Key ⓘ ]
-  const bar = node('div', 'av-windgram-bar');
-  const navRow = node('div', 'av-windgram-nav');
-
-  const scopeGroup = node('div', 'wg-scope-seg');
-  scopeGroup.role = 'group';
-  scopeGroup.ariaLabel = 'Forecast view';
-  const modeButtons = new Map<PointViewMode, HTMLButtonElement>();
-  for (const spec of POINT_VIEW_MODE_SPECS) {
-    const btn = node('button', 'wg-scope-btn', spec.label);
-    btn.type = 'button';
-    btn.ariaLabel = spec.ariaLabel;
-    btn.setAttribute?.('data-point-view', spec.id);
-    modeButtons.set(spec.id, btn);
-    scopeGroup.append(btn);
-  }
-  scopeGroup.hidden = !supportsMultiDay;
-
-  const stepper = node('div', 'wg-day-stepper');
-  stepper.role = 'group';
-  stepper.ariaLabel = 'Forecast day navigation';
-  const stepPrevBtn = node('button', 'wg-step-btn', '‹');
-  stepPrevBtn.type = 'button';
-  const stepLabelEl = node('span', 'wg-step-label');
-  const stepNextBtn = node('button', 'wg-step-btn', '›');
-  stepNextBtn.type = 'button';
-  stepper.append(stepPrevBtn, stepLabelEl, stepNextBtn);
-
-  const snapTolBtn = node('button', 'wg-chip is-alt', '↺ TOL');
-  snapTolBtn.type = 'button';
-  snapTolBtn.title = 'Return cursor to Top of Lift';
-  snapTolBtn.hidden = true;
-
-  navRow.append(scopeGroup, stepper, snapTolBtn);
-
-  const keyPop = node('details', 'av-windgram-key-pop');
-  keyPop.addEventListener('toggle', () => {
-    if (!keyPop.open) return;
-    const siblingInfo = container.parentElement?.querySelector?.<HTMLDetailsElement>('#point-settings[open]');
-    if (siblingInfo) siblingInfo.open = false;
-  });
-  const keySummary = node('summary', 'av-windgram-key-btn');
-  keySummary.ariaLabel = 'Visual chart key';
-  const keyIcon = node('span', 'av-windgram-key-glyph');
-  keyIcon.setAttribute?.('aria-hidden', 'true');
-  keyIcon.innerHTML =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12" width="11" height="11" aria-hidden="true">' +
-    '<rect x="1" y="1.5" width="10" height="2.2" rx="1" fill="#38bdf8"/>' +
-    '<rect x="1" y="4.9" width="10" height="2.2" rx="1" fill="#facc15"/>' +
-    '<rect x="1" y="8.3" width="10" height="2.2" rx="1" fill="#f97316"/>' +
-    '</svg>';
-  keySummary.append(keyIcon, node('span', undefined, 'Key'));
-  const keyCard = node('div', 'av-windgram-key');
-  keyPop.append(keySummary, keyCard);
-  bar.append(navRow, keyPop);
-
-  section.append(chartHost, liftSummary, time, profileStatus, incomplete, srReadout, bar);
-  container.replaceChildren(section);
+  const {
+    section, time, liftSummary, profileStatus, incomplete, chartHost, srReadout, bar,
+    modeButtons, stepper, stepPrevBtn, stepLabelEl, stepNextBtn, snapTolBtn, keyPop, keyCard,
+  } = buildPointPanel(owner, container, idPrefix, supportsMultiDay);
 
   const resolvePointOffsetMinutes = (validIso?: string | null): number => {
     const ms = validIso ? Date.parse(validIso) : NaN;
@@ -550,19 +306,7 @@ function createPointWindgram(
   const step = (delta: -1 | 1) => {
     if (disposed || !data.frames.length) return;
     const timeZone = data.forecast.site.timeZone;
-    const navigable = data.dayKeys.flatMap(dayKey => {
-      const hours = data.days.get(dayKey) ?? [];
-      const daylight = daylightForDate(data.forecast, dayKey, timeZone);
-      if (!daylight) return hours;
-      const inDaylight = hours.filter(h => {
-        const ms = Date.parse(h.validAt);
-        return ms >= daylight.sunrise && ms <= daylight.sunset;
-      });
-      return inDaylight.length >= Math.min(2, hours.length) && inDaylight.length > 0 ? inDaylight : hours;
-    });
-    const list: readonly DayHour[] = navigable.length
-      ? navigable
-      : data.frames.map(f => ({ id: f.id, validAt: f.validTime }));
+    const list = navigableDayHours(data, data.forecast, timeZone);
     const curMs = Date.parse(currentPointValidTime() ?? '');
     const exactIndex = list.findIndex(frame => frame.id === selectedFrameId);
     let target: DayHour | undefined;
@@ -705,18 +449,7 @@ function createPointWindgram(
         }),
       );
       const fullIdx = fullView.hours.findIndex(hour => hour.validAt === selectedValidAt);
-      if (fullIdx >= 0) {
-        const fullHour = fullView.hours[fullIdx]!;
-        const sourceHour = fullView.sourceHours[fullIdx]!;
-        const when = formatWindgramHourStamp(fullView, fullIdx, fullHour.validAt);
-        const minFloorM = Math.max(fullView.floorM, sourceHour.mapLift.terrainM ?? sourceHour.modelTerrainM ?? fullView.floorM);
-        const tolM = fullHour.usableLiftTopM !== null && fullHour.usableLiftTopM >= fullView.floorM && fullHour.usableLiftTopM <= fullView.topM
-          ? fullHour.usableLiftTopM
-          : null;
-        const inspectM = tolM ?? clamp(minFloorM + 90, minFloorM, fullView.topM);
-        const reading = readWindgram(fullView, fullIdx, inspectM);
-        offChartReadout = `${when} · ${formatPointMapLift(sourceHour.mapLift, units)} · ${formatWindgramReading(fullView, reading, tolM !== null ? 'height' : 'surface').join(' · ')}`;
-      }
+      if (fullIdx >= 0) offChartReadout = formatHourReadout(fullView, fullIdx, units);
     }
 
     if (!mounted) {

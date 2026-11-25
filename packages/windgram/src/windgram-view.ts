@@ -12,18 +12,20 @@ import type {
   WindgramOptions,
 } from './scene-types.ts';
 import {
-  analyzeHourCloudLayers,
-  buildClimbDomeFieldPaths,
   buildInversionAndCloudDeckPaths,
-  buildSkyCoverSpans,
-  classifyConvectiveCloudRegime,
   DEFAULT_WINDGRAM_FIELD_MODE,
   stabilityPixelNodesForHour,
+  type WindgramFieldMode,
+} from './windgram-atmosphere.ts';
+import { buildClimbDomeFieldPaths } from './windgram-climb.ts';
+import {
+  analyzeHourCloudLayers,
+  buildSkyCoverSpans,
+  classifyConvectiveCloudRegime,
   type ConvectiveCloudRegime,
   type HourCloudAnalysis,
   type SkyCoverSpan,
-  type WindgramFieldMode,
-} from './windgram-atmosphere.ts';
+} from './windgram-clouds.ts';
 import {
   celsiusToFahrenheit,
   finiteScalar,

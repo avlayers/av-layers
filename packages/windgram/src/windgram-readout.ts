@@ -1,9 +1,11 @@
-// Format inspector readings; DOM interaction lives in windgram-dom.ts.
-import { formatMapLiftCell, formatPlaceTime } from '@av/client';
+// Format inspector readings; DOM interaction lives in windgram-interaction.ts.
+import { formatMapLiftCell, formatPlaceTime, formatPointMapLift } from '@av/client';
 import { MPH_PER_MPS } from '@av/contracts/units';
 import { shortTimeZoneNameAt, timeZoneOffsetMinutesAt } from '@av/client/timezone';
 import { FEET_PER_MINUTE_TO_MPS } from '@av/soaring';
-import { clamp, compass16, fahrenheitToCelsius, formatQuantity, knotsToMps, METRES_PER_THOUSAND_FEET, type UnitSystem } from './windgram-format.ts';
+import { clamp, compass16, compassDegrees, fahrenheitToCelsius, formatQuantity, knotsToMps, METRES_PER_THOUSAND_FEET, type UnitSystem } from './windgram-format.ts';
+import { visibleTolM } from './windgram-hit-test.ts';
+import { readWindgram } from './windgram-inspector.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import type { WindgramView } from './windgram-view.ts';
 import type { WindgramReading } from './scene-types.ts';
@@ -12,7 +14,6 @@ type MapLiftSummary = WindgramView['sourceHours'][number]['mapLift'];
 
 const SHORT_WEEKDAYS_UTC = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
 const barbSpeed = (knots: number, system: UnitSystem) => formatQuantity(knotsToMps(knots), 'wind', undefined, system);
-const degrees = (direction: number) => `${compass16(direction)} ${Math.round(direction) % 360}°`;
 const windSources = {
   'surface-10m': 'Native 10 m wind',
   'model-level': 'Model level',
@@ -257,7 +258,7 @@ function surfaceDetails(view: WindgramView, reading: WindgramReading): string[] 
     : view.precipitationSemantics === 'windowMeanRate' ? 'Mean precipitation rate (preceding interval)' : 'Precipitation rate (timing unspecified)';
   const layer = reading.publishedLayerWind;
   const wind = (speed: number | null, direction: number | null) => speed === null ? 'unavailable'
-    : `${formatQuantity(speed, 'wind', undefined, system)}${direction === null || speed === 0 ? '' : ` from ${degrees(direction)}`}`;
+    : `${formatQuantity(speed, 'wind', undefined, system)}${direction === null || speed === 0 ? '' : ` from ${compassDegrees(direction)}`}`;
   const fineTerrainDetail =
     reading.fineTerrainM != null && reading.terrainDeltaM != null && Math.abs(reading.terrainDeltaM) >= 5
       ? `Fine surface elevation ${formatQuantity(reading.fineTerrainM, 'elevation', undefined, system)} MSL (${reading.terrainDeltaM > 0 ? '+' : ''}${formatQuantity(reading.terrainDeltaM, 'elevation', undefined, system)} vs model ground)`
@@ -301,7 +302,7 @@ export function formatWindgramReading(view: WindgramView, reading: WindgramReadi
       ? 'Wind unavailable'
       : reading.speedKt < 0.1
         ? 'Calm'
-        : `${barbSpeed(reading.speedKt, system)}${reading.directionDeg == null ? '' : ` from ${degrees(reading.directionDeg)}`}`,
+        : `${barbSpeed(reading.speedKt, system)}${reading.directionDeg == null ? '' : ` from ${compassDegrees(reading.directionDeg)}`}`,
     reading.windSource === null ? null : windSources[reading.windSource],
     reading.windShear === null
       ? 'Layer wind shear unavailable'
@@ -318,4 +319,16 @@ export function formatWindgramReading(view: WindgramView, reading: WindgramReadi
     reading.cloud === null ? null : cloudLabels[reading.cloud],
     ...surfaceDetails(view, reading),
   ].filter((value): value is string => value !== null);
+}
+
+/** One-line readout of an hour at Top of Lift when it lies inside the scale, else 90 m above ground. */
+export function formatHourReadout(view: WindgramView, hourIndex: number, system: UnitSystem): string {
+  const hour = view.hours[hourIndex]!;
+  const sourceHour = view.sourceHours[hourIndex]!;
+  const when = formatWindgramHourStamp(view, hourIndex, hour.validAt);
+  const minFloorM = Math.max(view.floorM, sourceHour.mapLift.terrainM ?? sourceHour.modelTerrainM ?? view.floorM);
+  const tolM = visibleTolM(view, hourIndex);
+  const inspectM = tolM ?? clamp(minFloorM + 90, minFloorM, view.topM);
+  const reading = readWindgram(view, hourIndex, inspectM);
+  return `${when} · ${formatPointMapLift(sourceHour.mapLift, system)} · ${formatWindgramReading(view, reading, tolM !== null ? 'height' : 'surface').join(' · ')}`;
 }

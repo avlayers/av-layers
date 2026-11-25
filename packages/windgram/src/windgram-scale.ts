@@ -4,11 +4,11 @@
 import { windFromComponents } from '@av/soaring';
 import type { SiteForecast } from './internal-meteo.ts';
 import {
-  classifyConvectiveCloudRegime,
   omegaToVerticalVelocityMps,
   WAVE_ASCENT_MIN_MPS,
   WAVE_MIN_WIND_KT,
 } from './windgram-atmosphere.ts';
+import { classifyConvectiveCloudRegime } from './windgram-clouds.ts';
 import { finiteScalar, mpsToKnots } from './windgram-format.ts';
 import { median } from './windgram-time-axis.ts';
 

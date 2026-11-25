@@ -3,11 +3,8 @@ import { sceneData } from './scene-store.ts';
 import { adoptDocumentStyleSheet } from './style-registry.ts';
 import windgramChartCss from './styles/windgram-chart.css?inline';
 import { windgramCalloutStyles, type WindgramCalloutVariant } from './windgram-callout.ts';
-import {
-  mountWindgram as mount,
-  type WindgramCalloutTrigger,
-  type WindgramMountOptions,
-} from './windgram-dom.ts';
+import { mountWindgram as mount, type WindgramMountOptions } from './windgram-dom.ts';
+import type { WindgramCalloutTrigger } from './windgram-interaction.ts';
 
 export type WindgramMount = ReturnType<typeof mountWindgram>;
 export type { WindgramCalloutTrigger, WindgramCalloutVariant,   };
