@@ -3,10 +3,10 @@ import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { getProduct } from '@av/contracts/models';
-import { manifestV5Schema, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5 } from '@av/contracts';
-import { buildIdentity } from '../apps/batch/src/identity.js';
+import { manifestV5Schema, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, MAX_COVERAGE_BITSET_BYTES, MAX_COVERAGE_DESCRIPTOR_BYTES, MAX_MANIFEST_BYTES, MAX_MANIFEST_JSON_TOKENS, MAX_SPARSE_COVERAGE_BYTES, decodeSparseCoverage, parseBoundedJson, sameGrid, sameJsonValue, sparseCoverageDescriptorSchema, validateArtifactRecordsV5, type ManifestV5 } from '@av/contracts';
+import { buildIdentity, PRODUCER_SOURCE_PATHS } from '../apps/batch/src/identity.js';
 import { readLocalFile } from '../apps/batch/src/local-file.js';
-import { checkPerformance, forecastPlanDeadline } from '../apps/batch/src/capacity.js';
+import { checkPerformance, forecastPlanDeadline, MAX_FORECAST_RECEIPT_ENTRIES } from '../apps/batch/src/capacity.js';
 import { workflowAuthority, workflowContext, type PublicationAuthority } from '../apps/batch/src/authority.js';
 import { failureReason } from '../apps/batch/src/failure.js';
 import { cleanup, publish, readPointer, type CleanupSummary } from '../apps/batch/src/publication.js';
@@ -23,11 +23,59 @@ import pRetry from 'p-retry';
 
 const TERRAIN_ATTEMPTS = 3;
 
-/** Check before starting new work and immediately before publishing a completed forecast. */
+const SUPERSEDED = 'This revision was superseded on main; rerun the latest revision';
+/** The compare API lists at most 300 files and 250 commits; a longer gap is treated as a producer change. */
+const MAX_COMPARED_FILES = 300, MAX_COMPARED_COMMITS = 250;
+/** Producer content plus the workflows that run it. A change elsewhere (preview, API Worker, docs, tests) cannot alter a frozen build. */
+const PUBLICATION_PATHS: readonly string[] = [...PRODUCER_SOURCE_PATHS, '.github'];
+
+async function mainRevision(repository: string, signal?: AbortSignal): Promise<string> {
+  const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/git/ref/heads/main`, '--jq', '.object.sha'], { timeout: 15_000, signal });
+  return stdout.trim();
+}
+
+/** Check before starting new work: new plans, resumes, deploys and maintenance run only from current main. */
 export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
   const { repository, revision } = workflowContext();
-  const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/git/ref/heads/main`, '--jq', '.object.sha'], { timeout: 15_000, signal });
-  if (stdout.trim() !== revision) throw new Error('This revision was superseded on main; rerun the latest revision');
+  if (await mainRevision(repository, signal) !== revision) throw new Error(SUPERSEDED);
+}
+
+/** Changed paths from a GitHub compare that a frozen build cannot publish across; null when the comparison is incomplete. */
+export function publicationBlockingChanges(compare: { status?: unknown; total_commits?: unknown; files?: unknown }): string[] | null {
+  const files = compare.files;
+  if (compare.status !== 'ahead' || typeof compare.total_commits !== 'number' || compare.total_commits >= MAX_COMPARED_COMMITS
+      || !Array.isArray(files) || files.length >= MAX_COMPARED_FILES) return null;
+  const paths: string[] = [];
+  for (const file of files) {
+    if (!file || typeof file !== 'object') return null;
+    const { filename, previous_filename: previous } = file as { filename?: unknown; previous_filename?: unknown };
+    if (typeof filename !== 'string' || (previous !== undefined && typeof previous !== 'string')) return null;
+    paths.push(filename, ...(typeof previous === 'string' ? [previous] : []));
+  }
+  return paths.filter(path => PUBLICATION_PATHS.some(root => path === root || path.startsWith(`${root}/`)));
+}
+
+/**
+ * Check immediately before publishing a completed forecast. Main may have moved on by commits that leave the
+ * producer and its workflows unchanged; any other difference, or one the compare API cannot list, still refuses.
+ */
+export async function assertPublishableRevision(signal?: AbortSignal): Promise<void> {
+  const { repository, revision } = workflowContext();
+  const main = await mainRevision(repository, signal);
+  if (main === revision) return;
+  if (!/^[a-f0-9]{40}$/.test(main)) throw new Error(SUPERSEDED);
+  let blocking: string[] | null;
+  try {
+    const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/compare/${revision}...${main}`, '--jq',
+      '{status, total_commits, files: [(.files // [])[] | {filename, previous_filename}]}'], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024, signal });
+    blocking = publicationBlockingChanges(JSON.parse(stdout) as Record<string, unknown>);
+  } catch (error) {
+    signal?.throwIfAborted();
+    throw new Error(SUPERSEDED, { cause: error });
+  }
+  if (blocking === null) throw new Error(SUPERSEDED);
+  if (blocking.length) throw new Error(`${SUPERSEDED} (changed: ${[...new Set(blocking)].slice(0, 5).join(', ')})`);
+  console.log(`Main advanced to ${main} without producer changes; publishing the ${revision} build`);
 }
 
 export async function downloadForecastArtifact(runId: string, root = 'output'): Promise<string> {
@@ -53,7 +101,7 @@ type ForecastEvent = {
   publication?: PublicationState;
 } & (
   { event: 'forecast-failure'; cancelled: boolean; error: ReturnType<typeof failureReason> }
-  | { event: 'forecast-stage'; outcome: 'complete' | 'skipped' }
+  | { event: 'forecast-stage'; outcome: 'complete' | 'skipped'; phasesMs?: Record<string, number> }
   | { event: 'forecast-published'; r2UploadWallMs?: number; casCommitWallMs?: number }
 );
 
@@ -90,7 +138,7 @@ export async function publicationWorkflow<T>(operation: 'terrain' | 'plan' | 'fi
       const budget = checkPerformance(manifest);
       await writeFile(join(dirname(path), 'performance.json'), JSON.stringify(budget, null, 2));
       if (!budget.passed) throw new Error(`Performance budget failed: ${budget.failures.join('; ')}`);
-      await assertCurrentMain(signal);
+      await assertPublishableRevision(signal);
       const started = Date.now(), validationReused = validated !== undefined;
       publicationPath = join(dirname(path), 'publication.json');
       publicationAttempted = true;
@@ -271,7 +319,7 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
       forecastPlanSignal(plan, controller.signal), process.env.RETAIN_FULL_ARTIFACTS === 'true' ? 'output' : undefined);
     else await build();
     await writeFile(join('output', 'shards', String(shard), 'workflow-metrics.json'), JSON.stringify({ shardSetupWallMs, rssBytes: process.memoryUsage().rss, peakRssBytes: process.resourceUsage().maxRSS * 1024 }));
-    logForecastEvent(authority, started, { event: 'forecast-stage', phase: 'shard', buildId, shard, outcome: 'complete' });
+    logForecastEvent(authority, started, { event: 'forecast-stage', phase: 'shard', buildId, shard, outcome: 'complete', phasesMs: await shardPhases(shard) });
   } catch (error) {
     logForecastEvent(authority, started, { event: 'forecast-failure', phase: 'shard', buildId, shard,
       cancelled: controller.signal.aborted, error: failureReason(error) });
@@ -279,6 +327,15 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
   } finally {
     process.off('SIGINT', abort); process.off('SIGTERM', abort);
   }
+}
+
+/** Acquire, derive, pack and render wall time from the shard receipt, so the job log shows where the shard spent its time. */
+async function shardPhases(shard: number): Promise<Record<string, number> | undefined> {
+  try {
+    const receipt = record(parseBoundedJson(await readLocalFile(join('output', 'shards', String(shard), 'receipt.json'), MAX_PROVENANCE_BYTES), MAX_PROVENANCE_JSON_TOKENS, MAX_FORECAST_RECEIPT_ENTRIES), 'Shard receipt');
+    const phases = record(record(receipt.metrics, 'Shard metrics').phasesMs, 'Shard phases');
+    return Object.fromEntries(Object.entries(phases).filter((entry): entry is [string, number] => Number.isFinite(entry[1])));
+  } catch { return undefined; }
 }
 
 /** Only the complete, validated shard set can enter the existing publication protocol. */

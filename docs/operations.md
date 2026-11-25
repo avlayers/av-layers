@@ -100,8 +100,12 @@ new build after expiry or rotation. Also start a new build
 when a failed shard uploaded frame provenance without completing its receipt.
 Reacquisition can change the immutable provenance timestamp.
 Workers and assembly finish under their frozen revision when main advances.
-Publication requires current main; [resume the completed artifact](#resume-a-build)
-from a current-main run with matching producer content.
+Publication proceeds when main advanced only outside the producer paths
+(`PRODUCER_SOURCE_PATHS` in [identity.ts](../apps/batch/src/identity.ts)) and
+`.github`. A change inside them refuses publication;
+[resume the completed artifact](#resume-a-build) from a current-main run with
+matching producer content. Each shard's `forecast-stage` log line carries its
+acquire, derive, pack and render wall time (`phasesMs`).
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
@@ -184,6 +188,11 @@ new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
 tile routes, and any serving failure there fails deployment.
 After Cloudflare Pages deploys, the job checks the revision marker.
+
+CI and deploy run on the [RunsOn](https://runs-on.com) AWS stack that av-wrf
+uses (4 vCPU Graviton; spot for CI, on-demand for deploy), so they never queue
+behind forecast shards on GitHub-hosted runners. Pull requests from forks and
+Dependabot run CI on `ubuntu-24.04`. Forecast jobs stay on GitHub-hosted runners.
 
 Deployment checks each available model's tile front cache with bounded repeated
 GETs. Workers Cache serves tile hits before API admission; TTL ends by the

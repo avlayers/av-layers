@@ -1,6 +1,6 @@
 {
   "defaultModel": "gfs",
-  "parallelism": {"jobs": 40, "workers": 3},
+  "parallelism": {"jobs": 84, "workers": 3},
   "models": [
     {
       "modelId": "gfs",
@@ -49,7 +49,7 @@
         "intervalChange": {"fromHour": 123, "hours": 3},
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": 6,
-        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 2}
+        "window": {"hourlyThrough": 24, "endHour": 72, "tailStepHours": 3, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 18},
       "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 18, "minHorizonHours": 48},
@@ -147,7 +147,7 @@
         }
       },
       "terrainSubdivisionFactor": 10,
-      "execution": {"zoom": 9, "parallelism": 20, "schedule": ["35 4,10,16,22 * * *"]}
+      "execution": {"zoom": 9, "parallelism": 40, "schedule": ["35 4,10,16,22 * * *"]}
     },
     {
       "modelId": "icon-eu",
@@ -331,7 +331,7 @@
         "intervalHours": 1,
         "cycleHoursUtc": [0, 6, 12, 18],
         "statisticsResetHours": 1,
-        "window": {"hourlyThrough": 84, "endHour": 84, "tailStepHours": 1, "minHorizonHours": 48, "framesPerShard": 2}
+        "window": {"hourlyThrough": 84, "endHour": 84, "tailStepHours": 1, "minHorizonHours": 48, "framesPerShard": 1}
       },
       "freshness": {"maxCycleAgeHours": 12},
       "monitoring": {"environments": ["staging", "production"], "maxCycleAgeHours": 12, "minHorizonHours": 48},
@@ -424,7 +424,7 @@
         }
       },
       "terrainSubdivisionFactor": 2,
-      "execution": {"zoom": 10, "parallelism": 40, "schedule": ["45 3,9,15,21 * * *"]}
+      "execution": {"zoom": 10, "parallelism": 84, "schedule": ["45 3,9,15,21 * * *"]}
     },
     {
       "modelId": "av-wrf",

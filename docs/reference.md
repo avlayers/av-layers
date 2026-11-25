@@ -44,7 +44,7 @@ Terrain reader limits ([source](../apps/batch/src/terrain/reader.ts)):
 
 Source: [model settings](../packages/contracts/config/models.json). See [deployments](status.md) for live applications and runs.
 
-Forecast trigger budget: 40 shard jobs; default workers 3.
+Forecast trigger budget: 84 shard jobs; default workers 3.
 
 ### av-wrf (av-wrf-soaring)
 
@@ -81,7 +81,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-180,-55,180,65]`.
 - Coverage: `soaring-land-v1`. Land and coastal buffer between 55°S and 65°N; Russia, China, Greenland, Antarctica and Africa excluded.
 - Native tile zoom: 0–9.
-- Execution: 20 target shards; at most 20 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["35 4,10,16,22 * * *"]`.
+- Execution: 40 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["35 4,10,16,22 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48,51,54,57,60,63,66,69,72]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 72; native samples and profiles retain the full selected axis.
 - Source interval changes at hour 123 to 3 hours.
@@ -153,7 +153,7 @@ Forecast trigger budget: 40 shard jobs; default workers 3.
 - Bounds [west, south, east, north]: `[-134.121428,21.122192,-60.891244,52.628704]`.
 - Coverage: `rrfs-conus-land-v1`. Land and 50 km coastal buffer within the operational 3 km CONUS Lambert grid, including adjacent Canadian and Mexican coverage.
 - Native tile zoom: 0–10.
-- Execution: 42 target shards; at most 40 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
+- Execution: 84 target shards; at most 84 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["45 3,9,15,21 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84]`; interval: 1 hours; frame policy: `all-hours`.
 - Map prefix ends at forecast hour 84; native samples and profiles retain the full selected axis.
 - Vertical coordinate: `isobaric`; maximum levels: 25.

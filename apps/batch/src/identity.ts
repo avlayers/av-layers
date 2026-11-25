@@ -9,31 +9,26 @@ import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, terr
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const digest = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
 
+/** Paths whose content makes up a producer revision: build code, science, contracts, publisher scripts and dependencies. */
+export const PRODUCER_SOURCE_PATHS = [
+  'apps/batch',
+  'packages/forecast',
+  'packages/soaring',
+  'packages/solar',
+  'packages/thermodynamics',
+  'packages/contracts',
+  'scripts',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'tsconfig.json'
+] as const;
+
 export async function readProducerSourceState(root = ROOT): Promise<{ revision: string; dirty: boolean }> {
   const git = promisify(execFile);
   const [{ stdout: revision }, { stdout: dirty }] = await Promise.all([
     git('git', ['rev-parse', 'HEAD'], { cwd: root }),
-    git(
-      'git',
-      [
-        'status',
-        '--porcelain',
-        '--untracked-files=normal',
-        '--',
-        'apps/batch',
-        'packages/forecast',
-        'packages/soaring',
-        'packages/solar',
-        'packages/thermodynamics',
-        'packages/contracts',
-        'scripts',
-        'package.json',
-        'pnpm-lock.yaml',
-        'pnpm-workspace.yaml',
-        'tsconfig.json'
-      ],
-      { cwd: root }
-    )
+    git('git', ['status', '--porcelain', '--untracked-files=normal', '--', ...PRODUCER_SOURCE_PATHS], { cwd: root })
   ]);
   return { revision: revision.trim(), dirty: !!dirty.trim() };
 }
