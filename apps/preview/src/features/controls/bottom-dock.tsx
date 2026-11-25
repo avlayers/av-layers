@@ -222,6 +222,13 @@ function CapsuleLegendChrome(props: ResolvedDockProps) {
         aria-hidden="true"
       />
       <div class="capsule-inline-controls">
+        <details id="legend-key" class="ribbon-key capsule-key">
+          <summary id="legend-key-toggle" class="capsule-key-trigger" aria-label={`Layer key${rangeText ? ` ${rangeText}` : ''}, opacity ${opacityPct}`}>
+            <span class="capsule-key-swatch" style={{ background: gradient }} aria-hidden="true" />
+            {props.referenceHidden ? <span class="capsule-chip-lead">{refBadge}</span> : 'Key'}
+          </summary>
+          <LayerKeyBody {...props} />
+        </details>
         {!props.referenceHidden ? (
           <button
             type="button"
@@ -235,15 +242,6 @@ function CapsuleLegendChrome(props: ResolvedDockProps) {
             onClick={() => props.onReference(nextRef)}
           >{refBadge}</button>
         ) : null}
-        <details id="legend-key" class="ribbon-key capsule-key">
-          <summary id="legend-key-toggle" class="capsule-key-trigger" aria-label="Layer scale, opacity, and key">
-            {props.referenceHidden ? <span class="capsule-chip-lead">{refBadge}</span> : null}
-            {rangeText ? <span class="capsule-chip-range">{rangeText}</span> : null}
-            <span class="capsule-chip-opacity">{opacityPct}</span>
-            <span class="capsule-chip-caret" aria-hidden="true">▾</span>
-          </summary>
-          <LayerKeyBody {...props} />
-        </details>
       </div>
     </aside>
   );

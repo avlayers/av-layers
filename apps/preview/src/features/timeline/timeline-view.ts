@@ -5,7 +5,10 @@ import { monotonicStops, ribbonGradient } from './solar-day';
 import type { FrameWindow } from './timeline-frame-window';
 import './compact-timeline.css';
 
-/** DOM for the compact timeline: builds the day row, track and controls, and paints a frame window onto them. */
+/**
+ * DOM for the timeline: a date/time readout, the intraday hour rail and one button per local day, in that
+ * order (also the focus order). The dock's CSS grid places the three; this module paints a frame window onto them.
+ */
 interface TimelineView {
   readonly root: HTMLElement;
   readonly track: HTMLElement;
@@ -43,11 +46,17 @@ const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
 const SNAP_GHOST_MIN_PX = 3.5;
 const LOUPE_HALF_PX = 44;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
+const LONG_DAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' };
 const MOON_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="#f6f1e4" d="M9.6 1.6a6.2 6.2 0 1 0 4.6 10.6A6.8 6.8 0 1 1 9.6 1.6z"/></svg>';
 
 function dayButtonLabel(day: string): string {
   const weekday = new Date(`${day}T00:00:00Z`).toLocaleDateString('en-US', WEEKDAY);
   return `${weekday} ${Number(day.slice(8))}`;
+}
+
+/** `Thu 26 Nov` for a local day key, read as a calendar date. */
+function readoutDate(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString('en-GB', LONG_DAY).replace(',', '');
 }
 
 function percent(value: number): string {
@@ -82,10 +91,14 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   const daysRow = el('div', 'ct-days');
   daysRow.setAttribute('role', 'group');
   daysRow.setAttribute('aria-label', 'Forecast days');
-  const controls = el('div', 'ct-controls');
+  const readout = el('div', 'ct-readout');
+  const dateLabel = el('span', 'ct-date');
   const timeLabel = el('time', 'ct-time');
   const localLabel = el('span', 'ct-time-local', '--:--'), utcLabel = el('span', 'ct-time-utc');
   timeLabel.append(localLabel, utcLabel);
+  const note = el('span', 'ct-note');
+  note.setAttribute('hidden', '');
+  readout.append(dateLabel, timeLabel, note);
   const track = el('div', 'ct-track');
   track.setAttribute('role', 'slider');
   track.setAttribute('aria-orientation', 'horizontal');
@@ -112,8 +125,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   track.tabIndex = -1;
   track.append(ribbon, hatches, marks, moons, ticks, snapGhost, playhead, progress, loupe);
 
-  controls.append(timeLabel, track);
-  root.append(daysRow, controls);
+  root.append(readout, track, daysRow);
   host.append(root);
 
   let dayButtons: HTMLButtonElement[] = [];
@@ -224,7 +236,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     const frame = win.selectedIndex >= 0 ? win.frames[win.selectedIndex] : undefined;
     const ms = frame ? Date.parse(frame.validTime) : Number.NaN;
     if (!frame || !Number.isFinite(ms)) {
-      localLabel.textContent = '--:--'; utcLabel.textContent = '';
+      localLabel.textContent = '--:--'; utcLabel.textContent = ''; dateLabel.textContent = '';
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
       hideMarkers();
@@ -235,6 +247,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     const split = clock.indexOf(' (');
     const localClock = split < 0 ? clock : clock.slice(0, split);
     localLabel.textContent = localClock;
+    dateLabel.textContent = local ? readoutDate(local.day) : '';
     utcLabel.textContent = split < 0 ? '' : clock.slice(split);
     timeLabel.setAttribute('dateTime', frame.validTime);
     track.setAttribute('aria-valuetext', formatZoneTime(ms, win.timeZone, 'stamp'));
@@ -268,18 +281,6 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     });
   }
 
-  function reveal(button: HTMLButtonElement): void {
-    if (daysRow.clientWidth <= 0 || button.offsetWidth <= 0) return;
-    const right = button.offsetLeft + button.offsetWidth;
-    if (button.offsetLeft < daysRow.scrollLeft) daysRow.scrollLeft = button.offsetLeft;
-    else if (right > daysRow.scrollLeft + daysRow.clientWidth) daysRow.scrollLeft = right - daysRow.clientWidth;
-  }
-
-  function revealSelected(): void {
-    const selected = dayButtons.find(button => button.classList.contains('is-selected'));
-    if (selected) reveal(selected);
-  }
-
   function render(paint: ViewPaint): void {
     const { scale, width } = paint;
     root.classList.toggle('is-scrubbing', paint.scrubMinute !== null);
@@ -292,14 +293,14 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     track.setAttribute('aria-disabled', String(off));
     track.setAttribute('aria-valuemax', String(Math.max(0, win.frames.length - 1)));
     track.setAttribute('aria-valuenow', String(Math.max(0, win.selectedIndex)));
-    revealSelected();
   }
 
   function rebuildDays(): void {
     const focusedDay = dayButtons.includes(doc.activeElement as HTMLButtonElement) ? (doc.activeElement as HTMLButtonElement).dataset.day : undefined;
     dayButtons = win.days.map(group => {
       const label = dayButtonLabel(group.day);
-      const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`, label);
+      const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`);
+      button.append(el('span', 'ct-day-label', label));
       button.dataset.day = group.day;
       const usable = () => !button.disabled && !win.off() && group.indices.length > 0;
       const prepareDay = () => { if (usable()) handlers.prepareDay(group); };
@@ -310,15 +311,15 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       return button;
     });
     daysRow.replaceChildren(...dayButtons);
+    // One day needs no picker: the readout already names it.
+    if (dayButtons.length > 1) daysRow.removeAttribute('hidden'); else daysRow.setAttribute('hidden', '');
     if (focusedDay) dayButtons.find(button => button.dataset.day === focusedDay)?.focus({ preventScroll: true });
   }
 
-  const resizeObserver = typeof ResizeObserver === 'function' && daysRow.nodeType === 1 ? new ResizeObserver(() => {
+  const resizeObserver = typeof ResizeObserver === 'function' && track.nodeType === 1 ? new ResizeObserver(() => {
     if (destroyed) return;
-    revealSelected();
     if (Math.abs(trackWidth() - paintedWidth) >= 0.5) handlers.resized();
   }) : null;
-  resizeObserver?.observe(daysRow);
   resizeObserver?.observe(track);
 
   return {

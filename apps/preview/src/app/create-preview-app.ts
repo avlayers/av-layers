@@ -1,5 +1,6 @@
 import { AUTO_MODEL_ID, timeZoneOffsetMinutesAt } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
+import { publishDockClearance } from '../features/controls/dock-clearance';
 import { createLocationController } from '../features/location/location-controller';
 import { BasemapChannel } from '../features/map/basemap';
 import { CoverageSeam } from '../features/map/coverage-seam';
@@ -146,6 +147,7 @@ export function createPreviewApp(): PreviewApp {
     });
 
     const signal = ctx.lifecycle.signal;
+    publishDockClearance(root, signal);
     installShortcuts({
       root, signal, store, commands,
       point: { isOpen: point.isOpen, close: point.close, dismiss: target => point.feature.dismiss(target, map.getContainer()) },
