@@ -7,7 +7,6 @@ import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { WindDataCache } from '@av/client/wind';
 import type { MapChannel } from '../channels/channel';
-import { DEFAULT_DOCK_VIEW } from '../features/controls/bottom-dock-model';
 import { activeLayer, committedFrame, layerOptions, restoredCustomLayer, validatedCustomLayer, visibleCustomLayer } from '../features/forecast/forecast-model';
 import { createForecastSession } from '../features/forecast/forecast-session';
 import { createLocationController } from '../features/location/location-controller';
@@ -21,12 +20,12 @@ import { SkyComposite } from '../features/sky/sky-composite';
 import { createCompactTimeline, type CompactTimeline } from '../features/timeline/timeline-controller';
 import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 import { createPreviewStore, preparedAxisReadiness, type PreviewStore } from '../stores/app-store';
-import { DEFAULT_THEME, themeOption } from '../themes/registry';
+import { themeOption } from '../themes/registry';
 import { overlayNotices, overlayUiChanged } from './overlay-status';
 import { createPointWiring, type PointWiring } from './point-wiring';
 import type { PreviewCommands } from './preview-commands';
 import { installShortcuts } from './shortcuts';
-import { apiBaseUrl, createStartup, offlineFixture, safeStorage } from './startup';
+import { apiBaseUrl, createStartup, offlineFixture, resolveDisplay, safeStorage } from './startup';
 import { createWindWiring, type WindWiring } from './wind-wiring';
 
 export interface PreviewApp {
@@ -288,26 +287,19 @@ export function createPreviewApp(): PreviewApp {
     timeline?.cancelGesture();
     const state = history.read(window.location.search), change = history.beginRestore();
     try {
-      const dockView = state.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
-      const theme = state.theme ?? preferences.theme() ?? DEFAULT_THEME;
+      const display = resolveDisplay(state, preferences);
       writer.intent({
         reference: state.reference,
         customLayer: restoredCustomLayer(build(), visibleCustomLayer(state.layer), Boolean(state.model && state.model !== intent().model)),
-        theme, dockView,
-        liftVisible: state.liftVisible ?? true, cloudsVisible: state.cloudsVisible ?? true, rainVisible: state.rainVisible ?? true,
-        isobarsVisible: state.isobarsVisible ?? false, peeking: false
+        theme: display.theme, dockView: display.dockView, opacity: display.opacity,
+        liftVisible: display.liftVisible, cloudsVisible: display.cloudsVisible, rainVisible: display.rainVisible,
+        isobarsVisible: display.isobarsVisible, peeking: false
       });
       syncRootTheme();
-      timeline?.setVariant?.(dockView);
+      timeline?.setVariant?.(display.dockView);
       syncChannels();
-      const units: UnitSystem = state.units ?? 'metric';
-      if (units !== intent().units) setUnits(units);
-      wind?.restore({
-        visible: state.windVisible ?? (preferences.wind()?.visible ?? true),
-        style: state.windStyle ?? 'trails',
-        height: state.windHeight ?? 'surface'
-      }, state.windVisible);
-      if (state.opacity !== null) { writer.intent({ opacity: state.opacity }); syncChannels(); }
+      if (display.units !== intent().units) setUnits(display.units);
+      wind?.restore({ visible: display.windVisible, style: display.windStyle, height: display.windHeight }, state.windVisible);
       if (state.camera) map?.jumpTo(state.camera, { previewHistory: true });
       writer.intent({ requestedTime: state.validTime });
       if (state.model && state.model !== intent().model) { await forecastSession.load(state.model as ModelId); return; }
