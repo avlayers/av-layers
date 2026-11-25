@@ -171,12 +171,14 @@ gh workflow run deploy.yml --ref main -f environment=staging
 
 Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
 the clients, deploys the API Worker, and checks the complete model catalog.
-Scheduled models require a publication. Event-driven models may report
-`publication-unavailable` or `not-retained` until an external cycle is
-published. Hourly health checks only models enrolled for that environment, so a
+Every registered model must appear in the catalog, but a model without a
+servable publication (missing, expired, invalid or incomplete) only logs a
+warning and skips its probes: forecast data problems belong to the health
+monitor, not to code deploys. Deployment fails if no model has a publication.
+Hourly health checks only models enrolled for that environment, so a
 new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
-tile routes; invalid or incomplete publications fail deployment.
+tile routes, and any serving failure there fails deployment.
 After Cloudflare Pages deploys, the job checks the revision marker.
 
 Deployment checks each available model's tile front cache with bounded repeated
