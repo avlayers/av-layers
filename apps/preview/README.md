@@ -25,7 +25,8 @@ pnpm --filter @av/preview build
 An open page stays on its pinned build while you compare times. Every few
 minutes, and when the tab regains focus, it asks the catalog whether the
 model has a newer cycle and offers **Update**, which adopts the new run and
-keeps the map, wind height and requested time where the run covers it
+keeps the map, wind height, requested time and an open point forecast where
+the run covers them
 (subject to the API's 15-second [pointer cache](../../docs/serving-budgets.md)).
 
 Keyboard: **F** (or the first Tab stop, *Forecast at map center*) opens the

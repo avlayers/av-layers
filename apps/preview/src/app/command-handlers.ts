@@ -29,6 +29,12 @@ function createOpacityGesture() {
 }
 
 /** The commands the UI calls; each updates intent, then the channels, preferences and URL. */
+/** Focuses the open point card, or `fallback` when no card is showing. */
+function focusPointOr(fallback?: HTMLElement): void {
+  const body = document.querySelector<HTMLElement>('#point-body');
+  (body && !body.closest('[hidden]') ? body : fallback)?.focus();
+}
+
 export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCommands {
   const { writer } = ctx.store, { live, history } = ctx, preferences = ctx.startup.preferences;
   const opacity = createOpacityGesture();
@@ -125,12 +131,20 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
       else live.point?.feature.syncViewMode?.();
     },
     selectFrame(index, mode) { ops.selectIndex(index, mode); },
-    updateRun() { void ctx.forecastSession.updateRun(); },
+    updateRun() {
+      // Loading a run closes the point card; reopen it at the same place so the windgram stays in view,
+      // and give focus a visible home because the notice holding the Update button hides.
+      const point = live.point?.feature.current?.point, before = ctx.build();
+      void ctx.forecastSession.updateRun().then(async () => {
+        if (point && live.point && ctx.build() !== before) await live.point.feature.open(point);
+        if (document.activeElement === document.body || document.activeElement?.closest('[hidden]')) focusPointOr(live.map?.getCanvas());
+      }).catch(() => {});
+    },
     forecastAtCenter() {
       const map = live.map;
       if (!map || ctx.mapFailed() || !live.point) return;
-      const center = map.getCenter();
-      void live.point.feature.open(normalizePoint(center.lat, center.lng)).then(() => document.querySelector<HTMLElement>('#point-body')?.focus());
+      const center = map.getCenter(), feature = live.point.feature;
+      void feature.open(normalizePoint(center.lat, center.lng)).then(() => { if (feature.current) focusPointOr(); }).catch(() => {});
     },
     setPlaying(playing) {
       writer.forecast({ playing });
