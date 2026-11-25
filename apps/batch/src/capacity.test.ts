@@ -36,13 +36,13 @@ it('projects retention for event-driven runs without inventing a zero-run budget
 
 it('admits aggregate scalar and profile bytes independently of the per-shard limit', () => {
   const cells = 64 * 17 * 17, recordBytes = 8 + 14 * 256, shardsPerGroup = 130;
-  const sampleShards = Array.from({ length: shardsPerGroup }, () => ({ frameCount: 8, storedCells: cells, bytes: cells * 8 * 5 }));
+  const sampleShards = Array.from({ length: shardsPerGroup }, () => ({ frameCount: 16, storedCells: cells, bytes: cells * 16 * 5 }));
   const profileShards = Array.from({ length: shardsPerGroup }, () => ({ storedCells: cells, bytes: cells * recordBytes }));
   const manifest = { version: 5, buildId: 'budget', cycle: '2026-11-05T00:00:00Z', artifacts: [{}],
     metrics: { elapsedMs: 1, peakRssBytes: 1, tiles: [1] },
     surfaces: [{ kind: 'native', grid: { width: 5000, height: 500 }, coverage: { maxZoom: 0 }, layers: ['sfc-temp-c'],
-      samples: { storedCells: cells * shardsPerGroup, channelCount: 8, shards: sampleShards },
-      profiles: { recordBytes, groups: Array.from({ length: 8 }, () => ({ frameCount: 1, shards: profileShards })) } }] } as unknown as ManifestV5;
+      samples: { storedCells: cells * shardsPerGroup, channelCount: 16, shards: sampleShards },
+      profiles: { recordBytes, groups: Array.from({ length: 16 }, () => ({ frameCount: 1, shards: profileShards })) } }] } as unknown as ManifestV5;
   const over = checkPerformance(manifest);
   expect(over.observed.numericBytes).toBe(over.observed.emittedSampleBytes + over.observed.profileBytes);
   expect(over.observed.profileBytes).toBeGreaterThan(BUILD_BUDGETS.numericBytes);
