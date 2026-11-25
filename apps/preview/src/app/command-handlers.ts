@@ -125,6 +125,7 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
       else live.point?.feature.syncViewMode?.();
     },
     selectFrame(index, mode) { ops.selectIndex(index, mode); },
+    updateRun() { void ctx.forecastSession.updateRun(); },
     setPlaying(playing) {
       writer.forecast({ playing });
       for (const channel of live.channels) channel.setPlayback?.(playing);

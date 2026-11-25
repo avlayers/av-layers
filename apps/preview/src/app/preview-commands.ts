@@ -12,6 +12,8 @@ type WeatherChannel = WeatherChannelKey;
 
 export interface PreviewCommands {
   selectModel(model: ModelId): void;
+  /** Adopts the newer run the catalog advertises. */
+  updateRun(): void;
   selectReference(reference: AltitudeReference): void;
   selectLayer(layer: 'lift' | LayerId): void;
   prepareLayer(layer: 'lift' | LayerId): void;

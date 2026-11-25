@@ -22,8 +22,11 @@ pnpm --filter @av/preview build
 
 `AV_API_BASE` defaults to `http://localhost:8787`. Set
 `VITE_OFFLINE_FIXTURE=true` when serving the synthetic fixture (`pnpm dev`).
-Reload the page to pick up a newly published build (subject to the API's
-15-second [pointer cache](../../docs/serving-budgets.md)).
+An open page stays on its pinned build while you compare times. Every few
+minutes, and when the tab regains focus, it asks the catalog whether the
+model has a newer cycle and offers **Update**, which adopts the new run and
+keeps the map, wind height and requested time where the run covers it
+(subject to the API's 15-second [pointer cache](../../docs/serving-budgets.md)).
 
 Auto selects the finest available forecast covering the map center and time, falling back to models covering at least 15% of the camera viewport when the center is over water or outside a regional domain, and clamping out-of-range timestamps to the nearest available frame.
 A globe view, or a map without a location, selects GFS immediately without a center sample when that build is available.

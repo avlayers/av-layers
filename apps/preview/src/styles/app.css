@@ -1030,6 +1030,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 .toast { position: absolute; z-index: 3; top: 88px; left: 12px; max-width: min(420px, calc(100% - 24px)); margin: 0; padding: 8px 10px; border-radius: 10px; font-size: 13px; }
 .fixture-warning { top: 120px; pointer-events: none; }
+#new-run { top: 124px; }
+#new-run button { margin-left: 6px; font: inherit; font-weight: 600; }
 .toast.status { background: #f4f7f8; color: #243140; }
 .toast.error { background: #fff1f1; color: #8d1d1d; }
 

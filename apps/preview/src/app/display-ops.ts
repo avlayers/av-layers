@@ -116,6 +116,7 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
         freshness: (ctx.intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now),
         runAge: formatRunAge(current.manifest.cycle, now)
       });
+      void ctx.forecastSession.checkNewRun();
     },
 
     updateTimeUi() {
@@ -199,7 +200,7 @@ export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, sign
       const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
       untracked(() => writer.notices(notices));
     }),
-    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '' })); })
+    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '', newRun: '' })); })
   ];
   signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });
 }

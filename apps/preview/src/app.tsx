@@ -223,6 +223,9 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
       />
       {offline ? <p class="toast fixture-warning">SYNTHETIC FIXTURE — development data</p> : null}
       <p id="horizon-notice" class="toast" role="status" hidden={!notices.horizon}>{notices.horizon}</p>
+      <p id="new-run" class="toast status" role="status" hidden={!notices.newRun}>
+        {notices.newRun} <button type="button" onClick={() => commands.updateRun()}>Update</button>
+      </p>
       <p id="tile-error" class={notices.tileError ? 'toast error' : 'toast status'} role={notices.tileError ? 'alert' : 'status'} hidden={!notices.tileError}>{notices.tileError}</p>
       <p id="error" class="toast error" role="alert" hidden={!notices.error}>{notices.error}</p>
       <p id="freshness" class="sr-only">{notices.freshness}</p>
