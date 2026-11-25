@@ -8,7 +8,9 @@ export const BUILD_BUDGETS = {
   numericBytes: 128 * 1024 ** 3,
   elapsedMs: 180 * 60_000,
   workingSetBytes: 2 * 1024 ** 3,
-  peakRssBytes: 4 * 1024 ** 3
+  // Observed process high-water mark. The ubuntu-24.04 public-repo runner has 16 GiB;
+  // HRDPS continental shards peaked at 3.5-4.6 GiB with a 2 GiB admitted working set.
+  peakRssBytes: 8 * 1024 ** 3
 } as const;
 
 export const LEGACY_FORECAST_ELAPSED_MS = 90 * 60_000;

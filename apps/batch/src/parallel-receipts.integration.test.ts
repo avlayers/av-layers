@@ -175,6 +175,19 @@ describe('whole-domain parallel receipt integrity', () => {
     } finally { rss.mockRestore(); }
   }, 60_000);
 
+  it('rejects a shard RSS peak from the frame build before validating or uploading outputs', async () => {
+    const out = await copyCompleted();
+    await rm(join(out, 'shards'), { recursive: true }); await rm(join(out, 'builds'), { recursive: true });
+    const usage = process.resourceUsage(), peak = BUILD_BUDGETS.peakRssBytes + 1024, validated = vi.fn();
+    const rss = vi.spyOn(process, 'resourceUsage').mockImplementation(() => ({ ...usage, maxRSS: peak / 1024 }));
+    metricsHooks.afterShardValidate = validated;
+    try {
+      await expect(buildShard({ plan, shard: 0, out, product: wholeProduct, mask: wholeMask, provider: source.provider })).rejects.toThrow('peakRssBytes');
+      expect(validated).not.toHaveBeenCalled();
+      await expect(readFile(receiptPath(out, 0))).rejects.toThrow();
+    } finally { rss.mockRestore(); }
+  }, 60_000);
+
   it.each(['assembly-rss', 'validation-rss', 'validation-elapsed'])('rejects over-budget %s before publication', async kind => {
     const out = await copyCompleted(), onValidated = vi.fn();
     const originalUsage = process.resourceUsage.bind(process), originalNow = Date.now.bind(Date);
