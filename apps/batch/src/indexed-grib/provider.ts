@@ -23,8 +23,8 @@ export function createIndexedGribProvider(model: ModelDefinition, requirements?:
       options.signal?.throwIfAborted();
       if (source.privateR2) return (await resolveRun(options)).cycle;
       const { validateCycle } = await import('./fields.js');
-      if (options.cycle !== undefined) return validateCycle(source, options.cycle);
-      const { discoverIndexedGribRun } = await import('./discover.js');
+      const { admitIndexedGribRun, discoverIndexedGribRun } = await import('./discover.js');
+      if (options.cycle !== undefined) return (await admitIndexedGribRun(source, validateCycle(source, options.cycle), options)).cycle;
       return validateCycle(source, (await discoverIndexedGribRun(source, options)).cycle);
     },
     async proveInputs(options) { return (await import('../input-proof.js')).proveForecastInputs(model, this, options); },
