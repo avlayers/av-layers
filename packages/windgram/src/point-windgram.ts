@@ -421,7 +421,7 @@ function createPointWindgram(
       stepLabelEl.textContent = `${formatShortDayLabel(targetDayKey)}${isBest ? ' ★' : ''}`;
       stepLabelEl.className = isBest ? 'wg-step-label is-best' : 'wg-step-label';
       if (isBest) {
-        stepLabelEl.title = '★ Highest daily thermal score in window (peak usable lift height, w*, and surface wind)';
+        stepLabelEl.title = '★ Highest peak thermal score in window (best hour of usable lift depth, w* and surface wind)';
       } else {
         stepLabelEl.title = '';
         stepLabelEl.removeAttribute?.('title');
