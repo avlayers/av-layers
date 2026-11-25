@@ -250,7 +250,11 @@ async function verifyTileCache(baseUrl: string, manifest: ManifestV5, request: t
   }, { retries: 2, delayMs: 1000, signal });
 }
 
-/** Deployment checks every registered model, accepting absent or expired event-driven publications. */
+/**
+ * Deployment checks every registered model. A model without a servable publication (absent, expired,
+ * invalid or incomplete) is a forecast-data problem the health monitor reports, so it only warns here;
+ * worker readiness, the catalog contract and every published model's serving path stay strict.
+ */
 export async function verifyApiDeployment(options: {
   baseUrl: string; expectedDeploymentId: string; signal?: AbortSignal; fetchImpl?: typeof fetch;
 }): Promise<void> {
@@ -263,11 +267,15 @@ export async function verifyApiDeployment(options: {
     const entry = catalog.find(entry => entry.model === product.modelId);
     invariant(entry, `Catalog omitted registered forecast model ${product.modelId}`);
     if (entry.available) return true;
-    invariant(product.execution.schedule.length === 0 && (entry.error === 'publication-unavailable' || entry.error === 'not-retained'),
-      `Catalog reports no publication for ${product.modelId}: ${entry.error ?? 'unknown error'}`);
-    console.log(`Deployment: ${product.modelId} has no active publication (${entry.error}); awaiting an external forecast cycle`);
+    const reason = entry.error ?? 'unknown error';
+    if (product.execution.schedule.length === 0 && (reason === 'publication-unavailable' || reason === 'not-retained')) {
+      console.log(`Deployment: ${product.modelId} has no active publication (${reason}); awaiting an external forecast cycle`);
+    } else {
+      console.warn(`Deployment warning: catalog reports no publication for ${product.modelId} (${reason}); skipping its serving probe`);
+    }
     return false;
   });
+  invariant(published.length > 0, 'Catalog reports no publication for any forecast model');
   for (const product of published) {
     const manifest = await probeApi({ ...options, baseUrl, model: product.modelId });
     await verifyTileCache(baseUrl, manifest, options.fetchImpl ?? fetch, options.signal);

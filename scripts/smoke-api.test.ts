@@ -298,16 +298,28 @@ describe('deployment publication readiness', () => {
     await result;
   });
 
-  it.each(['publication-invalid', 'publication-incomplete', undefined])('rejects event-driven publication error %s', async error => {
+  it.each(['publication-invalid', 'publication-incomplete', undefined])('warns and skips an event-driven model with publication error %s', async error => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { latest, options } = fixture(catalog().map(entry => entry.model === eventModel ? { ...entry, error } : entry));
-    await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
-    expect(latest).not.toHaveBeenCalled();
+    await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
+    expect(latest.mock.calls.map(([model]) => model)).not.toContain(eventModel);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`no publication for ${eventModel} (${error ?? 'unknown error'})`));
   });
 
-  it.each(['publication-unavailable', 'not-retained'] as const)('requires scheduled publications (%s) and keeps explicit forecast probes strict', async error => {
-    const { options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error } : entry));
-    await expect(verifyApiDeployment(options)).rejects.toThrow(`Catalog reports no publication for ${scheduledModel}`);
+  it.each(['publication-unavailable', 'not-retained'] as const)('warns and skips an unpublished scheduled model (%s) but keeps explicit forecast probes strict', async error => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { latest, options } = fixture(catalog().map(entry => entry.model === scheduledModel ? { ...entry, available: false, error } : entry));
+    await expect(verifyApiDeployment(options)).resolves.toBeUndefined();
+    expect(latest.mock.calls.map(([model]) => model)).not.toContain(scheduledModel);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`no publication for ${scheduledModel} (${error})`));
     await expect(probeApi({ ...options, model: eventModel })).rejects.toThrow(`Catalog reports no publication for ${eventModel}`);
+  });
+
+  it('fails when no registered model has a publication', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { latest, options } = fixture(catalog().map(entry => ({ model: entry.model, available: false, error: 'publication-invalid' })));
+    await expect(verifyApiDeployment(options)).rejects.toThrow('Catalog reports no publication for any forecast model');
+    expect(latest).not.toHaveBeenCalled();
   });
 
   it.each([
