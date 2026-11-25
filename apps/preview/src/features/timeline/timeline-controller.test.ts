@@ -1413,3 +1413,58 @@ it('highlights multi-day window pills cleanly and clears them when closed', () =
   expect(days.map(d => d.classList.contains('is-in-window'))).toEqual([false, false, false, false]);
   timeline.destroy();
 });
+
+// Day-preview redesign contracts (T1). Each starts as `it.fails` and flips when its behaviour lands.
+const comparison: TimelineFrame[] = [
+  { id: 'd1-14', validTime: '2026-11-13T14:00:00Z' },
+  { id: 'd2-03', validTime: '2026-11-14T03:00:00Z' },
+  { id: 'd2-15', validTime: '2026-11-14T15:00:00Z' },
+  { id: 'd3-14', validTime: '2026-11-15T14:00:00Z' },
+  { id: 'd3-15', validTime: '2026-11-15T15:00:00Z' }
+];
+
+it.fails('keeps the comparison hour across a sparse day', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const days = named(host.children[0]!, 'ct-day');
+  click(days[1]!);
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.update(comparison, 'd2-15');
+  click(days[2]!);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it.fails('keeps the second repeated DST hour when its own day is picked again', () => {
+  const fallBack: TimelineFrame[] = [
+    { id: 'first-01', validTime: '2026-11-01T05:00:00Z' },
+    { id: 'second-01', validTime: '2026-11-01T06:00:00Z' }
+  ];
+  const { host, onSelect, timeline } = setup('America/New_York');
+  timeline.update(fallBack, 'second-01');
+  click(named(host.children[0]!, 'ct-day')[0]!);
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it.fails('moves a focused day to the next day at the same hour, not the next frame', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const days = named(host.children[0]!, 'ct-day');
+  days[0]!.focus();
+  key(days[0]!, 'ArrowRight');
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.destroy();
+});
+
+it.fails('keeps an hour drag inside the selected day', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd2-15');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetLeft = 0; track.offsetWidth = 240;
+  pointer(track, 'pointerdown', 200);
+  for (const x of [230, 250, 270, 300, 340]) pointer(track, 'pointermove', x);
+  pointer(track, 'pointerup', 340);
+  expect(onSelect.mock.calls.every(([index]) => index === 1 || index === 2)).toBe(true);
+  timeline.destroy();
+});
