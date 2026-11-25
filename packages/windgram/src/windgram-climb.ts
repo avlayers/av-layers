@@ -1,11 +1,10 @@
-// Lenschow & Stephens (1980) net thermal climb-rate dome inside usable lift (ground -> TOL / native fallback).
+// Lenschow & Stephens (1980) net thermal climb-rate dome inside the native column's usable lift.
 
 import {
   LENSCHOW_F_MAX,
   LENSCHOW_PEAK_ZETA,
   lenschowNormalizedUpdraft,
   SINK_RATE_MPS,
-  usableLiftDepthM,
 } from '@av/soaring';
 import type { PublishedForecastHour } from './internal-meteo.ts';
 import { clamp, convertQuantity, finiteScalar, type UnitSystem } from './windgram-format.ts';
@@ -53,12 +52,33 @@ interface ConvectiveColumnEnvelope {
   readonly peakClimbMps: number;
 }
 
-interface ConvectiveEnvelopeOptions {
-  readonly modelTerrainM?: number | null;
-  readonly isNativeFallback?: boolean;
+/**
+ * The native model column one climb estimate uses: model ground, convective top, w* and cloud cap,
+ * with `usableTopM` from the same inputs (`null` when that column has no usable climb).
+ */
+interface NativeThermalColumn {
+  readonly groundM: number;
+  readonly thermalTopM: number;
+  readonly thermalVelocityMps: number;
+  readonly usableTopM: number | null;
+  readonly cloudCapM: number | null;
 }
 
-/** Resolves effective usable lift top (preferring fine map lift, falling back to native lift when map lift is unavailable). */
+/** The hour's native column, or `null` when model ground, thermal top or w* is missing. */
+export function nativeThermalColumn(
+  hour: Pick<PublishedForecastHour, 'modelTerrainM' | 'thermalTopM' | 'thermalVelocityMps' | 'nativeUsableLiftTopM' | 'effectiveCloudLimitM'>,
+): NativeThermalColumn | null {
+  const groundM = finiteScalar(hour.modelTerrainM), thermalTopM = finiteScalar(hour.thermalTopM);
+  const thermalVelocityMps = finiteScalar(hour.thermalVelocityMps);
+  if (groundM === null || thermalTopM === null || thermalVelocityMps === null) return null;
+  return {
+    groundM, thermalTopM, thermalVelocityMps,
+    usableTopM: finiteScalar(hour.nativeUsableLiftTopM),
+    cloudCapM: finiteScalar(hour.effectiveCloudLimitM),
+  };
+}
+
+/** Resolves the usable lift ceiling shown for an hour: fine map lift, else the native column's ceiling when fine lift is unpublished. */
 export function effectiveHourUsableLiftTopM(
   hour: Pick<PublishedForecastHour, 'mapLift' | 'nativeUsableLiftTopM'>,
   viewUsableLiftTopM?: number | null,
@@ -70,79 +90,41 @@ export function effectiveHourUsableLiftTopM(
   return hour.nativeUsableLiftTopM ?? null;
 }
 
-/** True when an hour's displayed ceiling comes from native-column fallback rather than fine map lift. */
-export function isHourNativeLiftFallback(
-  hour: Pick<PublishedForecastHour, 'mapLift' | 'nativeUsableLiftTopM'>,
-  viewUsableLiftTopM?: number | null,
-): boolean {
-  const mapTop = viewUsableLiftTopM !== undefined ? viewUsableLiftTopM : hour.mapLift.mslM;
-  if (mapTop !== null) return false;
-  const status = hour.mapLift.msl?.status;
-  if (status && status !== 'unavailable') return false;
-  return hour.nativeUsableLiftTopM != null;
-}
-
-/** Resolves the Lenschow convective mixed-layer envelope for one forecast hour. */
+/**
+ * Lenschow climb envelope for one native column. `surfaceM` (fine terrain) only clips drawing below
+ * the local surface; the profile's ground, depth and ceiling all come from `column`.
+ */
 export function resolveConvectiveEnvelope(
-  groundM: number | null,
-  usableTopM: number | null,
-  thermalTopM: number | null,
-  cloudCapM: number | null,
-  thermalVelocityMps: number | null,
-  options?: ConvectiveEnvelopeOptions,
+  column: NativeThermalColumn | null,
+  surfaceM: number | null = null,
 ): ConvectiveColumnEnvelope | null {
-  const modelTerrainM = options?.modelTerrainM ?? null;
-  const isNativeFallback = Boolean(options?.isNativeFallback);
-  const solverGroundM = isNativeFallback ? (modelTerrainM ?? groundM) : groundM;
-  const floorM = solverGroundM === null
-    ? null
-    : isNativeFallback && groundM !== null
-      ? Math.max(solverGroundM, groundM)
-      : solverGroundM;
-  if (
-    solverGroundM === null ||
-    floorM === null ||
-    usableTopM === null ||
-    usableTopM <= solverGroundM ||
-    usableTopM <= floorM ||
-    thermalVelocityMps === null ||
-    thermalVelocityMps <= 0
-  ) {
-    return null;
-  }
+  if (!column || column.usableTopM === null) return null;
+  const { groundM, thermalTopM, thermalVelocityMps, usableTopM } = column;
+  const floorM = Math.max(groundM, surfaceM ?? groundM);
+  if (usableTopM <= floorM || thermalVelocityMps <= 0) return null;
   if (thermalVelocityMps * LENSCHOW_F_MAX - SINK_RATE_MPS <= 0) return null;
-  const usableDepthM = usableTopM - solverGroundM;
-  const cloudCapped = cloudCapM !== null && usableTopM >= cloudCapM - 2;
-  let convectiveDepthM: number;
-  if (!cloudCapped) {
-    const unitCrit = usableLiftDepthM(1, thermalVelocityMps);
-    convectiveDepthM = unitCrit !== null && unitCrit > 0 ? usableDepthM / unitCrit : usableDepthM;
-  } else {
-    const nativeRefGroundM = modelTerrainM ?? solverGroundM;
-    const nativeDepthM = thermalTopM !== null && thermalTopM > nativeRefGroundM ? thermalTopM - nativeRefGroundM : 0;
-    convectiveDepthM = Math.max(usableDepthM, nativeDepthM);
-  }
+  const convectiveDepthM = Math.max(thermalTopM, usableTopM) - groundM;
   if (!(convectiveDepthM > 0)) return null;
-  const zetaMin = clamp((floorM - solverGroundM) / convectiveDepthM, 0, 1);
-  const zetaMax = clamp((usableTopM - solverGroundM) / convectiveDepthM, zetaMin, 1);
+  const zetaMin = clamp((floorM - groundM) / convectiveDepthM, 0, 1);
+  const zetaMax = clamp((usableTopM - groundM) / convectiveDepthM, zetaMin, 1);
   const peakZeta = clamp(LENSCHOW_PEAK_ZETA, zetaMin, zetaMax);
   const peakClimbMps = thermalVelocityMps * lenschowNormalizedUpdraft(peakZeta) - SINK_RATE_MPS;
   if (peakClimbMps <= 0) return null;
-  return { groundM: solverGroundM, floorM, usableTopM, convectiveDepthM, thermalVelocityMps, peakClimbMps };
+  return { groundM, floorM, usableTopM, convectiveDepthM, thermalVelocityMps, peakClimbMps };
 }
 
-/** Evaluates net paraglider climb rate (m/s) at `zM` MSL from the Lenschow updraft profile. */
+/**
+ * Net paraglider climb rate (m/s) at `zM` MSL in the native column: `null` when its inputs are
+ * missing, `0` outside its usable lift or when that column has none.
+ */
 export function estimateThermalClimbAtHeight(
   zM: number,
-  groundM: number | null,
-  usableTopM: number | null,
-  thermalTopM: number | null,
-  cloudCapM: number | null,
-  thermalVelocityMps: number | null,
-  options?: ConvectiveEnvelopeOptions,
+  column: NativeThermalColumn | null,
+  surfaceM: number | null = null,
 ): { estimatedClimbMps: number | null; peakClimbMps: number | null } {
-  const env = resolveConvectiveEnvelope(groundM, usableTopM, thermalTopM, cloudCapM, thermalVelocityMps, options);
-  if (!env) return { estimatedClimbMps: null, peakClimbMps: null };
+  if (!column) return { estimatedClimbMps: null, peakClimbMps: null };
+  const env = resolveConvectiveEnvelope(column, surfaceM);
+  if (!env) return { estimatedClimbMps: 0, peakClimbMps: null };
   if (zM < env.floorM || zM > env.usableTopM + 0.5) {
     return { estimatedClimbMps: 0, peakClimbMps: env.peakClimbMps };
   }
@@ -152,9 +134,8 @@ export function estimateThermalClimbAtHeight(
 }
 
 /**
- * Generates smooth marching-square isoband SVG paths for the Lenschow net-climb dome,
- * using fine `usableLiftTopM` when available and continuing with `nativeUsableLiftTopM`
- * on forecast days beyond `mapFrameCount`.
+ * Generates smooth marching-square isoband SVG paths for the Lenschow net-climb dome of each
+ * hour's native column, clipped below the fine terrain surface.
  */
 export function buildClimbDomeFieldPaths(args: {
   sourceHours: readonly PublishedForecastHour[];
@@ -168,22 +149,9 @@ export function buildClimbDomeFieldPaths(args: {
   const n = viewHours.length;
   if (n === 0) return [];
 
-  const envelopes = viewHours.map((vh, i) => {
+  const envelopes = viewHours.map((_vh, i) => {
     const src = sourceHours[i];
-    if (!src) return null;
-    const groundM = effectiveHourGroundM(src);
-    const effectiveTopM = effectiveHourUsableLiftTopM(src, vh.usableLiftTopM);
-    return resolveConvectiveEnvelope(
-      groundM,
-      effectiveTopM,
-      src.thermalTopM ?? null,
-      src.effectiveCloudLimitM ?? null,
-      finiteScalar(src.thermalVelocityMps),
-      {
-        modelTerrainM: src.modelTerrainM,
-        isNativeFallback: isHourNativeLiftFallback(src, vh.usableLiftTopM),
-      },
-    );
+    return src ? resolveConvectiveEnvelope(nativeThermalColumn(src), src.fineTerrainM ?? null) : null;
   });
 
   const runs: [number, number][] = [];

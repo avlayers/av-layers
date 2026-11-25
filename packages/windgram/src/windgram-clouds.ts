@@ -3,7 +3,7 @@
 
 import type { HourSampling, PublishedForecastHour } from './internal-meteo.ts';
 import type { SkyCoverageCode, WindgramCloudLayerSummary } from './scene-types.ts';
-import { effectiveHourGroundM, effectiveHourUsableLiftTopM } from './windgram-climb.ts';
+import { effectiveHourGroundM, nativeThermalColumn } from './windgram-climb.ts';
 import { clamp, finiteScalar } from './windgram-format.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT, sampleHeight } from './windgram-sampling.ts';
 import { hourX } from './windgram-time-axis.ts';
@@ -37,11 +37,8 @@ export function classifyConvectiveCloudRegime(hour: PublishedForecastHour): Conv
     .filter((v): v is number => v !== null && Number.isFinite(v));
   if (!limits.length) return 'none';
   const lclM = Math.min(...limits);
-  const liftTopM = effectiveHourUsableLiftTopM(hour);
-  const topM = Math.max(
-    hour.thermalTopM !== null && Number.isFinite(hour.thermalTopM) ? hour.thermalTopM : -Infinity,
-    liftTopM !== null && Number.isFinite(liftTopM) ? liftTopM : -Infinity,
-  );
+  const column = nativeThermalColumn(hour);
+  const topM = column ? Math.max(column.thermalTopM, column.usableTopM ?? -Infinity) : -Infinity;
   const hasCuSupport =
     hour.cloudCapped === true ||
     hour.overdeveloped === true ||
@@ -235,7 +232,7 @@ export interface SkyCoverSpan {
 
 /**
  * Builds contiguous top-of-plot sky-cover ceiling spans for Broken (65–84%)
- * or Overcast (>=85%) sky cover, distinguishing high cirrus shade (`highLevelOnly`) from
+ * or Overcast (>=85%) model total cloud (humidity-inferred only where total cloud is missing), distinguishing high cirrus shade (`highLevelOnly`) from
  * thick low/mid overcast inside the soaring domain.
  */
 export function buildSkyCoverSpans(args: {
@@ -258,21 +255,15 @@ export function buildSkyCoverSpans(args: {
     const rhNodes = sampling[i]?.cloudHumidityPercent ?? sampling[i]?.relativeHumidityPercent ?? [];
     let maxRh = 0;
     let inDomainMaxRh = 0;
-    let highCeilingRh = 0;
     for (const node of rhNodes) {
       if (!Number.isFinite(node.value)) continue;
       if (node.value > maxRh) maxRh = node.value;
       if (topM === undefined || node.altitudeM <= topM + 50) {
         if (node.value > inDomainMaxRh) inDomainMaxRh = node.value;
       }
-      if (topM !== undefined && node.altitudeM >= topM * 0.92 && node.value > highCeilingRh) {
-        highCeilingRh = node.value;
-      }
     }
-    const rhFallbackPct = totalPct === null
-      ? (maxRh >= CLOUD_RH_THRESHOLD_PERCENT ? 95 : maxRh >= CLOUD_BKN_RH_PERCENT ? 70 : 0)
-      : (highCeilingRh >= CLOUD_RH_THRESHOLD_PERCENT ? 95 : 0);
-    const pct = clamp(Math.max(totalPct ?? 0, rhFallbackPct), 0, 100);
+    // Model total cloud when published; humidity only stands in for it when it is missing.
+    const pct = clamp(totalPct ?? (maxRh >= CLOUD_RH_THRESHOLD_PERCENT ? 95 : maxRh >= CLOUD_BKN_RH_PERCENT ? 70 : 0), 0, 100);
     const tier: SkyCoverSpan['tier'] | null = pct >= 85 ? 'ovc' : pct >= 65 ? 'bkn' : null;
     if (!tier) continue;
     const highLevelOnly =

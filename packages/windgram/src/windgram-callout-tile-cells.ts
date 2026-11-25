@@ -274,7 +274,9 @@ export function paintClimbCell(
     climbSubClass = 'wg-tile-sub is-cloud';
   } else if (reading.estimatedClimbMps !== null) {
     displayClimbMps = 0;
-    climbCaption = inInversion ? 'Inversion lid' : 'Above lift';
+    climbCaption = inInversion ? 'Inversion lid' : reading.peakClimbMps === null ? 'No thermal' : 'Above lift';
+  } else if (!inInversion) {
+    climbCaption = 'No thermal data';
   }
   const climbTier = classifyClimbLevel(displayClimbMps);
   const barFrac = displayClimbMps !== null && displayClimbMps > 0 ? clamp(displayClimbMps / 5.0, 0.08, 1) : 0;

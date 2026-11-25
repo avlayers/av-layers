@@ -2,11 +2,7 @@
 
 import { windFromComponents } from '@av/soaring';
 import { omegaToVerticalVelocityMps } from './windgram-atmosphere.ts';
-import {
-  effectiveHourUsableLiftTopM,
-  estimateThermalClimbAtHeight,
-  isHourNativeLiftFallback,
-} from './windgram-climb.ts';
+import { estimateThermalClimbAtHeight, nativeThermalColumn } from './windgram-climb.ts';
 import {
   celsiusToFahrenheit,
   clamp,
@@ -181,21 +177,7 @@ export function readWindgram(view: WindgramView, hourIndex: number, heightM: num
   const fineTerrainM = source?.fineTerrainM ?? null;
   const terrainDeltaM = fineTerrainM !== null && modelTerrainM !== null ? fineTerrainM - modelTerrainM : null;
   const groundM = fineTerrainM ?? modelTerrainM;
-  const usableTopM = source
-    ? effectiveHourUsableLiftTopM(source, view.hours[index]?.usableLiftTopM)
-    : (view.hours[index]?.usableLiftTopM ?? null);
-  const isNativeFallback = source
-    ? isHourNativeLiftFallback(source, view.hours[index]?.usableLiftTopM)
-    : false;
-  const climb = estimateThermalClimbAtHeight(
-    z,
-    groundM,
-    usableTopM,
-    source?.thermalTopM ?? null,
-    source?.effectiveCloudLimitM ?? null,
-    finiteScalar(source?.thermalVelocityMps),
-    { modelTerrainM, isNativeFallback },
-  );
+  const climb = estimateThermalClimbAtHeight(z, source ? nativeThermalColumn(source) : null, fineTerrainM);
 
   const precipMmHr = finiteScalar(surface?.precipitationMmHr);
 
