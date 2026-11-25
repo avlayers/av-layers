@@ -15,7 +15,7 @@ jobs:
       ${{ github.event_name == 'pull_request'
       && (github.event.pull_request.head.repo.full_name != github.repository || github.event.pull_request.user.login == 'dependabot[bot]')
       && 'ubuntu-24.04'
-      || format('runs-on={0}/runner=4cpu-linux-arm64/spot={1}/image=ubuntu24-full-arm64/extras=s3-cache', github.run_id, github.event_name == 'pull_request') }}
+      || format('runs-on={0}/runner=4cpu-linux-x64/spot={1}/image=ubuntu24-full-x64/extras=s3-cache', github.run_id, github.event_name == 'pull_request') }}
     timeout-minutes: 30
     steps:
       - uses: runs-on/action@4a3bfc79f21a9b97e972e2ba75a2b0b1e9688670 # v2.7.1
