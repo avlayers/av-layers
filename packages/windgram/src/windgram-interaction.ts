@@ -23,7 +23,7 @@ import {
   formatWindgramReading,
   type WindgramTelemetryStrip,
 } from './windgram-readout.ts';
-import { heightToY } from './windgram-scale.ts';
+import { heightToY } from './windgram-vertical.ts';
 import { createScreenGeometry } from './windgram-screen-geometry.ts';
 import { visibleWindgramHourIndices } from './windgram-time-axis.ts';
 import type { WindgramView } from './windgram-view.ts';

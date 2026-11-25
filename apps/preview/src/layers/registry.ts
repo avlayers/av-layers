@@ -1,5 +1,7 @@
 import { LAYER_IDS, type LayerId } from '@av/contracts/layers';
-import type { AltitudeReference } from '../features/navigation/url-state';
+
+/** Height reference the lift layer is shown against. */
+export type AltitudeReference = 'agl' | 'msl';
 
 // Preview-side layer facts, one record per `LayerId`; `features/` reads them through the helpers below.
 // Dock channel records (glyphs, copy, visibility field) live in `channels.ts`.

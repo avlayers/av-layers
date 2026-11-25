@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import type { LayerId } from '@av/contracts/layers';
 import type { PinnedBuild, UnitSystem } from '@av/client';
 import { themeOption, type MapTheme } from '../../themes/registry';
-import type { AltitudeReference } from '../navigation/url-state';
+import type { AltitudeReference } from '../../layers/registry';
 import { liftLayerFor } from '../../layers/registry';
 import {
   DOCK_VIEW_OPTIONS,

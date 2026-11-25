@@ -1,16 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import {
-  buildDayScale,
-  createCompactTimeline,
-  minuteToX,
-  coarseSpanFractions,
-  dayHatchFractions,
-  frameIndexForDayFraction,
-  nearestFrameIndexForDay,
-  solarMinuteBounds,
-  solarRibbonStops,
-  type TimelineFrame
-} from './timeline-controller';
+import { buildDayScale, coarseSpanFractions, dayHatchFractions, frameIndexForDayFraction, minuteToX, nearestFrameIndexForDay } from './day-scale';
+import { solarMinuteBounds, solarRibbonStops } from './solar-day';
+import { createCompactTimeline } from './timeline-controller';
+import type { TimelineFrame } from './timeline-model';
 
 class ClassList {
   private readonly tokens = new Set<string>();

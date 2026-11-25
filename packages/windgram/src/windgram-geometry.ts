@@ -9,7 +9,7 @@ import {
   type UnitSystem,
 } from './windgram-format.ts';
 import { crossings, sampleField, sampleHeight, type Point } from './windgram-sampling.ts';
-import { heightToY, yToHeight, type WindgramScale } from './windgram-scale.ts';
+import { heightToY, yToHeight, type WindgramScale } from './windgram-vertical.ts';
 import { hourX } from './windgram-time-axis.ts';
 
 interface ContourSegment {

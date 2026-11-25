@@ -2,7 +2,7 @@
 
 import { clamp } from './windgram-format.ts';
 import { panelContainingX } from './windgram-panels.ts';
-import { heightToY, yToHeight } from './windgram-scale.ts';
+import { heightToY, yToHeight } from './windgram-vertical.ts';
 import type { WindgramView } from './windgram-view.ts';
 
 export type WindgramInspectionMode = 'magnetic' | 'lift' | 'height';

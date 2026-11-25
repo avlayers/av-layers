@@ -8,7 +8,7 @@ import { mountWindgramInspector, type WindgramCalloutTrigger, type WindgramInspe
 import { SVG_NS } from './windgram-markup.ts';
 import { panelContainingHour, panelShowsX } from './windgram-panels.ts';
 import type { WindgramTelemetryStrip } from './windgram-readout.ts';
-import { heightToY } from './windgram-scale.ts';
+import { heightToY } from './windgram-vertical.ts';
 import { hourX } from './windgram-time-axis.ts';
 import type { WindgramView } from './windgram-view.ts';
 

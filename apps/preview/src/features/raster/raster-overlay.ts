@@ -221,7 +221,6 @@ export class RasterOverlay implements MapChannel {
     return !this.disposed && !!slot && this.pool.ready(slot);
   }
 
-  get isSelectedPending(): boolean { return this.selectedPending; }
 
   select(build: PinnedBuild, layer: LayerId, frame: string): void {
     if (this.disposed) return;

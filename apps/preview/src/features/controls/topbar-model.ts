@@ -1,8 +1,6 @@
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { WIND_STYLE_LABELS, type WindStyle } from '../wind/wind-model';
 
-export type { WeatherChannelKey } from '../../layers/channels';
-
 const THEME_INFO_STORAGE_KEY = 'av.preview.themeInfoOpen';
 
 export const WIND_ENCODING_OPTIONS: ReadonlyArray<{ readonly id: WindStyle; readonly label: string; readonly summary: string }> = [

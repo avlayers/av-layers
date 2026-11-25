@@ -47,12 +47,8 @@ import {
   sampleHeight,
   type Point,
 } from './windgram-sampling.ts';
-import {
-  buildWindgramVerticalScale,
-  heightToY,
-  type HeightAnchor,
-  type WindgramScale,
-} from './windgram-scale.ts';
+import { buildWindgramVerticalScale } from './windgram-scale.ts';
+import { heightToY, type HeightAnchor, type WindgramScale } from './windgram-vertical.ts';
 import { WINDGRAM_STABILITY } from './windgram-stability.ts';
 import {
   buildWindgramTimeLayout,

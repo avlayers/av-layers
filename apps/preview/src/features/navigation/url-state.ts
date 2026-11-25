@@ -4,9 +4,8 @@ import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../controls/bottom-dock-model';
 import { DEFAULT_THEME, parseMapTheme, type MapTheme } from '../../themes/registry';
-import { isLiftLayer, layerRecord } from '../../layers/registry';
+import { isLiftLayer, layerRecord, type AltitudeReference } from '../../layers/registry';
 
-export type AltitudeReference = 'agl' | 'msl';
 type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
 
 function finiteParam(value: string | null): number | null {

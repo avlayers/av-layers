@@ -23,7 +23,8 @@ import { displayedBarbs, layoutWindgramMarks, type PlacedTemperatureLabel } from
 import { escapeMarkup as escape, SVG_NS, svgText as text } from './windgram-markup.ts';
 import { panelContainingHour, panelShowsX } from './windgram-panels.ts';
 import { WINDGRAM_STABLE_COLOR } from './windgram-stability.ts';
-import { heightToY, visibleHeightAnchors } from './windgram-scale.ts';
+import { visibleHeightAnchors } from './windgram-scale.ts';
+import { heightToY } from './windgram-vertical.ts';
 import { getWindgramCalloutRenderer, type WindgramCalloutVariant } from './windgram-callout.ts';
 import { CLOUD_RH_THRESHOLD_PERCENT } from './windgram-sampling.ts';
 import { visibleWindgramHourIndices } from './windgram-time-axis.ts';

@@ -7,7 +7,7 @@ import { mountWindgram as mount, type WindgramMountOptions } from './windgram-do
 import type { WindgramCalloutTrigger } from './windgram-interaction.ts';
 
 export type WindgramMount = ReturnType<typeof mountWindgram>;
-export type { WindgramCalloutTrigger, WindgramCalloutVariant,   };
+export type { WindgramCalloutTrigger, WindgramCalloutVariant };
 
 const CHART_DOCUMENT_CSS = `${windgramChartCss}\n${windgramCalloutStyles}`;
 

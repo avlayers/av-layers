@@ -21,7 +21,7 @@ import {
   stabilityDisplayNodes,
   withHeightGaps,
 } from './windgram-sampling.ts';
-import { heightToY, yToHeight, type WindgramScale } from './windgram-scale.ts';
+import { heightToY, yToHeight, type WindgramScale } from './windgram-vertical.ts';
 import { hourX } from './windgram-time-axis.ts';
 
 export const WINDGRAM_FIELD_MODES = ['hybrid-climb', 'lapse'] as const;

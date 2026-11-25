@@ -10,7 +10,7 @@ import {
 import type { PublishedForecastHour } from './internal-meteo.ts';
 import { clamp, convertQuantity, finiteScalar, type UnitSystem } from './windgram-format.ts';
 import { contourGridIsobands } from './windgram-isobands.ts';
-import { yToHeight, type WindgramScale } from './windgram-scale.ts';
+import { yToHeight, type WindgramScale } from './windgram-vertical.ts';
 import { hourX } from './windgram-time-axis.ts';
 
 /**

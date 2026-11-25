@@ -8,7 +8,7 @@ import type { UnitSystem } from './windgram-format.ts';
 import { buildStabilityFieldPaths, temperatureContours } from './windgram-geometry.ts';
 import type { WindgramPresentation } from './windgram-presentation.ts';
 import { hourSampling, linearPath, type Point } from './windgram-sampling.ts';
-import { heightToY, type WindgramScale } from './windgram-scale.ts';
+import { heightToY, type WindgramScale } from './windgram-vertical.ts';
 import { WINDGRAM_STABILITY } from './windgram-stability.ts';
 import {
   buildWindgramTimeLayout,

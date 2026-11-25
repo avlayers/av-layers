@@ -6,9 +6,6 @@ import type { TimelineFrame } from './timeline-model';
 import { createPlayback } from './timeline-playback';
 import { createTimelineView } from './timeline-view';
 
-export type { TimelineFrame } from './timeline-model';
-export { buildDayScale, coarseSpanFractions, dayHatchFractions, frameIndexForDayFraction, minuteToX, nearestFrameIndexForDay } from './day-scale';
-export { solarMinuteBounds, solarRibbonStops } from './solar-day';
 
 export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;

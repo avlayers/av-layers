@@ -6,7 +6,7 @@ import { svgNumber as fmt, type UnitSystem } from './windgram-format.ts';
 import { panelContainingHour } from './windgram-panels.ts';
 import type { WindgramReading } from './scene-types.ts';
 import type { WindgramTelemetryStrip } from './windgram-readout.ts';
-import { heightToY } from './windgram-scale.ts';
+import { heightToY } from './windgram-vertical.ts';
 import type { ScreenGeometry } from './windgram-screen-geometry.ts';
 import { setSvgNumbers } from './windgram-svg-dom.ts';
 import type { WindgramView } from './windgram-view.ts';

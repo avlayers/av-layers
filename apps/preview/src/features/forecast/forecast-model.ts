@@ -3,7 +3,7 @@ import { renderedLayers } from '@av/contracts/layers';
 import type { PinnedBuild } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import type { ModelId } from '@av/contracts/publication';
-import type { AltitudeReference } from '../navigation/url-state';
+import type { AltitudeReference } from '../../layers/registry';
 import { frameIndexFor } from '../timeline/timeline-model';
 import { isLiftLayer, layerRecord, liftLayerFor } from '../../layers/registry';
 
