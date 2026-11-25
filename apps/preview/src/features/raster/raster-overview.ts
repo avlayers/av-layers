@@ -1,18 +1,18 @@
 import type { Map } from 'maplibre-gl';
-import { clampOpacity, frameTileUrl, layerMaxZoom, previewRasterLayer, seamInsertBefore, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileHandle, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
+import { frameTileUrl, layerMaxZoom, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileHandle, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
-import { planRasterCrop, requiredSourceZoom, type RasterCrop } from './raster-crop';
+import type { RasterCrop } from './raster-crop';
+import { OverviewDisplay, type OverviewImage as Image } from './overview-display';
+import { PreviewAttempts } from './preview-attempts';
+import { canonicalZoom, contains, previewCrop, viewBounds as bounds } from './overview-geometry';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 import { remapTileToBitmap, shouldRemapTile } from './tile-remap';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 
 type Quality = 'overview' | 'detail';
-type Coordinates = [[number, number], [number, number], [number, number], [number, number]];
-interface Image { bitmap: ImageBitmap; lease: PreparationLease | null }
-interface Retired { image: Image; frame: string | null; coordinates: Coordinates | null; sourceId: string; displayLease: PreparationLease | null; previewLease: PreparationLease | null }
 interface Tile {
   state: 'waiting' | 'fetching' | 'compressed' | 'decoding' | 'drawn' | 'cancelled';
   handle?: RasterTileHandle;
@@ -37,79 +37,29 @@ interface Context {
   jobs: Job[];
   previewLease: PreparationLease | null;
 }
-interface ImageSourceLike {
-  image?: ImageBitmap;
-  _imageDirty?: boolean;
-  texture?: unknown;
-  tileID?: { equals?: (other: unknown) => boolean };
-  tiles?: Record<string, { state?: string; tileID?: { canonical?: unknown } }>;
-  updateImage?: (options: { image: ImageBitmap; coordinates: Coordinates }) => void;
-  setCoordinates?: (coordinates: Coordinates) => void;
-}
 interface RasterOverviewState { ready: number; total: number; failed: number }
 interface RasterOverviewReadiness { previewReadyFrames: readonly string[]; detailReadyFrames: readonly string[]; limited: boolean }
 export interface RasterOverviewOptions { budget?: PreparationBudget; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
 
 const SELECTED_PREVIEW_SLOTS = 4;
 const DECODE_LEASE_BYTES = 4 * (MAX_TILE_BYTES + RASTER_TILE_SIZE ** 2 * 4);
-const PREVIEW_RETRY_COOLDOWN_MS = 1_000;
-const MAX_PREVIEW_ATTEMPTS = 3;
 
-function bounds(map: Map): [number, number, number, number] {
-  const value = map.getBounds();
-  let west = value.getWest(), east = value.getEast();
-  if (east <= west) east += 360;
-  if (east - west > 360) { const middle = (west + east) / 2; west = middle - 180; east = middle + 180; }
-  return [west, value.getSouth(), east, value.getNorth()];
-}
-
-function canonicalZoom(map: Map, maxzoom: number): number | null {
-  if (typeof map.coveringTiles !== 'function') return Math.max(0, Math.min(maxzoom, Math.round(map.getZoom())));
-  const covering = map.coveringTiles({ tileSize: RASTER_TILE_SIZE, minzoom: 0, maxzoom, roundZoom: true })
-    .map(tile => ({ z: tile?.canonical?.z ?? tile?.overscaledZ })).filter(tile => Number.isFinite(tile.z));
-  return requiredSourceZoom(covering);
-}
-
-function previewCrop(view: [number, number, number, number], zoom: number): RasterCrop | null {
-  for (let z = Math.max(0, zoom - 1); z >= 0; z--) {
-    const crop = planRasterCrop(view, z);
-    if (crop && crop.tiles.length <= 4) return crop;
-  }
-  return null;
-}
-
-function contains(crop: RasterCrop, view: [number, number, number, number]): boolean {
-  const current = planRasterCrop(view, crop.zoom, { marginFractionPerEdge: 0, gutterPixelsPerEdge: 0 });
-  if (!current) return false;
-  const shift = Math.round((crop.left + crop.right - current.left - current.right) / (2 * crop.worldSize)) * crop.worldSize;
-  return current.top >= crop.top && current.bottom <= crop.bottom
-    && (crop.right - crop.left >= crop.worldSize || (current.left + shift >= crop.left && current.right + shift <= crop.right));
-}
-
+/**
+ * Low-resolution overview frames for the current viewport: fetches up to four tiles per frame, composes
+ * each into one canvas bitmap under the preparation budget, and shows it through `OverviewDisplay`.
+ */
 export class RasterOverview {
   readonly id = `av-overview-${crypto.randomUUID()}`;
   readonly supported: boolean;
   private readonly canvas: OffscreenCanvas | null;
   private readonly transport: RasterTileSourceTransport | null;
+  private readonly display: OverviewDisplay;
   private readonly previews = new globalThis.Map<string, Image>();
-  private readonly unavailable = new Set<string>();
-  private readonly retries = new Set<string>();
-  private readonly failureCounts = new globalThis.Map<string, number>();
-  private readonly retryAfter = new globalThis.Map<string, number>();
+  private readonly attempts = new PreviewAttempts();
   private context: Context | null = null;
   private selected: string | null = null;
   private direction = 1;
-  private shown: Image | null = null;
-  private shownId: string = this.id;
-  private visibleId: string | null = null;
-  private shownFrame: string | null = null;
-  private shownCoordinates: Coordinates | null = null;
-  private heldLease: PreparationLease | null = null;
-  private displayLease: PreparationLease | null = null;
-  private readonly retired: Retired[] = [];
-  private readonly opacities = new globalThis.Map<string, number>();
   private failedImage: Image | null = null;
-  private publishing = false;
   private canvasLease: PreparationLease | null = null;
   private decodeLease: PreparationLease | null = null;
   private composing: Job | null = null;
@@ -130,6 +80,7 @@ export class RasterOverview {
 
   constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void, private readonly options: RasterOverviewOptions = {}) {
     this.theme = options.theme ?? DEFAULT_THEME;
+    this.display = new OverviewDisplay(map, this.id, options.budget, image => [...this.previews.values()].includes(image));
     this.canvas = typeof OffscreenCanvas === 'function' && typeof createImageBitmap === 'function' && typeof map.getCanvas === 'function'
       ? new OffscreenCanvas(RASTER_TILE_SIZE, RASTER_TILE_SIZE) : null;
     this.supported = !!this.canvas?.getContext('2d') && typeof this.canvas.transferToImageBitmap === 'function';
@@ -146,6 +97,12 @@ export class RasterOverview {
     }) ?? null;
   }
 
+  // Display state, also read by raster-overview.test.ts.
+  private get shown(): Image | null { return this.display.shown; }
+  private get heldLease(): PreparationLease | null { return this.display.heldLease; }
+  private get visibleId(): string | null { return this.display.visibleId; }
+  private get opacities(): ReadonlyMap<string, number> { return this.display.opacities; }
+
   get state(): RasterOverviewState {
     const frames = this.context?.frames ?? [];
     const cov = this.coverage();
@@ -153,7 +110,7 @@ export class RasterOverview {
     for (const frame of frames) {
       const usable = this.isFrameUsable(frame, cov);
       if (usable) ready++;
-      else if (this.unavailable.has(frame)) failed++;
+      else if (this.attempts.failed(frame)) failed++;
     }
     return { ready, total: frames.length, failed };
   }
@@ -229,130 +186,24 @@ export class RasterOverview {
 
   ownsSource(id: string | undefined): boolean { return id === this.id || id === `${this.id}-stage`; }
 
-  canPaint(): boolean {
-    const source = this.map.getSource(this.shownId) as ImageSourceLike | undefined;
-    if (!source) return true;
-    if ('image' in source && source.image !== this.shown?.bitmap) return false;
-    if ('_imageDirty' in source && source._imageDirty !== false) return false;
-    if ('texture' in source && !source.texture) return false;
-    if ('tiles' in source && source.tiles) {
-      return Object.values(source.tiles).some(tile => tile?.state === 'loaded'
-        && (!source.tileID?.equals || !tile.tileID?.canonical || source.tileID.equals(tile.tileID.canonical)));
-    }
-    return true;
-  }
+  canPaint(): boolean { return this.display.canPaint(); }
 
   show(build: PinnedBuild, layer: LayerId, frame: string, opacity: number): boolean {
-    if (this.publishing || !this.ready(build, layer, frame)) return false;
+    if (this.display.publishing || !this.ready(build, layer, frame)) return false;
     const image = this.previews.get(frame);
     if (!image || image === this.failedImage) return false;
-    const coordinates = this.context!.preview.coordinates;
-    let displayLease: PreparationLease | null = null;
-    if (this.shown !== image) {
-      displayLease = this.options.budget?.reserve('raster-display', image.bitmap.width * image.bitmap.height * 8, 'foreground') ?? null;
-      if (this.shown !== image && this.options.budget && !displayLease) { this.markLimited(); return false; }
-    }
-    if (image === this.failedImage) { displayLease?.release(); return false; }
-    const targetId = this.shown !== image && this.visibleId === this.shownId ? (this.shownId === this.id ? `${this.id}-stage` : this.id) : this.shownId;
-    const context = this.context, selected = this.selected, shown = this.shown, visibleId = this.visibleId;
-    const previous = targetId === this.shownId ? { image: this.shown, coordinates: this.shownCoordinates }
-      : this.retired.findLast(entry => entry.sourceId === targetId);
-    const targetOpacity = this.opacities.get(targetId) ?? 0;
-    const visibleOpacity = visibleId ? this.opacities.get(visibleId) ?? 0 : 0;
-    let created = false;
-    let source: ImageSourceLike | undefined;
-    this.publishing = true;
-    try {
-      created = !this.map.getSource(targetId);
-      if (created) {
-        this.map.addSource(targetId, { type: 'image', coordinates });
-        this.map.addLayer({ ...previewRasterLayer(0), id: targetId, source: targetId, paint: { ...previewRasterLayer(0).paint, 'raster-opacity-transition': { duration: 0, delay: 0 } } }, seamInsertBefore(this.map));
-        this.opacities.set(targetId, 0);
-      }
-      source = this.map.getSource(targetId) as ImageSourceLike | undefined;
-      if (!source) throw new Error('Raster image source unavailable');
-      if (this.shown !== image) {
-        source?.updateImage?.({ image: image.bitmap, coordinates });
-        if (created) source?.setCoordinates?.(coordinates);
-      } else if (this.shownCoordinates !== coordinates) {
-        source?.setCoordinates?.(coordinates);
-      }
-      this.setOpacity(targetId, opacity);
-      if (opacity > 0 && visibleId && visibleId !== targetId && this.map.getLayer(visibleId)) this.setOpacity(visibleId, 0);
-      if (this.context !== context || this.selected !== selected || this.shown !== shown || this.disposed
-        || this.previews.get(frame) !== image) throw new Error('Raster selection changed during publication');
-    } catch {
-      if (created) {
-        try { this.removeSource(targetId); } catch { /* The owning map may already be unavailable. */ }
-      } else {
-        try {
-          if (previous?.image && previous.coordinates) source?.updateImage?.({ image: previous.image.bitmap, coordinates: previous.coordinates });
-          this.setOpacity(targetId, targetOpacity);
-        } catch { /* Keep the previous display ownership until a later selection can recover. */ }
-      }
-      if (visibleId && visibleId !== targetId) {
-        try { this.setOpacity(visibleId, visibleOpacity); } catch { /* Retain the previous image if its map cannot be updated. */ }
-      }
-      displayLease?.release();
-      if (this.context === context && this.selected === selected) this.failedImage = image;
-      return false;
-    } finally {
-      this.publishing = false;
-    }
-    if (this.shown !== image) {
-      if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
-      this.heldLease = null; this.displayLease = displayLease;
-      this.shown = image; this.shownId = targetId; this.shownFrame = frame;
-    }
-    this.shownCoordinates = coordinates;
-    if (opacity > 0) this.visibleId = targetId;
-    return true;
+    const context = this.context!, selected = this.selected;
+    return this.display.show(image, frame, context.preview.coordinates, opacity, {
+      failed: () => image === this.failedImage,
+      limited: () => this.markLimited(),
+      current: () => this.context === context && this.selected === selected && !this.disposed && this.previews.get(frame) === image,
+      rejected: () => { if (this.context === context && this.selected === selected) this.failedImage = image; }
+    });
   }
 
-  hide(): void { for (const id of [this.id, `${this.id}-stage`]) if (this.map.getLayer(id)) this.setOpacity(id, 0); this.visibleId = null; }
-
-  private setOpacity(id: string, value: number): void {
-    const opacity = clampOpacity(value);
-    if (this.opacities.get(id) === opacity) return;
-    try { this.map.setPaintProperty(id, 'raster-opacity', opacity); }
-    catch (error) { this.opacities.delete(id); throw error; }
-    this.opacities.set(id, opacity);
-  }
-
-  cancelStage(opacity: number): boolean {
-    const oldId = this.visibleId !== this.shownId ? this.visibleId : this.retired.findLast(entry => entry.sourceId !== this.shownId)?.sourceId;
-    if (!oldId) return false;
-    if (this.map.getLayer(this.shownId)) this.map.removeLayer(this.shownId);
-    this.opacities.delete(this.shownId);
-    if (this.map.getSource(this.shownId)) this.map.removeSource(this.shownId);
-    if (this.shown) this.retired.push({ image: this.shown, frame: this.shownFrame, coordinates: this.shownCoordinates, sourceId: this.shownId, displayLease: this.displayLease, previewLease: this.heldLease });
-    const index = this.retired.findLastIndex(entry => entry.sourceId === oldId);
-    const previous = index < 0 ? null : this.retired.splice(index, 1)[0];
-    this.shown = previous?.image ?? null; this.shownId = oldId; this.visibleId = oldId; this.shownFrame = previous?.frame ?? null;
-    this.shownCoordinates = previous?.coordinates ?? null; this.displayLease = previous?.displayLease ?? null; this.heldLease = previous?.previewLease ?? null;
-    if (this.map.getLayer(oldId)) this.setOpacity(oldId, opacity);
-    this.releaseRetired();
-    return !!this.shown;
-  }
-
-  painted(): boolean {
-    if (!this.shown) {
-      this.releaseRetired();
-      return false;
-    }
-    const source = this.map.getSource(this.shownId) as ImageSourceLike | undefined;
-    if (!source) return false;
-    if ('image' in source && source.image !== this.shown.bitmap) return false;
-    if ('_imageDirty' in source && source._imageDirty !== false) return false;
-    if ('texture' in source && !source.texture) return false;
-    if ('tiles' in source && source.tiles) {
-      const loaded = Object.values(source.tiles).some(tile => tile?.state === 'loaded'
-        && (!source.tileID?.equals || !tile.tileID?.canonical || source.tileID.equals(tile.tileID.canonical)));
-      if (!loaded) return false;
-    }
-    if (this.visibleId === this.shownId) this.releaseRetired();
-    return true;
-  }
+  hide(): void { this.display.hide(); }
+  cancelStage(opacity: number): boolean { return this.display.cancelStage(opacity); }
+  painted(): boolean { return this.display.painted(); }
 
   relievePressure(_required = 1): boolean { return false; }
 
@@ -387,40 +238,13 @@ export class RasterOverview {
     try { this.clear(); } finally { this.transport?.dispose(); }
   }
 
-  private removeSource(id: string): void {
-    let failure: unknown;
-    try { if (this.map.getLayer(id)) this.map.removeLayer(id); } catch (error) { failure = error; }
-    this.opacities.delete(id);
-    try { if (this.map.getSource(id)) this.map.removeSource(id); } catch (error) { failure ??= error; }
-    if (failure) throw failure;
-  }
-
-  private releaseRetired(): void {
-    const closed = new Set<Image>();
-    let failure: unknown;
-    for (const retired of this.retired.splice(0)) {
-      if (retired.sourceId !== this.visibleId && retired.sourceId !== this.shownId) {
-        try { this.removeSource(retired.sourceId); } catch (error) { failure ??= error; }
-      }
-      if (!closed.has(retired.image) && retired.image !== this.shown && ![...this.previews.values()].includes(retired.image)) {
-        retired.image.bitmap.close(); retired.image.lease?.release();
-        closed.add(retired.image);
-      }
-      retired.displayLease?.release(); retired.previewLease?.release();
-    }
-    if (failure) throw failure;
-  }
-
   private ensureSelectedPreview(frame: string): void {
     const context = this.context;
     if (!context || this.previews.has(frame) || context.jobs.some(job => job.frame === frame)) return;
-    const attempts = this.failureCounts.get(frame) ?? 0;
-    if (attempts >= MAX_PREVIEW_ATTEMPTS) return;
-    const due = this.retryAfter.get(frame) ?? 0;
-    if (!this.retries.has(frame) || Date.now() >= due) {
+    const due = this.attempts.admit(frame, () => Date.now());
+    if (due === null) return;
+    if (due === 'now') {
       if (this.retryTimer !== null) { clearTimeout(this.retryTimer); this.retryTimer = null; }
-      this.retries.add(frame);
-      this.unavailable.delete(frame);
       context.jobs.push(this.job(frame, context.preview));
       return;
     }
@@ -434,18 +258,6 @@ export class RasterOverview {
     }
   }
 
-  private shareLease(lease: PreparationLease, count: number): PreparationLease[] {
-    const parts = { n: count };
-    return Array.from({ length: count }, (): PreparationLease => {
-      let open = true;
-      return {
-        get bytes() { return open ? lease.bytes : 0; },
-        resize: () => false,
-        release() { if (!open) return; open = false; if (--parts.n === 0) lease.release(); }
-      };
-    });
-  }
-
   private reset(keepShown: boolean): void {
     const previous = this.context;
     this.previewEpoch++; this.coverageCache = null;
@@ -457,48 +269,13 @@ export class RasterOverview {
     if (this.themeWarmTimer !== null) clearTimeout(this.themeWarmTimer); this.themeWarmTimer = null;
     this.warmingPaused = false;
     const previewImages = new Set(this.previews.values());
-    const ownedShown = !!this.shown && previewImages.has(this.shown);
-    const surviving: Image[] = [];
-    if (keepShown && this.shown && previewImages.has(this.shown)) surviving.push(this.shown);
-    for (const entry of this.retired) if (previewImages.has(entry.image) && !surviving.includes(entry.image)) surviving.push(entry.image);
+    const surviving = this.display.surviving(previewImages, keepShown);
     for (const image of this.previews.values()) {
-      if (surviving.includes(image) || (keepShown && image === this.shown) || this.retired.some(entry => entry.image === image)) continue;
+      if (surviving.includes(image) || this.display.holds(image, keepShown)) continue;
       image.bitmap.close(); image.lease?.release();
     }
-    this.previews.clear(); this.unavailable.clear(); this.retries.clear();
-    this.failureCounts.clear(); this.retryAfter.clear();
-    const previousHeld = this.heldLease;
-    let retained: PreparationLease | null = null;
-    const group = previous?.previewLease ?? null;
-    const uncovered = surviving.filter(image => !image.lease);
-    if (group) {
-      const bytes = uncovered.reduce((sum, image) => sum + image.bitmap.width * image.bitmap.height * 4, 0);
-      if (bytes > 0 && group.resize(bytes)) {
-        const shares = this.shareLease(group, uncovered.length);
-        for (let index = 0; index < uncovered.length; index++) {
-          const image = uncovered[index]!, share = shares[index];
-          if (!share) continue;
-          if (image === this.shown) retained = share;
-          else {
-            const retired = this.retired.find(entry => entry.image === image && !entry.previewLease);
-            if (retired) retired.previewLease = share; else share.release();
-          }
-        }
-      } else group.release();
-    }
-    this.heldLease = retained ?? (keepShown && this.shown && !ownedShown ? previousHeld : null);
-    if (previousHeld && previousHeld !== this.heldLease) previousHeld.release();
-    let failure: unknown;
-    if (!(keepShown && this.shown)) {
-      retained?.release(); this.heldLease = null;
-      if (this.shown && !ownedShown) { this.shown.bitmap.close(); this.shown.lease?.release(); }
-      this.shown = null; this.shownFrame = null; this.shownCoordinates = null; this.shownId = this.id; this.visibleId = null;
-      this.displayLease?.release(); this.displayLease = null;
-      for (const id of [this.id, `${this.id}-stage`]) {
-        try { this.removeSource(id); } catch (error) { failure ??= error; }
-      }
-      try { this.releaseRetired(); } catch (error) { failure ??= error; }
-    }
+    this.previews.clear(); this.attempts.clear();
+    const failure = this.display.reset(previewImages, surviving, keepShown, previous?.previewLease ?? null);
     this.canvasLease?.release(); this.canvasLease = null;
     if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
     if (this.canvas) { this.canvas.width = 0; this.canvas.height = 0; }
@@ -764,9 +541,7 @@ export class RasterOverview {
     const image = { bitmap, lease: job.lease };
     job.lease = null;
     this.previews.set(job.frame, image);
-    this.unavailable.delete(job.frame);
-    this.failureCounts.delete(job.frame);
-    this.retryAfter.delete(job.frame);
+    this.attempts.succeeded(job.frame);
     context.jobs = context.jobs.filter(value => value !== job);
     this.composing = null;
     if (!this.decoding) { this.decodeLease?.release(); this.decodeLease = null; }
@@ -793,19 +568,9 @@ export class RasterOverview {
     this.cancelJob(job);
     if (context !== this.context || this.disposed) return;
     context.jobs = context.jobs.filter(value => value !== job);
-    const attempts = (this.failureCounts.get(job.frame) ?? 0) + 1;
-    this.failureCounts.set(job.frame, attempts);
-    if (job.frame === this.selected && !this.retries.has(job.frame)) {
-      this.retries.add(job.frame);
-      this.unavailable.delete(job.frame);
-      context.jobs.push(this.job(job.frame, job.crop));
-    } else {
-      this.unavailable.add(job.frame);
-      if (attempts < MAX_PREVIEW_ATTEMPTS) {
-        this.retryAfter.set(job.frame, Date.now() + PREVIEW_RETRY_COOLDOWN_MS);
-        if (job.frame === this.selected) this.ensureSelectedPreview(job.frame);
-      }
-    }
+    const outcome = this.attempts.fail(job.frame, job.frame === this.selected, () => Date.now());
+    if (outcome === 'retry') context.jobs.push(this.job(job.frame, job.crop));
+    else if (outcome === 'cooldown' && job.frame === this.selected) this.ensureSelectedPreview(job.frame);
     this.onReady(); this.pump();
   }
 
