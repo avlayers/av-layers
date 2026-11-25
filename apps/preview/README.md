@@ -64,7 +64,8 @@ scalar chart covers builds that publish no native profiles.
 
 - [src/index.tsx](src/index.tsx): the only production bootstrap.
 - [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
-- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the store and API client, creates the map channels, routes commands and forecast events, and shuts down.
+- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the [context](src/app/context.ts) (store, services, live parts) and the wiring modules, then creates the map channels on `start`. Wiring modules call each other through the shared `PreviewOps` table in [display-ops.ts](src/app/display-ops.ts).
+- [display-ops.ts](src/app/display-ops.ts), [forecast-wiring.ts](src/app/forecast-wiring.ts), [url-wiring.ts](src/app/url-wiring.ts), [command-handlers.ts](src/app/command-handlers.ts), [map-wiring.ts](src/app/map-wiring.ts), [page-lifecycle.ts](src/app/page-lifecycle.ts): channel and notice sync, forecast session events, URL write and history restore, UI commands, camera events, and back/forward-cache suspension and disposal.
 - [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
 - [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
 - [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
