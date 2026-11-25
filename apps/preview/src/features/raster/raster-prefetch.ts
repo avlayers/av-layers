@@ -2,6 +2,7 @@ import type { Map } from 'maplibre-gl';
 import { frameTileUrl, layerMaxZoom, planViewportPrefetch, type RasterTileSourceProtocol, viewportTiles } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
+import { pairedLiftLayer } from '../../layers/registry';
 import { boundsAreaKm2, cameraBounds, createViewportWarmth } from '../map/viewport-policy';
 import { matches, type RasterSelection, type Slot } from './raster-slots';
 
@@ -19,7 +20,7 @@ export function predictSelections(slot: RasterSelection | null, preferred: Raste
   if (preferred?.build === slot.build) add(preferred.layer, preferred.frame);
   const frames = renderedFrames(slot.build.manifest), index = frames.findIndex(f => f.id === slot.frame);
   const siblings = (Object.keys(slot.build.templates) as LayerId[]).filter(id => id !== slot.layer);
-  const primary = slot.layer === 'usable-lift-agl' ? 'usable-lift-msl' : slot.layer === 'usable-lift-msl' ? 'usable-lift-agl' : siblings[0];
+  const primary = pairedLiftLayer(slot.layer) ?? siblings[0];
   if (!direction && primary) add(primary, slot.frame);
   const step = frames[index + (direction ?? 1)] ? direction ?? 1 : -(direction ?? 1);
   for (const offset of direction ? [step, 2 * step, -step] : [step, -step, 2 * step]) add(slot.layer, frames[index + offset]?.id);

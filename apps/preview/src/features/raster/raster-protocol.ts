@@ -1,11 +1,12 @@
 import { addProtocol } from 'maplibre-gl';
 import type { RasterTileSourceProtocol } from '@av/client';
 import { isMapTheme, type MapTheme } from '../../themes/registry';
+import { layerInUrl, remapFor } from '../../layers/registry';
 import { remapTileToBitmap, shouldRemapTile } from './tile-remap';
 
 /**
  * Registers `protocol.scheme` with MapLibre. A tile URL's `#theme` suffix (else `theme()`) picks the
- * palette; remapped lift tiles of `usable-lift-msl` take their mask from the matching AGL tile.
+ * palette; a layer's remap ramp and mask layer come from the layer registry.
  */
 export function registerRasterProtocol(protocol: () => RasterTileSourceProtocol | null, scheme: string, theme: () => MapTheme): void {
   addProtocol(scheme, async (params, controller) => {
@@ -17,15 +18,16 @@ export function registerRasterProtocol(protocol: () => RasterTileSourceProtocol 
     if (!shouldRemapTile(slotTheme, response.data)) return response;
     const httpIdx = cleanUrl.indexOf('http');
     const rawUrl = httpIdx >= 0 ? cleanUrl.slice(httpIdx) : cleanUrl;
+    const layer = layerInUrl(rawUrl), remap = layer ? remapFor(layer) : { ramp: 'lift' as const, mask: null };
     let maskData: ArrayBuffer | null = null;
-    if (rawUrl.includes('/usable-lift-msl/')) {
-      const aglUrl = rawUrl.replace('/usable-lift-msl/', '/usable-lift-agl/');
-      const maskRes = await protocol()!.requestTile(aglUrl, { priority: 'foreground', signal: controller.signal }).response.catch(() => null);
+    if (layer && remap.mask) {
+      const maskUrl = rawUrl.replace(`/${layer}/`, `/${remap.mask}/`);
+      const maskRes = await protocol()!.requestTile(maskUrl, { priority: 'foreground', signal: controller.signal }).response.catch(() => null);
       if (maskRes) { maskData = maskRes.data; maskRes.release(); }
     }
     const bitmap = await remapTileToBitmap(
       response.data,
-      rawUrl.includes('/precip-rate/') ? 'rain' : 'lift',
+      remap.ramp,
       slotTheme,
       maskData,
       { priority: 'foreground', signal: controller.signal, transferInput: true }

@@ -2,6 +2,7 @@ import type { Map } from 'maplibre-gl';
 import { frameTileUrl, layerMaxZoom, type PinnedBuild, type PreparationBudget, type PreparationLease, type RasterTileHandle, type RasterTileSourceProtocol, type RasterTileSourceTransport } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
+import { remapFor } from '../../layers/registry';
 import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import type { RasterCrop } from './raster-crop';
 import { OverviewDisplay, type OverviewImage as Image } from './overview-display';
@@ -500,14 +501,15 @@ export class RasterOverview {
     const priority = job.frame === this.selected ? 'foreground' : 'background';
     const prepareBitmap = async (): Promise<ImageBitmap | null> => {
       let maskData: ArrayBuffer | null = null;
-      if (context.layer === 'usable-lift-msl' && context.build.templates['usable-lift-agl'] && typeof this.protocol.requestTile === 'function') {
-        const aglUrl = frameTileUrl(context.build.templates['usable-lift-agl'], job.frame)
+      const remap = remapFor(context.layer), maskTemplate = remap.mask && context.build.templates[remap.mask];
+      if (maskTemplate && typeof this.protocol.requestTile === 'function') {
+        const maskUrl = frameTileUrl(maskTemplate, job.frame)
           .replaceAll('{z}', String(location.z)).replaceAll('{x}', String(location.canonicalX)).replaceAll('{y}', String(location.y));
-        const maskRes = await this.protocol.requestTile(aglUrl, { priority }).response.catch(() => null);
+        const maskRes = await this.protocol.requestTile(maskUrl, { priority }).response.catch(() => null);
         if (maskRes) { maskData = maskRes.data; maskRes.release(); }
       }
       if (!this.ownsJob(job, context)) return null;
-      return remapTileToBitmap(data, context.layer === 'precip-rate' ? 'rain' : 'lift', theme, maskData, { priority });
+      return remapTileToBitmap(data, remap.ramp, theme, maskData, { priority });
     };
     void Promise.resolve().then(() => {
       if (!this.ownsJob(job, context)) return null;
