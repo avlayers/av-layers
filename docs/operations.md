@@ -261,8 +261,9 @@ Inspect the run's uploaded receipt artifacts:
 - `publication.json`: records a committed pointer update.
 - `failure.json`: reports `not-attempted`, `unconfirmed`, or `committed`. Resume
   `unconfirmed` runs with `resume-run-id`.
-- `maintenance.json`: records cleanup or rollback status.
-- `serving.json`: records live API verification after commit.
+- `serving.json`: records live API verification, which runs right after commit.
+- `maintenance.json`: records cleanup or rollback status. Cleanup runs after the
+  serving check, so its failure or slowness never hides whether the new build serves.
 
 The hourly [health workflow](https://github.com/avlayers/av-layers/actions/workflows/health.yml)
 checks each model enrolled in `monitoring.environments` for the selected
