@@ -72,11 +72,13 @@ scalar chart covers builds that publish no native profiles.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
-- [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
+- [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): the lift raster facade. It composes frame slots and budgets ([raster-slots.ts](src/features/raster/raster-slots.ts)), the overview-to-detail handoff ([raster-staging.ts](src/features/raster/raster-staging.ts)), prefetch planning ([raster-prefetch.ts](src/features/raster/raster-prefetch.ts)) and the low-zoom overview ([raster-overview.ts](src/features/raster/raster-overview.ts)). [ADR 0004](../../docs/decisions/0004-raster-stays-on-maplibre.md) says why it stays on MapLibre sources.
+- [src/layers/registry.ts](src/layers/registry.ts), [channels.ts](src/layers/channels.ts): one record per layer id (lift pairing, legend text, remap ramp and mask) and per dock channel (copy, shortcut, glyph, visibility field).
+- [src/features/sky/rain-layer.ts](src/features/sky/rain-layer.ts): rain channel, composing the field source, cuff and contour layers; [rain-animator.ts](src/features/sky/rain-animator.ts) draws the falling rain and [contours.ts](src/features/sky/contours.ts) is the one contour routine for isobars, cloud and rain edges.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
 - [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
-- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
+- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): routes timeline input; the view, folded-night [day scale](src/features/timeline/day-scale.ts), gesture, frame window and playback each have their own module beside it.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
 - [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.
 - [src/features/navigation/url-state.ts](src/features/navigation/url-state.ts): shared map URL parsing and serialization.
