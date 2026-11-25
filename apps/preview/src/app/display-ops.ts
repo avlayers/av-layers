@@ -204,6 +204,11 @@ export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, sign
     effect(() => {
       const note = shownTimeNote(view.overlay.value, view.forecast.value.timeZone);
       untracked(() => ctx.live.timeline?.setShowing?.(note));
+    }),
+    // Day previews follow overview readiness, the requested layer, lift visibility and the theme.
+    effect(() => {
+      void view.overlay.value; void view.intent.value.liftVisible; void view.intent.value.theme;
+      untracked(() => ctx.live.timeline?.refreshPreviews?.());
     })
   ];
   signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });

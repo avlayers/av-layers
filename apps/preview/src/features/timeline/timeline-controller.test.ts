@@ -40,9 +40,13 @@ class Element extends EventTarget {
   style: Record<string, string> = {};
   offsetLeft = 0;
   offsetWidth = 36;
-  getBoundingClientRect(): { left: number; width: number } {
-    return { left: this.offsetLeft - (this.parentNode?.scrollLeft ?? 0), width: this.offsetWidth };
+  offsetHeight = 20;
+  width = 0;
+  height = 0;
+  getBoundingClientRect(): { left: number; width: number; top: number; height: number } {
+    return { left: this.offsetLeft - (this.parentNode?.scrollLeft ?? 0), width: this.offsetWidth, top: 0, height: this.offsetHeight };
   }
+  getContext(): object | null { return this.tag === 'canvas' ? { clearRect() {}, tag: this } : null; }
   constructor(readonly tag: string) { super(); }
   get ownerDocument(): Document { return doc; }
   append(...nodes: Element[]): void {
@@ -1261,5 +1265,51 @@ it('puts the on-screen hour ahead of the comparison note while it loads', () => 
   expect(byClass(root, 'ct-note').textContent).toBe('Showing Fri 14:00 · loading');
   timeline.setShowing?.('');
   expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  timeline.destroy();
+});
+
+function previewSetup(state: (index: number) => 'ready' | 'pending' | 'unavailable' = () => 'ready') {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn();
+  const draw = vi.fn((index: number, _target: unknown, _width: number, _height: number) => state(index));
+  const prefer = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, timeZone: 'UTC', preview: { draw: draw as never, prefer } });
+  timeline.update(comparison, 'd1-14');
+  const { root, row, buttons } = dayRow(host);
+  timeline.refreshPreviews?.();
+  return { host, root, row, buttons, timeline, onSelect, draw, prefer };
+}
+
+it('draws each day card at its comparison-hour frame and asks for those frames first', () => {
+  const { buttons, timeline, draw, prefer } = previewSetup(index => index === 3 ? 'pending' : 'ready');
+  expect(draw.mock.calls.map(([index]) => index)).toEqual(expect.arrayContaining([0, 2, 3]));
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 3]);
+  expect(buttons.map(button => button.classList.contains('has-thumb'))).toEqual([true, true, true]);
+  expect(buttons[2]!.classList.contains('is-pending')).toBe(true);
+  timeline.destroy();
+});
+
+it('keeps plain date buttons when the source has no preview', () => {
+  const { buttons, timeline, root } = previewSetup(() => 'unavailable');
+  expect(buttons.some(button => button.classList.contains('has-thumb'))).toBe(false);
+  const { row } = dayRow({ children: [root] } as unknown as Element);
+  pointer(row, 'pointerdown', 70);
+  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('opens the enlarged preview on press, follows a drag across days, and closes on release', () => {
+  const { root, row, timeline, draw } = previewSetup();
+  const loupe = byClass(root, 'ct-day-loupe'), title = byClass(root, 'ct-day-loupe-title');
+  pointer(row, 'pointerdown', 80);
+  expect(loupe.getAttribute('hidden')).toBeNull();
+  expect(title.textContent).toBe('Sat 14 Nov · 15:00');
+  draw.mockClear();
+  pointer(row, 'pointermove', 140);
+  expect(title.textContent).toBe('Sun 15 Nov · 14:00');
+  expect(draw.mock.calls.some(([index, , width]) => index === 3 && width === 36)).toBe(true);
+  pointer(row, 'pointerup', 140);
+  expect(loupe.getAttribute('hidden')).toBe('');
   timeline.destroy();
 });

@@ -4,6 +4,7 @@ import { coarseSpanFractions, DAY_MINUTES, dayHatchFractions, localTimeFromMs, m
 import { monotonicStops, ribbonGradient } from './solar-day';
 import type { FrameWindow } from './timeline-frame-window';
 import type { DayTarget } from './timeline-gesture';
+import type { PreviewDraw } from '../raster/raster-overview';
 import './compact-timeline.css';
 
 /**
@@ -23,6 +24,14 @@ interface TimelineView {
   dayTargets(): DayTarget[] | null;
   /** Visible note that the map still shows another hour; empty clears it. */
   setShowing(text: string): void;
+  /** Each day button's preview canvas. */
+  cards(): { group: DayGroup; canvas: HTMLCanvasElement }[];
+  /** Shows the preview state on a day button: an image, a neutral placeholder, or a plain date. */
+  setThumb(day: string, state: PreviewDraw): void;
+  readonly loupeCanvas: HTMLCanvasElement;
+  readonly dayLoupe: HTMLElement;
+  /** Opens the enlarged day preview titled for frame `index`, or closes it with null. */
+  setDayLoupe(index: number | null): void;
   focusDay(day: string): void;
   setVariant(next: DockViewId): boolean;
   setReadiness(ready: number, total: number, loading: boolean): void;
@@ -42,6 +51,8 @@ interface ViewPaint {
 interface DayHandlers {
   prepareDay(group: DayGroup): void;
   pickDay(group: DayGroup): void;
+  /** A pointer rests on, or keyboard focus reaches, a day (null when it leaves). */
+  hoverDay(group: DayGroup | null): void;
   dayKey(event: KeyboardEvent, group: DayGroup): void;
   /** Track or day row changed width since the last paint. */
   resized(): void;
@@ -135,10 +146,17 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   track.tabIndex = -1;
   track.append(ribbon, hatches, marks, moons, ticks, snapGhost, playhead, progress, loupe);
 
-  root.append(readout, track, daysRow);
+  const dayLoupe = el('div', 'ct-day-loupe');
+  const dayLoupeTitle = el('span', 'ct-day-loupe-title');
+  const loupeCanvas = el('canvas', 'ct-day-loupe-canvas');
+  dayLoupe.append(loupeCanvas, dayLoupeTitle);
+  dayLoupe.setAttribute('aria-hidden', 'true');
+  dayLoupe.setAttribute('hidden', '');
+  root.append(readout, track, daysRow, dayLoupe);
   host.append(root);
 
   let dayButtons: HTMLButtonElement[] = [];
+  const canvases = new WeakMap<HTMLButtonElement, HTMLCanvasElement>();
   let highlightedDays = new Set<string>(), highlightedKey = '';
   let paintedWidth = -1, decorationKey = '', destroyed = false, showing = '';
   let lastNote: { local: { hour: number; minute: number } | null; comparisonMinute: number | null } = { local: null, comparisonMinute: null };
@@ -317,12 +335,20 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     dayButtons = win.days.map(group => {
       const label = dayButtonLabel(group.day);
       const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`);
-      button.append(el('span', 'ct-day-label', label));
+      const thumb = el('span', 'ct-day-thumb');
+      thumb.setAttribute('aria-hidden', 'true');
+      const canvas = el('canvas', 'ct-day-canvas');
+      canvases.set(button, canvas);
+      thumb.append(canvas);
+      button.append(thumb, el('span', 'ct-day-label', label));
       button.dataset.day = group.day;
       const usable = () => !button.disabled && !win.off() && group.indices.length > 0;
       const prepareDay = () => { if (usable()) handlers.prepareDay(group); };
-      button.addEventListener('pointerenter', prepareDay);
-      button.addEventListener('focus', prepareDay);
+      const hover = (event: Event) => { prepareDay(); if (usable() && (event as PointerEvent).pointerType !== 'touch') handlers.hoverDay(group); };
+      button.addEventListener('pointerenter', hover);
+      button.addEventListener('focus', hover);
+      button.addEventListener('pointerleave', () => handlers.hoverDay(null));
+      button.addEventListener('blur', () => handlers.hoverDay(null));
       button.addEventListener('pointerdown', prepareDay);
       button.addEventListener('click', () => { if (usable()) handlers.pickDay(group); });
       button.addEventListener('keydown', event => { if (usable()) handlers.dayKey(event as KeyboardEvent, group); });
@@ -350,6 +376,26 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       });
       if (!spans.length || spans.some(span => span.top !== spans[0]!.top)) return null;
       return spans.map(({ left, right, group }) => ({ left, right, group }));
+    },
+    loupeCanvas, dayLoupe,
+    cards() {
+      return dayButtons.flatMap((button, index) => {
+        const group = win.days[index], canvas = canvases.get(button);
+        return group && canvas ? [{ group, canvas }] : [];
+      });
+    },
+    setThumb(day, state) {
+      const button = dayButtons.find(candidate => candidate.dataset.day === day);
+      if (!button) return;
+      button.classList.toggle('has-thumb', state !== 'unavailable');
+      button.classList.toggle('is-pending', state === 'pending');
+    },
+    setDayLoupe(index) {
+      const frame = index === null ? undefined : win.frames[index];
+      const ms = frame ? Date.parse(frame.validTime) : Number.NaN, local = localTimeFromMs(ms, win.timeZone);
+      if (!local) { dayLoupe.setAttribute('hidden', ''); return; }
+      dayLoupeTitle.textContent = `${readoutDate(local.day)} · ${clockLabel(local.hour * 60 + local.minute)}`;
+      dayLoupe.removeAttribute('hidden');
     },
     setShowing(text) {
       if (text === showing) return;

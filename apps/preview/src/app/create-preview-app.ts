@@ -106,8 +106,24 @@ export function createPreviewApp(): PreviewApp {
         if (ctx.intent().model === AUTO_MODEL_ID) ctx.forecastSession.cancelAuto();
         ops.prepareFrameIndex(index);
       },
-      onPrepare: index => ops.prepareFrameIndex(index)
+      onPrepare: index => ops.prepareFrameIndex(index),
+      // Day previews: the active lift raster's overview of this view, on the pinned build. Hidden lift shows plain dates.
+      preview: {
+        draw(index, target, width, height) {
+          const current = ctx.build(), requested = view.overlay.value.requested;
+          if (!current || !requested || requested.build !== current || !ctx.intent().liftVisible) return 'unavailable';
+          const frame = renderedFrames(current.manifest)[index];
+          return frame ? overlay.drawPreview(current, requested.layer, frame.id, target, width, height) : 'unavailable';
+        },
+        prefer(indices) {
+          const current = ctx.build();
+          if (!current) return;
+          const frames = renderedFrames(current.manifest);
+          overlay.preferPreviewFrames(indices.flatMap(index => frames[index]?.id ?? []));
+        }
+      }
     });
+    map.on('move', () => live.timeline?.refreshPreviews?.());
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,
