@@ -123,7 +123,7 @@ it('validates deployed products before hits and separates compatible configurati
   const fixture = createV5Fixture();
   await call(fixture, '/v1/models/gfs/latest?expand=manifest');
   const matches = cache.matches;
-  const invalid = createApp({ products: { gfs: { ...fixture.product, attribution: 'Incompatible descriptors' } } });
+  const invalid = createApp({ products: { gfs: { ...fixture.product, bounds: [fixture.product.bounds[0], fixture.product.bounds[1], fixture.product.bounds[2] - 1, fixture.product.bounds[3]] } } });
   const rejected = await call(fixture, '/v1/models/gfs/latest?expand=manifest', { app: invalid });
   expect(rejected.status).toBe(503);
   expect(rejected.headers.get('cache-control')).toBe('no-store');
