@@ -11,7 +11,7 @@ import * as admission from './admission.ts';
 import { inspectIndexedGribField } from './admission.ts';
 import { IndexedGribError } from './errors.ts';
 import { indexedGribCurrentSpecs, indexedGribPressureSpecs, indexedGribSurfaceSpecs } from './fields.ts';
-import { discoverIndexedGribRun } from './discover.ts';
+import { admitIndexedGribRun, discoverIndexedGribRun } from './discover.ts';
 import {
   indexedGribWindowStart,
   readIndexedGribStatisticalInterval,
@@ -285,6 +285,32 @@ describe('inventory admission and transport accounting', () => {
     await expect(discoverIndexedGribRun(source, { now: new Date('2026-10-30T08:00:00Z'), fetchImpl })).rejects.toMatchObject({ code: 'run-unavailable' });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(String(fetchImpl.mock.calls[0]![0])).toContain('.f072.idx');
+  });
+
+  it('waits for an earlier hour that lands after the final hour of a pinned cycle', async () => {
+    vi.useFakeTimers();
+    try {
+      const baseFetch = inventoryFetch('complete');
+      let late = true;
+      const fetchImpl = vi.fn<typeof fetch>(async (input, init) =>
+        late && String(input).includes('pgrb2.0p25.f001.idx') ? new Response(null, { status: 404 }) : baseFetch(input, init));
+      const pending = admitIndexedGribRun(profile, '2026-10-30T00:00:00Z', { fetchImpl });
+      await vi.waitFor(() => { expect(fetchImpl.mock.calls.some(([url]) => String(url).includes('pgrb2.0p25.f001.idx'))).toBe(true); });
+      late = false;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(pending).resolves.toMatchObject({ cycle: '2026-10-30T00:00:00Z', inventoryComplete: true });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('gives up on a pinned cycle that stays incomplete', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
+      const pending = admitIndexedGribRun(profile, '2026-10-30T00:00:00Z', { fetchImpl }).catch(error => error);
+      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      expect(await pending).toMatchObject({ code: 'transport' });
+      expect(fetchImpl).toHaveBeenCalledTimes(9);
+    } finally { vi.useRealTimers(); }
   });
 
   it('refreshes missing final-hour fields before loading earlier inventories', async () => {

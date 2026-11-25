@@ -55,7 +55,8 @@ forecast windows, rendered zoom and parallelism. Tune that entry, then run
 Generated workflow triggers select models by the cron expression that fired,
 including delayed starts. Manual runs finish each model before starting the next;
 scheduled runs start selected models concurrently. Without `cycle`, each model
-discovers its latest complete upstream run. Already-published
+discovers its latest complete upstream run. A GFS or RRFS `cycle` waits up to
+8 minutes for every forecast hour's inventory. Already-published
 cycles are skipped unless `-f allow-same-cycle=true` is passed. External cycle
 events require a registered event-driven model, an environment, and an explicit
 UTC cycle. Pass
