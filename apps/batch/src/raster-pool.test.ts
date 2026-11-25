@@ -130,10 +130,12 @@ describe('bounded per-frame raster workers', () => {
     const product = { ...INDEXED_PRODUCT, execution: { ...INDEXED_PRODUCT.execution, workers: 3 } };
     const { plan, fine } = await sharedFineCoverage(INDEXED_PRODUCT);
     const nativeCells = plan.native.width * plan.native.height, active = fine.coverage.offsets.at(-1)!;
+    // The fixture grid fills a 2 GiB budget; inline-only output bytes keep the boundary in range for a larger one.
+    const fill = BUILD_BUDGETS.workingSetBytes - 2 * 1024 ** 3;
     const admit = (nativeActive: number) => admitWholeDomain({ product, plan, nativeBlocks: Uint32Array.of(0), nativeActive, nativeMask: fine, fine,
       nativeMaskBytes: 2 * Math.ceil(nativeCells / 8), frames: 1, maxLevels: 1, retainedGeometryFields: 257,
       nativeLayers: 0, fineLayers: 2, terrainBytes: 0,
-      columns: { byteLength: 0, workspaceBufferBytes: Math.min(4, nativeActive) * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 } });
+      columns: { byteLength: 0, workspaceBufferBytes: Math.min(4, nativeActive) * 64, workspaceObjectBudgetBytes: 0, outputBufferBytes: active * 10 + fill } });
     let low = 0, high = nativeCells;
     while (low < high) {
       const middle = Math.ceil((low + high) / 2), capacity = admit(middle);

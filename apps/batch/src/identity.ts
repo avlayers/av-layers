@@ -9,34 +9,43 @@ import { createProductDescriptors, createRecipeIdentity, MODEL_CONFIG_PATH, terr
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 const digest = (data: Uint8Array | string): string => createHash('sha256').update(data).digest('hex');
 
+/** Paths whose content makes up a producer revision: build code, science, contracts, publisher scripts and dependencies. Every `PRODUCER_GROUPS` input lies under one of them. */
+export const PRODUCER_SOURCE_PATHS = [
+  'apps/batch',
+  'packages/forecast',
+  'packages/soaring',
+  'packages/solar',
+  'packages/thermodynamics',
+  'packages/contracts',
+  'scripts',
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'tsconfig.json'
+] as const;
+
 export async function readProducerSourceState(root = ROOT): Promise<{ revision: string; dirty: boolean }> {
   const git = promisify(execFile);
   const [{ stdout: revision }, { stdout: dirty }] = await Promise.all([
     git('git', ['rev-parse', 'HEAD'], { cwd: root }),
-    git(
-      'git',
-      [
-        'status',
-        '--porcelain',
-        '--untracked-files=normal',
-        '--',
-        'apps/batch',
-        'packages/forecast',
-        'packages/soaring',
-        'packages/solar',
-        'packages/thermodynamics',
-        'packages/contracts',
-        'scripts',
-        'package.json',
-        'pnpm-lock.yaml',
-        'pnpm-workspace.yaml',
-        'tsconfig.json'
-      ],
-      { cwd: root }
-    )
+    git('git', ['status', '--porcelain', '--untracked-files=normal', '--', ...PRODUCER_SOURCE_PATHS], { cwd: root })
   ]);
   return { revision: revision.trim(), dirty: !!dirty.trim() };
 }
+
+export const PRODUCER_GROUPS = {
+  adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
+  science: {
+    directories: [
+      'packages/forecast/src',
+      'packages/soaring/src',
+      'packages/solar/src',
+      'packages/thermodynamics/src'
+    ],
+    settings: []
+  },
+  contracts: { directories: ['packages/contracts/src'], settings: [MODEL_CONFIG_PATH, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'] }
+} as const;
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -51,23 +60,10 @@ interface BuildIdentity {
 interface WholeDomainIdentityInput { k: number; nativeCoverageHash: string; fineCoverageHash: string; fineGridHash: string; terrain: import('./terrain/sparse.js').SparseTerrainRef }
 
 export async function buildIdentity(product: ProductDefinition, coverageHash: string, { root = ROOT, wholeDomain }: { root?: string; wholeDomain?: WholeDomainIdentityInput } = {}): Promise<BuildIdentity> {
-  const groups = {
-    adapter: { directories: ['apps/batch/src'], settings: ['apps/batch/pmtiles.json'] },
-    science: {
-      directories: [
-        'packages/forecast/src',
-        'packages/soaring/src',
-        'packages/solar/src',
-        'packages/thermodynamics/src'
-      ],
-      settings: []
-    },
-    contracts: { directories: ['packages/contracts/src'], settings: [MODEL_CONFIG_PATH, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'] }
-  };
   const components = {} as Record<'adapter' | 'science' | 'contracts', string>;
   const fixtureProduct = join(root, 'packages/contracts/src/fixture-product.ts');
   for (const group of ['adapter', 'science', 'contracts'] as const) {
-    const { directories, settings } = groups[group];
+    const { directories, settings } = PRODUCER_GROUPS[group];
     const hash = createHash('sha256');
     const files = [...(await Promise.all(directories.map(dir => sourceFiles(join(root, dir))))).flat(), ...settings.map(path => join(root, path))]
       .filter(path => path !== fixtureProduct).sort();

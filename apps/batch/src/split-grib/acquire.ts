@@ -766,6 +766,8 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
       } finally {
         // Only this hour's pair can be reused as the next frame's companions.
         for (const key of fluxCache.keys()) if (!key.endsWith(`:${hour}`)) fluxCache.delete(key);
+        // Decoder workers keep their WASM heaps; release them so raster admission, which reads RSS, sees the memory free.
+        await closeJ2kPool();
         active = undefined;
       }
     },

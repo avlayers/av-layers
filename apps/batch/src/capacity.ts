@@ -7,7 +7,9 @@ export const BUILD_BUDGETS = {
   samplePackBytes: 256 * 1024 * 1024,
   numericBytes: 128 * 1024 ** 3,
   elapsedMs: 180 * 60_000,
-  workingSetBytes: 2 * 1024 ** 3,
+  // Planned working set. At 2 GiB RRFS shards admitted no raster or derive workers and rendered inline;
+  // at 4 GiB RRFS plans 3 + 3 workers within an estimated 3.8 GiB.
+  workingSetBytes: 4 * 1024 ** 3,
   // Observed process high-water mark. The ubuntu-24.04 public-repo runner has 16 GiB;
   // HRDPS continental shards peaked at 3.5-4.6 GiB with a 2 GiB admitted working set.
   peakRssBytes: 8 * 1024 ** 3

@@ -88,7 +88,7 @@ worker ceilings and frame groups for their workers.
 
 Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
 changes reuse the same terrain cache and preserve retained builds.
-The [build budgets](../apps/batch/src/capacity.ts) admit a 2 GiB planned working
+The [build budgets](../apps/batch/src/capacity.ts) admit a 4 GiB planned working
 set and accept up to 8 GiB of observed process RSS, half of a 16 GiB
 `ubuntu-24.04` runner. Worker selection and
 compaction use the working-set limit.
@@ -100,8 +100,10 @@ new build after expiry or rotation. Also start a new build
 when a failed shard uploaded frame provenance without completing its receipt.
 Reacquisition can change the immutable provenance timestamp.
 Workers and assembly finish under their frozen revision when main advances.
-Publication requires current main; [resume the completed artifact](#resume-a-build)
-from a current-main run with matching producer content.
+Publication proceeds when main advanced without changing `PUBLICATION_PATHS`
+in [publication-workflow.ts](../scripts/publication-workflow.ts); otherwise
+[resume the completed artifact](#resume-a-build) from a current-main run with
+matching producer content.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
@@ -184,6 +186,11 @@ new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
 tile routes, and any serving failure there fails deployment.
 After Cloudflare Pages deploys, the job checks the revision marker.
+
+CI and deploy run on the [RunsOn](https://runs-on.com) AWS stack that av-wrf
+uses: 4 vCPU x64, spot for pull requests and on-demand on `main`. They stay on
+x64 because the pinned terrain recipe (rasterio 1.4.3) has no Linux arm64 wheel.
+Fork and Dependabot pull requests run CI on `ubuntu-24.04`, as do forecast jobs.
 
 Deployment checks each available model's tile front cache with bounded repeated
 GETs. Workers Cache serves tile hits before API admission; TTL ends by the

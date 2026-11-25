@@ -7,6 +7,7 @@ import { fixtureManifestV5 } from '../tests/forecast-fixture.js';
 import type { BuildPlan } from '../apps/batch/src/parallel.js';
 import { BUILD_BUDGETS, LEGACY_FORECAST_ELAPSED_MS } from '../apps/batch/src/capacity.js';
 import { localPath } from '../apps/batch/src/validate.js';
+import { PRODUCER_SOURCE_PATHS } from '../apps/batch/src/identity.js';
 import { privateUpstreamPrefix, sourceCycleParts, sourceModelId } from '../apps/batch/src/source.js';
 const fake = vi.hoisted(() => ({ discover: vi.fn(), pointer: vi.fn(), publish: vi.fn(), cleanup: vi.fn(), mkdir: vi.fn(), gh: vi.fn(), write: vi.fn(), directories: vi.fn(), readLocal: vi.fn(), identity: vi.fn(), plan: vi.fn(), readPlan: vi.fn(), shard: vi.fn(), finalize: vi.fn(), storage: vi.fn(), verifyServing: vi.fn(), fineCoverage: vi.fn(), terrain: vi.fn(), verifyReceipts: vi.fn(), verifyDependencies: vi.fn(), stageControl: vi.fn() }));
 vi.mock('./forecast-control.js', async importOriginal => ({
@@ -24,7 +25,7 @@ vi.mock('../apps/batch/src/providers.js', async () => {
 });
 vi.mock('../apps/batch/src/publication.js', () => ({ publish: fake.publish, cleanup: fake.cleanup, readPointer: fake.pointer, verifyV5Dependencies: fake.verifyDependencies }));
 vi.mock('../apps/batch/src/local-file.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/local-file.js')>(), readLocalFile: fake.readLocal }));
-vi.mock('../apps/batch/src/identity.js', () => ({ buildIdentity: fake.identity }));
+vi.mock('../apps/batch/src/identity.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/identity.js')>(), buildIdentity: fake.identity }));
 vi.mock('../apps/batch/src/storage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/storage.js')>(), r2Storage: fake.storage }));
 vi.mock('../apps/batch/src/whole-domain/coverage.js', async importOriginal => ({ ...await importOriginal<typeof import('../apps/batch/src/whole-domain/coverage.js')>(), loadBundledFineCoverage: fake.fineCoverage }));
 vi.mock('../apps/batch/src/whole-domain/terrain.js', () => ({ ensureWholeDomainTerrain: fake.terrain }));
@@ -317,11 +318,13 @@ it('assembles a frozen forecast after main advances and refuses publication with
     await onValidated({ root: 'output', manifest, hash: 'a'.repeat(64) }, path);
     return path;
   });
-  fake.gh.mockResolvedValue({ stdout: 'b'.repeat(40) });
-  await expect(runOperation('forecast')).rejects.toThrow('superseded');
+  fake.gh.mockResolvedValueOnce({ stdout: 'b'.repeat(40) }).mockResolvedValueOnce({ stdout: '' }).mockResolvedValueOnce({ stdout: 'apps/batch/src/render.ts\n' });
+  await expect(runOperation('forecast')).rejects.toThrow('superseded on main; rerun the latest revision (changed: apps/batch/src/render.ts)');
   expect(fake.stageControl).toHaveBeenCalledOnce();
   expect(fake.finalize).toHaveBeenCalledOnce();
-  expect(fake.gh).toHaveBeenCalledOnce();
+  expect(fake.gh).toHaveBeenCalledTimes(3);
+  expect(fake.gh).toHaveBeenNthCalledWith(2, 'git', ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', 'b'.repeat(40)], expect.objectContaining({ timeout: 60_000 }));
+  expect(fake.gh).toHaveBeenLastCalledWith('git', ['diff', '--name-only', revision, 'b'.repeat(40), '--', ...PRODUCER_SOURCE_PATHS, 'packages/client', '.github'], expect.objectContaining({ timeout: 30_000 }));
   expect(fake.finalize.mock.invocationCallOrder[0]).toBeLessThan(fake.gh.mock.invocationCallOrder[0]);
   const sealed = fake.write.mock.calls.findIndex(([file]) => file === path);
   expect(JSON.parse(fake.write.mock.calls[sealed][1])).toEqual(original);
@@ -329,6 +332,18 @@ it('assembles a frozen forecast after main advances and refuses publication with
   expect(JSON.parse(fake.write.mock.calls.find(([file]) => file === 'output/workflow.json')![1])).toMatchObject({ runId: '123', attempt: 1, revision });
   expect(manifest).toEqual(original);
   for (const call of [fake.publish, fake.pointer, fake.cleanup, fake.verifyServing]) expect(call).not.toHaveBeenCalled();
+});
+it('publishes a frozen build across main commits that leave the producer unchanged', async () => {
+  fake.gh.mockResolvedValueOnce({ stdout: 'b'.repeat(40) }).mockResolvedValueOnce({ stdout: '' }).mockResolvedValueOnce({ stdout: '' });
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  await finalizeAndPublish();
+  expect(fake.publish).toHaveBeenCalledOnce();
+  expect(log).toHaveBeenCalledWith(expect.stringContaining('without producer changes'));
+});
+it('reports a failed main fetch as itself before publication', async () => {
+  fake.gh.mockResolvedValueOnce({ stdout: 'b'.repeat(40) }).mockRejectedValueOnce(new Error('fetch timed out'));
+  await expect(finalizeAndPublish()).rejects.toThrow('fetch timed out');
+  expect(fake.publish).not.toHaveBeenCalled();
 });
 it('refuses a build that exceeds resource budgets before publication', async () => {
   manifest.metrics.peakRssBytes = 10 * 1024 ** 3;
@@ -735,6 +750,15 @@ it('runs a worker without constructing publication storage or resolving another 
   await runForecastShard(2);
   expect(fake.shard).toHaveBeenCalledWith('output/plan.json', 2, { out: 'output', cacheDir: '.cache/gfs', signal: expect.any(AbortSignal), store: undefined });
   expect(fake.storage).not.toHaveBeenCalled(); expect(fake.discover).not.toHaveBeenCalled(); expect(fake.publish).not.toHaveBeenCalled();
+});
+it('logs shard phase timings from the completed receipt', async () => {
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  fake.readLocal.mockImplementation(async (path: string) => {
+    return Buffer.from(JSON.stringify(path === 'output/shards/2/receipt.json' ? { metrics: { phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 } } } : manifest));
+  });
+  await runForecastShard(2);
+  const entry = JSON.parse(log.mock.calls.map(([line]) => String(line)).find(line => line.includes('"forecast-stage"'))!);
+  expect(entry).toMatchObject({ phase: 'shard', shard: 2, outcome: 'complete', phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 } });
 });
 it('cancels the shard and removes its signal handlers', async () => {
   const before = process.listenerCount('SIGTERM');
