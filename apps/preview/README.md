@@ -64,18 +64,21 @@ scalar chart covers builds that publish no native profiles.
 
 - [src/index.tsx](src/index.tsx): the only production bootstrap.
 - [src/app.tsx](src/app.tsx): Preact composition, layout and controls.
-- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the store and API client, creates the map channels, routes commands and forecast events, and shuts down.
+- [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the [context](src/app/context.ts) (store, services, live parts) and the wiring modules, then creates the map channels on `start`. Wiring modules call each other through the shared `PreviewOps` table in [display-ops.ts](src/app/display-ops.ts).
+- [display-ops.ts](src/app/display-ops.ts), [forecast-wiring.ts](src/app/forecast-wiring.ts), [url-wiring.ts](src/app/url-wiring.ts), [command-handlers.ts](src/app/command-handlers.ts), [map-wiring.ts](src/app/map-wiring.ts), [page-lifecycle.ts](src/app/page-lifecycle.ts): channel and notice sync, forecast session events, URL write and history restore, UI commands, camera events, and back/forward-cache suspension and disposal.
 - [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
-- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. [display-ops.ts](src/app/display-ops.ts) forwards theme, opacity, visibility, units and teardown to every channel in one loop; [command-handlers.ts](src/app/command-handlers.ts) forwards playback.
 - [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
-- [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): raster replacement, overview retention and admission budgets.
+- [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): the lift raster facade. It composes frame slots and budgets ([raster-slots.ts](src/features/raster/raster-slots.ts)), the overview-to-detail handoff ([raster-staging.ts](src/features/raster/raster-staging.ts)), prefetch planning ([raster-prefetch.ts](src/features/raster/raster-prefetch.ts)) and the low-zoom overview ([raster-overview.ts](src/features/raster/raster-overview.ts)). [ADR 0004](../../docs/decisions/0004-raster-stays-on-maplibre.md) says why it stays on MapLibre sources.
+- [src/layers/registry.ts](src/layers/registry.ts), [channels.ts](src/layers/channels.ts): one record per layer id (lift pairing, legend text, remap ramp and mask) and per dock channel (copy, shortcut, glyph, visibility field).
+- [src/features/sky/rain-layer.ts](src/features/sky/rain-layer.ts): rain channel, composing the field source, cuff and contour layers; [rain-animator.ts](src/features/sky/rain-animator.ts) draws the falling rain and [contours.ts](src/features/sky/contours.ts) is the one contour routine for isobars, cloud and rain edges.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
 - [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
-- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): folded-night scale, gestures and playback.
+- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): routes timeline input; the view, folded-night [day scale](src/features/timeline/day-scale.ts), gesture, frame window and playback each have their own module beside it.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
 - [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.
 - [src/features/navigation/url-state.ts](src/features/navigation/url-state.ts): shared map URL parsing and serialization.
@@ -91,8 +94,8 @@ values and typed commands. URL/history behavior is tested through
 To change a control, update its store intent, command and component; leave the
 graphics engine alone. To add a map layer group, implement `MapChannel` and add
 it to the root's channel list, which updates, clears and destroys every channel.
-A group that loads forecast data also needs a select call where the root selects
-the raster and sky frames;
+A group that loads forecast data also needs a select call beside the raster and
+sky selects in [display-ops.ts](src/app/display-ops.ts);
 to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 

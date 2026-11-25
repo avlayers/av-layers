@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import fresh from 'fresh';
 import { CoverageError } from './coverage';
 import { countCacheHit, reserveAllocation, boundCachedResponse, createBoundedResponse, forkResponseForCache, transferBodyLease, estimateJsonBytes, ResourceLimitError, waitFor, type WaitContext } from './resources';
 
@@ -88,15 +89,10 @@ export function finish(request: Request, res: Response, expiresAt?: string, edge
   headers.set('access-control-allow-origin', '*');
   headers.set('timing-allow-origin', '*');
   headers.set('access-control-expose-headers', 'ETag, Cache-Control, Cf-Cache-Status, Age, Server-Timing, Content-Encoding, Content-Length, Timing-Allow-Origin, X-Av-R2-Reads, X-Av-R2-Bytes, X-Av-Cache-Hits, X-Av-Coalesced, X-Av-Response-Cache');
-  if (
-    res.status === 200 &&
-    headers.has('etag') &&
-    request.headers
-      .get('if-none-match')
-      ?.split(',')
-      .map(x => x.trim())
-      .includes(headers.get('etag')!)
-  ) {
+  // RFC 9110 §13.1.2: If-None-Match uses the weak comparison, so `W/"x"` (as an edge that compresses
+  // the body sends back) and `*` both revalidate.
+  if (res.status === 200 && headers.has('etag') && request.headers.has('if-none-match')
+      && fresh({ 'if-none-match': request.headers.get('if-none-match')! }, { etag: headers.get('etag')! })) {
     void res.body?.cancel().catch(() => {});
     return new Response(null, { status: 304, headers });
   }

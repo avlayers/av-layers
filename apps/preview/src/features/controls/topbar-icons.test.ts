@@ -2,13 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import {
   cleanModelDisplayLabel,
-  DOCK_CHANNELS,
   formatModelResolutionKm,
-  formatWindLevelLabel,
   modelApproxKm,
   modelRegionSubtitle,
   WIND_ENCODING_OPTIONS
 } from './topbar-model';
+import { DOCK_CHANNELS, formatWindLevelLabel } from '../../layers/channels';
 import { resolveChannelStyles } from '../map/channel-styles';
 import { MAP_THEMES, THEME_OPTIONS } from '../../themes/registry';
 

@@ -22,3 +22,18 @@ hour. CAPE and gust labels follow the pinned layer descriptors.
 [`scalar-point.ts`](src/scalar-point.ts) renders the scalar fallback.
 
 The headless [model](src/model.ts) converts validated frames into a chart view.
+
+Chart modules each own one concern:
+
+- Scenes: [`windgram-view.ts`](src/windgram-view.ts) builds one day;
+  [`windgram-stitched.ts`](src/windgram-stitched.ts) joins cached
+  [day panels](src/windgram-stitched-panel.ts).
+- Fields: [`windgram-climb.ts`](src/windgram-climb.ts) (thermal dome),
+  [`windgram-clouds.ts`](src/windgram-clouds.ts) (cloud layers and sky cover), and
+  [`windgram-atmosphere.ts`](src/windgram-atmosphere.ts) (inversions, model ascent,
+  cloud decks), contoured by [`windgram-isobands.ts`](src/windgram-isobands.ts).
+- Drawing: [`windgram-chart.ts`](src/windgram-chart.ts) writes the SVG and
+  [`windgram-key.ts`](src/windgram-key.ts) the legend.
+- Interaction: [`windgram-dom.ts`](src/windgram-dom.ts) mounts the chart;
+  [`windgram-interaction.ts`](src/windgram-interaction.ts) handles pointer and keys;
+  [`windgram-callout.ts`](src/windgram-callout.ts) registers the hover callouts.

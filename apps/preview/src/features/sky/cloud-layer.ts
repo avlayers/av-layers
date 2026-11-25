@@ -2,7 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { clampOpacity, previewRasterLayer } from '@av/client';
 import type { ResolvedChannelStyles } from '../map/channel-styles';
 import type { CloudStyleId } from '../../themes/theme';
-import { extractOrientedContours, type GeoPt } from './contour-rings';
+import { contourLines, type GeoPt } from './contours';
 import {
   cloudRasterBeforeId,
   isBitmapPendingOnImageSource,
@@ -10,6 +10,7 @@ import {
   weatherContourBeforeId
 } from './sky-layer-order';
 import type { SynopticField } from './synoptic-sampler';
+import { invMercY, mercY } from './mercator';
 
 type Coordinates = [[number, number], [number, number], [number, number], [number, number]];
 interface ImageSourceLike {
@@ -31,7 +32,6 @@ const CONTOUR_GRID_W = 56;
 const CONTOUR_GRID_H = 40;
 const MAX_BITMAP_CACHE = 48;
 const MAX_CONTOUR_CACHE = 64;
-const MAX_LAT = 85.05112878;
 const DEG = Math.PI / 180;
 
 const NOISE_SIZE = 256;
@@ -105,14 +105,6 @@ function sampleGridSmooth(grid: Float32Array, cols: number, rows: number, u: num
   if (Number.isFinite(v01)) { sum += v01 * w01; wSum += w01; }
   if (Number.isFinite(v11)) { sum += v11 * w11; wSum += w11; }
   return wSum > 0 ? sum / wSum : Number.NaN;
-}
-
-function mercY(lat: number): number {
-  return Math.asinh(Math.tan(Math.max(-MAX_LAT, Math.min(MAX_LAT, lat)) * DEG));
-}
-
-function invMercY(my: number): number {
-  return Math.atan(Math.sinh(my)) / DEG;
 }
 
 /** Encodes low boundary-layer cloud cover and upper cirrus into an RGBA viewport buffer. */
@@ -264,7 +256,7 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
 
   for (const { tier, threshold } of levels) {
     if (maxCover < threshold) continue;
-    for (const coordinates of extractOrientedContours(grid, CONTOUR_GRID_W, CONTOUR_GRID_H, threshold, toGeo, 4)) {
+    for (const coordinates of contourLines(grid, CONTOUR_GRID_W, CONTOUR_GRID_H, threshold, toGeo, { minVertices: 4 })) {
       features.push({
         type: 'Feature',
         properties: { tier },

@@ -20,6 +20,7 @@ import { validateSparsePreparedTerrain } from './terrain/sparse.js';
 import { verifyObjectReceipts, type ObjectReceipt } from './immutable-upload.js';
 import type { ObjectStorage } from './storage.js';
 import { runConcurrent } from './concurrent.js';
+import { LRUCache } from 'lru-cache';
 export { runConcurrent } from './concurrent.js';
 
 export const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
@@ -75,17 +76,16 @@ export async function fileSha256(path: string, maxBytes = Number.POSITIVE_INFINI
 /** Bound digest identities; share pending decodes as well as successfully verified content. */
 export function createArchiveContentValidator(maxEntries = 1024) {
   if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || maxEntries > 16_384) throw new RangeError('Invalid archive validation cache size');
-  const verified = new Map<string, Promise<void>>();
+  const verified = new LRUCache<string, Promise<void>>({ max: maxEntries });
   return async (bytes: Uint8Array): Promise<void> => {
     if (bytes.byteLength < 25 || bytes.byteLength > MAX_TILE_BYTES) throw new Error('Invalid tile byte length');
     const key = sha256(bytes), prior = verified.get(key);
-    if (prior) { verified.delete(key); verified.set(key, prior); return prior; }
+    if (prior) return prior;
     const work = (async () => {
       const dims = await decodeWebp(bytes);
       if (dims.width !== RASTER_TILE_SIZE || dims.height !== RASTER_TILE_SIZE) throw new Error('Invalid tile dimensions');
     })();
     verified.set(key, work);
-    if (verified.size > maxEntries) verified.delete(verified.keys().next().value!);
     try { await work; }
     catch (error) { if (verified.get(key) === work) verified.delete(key); throw error; }
   };

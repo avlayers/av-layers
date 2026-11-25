@@ -8,6 +8,7 @@ import { preparedBounds, WIND_NUMERIC_BYTES, WIND_WINDOW_BYTES, WIND_WINDOW_ENTR
 import type { ForecastRequestHandle, ForecastRequestSpec } from './client-request-scheduler.ts';
 import { createPreparationBudget } from './client-preparation-budget.ts';
 import { createForecastRequestScheduler } from './client-request-scheduler.ts';
+import { WindTransport } from './client-wind-transport.ts';
 
 const bounds = [-1, -1, 2, 2] as const;
 function build() {
@@ -863,20 +864,20 @@ it('retries transient numeric responses and cools an exhausted immutable resourc
     }
     return reply(target.includes('/wind/') ? wind : fine);
   });
-  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, retries: 2, retryMinTimeoutMs: 1 });
   expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
   expect(windAttempts).toBe(2);
   source.dispose();
 
   windAttempts = 0; fail = true;
   const failingCache = new WindDataCache();
-  const failing = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  const failing = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retries: 2, retryMinTimeoutMs: 1 });
   await expect(failing.load({ build: pinned, frame, bounds })).rejects.toThrow('Transient numeric response 503');
   expect(fetcher.mock.calls.filter(call => String(call[0]).includes('/wind/'))).toHaveLength(5);
   failing.dispose();
 
   const before = fetcher.mock.calls.length;
-  const cooling = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {} });
+  const cooling = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retries: 2, retryMinTimeoutMs: 1 });
   await expect(cooling.load({ build: pinned, frame, bounds })).rejects.toThrow('cooling down');
   expect(fetcher.mock.calls).toHaveLength(before);
   expect(failingCache.failedResources).toBeGreaterThan(0);
@@ -1996,4 +1997,25 @@ it('trims historical heights while retaining current fields and borrowed grid le
     expect(budget.snapshot()['wind-prepared']).toBe(16 * 16 * 4);
     source.dispose(); cache.clear(); expect(budget.used).toBe(0);
   } finally { source.dispose(); cache.clear(); }
+});
+
+it('re-runs a demoted wind request after transient failures spent every retry', async () => {
+  const cache = new WindDataCache(), url = 'https://api.test/wind/0';
+  const transport = new WindTransport(cache, undefined, { retries: 2, retryMinTimeoutMs: 0 });
+  // Capture the demotion reason through setPriority, the path that issues it.
+  let demoted: unknown;
+  const held = transport.hold(cache.take('https://api.test/held', 16, Date.now() + 60000));
+  held.pending = { handles: new Set([{ started: false, cancel: (reason: unknown) => { demoted = reason; } }]), revoke: new Map(), wake: new Set(), entries: [held] } as never;
+  transport.setPriority('background');
+  held.pending = undefined;
+  expect(demoted).toBeInstanceOf(Error);
+  const outcomes: unknown[] = [new TypeError('fetch failed'), new TypeError('fetch failed'), demoted, 12];
+  const readOnce = vi.spyOn(transport as never as { readOnce: () => Promise<number> }, 'readOnce').mockImplementation(async () => {
+    const next = outcomes.shift();
+    if (next instanceof Error) throw next;
+    return next as number;
+  });
+  expect(await transport.read(url, 'wind', [], { controller: new AbortController() } as never)).toBe(12);
+  expect(readOnce).toHaveBeenCalledTimes(4);
+  expect(cache.failureRemaining(url)).toBe(0);
 });

@@ -37,7 +37,7 @@ combined work across all grids selected by a request.
   queued task changes queue rank; promotion of an active raster or wind consumer
   reaches the physical request handle without a second fetch. A validated
   exact size reserves that size and fails delivered bytes beyond it. The raster
-  protocol keeps 16 inner requests active. A tile that has returned HTTP 200 is
+  protocol keeps 24 inner requests active by default (`VITE_FORECAST_REQUESTS`: 16, 24 or 32). A tile that has returned HTTP 200 is
   stored in the compressed cache when its caller leaves. The compressed tile cache is 48 MiB including entry overhead.
   Preview retains up to four source handles using
   [viewport memory admission](../apps/preview/src/features/raster/raster-budget.ts), charging 24

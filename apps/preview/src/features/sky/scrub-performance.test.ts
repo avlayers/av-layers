@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import type { PinnedBuild } from '@av/client';
 import { LIFT_COLORS, RAIN_COLORS } from '@av/contracts/layers';
@@ -8,7 +8,8 @@ import { resolveChannelStyles } from '../map/channel-styles';
 import { remapRgbaInPlace } from '../raster/tile-remap-core';
 import { CloudLayerController } from './cloud-layer';
 import { IsobarLayerController } from './isobar-layer';
-import { decodePrecipRgbaToField, RainAnimator } from './rain-animation';
+import { decodePrecipRgbaToField } from './precip-field';
+import { RainAnimator } from './rain-animator';
 import { pilotHorizonFrameOrder, SynopticSampler, type SynopticField } from './synoptic-sampler';
 
 function parseHex(hex: string): [number, number, number] {
@@ -44,6 +45,10 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
   });
 
   it('fetches only visible synoptic channels and upgrades missing mslp-hpa in place without re-fetching clouds', async () => {
+    // The fixture build expires at a fixed instant; pin the clock inside its lifetime.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-20T00:00:00Z'));
+    onTestFinished(() => { vi.useRealTimers(); });
     const build = fixtureBuild({
       mapFrameCount: 6,
       createdAt: '2026-11-18T00:00:00Z',

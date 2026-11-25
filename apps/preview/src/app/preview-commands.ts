@@ -3,9 +3,9 @@ import type { ModelId } from '@av/contracts/publication';
 import type { PointHorizon, UnitSystem } from '@av/client';
 import type { PointViewMode } from '@av/windgram';
 import type { DockViewId } from '../features/controls/bottom-dock-model';
-import type { WeatherChannelKey } from '../features/controls/topbar-model';
+import type { WeatherChannelKey } from '../layers/channels';
 import type { MapTheme } from '../themes/registry';
-import type { AltitudeReference } from '../features/navigation/url-state';
+import type { AltitudeReference } from '../layers/registry';
 import type { WindHeight, WindStyle } from '../features/wind/wind-model';
 
 type WeatherChannel = WeatherChannelKey;

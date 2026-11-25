@@ -2,7 +2,8 @@ import type { ComponentChildren } from 'preact';
 import type { LayerId } from '@av/contracts/layers';
 import type { PinnedBuild, UnitSystem } from '@av/client';
 import { themeOption, type MapTheme } from '../../themes/registry';
-import type { AltitudeReference } from '../navigation/url-state';
+import type { AltitudeReference } from '../../layers/registry';
+import { liftLayerFor } from '../../layers/registry';
 import {
   DOCK_VIEW_OPTIONS,
   legendRangeSummary,
@@ -68,9 +69,9 @@ function ReferenceToggle(props: {
           class={props.reference === reference ? 'ref is-selected' : 'ref'}
           aria-pressed={props.reference === reference}
           disabled={props.disabled}
-          onPointerEnter={() => props.onPrepareLayer(reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
-          onFocus={() => props.onPrepareLayer(reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
-          onPointerDown={() => props.onPrepareLayer(reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
+          onPointerEnter={() => props.onPrepareLayer(liftLayerFor(reference))}
+          onFocus={() => props.onPrepareLayer(liftLayerFor(reference))}
+          onPointerDown={() => props.onPrepareLayer(liftLayerFor(reference))}
           onClick={() => props.onReference(reference)}
         >{reference.toUpperCase()}</button>
       ))}
@@ -228,9 +229,9 @@ function CapsuleLegendChrome(props: ResolvedDockProps) {
             disabled={props.disabled}
             aria-label={`Lift reference ${props.reference.toUpperCase()}, activate for ${nextRef.toUpperCase()}`}
             title={`Switch to ${nextRef.toUpperCase()}`}
-            onPointerEnter={() => props.onPrepareLayer(nextRef === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
-            onFocus={() => props.onPrepareLayer(nextRef === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
-            onPointerDown={() => props.onPrepareLayer(nextRef === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl')}
+            onPointerEnter={() => props.onPrepareLayer(liftLayerFor(nextRef))}
+            onFocus={() => props.onPrepareLayer(liftLayerFor(nextRef))}
+            onPointerDown={() => props.onPrepareLayer(liftLayerFor(nextRef))}
             onClick={() => props.onReference(nextRef)}
           >{refBadge}</button>
         ) : null}

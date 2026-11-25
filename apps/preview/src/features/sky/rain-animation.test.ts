@@ -3,15 +3,11 @@ import { RAIN_COLORS } from '@av/contracts/layers';
 import { rainContourStrokePair, resolveChannelStyles } from '../map/channel-styles';
 import { MAP_THEMES, THEME_OPTIONS } from '../../themes/registry';
 import { buildCloudContourGeoJson, renderSmoothCloudRgba } from './cloud-layer';
-import {
-  buildRainContourGeoJson,
-  buildViewportSpawnDistribution,
-  decodePrecipRgbaToField,
-  RainAnimator,
-  rainVisualProfileForMmh,
-  renderRainInnerVignetteRgba,
-  samplePrecipMmh
-} from './rain-animation';
+import { decodePrecipRgbaToField, samplePrecipMmh } from './precip-field';
+import { RainAnimator } from './rain-animator';
+import { buildRainContourGeoJson } from './rain-contours';
+import { renderRainInnerVignetteRgba } from './rain-cuff';
+import { buildViewportSpawnDistribution, rainVisualProfileForMmh } from './rain-spawn';
 import {
   cloudRasterBeforeId,
   OwnedImageBitmapRetirer,

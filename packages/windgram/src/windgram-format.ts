@@ -21,6 +21,8 @@ export const fahrenheitToCelsius = (fahrenheit: number): number => (fahrenheit -
 
 const COMPASS_16 = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'] as const;
 export const compass16 = (directionDeg: number): string => COMPASS_16[((Math.round(directionDeg / 22.5) % 16) + 16) % 16]!;
+/** `SW 225°` style wind-direction label. */
+export const compassDegrees = (direction: number) => `${compass16(direction)} ${Math.round(direction) % 360}°`;
 
 export function finiteScalar(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;

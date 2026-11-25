@@ -1,9 +1,6 @@
 import { formatPlaceTime, formatPointMapTimes, placeDateKey, pointFrameView, seriesTable, type GeoPoint, type PinnedBuild, type PointSeries, type UnitSystem } from '@av/client';
 import { formatSitePlaceTime, pointOffsetMinutesAt } from '@av/client/timezone';
-import { adoptDocumentStyleSheet } from './style-registry.ts';
-import windgramPanelCss from './styles/windgram-panel.css?inline';
-
-const STYLE_ID = 'av-windgram-document-style';
+import { adoptPanelStyles, elementFactory } from './panel-dom.ts';
 
 function setCssVar(element: HTMLElement, name: string, value: string): void {
   if (typeof element.style.setProperty === 'function') element.style.setProperty(name, value);
@@ -16,13 +13,8 @@ export function renderPointSeries(
   options: { point: GeoPoint; frameId: string | null; mapFrameId?: string | null; mapOffsetMinutes?: number; unitSystem: UnitSystem; totalFrames?: number; loading?: boolean; onFrame(id: string): void }
 ): (frameId: string | null, units?: UnitSystem, mapFrameId?: string | null, loading?: boolean, mapOffsetMinutes?: number) => void {
   const owner = container.ownerDocument;
-  adoptDocumentStyleSheet(owner, STYLE_ID, windgramPanelCss);
-  const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] => {
-    const element = owner.createElement(tag);
-    if (className) element.className = className;
-    if (text !== undefined) element.textContent = text;
-    return element;
-  };
+  adoptPanelStyles(owner);
+  const node = elementFactory(owner);
   const previous = container.querySelector?.<HTMLElement>('.av-point-chart');
   const previousScroll = previous?.scrollLeft ?? 0;
   const previousSelected = previous?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]');

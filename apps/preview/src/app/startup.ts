@@ -13,7 +13,7 @@ import {
   type WindControlState
 } from '../features/wind/wind-model';
 import { visibleCustomLayer } from '../features/forecast/forecast-model';
-import { emptyOverlay, type PreviewInitialState } from '../stores/app-store';
+import { emptyOverlay, type PreviewInitialState, type PreviewIntent } from '../stores/app-store';
 
 export const offlineFixture = import.meta.env.VITE_OFFLINE_FIXTURE === 'true';
 export const apiBaseUrl = import.meta.env.AV_API_BASE ?? 'http://localhost:8787';
@@ -39,8 +39,33 @@ interface Preferences {
   setWind(state: WindControlState, fixedHeight: number): void;
 }
 
+type PreviewQuery = ReturnType<typeof previewQuery>;
+type ResolvedDisplay = Pick<PreviewIntent, 'units' | 'opacity' | 'theme' | 'dockView' | 'liftVisible' | 'cloudsVisible'
+  | 'rainVisible' | 'isobarsVisible' | 'windStyle' | 'windVisible' | 'windHeight'>;
+
+/**
+ * Display settings in their one precedence: URL value, then stored preference, then default.
+ * Startup and history restore both read it, so back/forward lands where a fresh load would.
+ */
+export function resolveDisplay(query: PreviewQuery, preferences: Pick<Preferences, 'units' | 'opacity' | 'theme' | 'dockView' | 'wind'>): ResolvedDisplay {
+  const storedWind = preferences.wind();
+  return {
+    units: query.units ?? preferences.units() ?? 'metric',
+    opacity: query.opacity ?? preferences.opacity() ?? 0.72,
+    theme: query.theme ?? preferences.theme() ?? DEFAULT_THEME,
+    dockView: query.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW,
+    liftVisible: query.liftVisible ?? true,
+    cloudsVisible: query.cloudsVisible ?? true,
+    rainVisible: query.rainVisible ?? true,
+    isobarsVisible: query.isobarsVisible ?? false,
+    windStyle: query.windStyle ?? storedWind?.style ?? 'trails',
+    windVisible: query.windVisible ?? storedWind?.visible ?? true,
+    windHeight: query.windHeight ?? storedWind?.height ?? 'surface'
+  };
+}
+
 interface StartupSnapshot {
-  readonly query: ReturnType<typeof previewQuery>;
+  readonly query: PreviewQuery;
   readonly preferences: Preferences;
   readonly initial: PreviewInitialState;
   readonly initialOffset: number;
@@ -65,24 +90,16 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     setPointViewMode(mode) { write('preview-point-view', mode); },
     setWind(state, fixedHeight) { write(WIND_STORAGE_KEY, serializeWindPreferences(state, fixedHeight)); }
   };
-  const query = previewQuery(search, offline), storedWind = preferences.wind();
+  const query = previewQuery(search, offline), storedWind = preferences.wind(), display = resolveDisplay(query, preferences);
   const initialModel = query.model ?? (offline ? fixtureModel : AUTO_MODEL_ID);
-  const initialOpacity = query.opacity ?? preferences.opacity() ?? 0.72;
-  const initialUnits: UnitSystem = query.units ?? preferences.units() ?? 'metric';
-  const initialTheme: MapTheme = query.theme ?? preferences.theme() ?? DEFAULT_THEME;
-  const initialDockView: DockViewId = query.dockView ?? preferences.dockView() ?? DEFAULT_DOCK_VIEW;
   const initialPointViewMode: PointViewMode = preferences.pointViewMode() ?? '3d';
-  const initialWindHeight = query.windHeight ?? storedWind?.height ?? 'surface';
-  const initialFixedHeight = typeof initialWindHeight === 'number' ? initialWindHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
+  const initialFixedHeight = typeof display.windHeight === 'number' ? display.windHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
   const browserOffsetMinutes = -new Date().getTimezoneOffset();
   const initialOffset = query.camera && Number.isFinite(query.camera.center[1]) ? longitudeOffsetHours(query.camera.center[0]) * 60 : browserOffsetMinutes;
   const initial: PreviewInitialState = {
     intent: {
-      model: initialModel, reference: query.reference, customLayer: visibleCustomLayer(query.layer), opacity: initialOpacity, units: initialUnits,
-      theme: initialTheme, dockView: initialDockView,
-      liftVisible: query.liftVisible ?? true, cloudsVisible: query.cloudsVisible ?? true, rainVisible: query.rainVisible ?? true, isobarsVisible: query.isobarsVisible ?? false, peeking: false,
-      windStyle: query.windStyle ?? storedWind?.style ?? 'trails', windVisible: query.windVisible ?? storedWind?.visible ?? true,
-      windVisibleOverride: query.windVisible, windPaused: false, windHeight: initialWindHeight, fixedWindHeight: initialFixedHeight,
+      model: initialModel, reference: query.reference, customLayer: visibleCustomLayer(query.layer), ...display, peeking: false,
+      windVisibleOverride: query.windVisible, windPaused: false, fixedWindHeight: initialFixedHeight,
       pointHorizon: initialPointViewMode === '3d' ? 'forecast' : 'day', pointViewMode: initialPointViewMode, requestedTime: query.validTime
     },
     forecast: {

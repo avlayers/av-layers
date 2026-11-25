@@ -153,12 +153,12 @@ and [serving budgets](serving-budgets.md):
   `Float32` decimals), add a client `m` / `ft` toggle for legends and readouts,
   and display local time alongside UTC.
 - **Basemap hillshade, roads/labels above overlay, and patch outline:** place
-  terrain hillshade beneath [`OVERLAY_LAYER_ID`](../apps/preview/src/app/create-preview-app.ts),
+  terrain hillshade beneath the forecast raster,
   render roads, borders, and place/peak labels in a symbol layer above the
   forecast raster, render refinement polygon outlines (`zone-001`), and allow
   `maxZoom: 9` inside 1 km patches.
 - **Flicker-free frame scrubbing (`←` / `→`):** update or prefetch tile sources
-  across adjacent frames in [`apps/preview/src/main.ts`](../apps/preview/src/app/create-preview-app.ts)
+  across adjacent frames in [the raster overlay](../apps/preview/src/features/raster/raster-overlay.ts)
   without tearing down the active MapLibre layer on every step.
 
 ## 6. Route cross-sections, soundings, high-res feeds, and calibration

@@ -4,7 +4,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 const include = ['{packages,apps,scripts,tests}/**/*.test.{ts,tsx}'];
 const integration = [
   '{packages,apps,scripts,tests}/**/*.integration.test.ts',
-  'apps/api/test/runtime.test.ts',
+  'apps/api/test/{runtime,wind-data}.test.ts',
   'apps/batch/src/{archive,raster-pool,render,whole-domain-v5}.test.ts',
   'scripts/sample-preview.test.ts'
 ];

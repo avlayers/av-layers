@@ -3,12 +3,13 @@ import { link, mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import pRetry from 'p-retry';
 import { ASSET_MAX_BYTES, type TerrainStorage } from './contract.js';
+import { LRUCache } from 'lru-cache';
 
 class MetadataChanged extends Error {}
 
 /** Immutable filesystem storage for local ingestion and preparation; the same commands use R2 in CI. */
 export function localTerrainStorage(directory: string): TerrainStorage {
-  const root = resolve(directory), etags = new Map<string, { size: number; mtime: number; ctime: number; inode: number; etag: string; computedSha256: string }>();
+  const root = resolve(directory), etags = new LRUCache<string, { size: number; mtime: number; ctime: number; inode: number; etag: string; computedSha256: string }>({ max: 1024 });
   function pathFor(key: string) {
     if (!/^terrain\/(?:[a-zA-Z0-9._-]+\/)*[a-zA-Z0-9._-]+$/.test(key) || key.split('/').some(part => part === '.' || part === '..')) throw new Error('Invalid local terrain object key');
     return join(root, key);
@@ -35,7 +36,6 @@ export function localTerrainStorage(directory: string): TerrainStorage {
         const after = await file.stat();
         if (after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) throw new MetadataChanged('Local terrain object changed during hashing');
         const entry = { size: info.size, mtime: info.mtimeMs, ctime: info.ctimeMs, inode: info.ino, etag: `"${hash.digest('hex')}"`, computedSha256: sha.digest('hex') };
-        if (etags.size >= 1024) etags.delete(etags.keys().next().value!);
         etags.set(key, entry);
         return entry;
       } finally { await file.close(); }

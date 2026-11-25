@@ -4,53 +4,19 @@
 import { windFromComponents } from '@av/soaring';
 import type { SiteForecast } from './internal-meteo.ts';
 import {
-  classifyConvectiveCloudRegime,
   omegaToVerticalVelocityMps,
   WAVE_ASCENT_MIN_MPS,
   WAVE_MIN_WIND_KT,
 } from './windgram-atmosphere.ts';
+import { classifyConvectiveCloudRegime } from './windgram-clouds.ts';
 import { finiteScalar, mpsToKnots } from './windgram-format.ts';
 import { median } from './windgram-time-axis.ts';
-
-export interface HeightAnchor {
-  heightM: number;
-  y: number;
-  pressureHpa: number | null;
-}
-
-export interface WindgramScale {
-  anchors: readonly HeightAnchor[];
-  top: number;
-  bottom: number;
-  floorM: number;
-  topM: number;
-}
+import type { HeightAnchor } from './windgram-vertical.ts';
 
 const ICON_ISOBAR_TICKS_HPA = [
   1000, 975, 950, 925, 900, 875, 850, 800, 750, 700, 650,
   600, 550, 500, 450, 400, 350, 300, 250, 200, 150, 100,
 ] as const;
-
-export function heightToY(view: WindgramScale, heightM: number): number {
-  const anchors = view.anchors;
-  if (heightM <= view.floorM) return view.bottom;
-  if (heightM >= view.topM) return view.top;
-  for (let i = 1; i < anchors.length; i++) {
-    const a = anchors[i - 1], b = anchors[i];
-    if (heightM <= b.heightM) return a.y + (b.y - a.y) * (heightM - a.heightM) / (b.heightM - a.heightM);
-  }
-  return view.top;
-}
-
-export function yToHeight(view: WindgramScale, y: number): number {
-  if (y >= view.bottom) return view.floorM;
-  if (y <= view.top) return view.topM;
-  for (let i = 1; i < view.anchors.length; i++) {
-    const a = view.anchors[i - 1], b = view.anchors[i];
-    if (y >= b.y) return a.heightM + (b.heightM - a.heightM) * (a.y - y) / (a.y - b.y);
-  }
-  return view.topM;
-}
 
 /** Compare with the last retained label so dense profiles still have an axis. */
 export function visibleHeightAnchors(

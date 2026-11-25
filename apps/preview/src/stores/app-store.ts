@@ -4,7 +4,7 @@ import type { ModelId } from '@av/contracts/publication';
 import type { PinnedBuild, PointHorizon, UnitSystem } from '@av/client';
 import type { PointViewMode } from '@av/windgram';
 import { DEFAULT_DOCK_VIEW, type DockViewId } from '../features/controls/bottom-dock-model';
-import type { AltitudeReference } from '../features/navigation/url-state';
+import type { AltitudeReference } from '../layers/registry';
 import { DEFAULT_THEME, type MapTheme } from '../themes/registry';
 import type { OverlayState } from '../features/raster/raster-overlay';
 import type { WindHeight, WindStatus, WindStyle } from '../features/wind/wind-model';
