@@ -95,6 +95,9 @@ published packages at those versions.
   @aws-sdk/checksums 3.1002.0              Apache-2.0
   zarrita 0.7.5                            MIT
   p-retry 9.0.0                            MIT
+  d3-contour 4.0.2                         ISC
+  d3-array 3.2.5                           ISC
+  internmap 2.0.3                          ISC
   is-network-error 1.3.2                   MIT
   sharp 0.35.5                            Apache-2.0
   @img/sharp-* 0.35.5                      Apache-2.0

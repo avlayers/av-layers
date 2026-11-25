@@ -19,7 +19,8 @@
     "./json": "./src/json.ts",
     "./models": "./src/products.ts",
     "./model-options": "./src/model-options.ts",
-    "./fixture-product": "./src/fixture-product.ts"
+    "./fixture-product": "./src/fixture-product.ts",
+    "./safety": "./src/safety.ts"
   },
   "dependencies": {
     "zod": "catalog:",

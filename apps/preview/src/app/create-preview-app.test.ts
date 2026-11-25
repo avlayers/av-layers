@@ -103,7 +103,7 @@ async function harness(wind = false) {
   vi.stubGlobal('window', win);
   vi.stubGlobal('document', doc);
   vi.stubGlobal('navigator', {});
-  const root = { querySelector: (selector: string) => hosts.get(selector) ?? null } as unknown as HTMLElement;
+  const root = { dataset: {}, querySelector: (selector: string) => hosts.get(selector) ?? null } as unknown as HTMLElement;
   const build = fixtureBuild({ mapFrameCount: 2, createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 86_400_000).toISOString() });
   if (wind) build.manifest.mapData = { sha256: 'a'.repeat(64), bytes: 1 };
   const frames = build.manifest.frames;

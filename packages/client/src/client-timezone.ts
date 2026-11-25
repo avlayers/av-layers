@@ -1,14 +1,14 @@
 import tzLookup from '@photostructure/tz-lookup';
 import { normalizeLon } from '@av/contracts/geometry';
-import { formatPlaceTime, longitudeOffsetHours, type PlaceTimeStyle } from './client-time.ts';
+import { cachedFormatter, formatPlaceTime, isUtcZone, longitudeOffsetHours, timeZoneOffsetMinutesAt, type PlaceTimeStyle } from './client-time.ts';
+
+export { timeZoneOffsetMinutesAt };
 import type { GeoPoint } from './client-types.ts';
 
 export interface SiteTimeZoneResolution {
   readonly timeZone: string;
   readonly isUtcFallback: boolean;
 }
-
-const isUtcZone = (timeZone: string): boolean => timeZone === 'UTC' || timeZone === 'Etc/UTC';
 
 /** Fixed solar UTC offset IANA identifier (`Etc/GMT±N`) from longitude. */
 export function timeZoneForLongitude(lon: number): string {
@@ -38,44 +38,10 @@ export function resolveCivilTimeZone(lat: number, lon: number): string {
   return resolveSiteTimeZone(lat, lon).timeZone;
 }
 
-function cachedFormatter(
-  cache: Map<string, Intl.DateTimeFormat>,
-  timeZone: string,
-  options: Intl.DateTimeFormatOptions,
-): Intl.DateTimeFormat | null {
-  let formatter = cache.get(timeZone);
-  if (!formatter) {
-    try {
-      formatter = new Intl.DateTimeFormat('en-US', { timeZone, ...options });
-      if (cache.size >= 64) cache.clear();
-      cache.set(timeZone, formatter);
-    } catch {
-      return null;
-    }
-  }
-  return formatter;
-}
-
-const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
-const OFFSET_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hourCycle: 'h23',
-};
-
-/** UTC offset in minutes (east positive, west negative) for `validMs` in `timeZone`. */
-export function timeZoneOffsetMinutesAt(validMs: number, timeZone: string): number {
-  if (!Number.isFinite(validMs) || isUtcZone(timeZone)) return 0;
-  const formatter = cachedFormatter(offsetFormatters, timeZone, OFFSET_PARTS_OPTIONS);
-  if (!formatter) return 0;
-  const parts = formatter.formatToParts(new Date(validMs));
-  const get = (type: string) => Number(parts.find(p => p.type === type)?.value ?? 0);
-  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
-  return Math.round((localAsUtcMs - validMs) / 60_000) || 0;
+/** Map clock zone: the civil zone on land, the nautical longitude zone (`Etc/GMT±N`) offshore. */
+export function mapClockTimeZone(lat: number, lon: number): string {
+  const site = resolveSiteTimeZone(lat, lon);
+  return site.isUtcFallback && Number.isFinite(lon) ? timeZoneForLongitude(lon) : site.timeZone;
 }
 
 const shortZoneFormatters = new Map<string, Intl.DateTimeFormat>();

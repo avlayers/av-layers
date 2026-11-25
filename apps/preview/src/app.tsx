@@ -1,4 +1,5 @@
-import { AUTO_MODEL_ID, formatPlaceTime } from '@av/client';
+import { FORECAST_DISCLAIMER } from '@av/contracts/safety';
+import { AUTO_MODEL_ID, formatZoneTime } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import type { ModelId } from '@av/contracts/publication';
@@ -50,8 +51,8 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         {
           modelId: AUTO_MODEL_ID as ModelId,
           label: 'Auto',
-          subtitle: 'Best model for map view',
-          kmBadge: isAutoModel && activeModelKm ? activeModelKm : 'Best km',
+          subtitle: 'Finest grid for this view',
+          kmBadge: isAutoModel && activeModelKm ? activeModelKm : 'Finest',
           isAuto: true
         },
         ...MODEL_OPTIONS.map(option => ({
@@ -65,7 +66,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
   const selectedIndex = Math.max(0, frames.findIndex(frame => frame.id === forecast.selectedFrame));
   const selected = frames.find(frame => frame.id === forecast.selectedFrame);
   const timestamp = !build || !selected ? (forecast.expired ? 'Build expired — overlay removed' : 'No frame selected')
-    : `Selected · ${formatPlaceTime(Date.parse(selected.validTime), forecast.offsetMinutes, 'stamp')}`;
+    : `Selected · ${formatZoneTime(Date.parse(selected.validTime), forecast.timeZone, 'stamp')}`;
   const controlsDisabled = !build || forecast.expired || forecast.mapFailed || forecast.pendingModel !== null;
   const displayed = overlay.displayed;
 
@@ -82,7 +83,10 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
               title={activeModelKm ? `${name} · Approx. ${activeModelKm} grid spacing` : name}
             >
               {isAutoModel ? <ModelEmblem isAuto /> : null}
-              <span id="model-name">{name}</span>
+              <span class="model-copy">
+                <span id="model-name">{name}</span>
+                {notices.runAge ? <span id="model-run">{notices.runAge}</span> : null}
+              </span>
               {activeModelKm ? <span class="model-res-badge" aria-label={`Approximate resolution ${activeModelKm}`}>{activeModelKm}</span> : null}
               <span class="model-caret" aria-hidden="true">▾</span>
             </summary>
@@ -113,6 +117,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
                   </button>
                 );
               })}
+              <p class="model-disclaimer">{FORECAST_DISCLAIMER}</p>
             </div>
           </details>
 
@@ -129,7 +134,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
             windStyle={intent.windStyle}
             windPaused={intent.windPaused}
             windHeight={intent.windHeight}
-            windStatus={wind.status}
+            channelStatus={{ ...notices.skyStatus, wind: wind.status }}
             liftVisible={intent.liftVisible}
             cloudsVisible={intent.cloudsVisible}
             rainVisible={intent.rainVisible}

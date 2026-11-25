@@ -41,7 +41,6 @@ function createServices() {
 interface LiveParts {
   map: maplibregl.Map | null;
   camera: MapCamera | null;
-  appRoot: HTMLElement | null;
   overlay: RasterOverlay | null;
   sky: SkyComposite | null;
   seam: CoverageSeam | null;
@@ -69,7 +68,7 @@ export function createPreviewContext() {
   const services = createServices();
   startup.preferences.setUnits(view.intent.value.units);
   const live: LiveParts = {
-    map: null, camera: null, appRoot: null, overlay: null, sky: null, seam: null,
+    map: null, camera: null, overlay: null, sky: null, seam: null,
     wind: null, point: null, timeline: null, locationController: null, channels: []
   };
   const state = {

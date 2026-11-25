@@ -200,15 +200,23 @@ async function validateProduct(m: ManifestV5, product: ProductDefinition | undef
   }
 }
 
+/**
+ * Copies the prose a build was published with (layer labels, attribution, coverage description) onto
+ * today's expected descriptors, so editing that prose in config keeps retained builds readable.
+ * Every other descriptor field must still match exactly.
+ */
+function withPublishedPresentation(expected: ManifestV5['descriptors'], m: ManifestV5): ManifestV5['descriptors'] {
+  const layers = Object.fromEntries(Object.entries(expected.layers).map(([id, layer]) => [id, { ...layer, label: m.descriptors.layers[id as LayerId]?.label }]));
+  return { ...expected, layers, attribution: m.descriptors.attribution, coverageDescription: m.descriptors.coverageDescription };
+}
+
 async function checkProduct(m: ManifestV5, product: ProductDefinition): Promise<void> {
   if (m.recipe.id !== product.id || m.recipe.source.modelFamily !== product.source.modelFamily
       || m.recipe.source.configurationId !== product.source.configurationId || m.recipe.source.domainId !== product.source.domainId
       || m.layers.some(layer => !product.layers.includes(layer))) {
     fail(503, 'publication-invalid', 'Publication does not match admitted product');
   }
-  const expected = createWholeDomainDescriptors({ ...product, layers: m.layers });
-  // Display labels are immutable publication metadata.
-  for (const layer of m.layers) expected.layers[layer].label = m.descriptors.layers[layer].label;
+  const expected = withPublishedPresentation(createWholeDomainDescriptors({ ...product, layers: m.layers }), m);
   if (product.terrainSubdivisionFactor === undefined || !sameJsonValue(m.descriptors, expected)) fail(503, 'publication-invalid', 'Publication does not match admitted product');
   let plan: ReturnType<typeof planWholeDomainGrid>;
   try { plan = planWholeDomainGrid(product.grid, product.terrainSubdivisionFactor); }

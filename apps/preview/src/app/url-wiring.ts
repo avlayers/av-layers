@@ -36,7 +36,6 @@ export function createUrlWiring(ctx: PreviewContext, ops: PreviewOps): Pick<Prev
           liftVisible: display.liftVisible, cloudsVisible: display.cloudsVisible, rainVisible: display.rainVisible,
           isobarsVisible: display.isobarsVisible, peeking: false
         });
-        ops.syncRootTheme();
         live.timeline?.setVariant?.(display.dockView);
         ops.syncChannels();
         if (display.units !== ctx.intent().units) ops.setUnits(display.units);

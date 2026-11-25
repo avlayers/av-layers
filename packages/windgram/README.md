@@ -29,9 +29,10 @@ Chart modules each own one concern:
   [`windgram-stitched.ts`](src/windgram-stitched.ts) joins cached
   [day panels](src/windgram-stitched-panel.ts).
 - Fields: [`windgram-climb.ts`](src/windgram-climb.ts) (thermal dome),
-  [`windgram-clouds.ts`](src/windgram-clouds.ts) (cloud layers and sky cover), and
+  [`windgram-clouds.ts`](src/windgram-clouds.ts) (humidity cloud decks, and the
+  sky cover strip from model total cloud), and
   [`windgram-atmosphere.ts`](src/windgram-atmosphere.ts) (inversions, model ascent,
-  cloud decks), contoured by [`windgram-isobands.ts`](src/windgram-isobands.ts).
+  cloud decks), contoured by [`windgram-isobands.ts`](src/windgram-isobands.ts) on `d3-contour`.
 - Drawing: [`windgram-chart.ts`](src/windgram-chart.ts) writes the SVG and
   [`windgram-key.ts`](src/windgram-key.ts) the legend.
 - Interaction: [`windgram-dom.ts`](src/windgram-dom.ts) mounts the chart;

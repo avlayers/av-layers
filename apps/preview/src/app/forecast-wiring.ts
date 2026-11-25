@@ -25,7 +25,7 @@ export function createForecastWiring(ctx: PreviewContext, ops: PreviewOps): Retu
     hooks: {
       onLoading(model) {
         live.wind?.session.clear(); live.point?.close();
-        writer.notices({ tileError: '', horizon: '', error: '', frameStatus: 'Loading forecast…', freshness: `Loading ${model} latest immutable build…` });
+        writer.notices({ horizon: '', error: '', freshness: `Loading ${model} latest immutable build…`, runAge: '' });
         ops.updateTimeUi();
       },
       onBuild(next) {
@@ -45,9 +45,9 @@ export function createForecastWiring(ctx: PreviewContext, ops: PreviewOps): Retu
         ops.showError(message); writer.notices({ freshness: 'No viewable build' });
       },
       onExpired() {
-        writer.notices({ tileError: '', horizon: '' });
+        writer.notices({ horizon: '' });
         ctx.services.windCache.clear(); ops.clearForecast();
-        writer.notices({ freshness: 'Expired immutable build' });
+        writer.notices({ freshness: 'Expired immutable build', runAge: '' });
         ops.showError('This build has expired. Reload to discover the latest retained build.');
       },
       onUrl(mode) { ops.writeUrl(mode); },

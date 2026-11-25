@@ -2,6 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { ApiClient, normalizePoint, type PinnedBuild } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
+import { alignedTo, lonWindow, type LonLatWindow } from './lon-window';
 
 export interface SynopticField {
   readonly id: string;
@@ -22,12 +23,7 @@ export interface SynopticField {
   readonly mslpEvaluated?: boolean;
 }
 
-export interface ViewportBounds {
-  readonly west: number;
-  readonly south: number;
-  readonly east: number;
-  readonly north: number;
-}
+export type ViewportBounds = LonLatWindow;
 
 interface SynopticChannelNeed {
   readonly needClouds?: boolean;
@@ -39,19 +35,10 @@ const SAMPLE_COLS = 8;
 const SAMPLE_ROWS = 6;
 const MAX_FIELD_CACHE = 256;
 const MAX_FOREGROUND_INFLIGHT = 3;
-const MAX_LAT = 85.05112878;
 
 export function rawMapViewBounds(map: MapLibreMap): ViewportBounds {
   const b = map.getBounds();
-  let west = b.getWest(), east = b.getEast();
-  if (east <= west) east += 360;
-  if (east - west > 340) { west = -179.9; east = 179.9; }
-  const south = Math.max(-MAX_LAT, b.getSouth());
-  const north = Math.min(MAX_LAT, b.getNorth());
-  west = Math.max(-179.9, west);
-  east = Math.min(179.9, east);
-  if (east - west < 0.04) east = Math.min(179.9, west + 0.04);
-  return { west, south, east, north };
+  return lonWindow(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
 }
 
 /**
@@ -63,16 +50,14 @@ export function scaleAdaptiveSampleBox(raw: ViewportBounds): ViewportBounds & { 
   const spanLat = Math.max(0.03, raw.north - raw.south);
   const padLon = Math.min(20, spanLon * 0.38);
   const padLat = Math.min(14, spanLat * 0.38);
-  const west = Math.max(-179.9, raw.west - padLon);
-  const east = Math.min(179.9, raw.east + padLon);
-  const south = Math.max(-MAX_LAT, raw.south - padLat);
-  const north = Math.min(MAX_LAT, raw.north + padLat);
+  const box = lonWindow(raw.west - padLon, raw.south - padLat, raw.east + padLon, raw.north + padLat);
   const step = Math.max(0.01, Math.min(0.5, Math.min(spanLon, spanLat) * 0.12));
   const q = (v: number) => (Math.round(v / step) * step).toFixed(3);
-  return { west, south, east, north, key: `${q(west)},${q(south)},${q(east)},${q(north)}` };
+  return { ...box, key: `${q(box.west)},${q(box.south)},${q(box.east)},${q(box.north)}` };
 }
 
-export function synopticFieldCoversView(field: ViewportBounds, raw: ViewportBounds): boolean {
+export function synopticFieldCoversView(field: ViewportBounds, view: ViewportBounds): boolean {
+  const raw = alignedTo(view, field);
   if (field.west > raw.west || field.east < raw.east || field.south > raw.south || field.north < raw.north) {
     return false;
   }
@@ -127,6 +112,16 @@ export function pilotHorizonFrameOrder(build: PinnedBuild, anchorFrame: string):
     push(anchorIdx - radius);
   }
   return ordered;
+}
+
+/** Fraction 0..1 from a cloud cover percentage, clamped. */
+export function cloudFraction(percent: number): number {
+  return Math.max(0, Math.min(100, percent)) * 0.01;
+}
+
+function cellValue(cell: { readonly status: string; readonly value: number | null } | undefined): number | null {
+  if (!cell || cell.status === 'unavailable' || cell.status === 'outside-domain') return null;
+  return typeof cell.value === 'number' && Number.isFinite(cell.value) ? cell.value : null;
 }
 
 function fieldSatisfies(field: SynopticField, wantClouds: boolean, wantMslp: boolean): boolean {
@@ -202,12 +197,13 @@ export class SynopticSampler {
     return null;
   }
 
+  /** Field for `frame` covering `raw`; `null` when the request failed, `undefined` when a newer foreground request evicted it. */
   async load(
     build: PinnedBuild,
     frame: string,
     raw: ViewportBounds,
     needed: SynopticChannelNeed = {}
-  ): Promise<SynopticField | null> {
+  ): Promise<SynopticField | null | undefined> {
     const hasTotal = build.manifest.layers.includes('cloud-cover-total');
     const hasLow = build.manifest.layers.includes('cloud-cover-low');
     const hasMslp = build.manifest.layers.includes('mslp-hpa');
@@ -234,7 +230,7 @@ export class SynopticSampler {
     if (existing) {
       const resolved = await existing.promise;
       if (resolved) this.active = resolved;
-      return resolved;
+      return existing.controller.signal.aborted ? undefined : resolved;
     }
 
     // Pause background warming while foreground frame misses are in flight.
@@ -261,7 +257,7 @@ export class SynopticSampler {
     this.fgInflight.set(inflightKey, { promise, controller });
     const field = await promise;
     if (field) this.active = field;
-    return field;
+    return controller.signal.aborted ? undefined : field;
   }
 
   /**
@@ -399,23 +395,11 @@ export class SynopticSampler {
             : sampleFrames.find(entry => entry.id === frameId);
           const frameLayers = frameEntry?.layers;
           if (spec.fetchClouds) {
-            const tCell = frameLayers?.['cloud-cover-total'];
-            const tVal = tCell && tCell.status !== 'unavailable' && tCell.status !== 'outside-domain' ? tCell.value : null;
-            const lCell = spec.hasLow ? frameLayers?.['cloud-cover-low'] : undefined;
-            const lVal = spec.hasLow
-              ? (lCell && lCell.status !== 'unavailable' && lCell.status !== 'outside-domain' ? lCell.value : null)
-              : (typeof tVal === 'number' && Number.isFinite(tVal) ? tVal * 0.55 : null);
-            if (typeof tVal === 'number' && Number.isFinite(tVal)) {
-              const clampedTotal = Math.max(0, Math.min(100, tVal)) * 0.01;
-              total[i] = clampedTotal;
-              low[i] = typeof lVal === 'number' && Number.isFinite(lVal)
-                ? Math.max(0, Math.min(100, lVal)) * 0.01
-                : clampedTotal * 0.55;
-              validCloudCells++;
-            } else {
-              total[i] = Number.NaN;
-              low[i] = Number.NaN;
-            }
+            const tVal = cellValue(frameLayers?.['cloud-cover-total']);
+            const lVal = spec.hasLow ? cellValue(frameLayers?.['cloud-cover-low']) : null;
+            total[i] = tVal === null ? Number.NaN : cloudFraction(tVal);
+            low[i] = lVal === null ? Number.NaN : cloudFraction(lVal);
+            if (tVal !== null) validCloudCells++;
           }
           if (spec.fetchMslp) {
             const pCell = frameLayers?.['mslp-hpa'];

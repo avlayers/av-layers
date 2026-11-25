@@ -1,3 +1,4 @@
+import { SKY_COVER_TIERS } from '@av/contracts/layers';
 import type { UnitSystem } from '@av/client';
 import type { ChannelView } from '../channels/channel';
 import { themeOption, type MapTheme } from '../themes/registry';
@@ -43,7 +44,7 @@ export function formatWindLevelLabel(height: WindHeight, units: UnitSystem = 'me
 
 const CLOUD_STYLE_SUMMARIES: Readonly<Record<CloudStyleId, string>> = {
   'sunlit-veil': 'Billowy sunlit Cu + neutral overcast ground shadow',
-  nephanalysis: 'Crisp vector 40 / 75% cloud isolines + airy veil',
+  nephanalysis: `Crisp vector ${SKY_COVER_TIERS.broken} / ${SKY_COVER_TIERS.overcast}% total cloud isolines + airy veil`,
   'satellite-ir': 'Simulated IR deck (bright upper tops, gray low cloud)'
 };
 

@@ -361,14 +361,14 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
         windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', requestedTime: null
       },
       forecast: {
-        build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-        offsetMinutes: 0, mapCenter: { lat: 40.18, lng: 44.51 }, playing: false
+        build: null, selectedFrame: null, pendingModel: null, resolving: false, expired: false, mapReady: false, mapFailed: false, layers: [],
+        timeZone: 'UTC', mapCenter: { lat: 40.18, lng: 44.51 }, playing: false
       },
       overlay: emptyOverlay,
       wind: { status: 'ready', overview: false, displayed: true, supported: true },
       point: { open: false, location: '', horizonSelectable: false, horizonLabel: '24 hours', busy: false, status: '', wind: '' },
       location: { message: '', detail: '', busy: false },
-      notices: { error: '', tileError: '', horizon: '', freshness: '', frameStatus: 'Full detail', overviewReady: 40, overviewTotal: 40, overviewFailed: 0, detailReady: 4, preparationLimited: false, scaleWidth: 64, scaleText: '10 km' }
+      notices: { error: '', tileError: '', horizon: '', freshness: '', runAge: '', frameStatus: 'Full detail', skyStatus: {}, overviewReady: 40, overviewTotal: 40, overviewFailed: 0, detailReady: 4, preparationLimited: false, scaleWidth: 64, scaleText: '10 km' }
     });
 
     const noticesBefore = store.view.notices.value;

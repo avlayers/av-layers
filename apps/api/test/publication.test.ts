@@ -92,7 +92,7 @@ describe('validated publication reuse', () => {
     expect(fixture.get.mock.calls.filter(([key]) => key === entry.manifestKey)).toHaveLength(2);
   });
 
-  it('reuses warm tile admission and rejects a newly incompatible product', async () => {
+  it('reuses warm tile admission, keeps retained builds through prose edits and rejects a newly incompatible product', async () => {
     const fixture = createV5Fixture();
     const cache = { match: vi.fn(async (_request: Request) => new Response(Uint8Array.of(1, 2, 3), { headers: { 'content-type': 'image/webp', 'content-length': '3' } })) };
     const responseMatches = () => cache.match.mock.calls.filter(([request]) => new URL(request.url).pathname.startsWith('/tiles/')).length;
@@ -111,8 +111,14 @@ describe('validated publication reuse', () => {
     expect(digest).not.toHaveBeenCalled();
     const matches = responseMatches();
     expect(matches).toBe(0);
-    const changed = createApp({ products: { [fixture.manifest.model]: { ...fixture.product, attribution: 'Changed deployment attribution' } } });
-    const rejected = await changed.fetch(new Request(`https://api.test${path}`), { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } }, { waitUntil() {} });
+    const env = { BUCKET: fixture.bucket, SAMPLE_RATE_LIMITER: { limit: async () => ({ success: true }) } };
+    const reworded = createApp({ products: { [fixture.manifest.model]: { ...fixture.product, attribution: 'Changed deployment attribution', coverageDescription: 'Reworded coverage' } } });
+    const kept = await reworded.fetch(new Request(`https://api.test${path}`), env, { waitUntil() {} });
+    expect(kept.status).toBe(200);
+    await kept.arrayBuffer();
+    const [west, south, east, north] = fixture.product.bounds;
+    const changed = createApp({ products: { [fixture.manifest.model]: { ...fixture.product, bounds: [west, south, east - 1, north] } } });
+    const rejected = await changed.fetch(new Request(`https://api.test${path}`), env, { waitUntil() {} });
     expect(rejected.status).toBe(503);
     expect(rejected.headers.get('cache-control')).toBe('no-store');
     expect(responseMatches()).toBe(matches);

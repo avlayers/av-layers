@@ -8,6 +8,7 @@ import type { AltitudeReference } from '../layers/registry';
 import { DEFAULT_THEME, type MapTheme } from '../themes/registry';
 import type { OverlayState } from '../features/raster/raster-overlay';
 import type { WindHeight, WindStatus, WindStyle } from '../features/wind/wind-model';
+import type { SkyStatus } from '../features/sky/sky-composite';
 import type { LayerOption } from '../features/forecast/forecast-model';
 
 export interface PreviewIntent {
@@ -41,11 +42,14 @@ interface ForecastView {
   readonly build: PinnedBuild | null;
   readonly selectedFrame: string | null;
   readonly pendingModel: ModelId | null;
+  /** Auto is resolving a first build for this view. */
+  readonly resolving: boolean;
   readonly expired: boolean;
   readonly mapReady: boolean;
   readonly mapFailed: boolean;
   readonly layers: readonly LayerOption[];
-  readonly offsetMinutes: number;
+  /** IANA zone of the map clock: the map centre's civil zone, or the browser's before the camera follows a place. */
+  readonly timeZone: string;
   readonly mapCenter: { readonly lat: number; readonly lng: number } | null;
   readonly playing: boolean;
 }
@@ -79,7 +83,12 @@ interface NoticeView {
   readonly tileError: string;
   readonly horizon: string;
   readonly freshness: string;
+  /** Visible model-run label, e.g. `06Z run · 3 h old`; empty without a live build. */
+  readonly runAge: string;
   readonly frameStatus: string;
+  /** Sky channels not drawing the selected hour; empty when every visible one is. */
+  /** Sky channels not drawing the selected hour, shown on their layer buttons. */
+  readonly skyStatus: SkyStatus;
   readonly overviewReady: number;
   readonly overviewTotal: number;
   readonly overviewFailed: number;

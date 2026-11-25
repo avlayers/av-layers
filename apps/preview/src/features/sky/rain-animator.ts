@@ -1,5 +1,6 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { calibrateMercatorProjector, invMercY, MAX_LAT, type FastMercatorProjector } from './mercator';
+import { calibrateMercatorProjector, invMercY, type FastMercatorProjector } from './mercator';
+import { alignedTo, lonWindow } from './lon-window';
 import { MIN_RAIN_MMH, samplePrecipMmh, type PrecipBounds, type PrecipField } from './precip-field';
 import {
   buildViewportSpawnDistribution,
@@ -202,15 +203,8 @@ export class RainAnimator {
       return this.field ?? { west: -180, south: -60, east: 180, north: 60 };
     }
     const b = this.map.getBounds();
-    const west = b.getWest();
-    let east = b.getEast();
-    if (east <= west) east += 360;
-    return {
-      west,
-      east,
-      south: Math.max(-MAX_LAT, b.getSouth()),
-      north: Math.min(MAX_LAT, b.getNorth())
-    };
+    const view = lonWindow(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
+    return this.field ? alignedTo(view, this.field) : view;
   }
 
   private computeTargetDropCount(dist: ViewportSpawnDistribution): number {

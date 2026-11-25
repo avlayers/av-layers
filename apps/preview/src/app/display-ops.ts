@@ -1,15 +1,15 @@
-import { AUTO_MODEL_ID, formatBuildFreshness, formatPlaceTime, mapForecastHorizonNotice, type UnitSystem } from '@av/client';
+import { AUTO_MODEL_ID, formatBuildFreshness, formatRunAge, formatZoneTime, mapForecastHorizonNotice, type UnitSystem } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { layerOptions, validatedCustomLayer } from '../features/forecast/forecast-model';
 import { preparedAxisReadiness } from '../stores/app-store';
 import { themeOption } from '../themes/registry';
 import type { PreviewContext } from './context';
+import { effect, untracked } from '@preact/signals';
 import { overlayNotices } from './overlay-status';
 
 /** The operations the wiring modules call on each other, resolved at call time. */
 export interface PreviewOps {
-  syncRootTheme(): void;
   syncChannels(): void;
   clearForecast(): void;
   syncLayers(): void;
@@ -17,7 +17,6 @@ export interface PreviewOps {
   showError(message: string): void;
   updatePreparation(): void;
   updateScale(): void;
-  updateOverlayStatus(): void;
   paintMapHorizon(now?: number): void;
   updateFreshness(): void;
   updateTimeUi(): void;
@@ -37,11 +36,6 @@ export interface PreviewOps {
 export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<PreviewOps, 'writeUrl' | 'applyHistory'> {
   const { writer, view } = ctx.store, { live, state } = ctx;
   return {
-    syncRootTheme() {
-      if (!live.appRoot?.dataset) return;
-      live.appRoot.dataset.chrome = themeOption(ctx.intent().theme).darkChrome ? 'dark' : 'light';
-    },
-
     /** Forwards theme, opacity, visibility and units to every map channel. */
     syncChannels() {
       for (const channel of live.channels) channel.update(ctx.intent());
@@ -84,17 +78,10 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       writer.notices({ scaleWidth: scale.width, scaleText: scale.text });
     },
 
-    updateOverlayStatus() {
-      const { pendingModel, expired, playing } = ctx.forecast();
-      writer.notices(overlayNotices(view.overlay.value, { build: ctx.build(), pendingModel, expired, playing, offsetMinutes: ctx.forecast().offsetMinutes }));
-      ops.updatePreparation();
-      if (!state.selectingOverlay) live.point?.feature.syncSelection();
-    },
-
     paintMapHorizon(now = Date.now()) {
       const current = ctx.build();
       if (!current || ctx.forecast().expired) return;
-      writer.notices({ horizon: mapForecastHorizonNotice(current.manifest, now, ms => formatPlaceTime(ms, ctx.forecast().offsetMinutes, 'stamp')) ?? '' });
+      writer.notices({ horizon: mapForecastHorizonNotice(current.manifest, now, ms => formatZoneTime(ms, ctx.forecast().timeZone, 'stamp')) ?? '' });
     },
 
     updateFreshness() {
@@ -104,7 +91,10 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       const now = Date.now();
       if (current.expiresAtMs <= now) { ctx.forecastSession.expire(); return; }
       ops.paintMapHorizon(now);
-      writer.notices({ freshness: (ctx.intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now) });
+      writer.notices({
+        freshness: (ctx.intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now),
+        runAge: formatRunAge(current.manifest.cycle, now)
+      });
     },
 
     updateTimeUi() {
@@ -172,4 +162,22 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       ops.writeUrl('replace');
     }
   };
+}
+
+/**
+ * Effects for the views that derive purely from store signals (root chrome, frame status line, tile
+ * notice, run age cleared with the build), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
+ */
+export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, signal: AbortSignal): void {
+  const { writer, view } = ctx.store;
+  const disposers = [
+    effect(() => { root.dataset.chrome = themeOption(view.intent.value.theme).darkChrome ? 'dark' : 'light'; }),
+    effect(() => {
+      const { build, pendingModel, resolving, expired, playing, timeZone } = view.forecast.value;
+      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
+      untracked(() => writer.notices(notices));
+    }),
+    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '' })); })
+  ];
+  signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });
 }

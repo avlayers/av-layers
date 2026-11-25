@@ -216,9 +216,9 @@ describe('decoupled rain-edge (#1 inner vignette cuff + dry halo), smooth cloud 
     expect(cirrusRgba[centerOff]!).toBeGreaterThan(215);
     expect(cirrusRgba[centerOff + 3]!).toBeLessThanOrEqual(54);
 
-    const neph = buildCloudContourGeoJson(lowOvcField, 'nephanalysis');
-    expect(neph.features.some(f => f.properties.tier === 'broken')).toBe(true);
-    expect(neph.features.some(f => f.properties.tier === 'overcast')).toBe(true);
+    const contours = buildCloudContourGeoJson(lowOvcField);
+    expect(contours.features.some(f => f.properties.tier === 'broken')).toBe(true);
+    expect(contours.features.some(f => f.properties.tier === 'overcast')).toBe(true);
   });
 
   it('uses scale-adaptive viewport quantization so zoomed-in local views (e.g. Yerevan 2 mi) resample crisp local grids', () => {

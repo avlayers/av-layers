@@ -6,6 +6,7 @@ import {
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, type RasterCrop } from '../raster/raster-crop';
 import { decodePrecipRgbaToField, type PrecipField } from './precip-field';
+import { alignedTo } from './lon-window';
 import type { ViewportBounds } from './synoptic-sampler';
 
 const RAIN_FIELD_SIZE = 224;
@@ -27,7 +28,8 @@ function planRainCrop(raw: ViewportBounds, mapZoom: number, maxzoom: number): Ra
  * Checks whether a cached `PrecipField` covers the viewport without over-coarsening relative to
  * the layer's native `maxzoom` (e.g., GFS `precip-rate` `maxzoom = 4..6`, where 1 tile spans 5.6°–22.5°).
  */
-function precipFieldCoversView(field: PrecipField, raw: ViewportBounds, maxzoom: number): boolean {
+function precipFieldCoversView(field: PrecipField, view: ViewportBounds, maxzoom: number): boolean {
+  const raw = alignedTo(view, field);
   const viewSpanLon = raw.east - raw.west;
   if (viewSpanLon >= 145) return field.east - field.west >= 320;
   if (raw.west < field.west || raw.east > field.east || raw.south < field.south || raw.north > field.north) {
@@ -117,59 +119,48 @@ export class RainFieldSource {
     const protocol = this.protocol;
     protocol.setBuildExpiry(buildId, build.expiresAtMs);
 
-    try {
-      const tileBitmaps = await Promise.all(crop.tiles.map(async tile => {
-        const url = frameTileUrl(template, frame)
-          .replaceAll('{z}', String(tile.z))
-          .replaceAll('{x}', String(tile.canonicalX))
-          .replaceAll('{y}', String(tile.y));
-        let data: ArrayBuffer;
-        let release: (() => void) | undefined;
-        if (typeof protocol.requestTile === 'function') {
-          const handle = protocol.requestTile(url, { priority });
-          handlesOut.push(handle);
-          const res = await handle.response;
-          data = res.data;
-          release = res.release;
-        } else {
-          const res = await protocol.load({ url }, new AbortController());
-          data = res.data;
-        }
-        try {
-          if (!isCurrent() || data.byteLength <= 48) return null;
-          const bmp = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
-          return { tile, bmp };
-        } finally {
-          release?.();
-        }
-      }));
-
-      if (!isCurrent()) {
-        for (const item of tileBitmaps) item?.bmp.close();
-        return null;
+    const settled = await Promise.allSettled(crop.tiles.map(async tile => {
+      const url = frameTileUrl(template, frame)
+        .replaceAll('{z}', String(tile.z))
+        .replaceAll('{x}', String(tile.canonicalX))
+        .replaceAll('{y}', String(tile.y));
+      let data: ArrayBuffer;
+      let release: (() => void) | undefined;
+      if (typeof protocol.requestTile === 'function') {
+        const handle = protocol.requestTile(url, { priority });
+        handlesOut.push(handle);
+        const res = await handle.response;
+        data = res.data;
+        release = res.release;
+      } else {
+        const res = await protocol.load({ url }, new AbortController());
+        data = res.data;
       }
-
+      try {
+        if (!isCurrent() || data.byteLength <= 48) return null;
+        const bmp = await createImageBitmap(new Blob([data], { type: 'image/webp' }));
+        return { tile, bmp };
+      } finally {
+        release?.();
+      }
+    }));
+    const tileBitmaps = settled.map(result => result.status === 'fulfilled' ? result.value : null);
+    try {
+      if (!isCurrent() || settled.some(result => result.status === 'rejected')) return null;
       const scaleX = RAIN_FIELD_SIZE / crop.width;
       const scaleY = RAIN_FIELD_SIZE / crop.height;
       const ctx = this.decodeCanvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) {
-        for (const item of tileBitmaps) item?.bmp.close();
-        return null;
-      }
+      if (!ctx) return null;
       ctx.clearRect(0, 0, RAIN_FIELD_SIZE, RAIN_FIELD_SIZE);
       for (const item of tileBitmaps) {
         if (!item) continue;
-        try {
-          ctx.drawImage(
-            item.bmp,
-            item.tile.drawX * scaleX,
-            item.tile.drawY * scaleY,
-            RASTER_TILE_SIZE * scaleX,
-            RASTER_TILE_SIZE * scaleY
-          );
-        } finally {
-          item.bmp.close();
-        }
+        ctx.drawImage(
+          item.bmp,
+          item.tile.drawX * scaleX,
+          item.tile.drawY * scaleY,
+          RASTER_TILE_SIZE * scaleX,
+          RASTER_TILE_SIZE * scaleY
+        );
       }
 
       const pixels = ctx.getImageData(0, 0, RAIN_FIELD_SIZE, RAIN_FIELD_SIZE).data;
@@ -192,6 +183,9 @@ export class RainFieldSource {
       return field;
     } catch {
       return null;
+    } finally {
+      // Settled, so no sibling can finish later: every bitmap this decode made closes here.
+      for (const item of tileBitmaps) item?.bmp.close();
     }
   }
 

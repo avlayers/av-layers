@@ -1,4 +1,4 @@
-import { formatPlaceTime, type PinnedBuild } from '@av/client';
+import { formatZoneTime, type PinnedBuild } from '@av/client';
 import type { OverlayState } from '../features/raster/raster-overlay';
 
 function sameSelection(a: OverlayState['displayed'], b: OverlayState['displayed']): boolean {
@@ -35,9 +35,10 @@ export function overlayUiChanged(prev: OverlayState, next: OverlayState): boolea
 interface StatusContext {
   readonly build: PinnedBuild | null;
   readonly pendingModel: string | null;
+  readonly resolving: boolean;
   readonly expired: boolean;
   readonly playing: boolean;
-  readonly offsetMinutes: number;
+  readonly timeZone: string;
 }
 
 /** The timeline status line and tile notice for the raster overlay state. */
@@ -48,8 +49,8 @@ export function overlayNotices(state: OverlayState, ctx: StatusContext): { frame
   const pending = requested && (!displayed || displayed.build !== requested.build || displayed.layer !== requested.layer || displayed.frame !== requested.frame);
   const olderBuild = displayed && displayed.build !== ctx.build;
   const displayedTime = displayed?.build.manifest.frames.find(frame => frame.id === displayed.frame)?.validTime;
-  const displayedLabel = displayedTime ? formatPlaceTime(Date.parse(displayedTime), ctx.offsetMinutes, 'stamp') : '';
-  const frameStatus = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : ctx.expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
+  const displayedLabel = displayedTime ? formatZoneTime(Date.parse(displayedTime), ctx.timeZone, 'stamp') : '';
+  const frameStatus = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : ctx.expired ? 'Forecast expired' : pendingModel || ctx.resolving ? 'Loading forecast…' : 'No forecast shown'
     : pending ? `Showing ${displayedLabel} · ${replacementFailed ? 'Selected time unavailable' : 'Loading selected time…'}`
       : quality === 'overview' ? `${displayedLabel} · Overview${playing ? '' : (replacementFailed ? ' · Detail unavailable' : ' · Loading detail…')}`
         : viewLoading ? `${displayedLabel} · Loading this view…` : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;

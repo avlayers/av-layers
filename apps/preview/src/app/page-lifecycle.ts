@@ -61,7 +61,7 @@ export function createPageLifecycle(ctx: PreviewContext, ops: PreviewOps) {
         error: error instanceof maplibregl.GPUInitializationError
           ? 'Map unavailable: this browser needs WebGL2. Enable graphics acceleration or try another browser.'
           : `Map initialization failed: ${error instanceof Error ? error.message : String(error)}`,
-        freshness: ''
+        freshness: '', runAge: ''
       });
       live.point?.marker.clear();
       writer.point({ open: false });

@@ -68,7 +68,7 @@ it('rechecks retained membership and deployed product compatibility before using
   await first.settle();
   const second = createV5Fixture(), next = context();
   await expect(manifest(second.bucket, second.manifest.model, second.buildId, retained(second), next.ctx,
-    { ...second.product, attribution: 'Changed product' })).rejects.toThrow('admitted product');
+    { ...second.product, bounds: [second.product.bounds[0], second.product.bounds[1], second.product.bounds[2] - 1, second.product.bounds[3]] })).rejects.toThrow('admitted product');
   expect(second.get).not.toHaveBeenCalled();
   vi.setSystemTime(NOW + 15_000);
   const removed = createV5Fixture({ buildId: nextBuild }), third = context();
@@ -93,7 +93,7 @@ it('recovers corrupt or schema-invalid shared bytes from R2 and never caches rej
   cache.entries.clear();
   const invalid = createV5Fixture();
   await expect(manifest(invalid.bucket, invalid.manifest.model, invalid.buildId, retained(invalid), next.ctx,
-    { ...invalid.product, attribution: 'Changed product' })).rejects.toThrow('admitted product');
+    { ...invalid.product, bounds: [invalid.product.bounds[0], invalid.product.bounds[1], invalid.product.bounds[2] - 1, invalid.product.bounds[3]] })).rejects.toThrow('admitted product');
   await next.settle(); expect(cache.entries.size).toBe(0);
 });
 
@@ -215,7 +215,7 @@ it('validates coalesced manifest callers independently and publishes bytes once 
   const fixture = createV5Fixture(), owner = context();
   const load = (product: typeof fixture.product) => manifest(fixture.bucket, fixture.manifest.model, fixture.buildId,
     retained(fixture), owner.ctx, product);
-  const results = await Promise.allSettled([load({ ...fixture.product, attribution: 'Changed product' }), load(fixture.product), load(fixture.product)]);
+  const results = await Promise.allSettled([load({ ...fixture.product, bounds: [fixture.product.bounds[0], fixture.product.bounds[1], fixture.product.bounds[2] - 1, fixture.product.bounds[3]] }), load(fixture.product), load(fixture.product)]);
   expect(results[0]).toMatchObject({ status: 'rejected', reason: { code: 'publication-invalid' } });
   expect(results[1]).toMatchObject({ status: 'fulfilled', value: fixture.manifest });
   expect(results[2]).toMatchObject({ status: 'fulfilled', value: fixture.manifest });

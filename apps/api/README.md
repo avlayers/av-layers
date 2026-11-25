@@ -63,6 +63,9 @@ is 256 point × frame × field values, so a longer frame list needs
 budget. Layer descriptors carry each model's `definition`; sample values stay
 the number and status. Resolve one build, then keep that `buildId` for the
 series.
+A retained build keeps the layer labels, attribution and coverage description
+it was published with; editing those in config leaves it readable. Any other
+descriptor change makes older builds return 503.
 See the [OpenAPI spec](../../docs/reference/openapi.json) for limits and schemas.
 
 `/provenance` serves the run frame index; `?frame=f001` selects a verified

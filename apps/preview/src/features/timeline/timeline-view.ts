@@ -1,4 +1,4 @@
-import { formatPlaceTime } from '@av/client';
+import { formatZoneTime } from '@av/client';
 import { dockViewOption, type DockViewId } from '../controls/bottom-dock-model';
 import { coarseSpanFractions, DAY_MINUTES, dayHatchFractions, localTimeFromMs, minuteToX, type DayGroup, type DayScale } from './day-scale';
 import { monotonicStops, ribbonGradient } from './solar-day';
@@ -205,15 +205,15 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
 
   function paintDecorations(scale: DayScale, width: number): void {
     const group = win.selectedGroup();
-    const key = [win.revision, group?.day, win.offsetMinutes, win.centerKey(), Math.round(width),
+    const key = [win.revision, group?.day, win.timeZone, win.centerKey(), Math.round(width),
       ...scale.segments.flatMap(segment => [segment.kind, segment.start, segment.end, segment.folded, Math.round(segment.x0 * 10), Math.round(segment.x1 * 10)])].join('|');
     if (key === decorationKey) return;
     decorationKey = key;
     const solar = group ? win.daySolar(group.day) : { stops: null, bounds: null };
     const warped = solar.stops ? solar.stops.map(stop => ({ color: stop.color, at: placeMinute(scale, stop.at / 100 * DAY_MINUTES) * 100 })) : null;
     ribbon.style.background = warped ? ribbonGradient(monotonicStops(warped)) : NEUTRAL;
-    paintHatches(scale, group ? dayHatchFractions(win.frames, group.indices, win.offsetMinutes) : []);
-    paintCoarse(scale, group ? coarseSpanFractions(win.frames, group.indices, win.offsetMinutes) : []);
+    paintHatches(scale, group ? dayHatchFractions(win.frames, group.indices, win.timeZone) : []);
+    paintCoarse(scale, group ? coarseSpanFractions(win.frames, group.indices, win.timeZone) : []);
     paintTicks(scale);
     paintMoons(scale);
   }
@@ -247,14 +247,14 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       hideMarkers();
       return;
     }
-    const local = localTimeFromMs(ms, win.offsetMinutes);
-    const clock = formatPlaceTime(ms, win.offsetMinutes, 'clock');
+    const local = localTimeFromMs(ms, win.timeZone);
+    const clock = formatZoneTime(ms, win.timeZone, 'clock');
     const split = clock.indexOf(' (');
     const localClock = split < 0 ? clock : clock.slice(0, split);
     localLabel.textContent = localClock;
     utcLabel.textContent = split < 0 ? '' : clock.slice(split);
     timeLabel.setAttribute('dateTime', frame.validTime);
-    track.setAttribute('aria-valuetext', formatPlaceTime(ms, win.offsetMinutes, 'stamp'));
+    track.setAttribute('aria-valuetext', formatZoneTime(ms, win.timeZone, 'stamp'));
     if (!local) { hideMarkers(); return; }
     const frameFraction = placeMinute(scale, local.hour * 60 + local.minute);
     const headFraction = scrubMinute !== null ? placeMinute(scale, scrubMinute) : frameFraction;

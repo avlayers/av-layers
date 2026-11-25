@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { formatPlaceTime, formatPointMapTimes, formatViewerTime, mapForecastHorizonNotice, buildAgeMs, longitudeOffsetHours, placeDateKey, selectExplicitFrame, selectHostFrame, watchBuildExpiry } from './index';
+import { formatPlaceTime, formatRunAge, formatPointMapTimes, formatViewerTime, mapForecastHorizonNotice, buildAgeMs, longitudeOffsetHours, placeDateKey, selectExplicitFrame, selectHostFrame, watchBuildExpiry } from './index';
 
 afterEach(() => vi.useRealTimers());
 
@@ -95,4 +95,16 @@ it('uses the rendered prefix when the point forecast continues', () => {
   expect(mapForecastHorizonNotice(manifest, horizon - 1)).toBeNull();
   expect(mapForecastHorizonNotice(manifest, horizon)).toContain(`Map forecast ended at ${frames[1].validTime}`);
   expect(horizon).toBeLessThan(Date.parse(frames.at(-1)!.validTime));
+});
+
+describe('formatRunAge', () => {
+  const now = Date.parse('2026-11-25T15:00:00Z');
+  it.each([
+    ['2026-11-25T14:30:00Z', '14Z run · 30 min old'],
+    ['2026-11-25T06:00:00Z', '06Z run · 9 h old'],
+    ['2026-11-22T00:00:00Z', '00Z run · 4 d old'],
+    ['not a time', '']
+  ])('labels %s as %s', (cycle, label) => {
+    expect(formatRunAge(cycle, now)).toBe(label);
+  });
 });

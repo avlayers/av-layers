@@ -65,7 +65,6 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
       if (ctx.intent().theme === theme) return;
       writer.intent({ theme });
       preferences.setTheme(theme);
-      ops.syncRootTheme();
       ops.syncChannels();
       ops.writeUrl('replace');
     },
@@ -130,7 +129,7 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
       writer.forecast({ playing });
       for (const channel of live.channels) channel.setPlayback?.(playing);
       live.wind?.session.playbackChanged();
-      ops.updateOverlayStatus();
+      ops.updatePreparation();
     },
     locate() { live.locationController?.locate(); },
     closePoint() { live.point?.close(); },

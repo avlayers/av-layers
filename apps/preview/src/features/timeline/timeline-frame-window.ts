@@ -1,4 +1,4 @@
-import { placeDateKey } from '@av/client';
+import { timeZoneOffsetMinutesAt, zoneDateKey } from '@av/client';
 import { buildDayScale, DAY_MS, localDayGroups, localTimeFromMs, type DayGroup, type DayScale, type NightBounds } from './day-scale';
 import { solarMinuteBounds, solarRibbonStops } from './solar-day';
 import type { TimelineFrame } from './timeline-model';
@@ -12,7 +12,8 @@ export interface FrameWindow {
   readonly days: readonly DayGroup[];
   /** Bumped whenever `frames` is replaced. */
   readonly revision: number;
-  readonly offsetMinutes: number;
+  /** IANA zone the days, clocks and solar ribbon use. */
+  readonly timeZone: string;
   /** Frame the track shows; leads `sceneIndex` during a gesture. */
   selectedIndex: number;
   /** Frame last delivered through `onSelect` or confirmed by `update`. */
@@ -29,7 +30,7 @@ export interface FrameWindow {
   setFrames(next: readonly TimelineFrame[]): void;
   /** Regroups days; returns whether the grouping changed. */
   syncDays(): boolean;
-  setOffsetMinutes(next: number): boolean;
+  setTimeZone(next: string): boolean;
   setCenter(latitude: number, longitude: number): boolean;
   /** Rounded centre used in paint cache keys. */
   centerKey(): string;
@@ -40,13 +41,13 @@ export interface FrameWindow {
 
 interface DaySolar { stops: ReturnType<typeof solarRibbonStops>; bounds: NightBounds | null }
 
-interface FrameWindowOptions { offsetMinutes?: number | undefined; latitude?: number | undefined; longitude?: number | undefined }
+interface FrameWindowOptions { timeZone?: string | undefined; latitude?: number | undefined; longitude?: number | undefined }
 
 const SOLAR_CACHE_DAYS = 24;
 
 export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
   let frames: readonly TimelineFrame[] = [], days: DayGroup[] = [], daySignature = '', revision = 0;
-  let offsetMinutes = Number.isFinite(options.offsetMinutes) ? options.offsetMinutes! : 0;
+  let timeZone = options.timeZone || 'UTC';
   let latitude = Number.isFinite(options.latitude) ? options.latitude! : Number.NaN;
   let longitude = Number.isFinite(options.longitude) ? options.longitude! : Number.NaN;
   let hasCenter = Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90;
@@ -56,12 +57,12 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
     get frames() { return frames; },
     get days() { return days; },
     get revision() { return revision; },
-    get offsetMinutes() { return offsetMinutes; },
+    get timeZone() { return timeZone; },
     selectedIndex: -1,
     sceneIndex: -1,
     disabled: false,
     off: () => win.disabled || !frames.length,
-    selectedDay: () => win.selectedIndex >= 0 ? placeDateKey(Date.parse(frames[win.selectedIndex]!.validTime), offsetMinutes) : '',
+    selectedDay: () => win.selectedIndex >= 0 ? zoneDateKey(Date.parse(frames[win.selectedIndex]!.validTime), timeZone) : '',
     selectedGroup() {
       const day = win.selectedDay();
       return days.find(group => group.day === day && group.indices.length) ?? days.find(group => group.indices.length);
@@ -79,7 +80,7 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
     },
     selectedMinute() {
       const frame = win.selectedIndex >= 0 ? frames[win.selectedIndex] : undefined;
-      const local = frame ? localTimeFromMs(Date.parse(frame.validTime), offsetMinutes) : null;
+      const local = frame ? localTimeFromMs(Date.parse(frame.validTime), timeZone) : null;
       return local ? local.hour * 60 + local.minute : null;
     },
     sameFrames: next => next.length === frames.length && next.every((frame, index) => frame.id === frames[index]?.id && frame.validTime === frames[index]?.validTime),
@@ -88,16 +89,16 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
       revision++;
     },
     syncDays() {
-      const next = localDayGroups(frames, offsetMinutes);
+      const next = localDayGroups(frames, timeZone);
       const signature = next.map(group => `${group.day}:${group.indices.join('.')}`).join('|');
       if (signature === daySignature) return false;
       days = next;
       daySignature = signature;
       return true;
     },
-    setOffsetMinutes(next) {
-      if (!Number.isFinite(next) || next === offsetMinutes) return false;
-      offsetMinutes = next;
+    setTimeZone(next) {
+      if (!next || next === timeZone) return false;
+      timeZone = next;
       solarCache.clear();
       return true;
     },
@@ -112,11 +113,13 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
     centerKey: () => hasCenter ? `${latitude.toFixed(2)}|${longitude.toFixed(2)}` : '|',
     daySolar(day) {
       if (!hasCenter || !day) return { stops: null, bounds: null };
-      const key = `${latitude.toFixed(2)},${longitude.toFixed(2)},${day},${offsetMinutes}`;
+      const key = `${latitude.toFixed(2)},${longitude.toFixed(2)},${day},${timeZone}`;
       const cached = solarCache.get(key);
       if (cached) return cached;
-      const start = Date.parse(`${day}T00:00:00Z`) - offsetMinutes * 60_000;
-      const solar = { stops: solarRibbonStops(latitude, longitude, start, start + DAY_MS), bounds: solarMinuteBounds(latitude, longitude, day, offsetMinutes) };
+      // The ribbon runs from this local midnight to the next, so 23 h and 25 h days keep both ends.
+      const start = localMidnight(day, timeZone), end = localMidnight(nextDay(day), timeZone);
+      const offset = timeZoneOffsetMinutesAt(start + DAY_MS / 2, timeZone);
+      const solar = { stops: onLocalClock(solarRibbonStops(latitude, longitude, start, end), start, end, timeZone), bounds: solarMinuteBounds(latitude, longitude, day, offset) };
       solarCache.set(key, solar);
       if (solarCache.size > SOLAR_CACHE_DAYS) solarCache.delete(solarCache.keys().next().value!);
       return solar;
@@ -130,3 +133,26 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
   };
   return win;
 }
+
+type RibbonStops = ReturnType<typeof solarRibbonStops>;
+
+/** Moves ribbon stops from elapsed time to local clock position, where the view and frame markers place them. */
+function onLocalClock(stops: RibbonStops, start: number, end: number, timeZone: string): RibbonStops {
+  if (!stops || end - start === DAY_MS) return stops;
+  const startOffset = timeZoneOffsetMinutesAt(start, timeZone);
+  let floor = 0;
+  return stops.map(stop => {
+    const ms = start + stop.at / 100 * (end - start);
+    const clock = (ms - start + (timeZoneOffsetMinutesAt(ms, timeZone) - startOffset) * 60_000) / DAY_MS * 100;
+    floor = Math.min(100, Math.max(floor, clock));
+    return { ...stop, at: floor };
+  });
+}
+
+/** UTC instant of 00:00 on `day` in `timeZone`, using the offset in force at that midnight. */
+function localMidnight(day: string, timeZone: string): number {
+  const utc = Date.parse(`${day}T00:00:00Z`);
+  return utc - timeZoneOffsetMinutesAt(utc - timeZoneOffsetMinutesAt(utc, timeZone) * 60_000, timeZone) * 60_000;
+}
+
+const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);

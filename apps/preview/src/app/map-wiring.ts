@@ -24,10 +24,10 @@ export function installMapWiring(ctx: PreviewContext, ops: PreviewOps, map: mapl
       live.timeline?.setMapCenter(next.center.lat, next.center.lng);
     }
     if (!next.changed) return;
-    const offsetMinutes = camera.offsetMinutes();
-    writer.forecast({ offsetMinutes });
-    live.timeline?.setOffsetMinutes(offsetMinutes);
-    ops.updateTimeUi(); ops.updateOverlayStatus(); ops.paintMapHorizon(); live.point?.feature.syncSelection();
+    const timeZone = camera.timeZone();
+    writer.forecast({ timeZone });
+    live.timeline?.setTimeZone(timeZone);
+    ops.updateTimeUi(); ops.paintMapHorizon(); live.point?.feature.syncSelection();
   }
 
   map.on('click', event => {
@@ -35,6 +35,7 @@ export function installMapWiring(ctx: PreviewContext, ops: PreviewOps, map: mapl
     if (point.isOpen()) { point.close(); return; }
     void point.feature.open(normalizePoint(event.lngLat.lat, event.lngLat.lng));
   });
+  if (live.camera?.zoneReady) void live.camera.zoneReady.then(() => syncMapClock(true));
   map.on('move', () => { syncMapClock(false); point.marker.sync(); wind.session.reconcile(); });
   map.on('resize', () => { point.marker.sync(); point.syncBarReserve(); });
   map.on('movestart', event => {

@@ -10,14 +10,14 @@ function initial(): PreviewInitialState {
       windHeight: 'surface', fixedWindHeight: 0, pointHorizon: 'day', requestedTime: null
     },
     forecast: {
-      build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-      offsetMinutes: 0, mapCenter: null, playing: false
+      build: null, selectedFrame: null, pendingModel: null, resolving: false, expired: false, mapReady: false, mapFailed: false, layers: [],
+      timeZone: 'UTC', mapCenter: null, playing: false
     },
     overlay: emptyOverlay,
     wind: { status: 'unavailable', overview: false, displayed: false, supported: false },
     point: { open: false, location: '', horizonSelectable: false, horizonLabel: '24 hours', busy: false, status: '', wind: '' },
     location: { message: '', detail: '', busy: false },
-    notices: { error: '', tileError: '', horizon: '', freshness: '', frameStatus: '', overviewReady: 0, overviewTotal: 0, overviewFailed: 0, detailReady: 0, preparationLimited: false, scaleWidth: 1, scaleText: '' }
+    notices: { error: '', tileError: '', horizon: '', freshness: '', runAge: '', frameStatus: '', skyStatus: {}, overviewReady: 0, overviewTotal: 0, overviewFailed: 0, detailReady: 0, preparationLimited: false, scaleWidth: 1, scaleText: '' }
   };
 }
 

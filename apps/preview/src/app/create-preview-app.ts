@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID } from '@av/client';
+import { AUTO_MODEL_ID, timeZoneOffsetMinutesAt } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { createLocationController } from '../features/location/location-controller';
 import { BasemapChannel } from '../features/map/basemap';
@@ -11,7 +11,7 @@ import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 import type { PreviewStore } from '../stores/app-store';
 import { createCommands } from './command-handlers';
 import { createPreviewContext } from './context';
-import { createDisplayOps, type PreviewOps } from './display-ops';
+import { createDisplayOps, installDerivedViews, type PreviewOps } from './display-ops';
 import { createForecastWiring } from './forecast-wiring';
 import { installMapWiring } from './map-wiring';
 import { overlayUiChanged } from './overlay-status';
@@ -46,8 +46,7 @@ export function createPreviewApp(): PreviewApp {
 
   function start(root: HTMLElement): void {
     if (live.map || state.destroyed) return;
-    live.appRoot = root;
-    ops.syncRootTheme();
+    installDerivedViews(ctx, root, ctx.lifecycle.signal);
     const container = root.querySelector<HTMLElement>('#map');
     if (!container) throw new Error('Missing element #map');
     for (const id of ['#wind-controls', '#compact-timeline']) if (!root.querySelector(id)) throw new Error(`Missing element ${id}`);
@@ -56,8 +55,8 @@ export function createPreviewApp(): PreviewApp {
     const camera = live.camera = createMapCamera(map, {
       home: { lat: openedAt.lat, lng: openedAt.lng },
       followsPlace: startup.query.camera !== null,
-      initialOffset: startup.initialOffset,
-      browserOffset: startup.browserOffsetMinutes
+      browserTimeZone: startup.browserZone,
+      loadZoneLookup: () => import('@av/client/timezone').then(module => module.mapClockTimeZone)
     });
 
     const { forecastScheduler, preparationBudget } = services;
@@ -77,7 +76,8 @@ export function createPreviewApp(): PreviewApp {
       if (!overlayUiChanged(view.overlay.value, next)) return;
       writer.overlay(next);
       wind.session.reconcile();
-      ops.updateOverlayStatus();
+      ops.updatePreparation();
+      if (!state.selectingOverlay) live.point?.feature.syncSelection();
     }, forecastScheduler.fetch, spec => forecastScheduler.request(spec), {
       budget: preparationBudget, requestLimits: services.requestLimits, theme: ctx.intent().theme,
       protectedBytes: wind.protectedBytes,
@@ -87,14 +87,15 @@ export function createPreviewApp(): PreviewApp {
     const cur = ctx.intent();
     live.sky = new SkyComposite(map, services.api, apiBaseUrl, {
       theme: cur.theme, opacity: cur.opacity, cloudsVisible: cur.cloudsVisible, rainVisible: cur.rainVisible, isobarsVisible: cur.isobarsVisible,
-      fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec)
+      fetchImpl: forecastScheduler.fetch, request: spec => forecastScheduler.request(spec),
+      onStatus: skyStatus => writer.notices({ skyStatus })
     });
     live.seam = new CoverageSeam(map);
     live.channels = [new BasemapChannel(map, ctx.intent().theme), overlay, live.sky, wind.overlay];
     ops.syncChannels();
 
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
-      offsetMinutes: ctx.forecast().offsetMinutes,
+      timeZone: ctx.forecast().timeZone,
       variant: ctx.intent().dockView,
       ...(camera.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, mode = 'push') => ops.selectIndex(index, mode, true),
@@ -108,7 +109,10 @@ export function createPreviewApp(): PreviewApp {
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,
-      offsetMinutes: () => ctx.forecast().offsetMinutes,
+      mapOffsetMinutes: () => {
+        const frame = ctx.build()?.manifest.frames.find(item => item.id === ctx.selectedFrame());
+        return timeZoneOffsetMinutesAt(frame ? Date.parse(frame.validTime) : Date.now(), ctx.forecast().timeZone);
+      },
       displayedFrame: () => {
         const displayed = view.overlay.value.displayed;
         return displayed && displayed.build === ctx.build() ? displayed.frame : null;
