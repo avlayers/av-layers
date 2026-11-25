@@ -99,7 +99,7 @@ combined work across all grids selected by a request.
   point queries at 100,000 requests / 10 s). The
   [wind contract](../packages/contracts/src/wind-data.ts) bounds descriptors,
   pages and chunks; serving hashes the selected range against its verified index.
-- **Manifest cache:** 64 entries, 4 MiB max, bounded by `expiresAt`; 4
+- **Manifest cache:** 64 entries, 8 MiB max, bounded by `expiresAt`; 4
   concurrent cold loads. Validated manifest bytes also use the Cache API through
   build expiry. Shared storage entries are scoped to the API origin; each read
   verifies its body digest and each manifest rechecks retained/product binding.
@@ -141,7 +141,7 @@ shared in-flight pool. Version-5
 scalar/profile objects are at most 64 MiB; point requests read bounded ranges
 from them. Build admission and assembly enforce aggregate numeric bytes through
 [`BUILD_BUDGETS`](../apps/batch/src/capacity.ts).
-JSON structural token caps: 16,384 for manifests, 8,192 for other metadata,
+JSON structural token caps: 32,768 for manifests, 8,192 for other metadata,
 262,144 for provenance, max depth 32, max 256 keys/elements per container. Request URLs cap
 at 16 KiB.
 

@@ -121,7 +121,7 @@ export async function manifest(
 ): Promise<ManifestV5> {
   waiterSignal?.throwIfAborted();
   let entries = manifestCache.get(bucket);
-  if (!entries) { entries = new ByteCache(64, 4 * 1024 * 1024); manifestCache.set(bucket, entries); }
+  if (!entries) { entries = new ByteCache(64, 8 * 1024 * 1024); manifestCache.set(bucket, entries); }
   const cacheKey = `${model}/${build}`;
   let m = entries.get(cacheKey);
   if (m) countCacheHit(ctx);
