@@ -79,7 +79,8 @@ column for each output cell before terrain refinement and point interpolation.
 
 - `cycle`: upstream model initialization time (UTC).
 - `validTime`: forecast valid time (UTC).
-- `intervalStart` / `intervalEnd`: trailing flux and precipitation window (UTC).
+- `intervalStart` / `intervalEnd`: trailing flux and precipitation window (UTC);
+  HRDPS fluxes are snapshots at `validTime`, so its flux window has zero width.
 - `createdAt` / `ageSeconds`: build creation timestamp and elapsed seconds since
   the build started.
 

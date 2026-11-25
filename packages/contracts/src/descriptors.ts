@@ -20,6 +20,18 @@ function methodForLayer(product: Pick<ProductDefinition, 'capabilities'>, layer:
 export function createProductMethodId(product: Pick<ProductDefinition, 'layers' | 'capabilities'>): string {
   return [...new Set(product.layers.map(id => methodForLayer(product, id).id))].join('+');
 }
+const FLUX_INPUTS = ['sensibleHeatFluxWm2', 'latentHeatFluxWm2'];
+const instantaneousField = z.looseObject({ statistic: z.never().optional() });
+/** Split GRIB fluxes without a statistic are instantaneous (template 4.0, e.g. HRDPS `SHTFL_Sfc`/`LHTFL_Sfc`). */
+function instantaneousFluxes(product: ProductDefinition): boolean {
+  return z.object({ upstream: z.object({ protocol: z.literal('split-grib2'), fields: z.object({ sensibleHeatFlux: instantaneousField, latentHeatFlux: instantaneousField }) }) }).safeParse(product).success;
+}
+/** Describes a method's flux inputs as valid-time snapshots instead of interval means. */
+function snapshotFluxInputs(raw: unknown): unknown {
+  const method = methodDescriptorSchema.parse(raw);
+  if (!FLUX_INPUTS.some(input => method.inputs[input])) return raw;
+  return { ...method, inputs: Object.fromEntries(Object.entries(method.inputs).map(([key, input]) => [key, FLUX_INPUTS.includes(key) ? { ...input, timeSupport: 'valid-time' } : input])) };
+}
 export function createProductDescriptors(product: ProductDefinition): z.infer<typeof descriptorSchema> {
   const layers = product.layers.map(id => {
     const definition = weatherFieldDefinition(product.modelId, id);
@@ -32,6 +44,11 @@ export function createProductDescriptors(product: ProductDefinition): z.infer<ty
     gust.timeSupport = 'interval-maximum';
     const method = methodDescriptorSchema.parse(methods[gust.methodId]);
     methods[gust.methodId] = { ...method, inputs: { ...method.inputs, gust10mMps: { ...method.inputs.gust10mMps!, timeSupport: 'interval-maximum' } } };
+  }
+  if (instantaneousFluxes(product)) {
+    // A snapshot flux paired with the valid-time profile is itself a valid-time product.
+    for (const layer of layers) if (layer.id === 'sensible-heat-flux' || layer.id === 'latent-heat-flux' || layer.timeSupport === 'interval-flux-endpoint-profile') layer.timeSupport = 'valid-time';
+    for (const [id, method] of Object.entries(methods)) methods[id] = snapshotFluxInputs(method);
   }
   return descriptorSchema.parse({
     layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
@@ -53,6 +70,6 @@ export function createWholeDomainDescriptors(product: ProductDefinition): z.infe
   const layers = product.layers.map(id => fineLayers[id] ?? base.layers[id]);
   return descriptorSchema.parse({ ...base,
     layers: Object.fromEntries(layers.map(layer => [layer.id, layer])),
-    methods: Object.fromEntries(layers.map(layer => [layer.methodId, layer.methodId === method.id ? method : base.methods[layer.methodId]]))
+    methods: Object.fromEntries(layers.map(layer => [layer.methodId, layer.methodId !== method.id ? base.methods[layer.methodId] : instantaneousFluxes(product) ? snapshotFluxInputs(method) : method]))
   });
 }

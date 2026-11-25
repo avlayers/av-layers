@@ -52,11 +52,13 @@ windows in GRIB2 metadata and pass them to
   differencing consecutive hours and negating yields the preceding-hour upward
   flux (`f001` negates its `0..1h` mean directly).
 - HRDPS `SHTFL_Sfc` and `LHTFL_Sfc` are instantaneous upward surface fluxes, and
-  `APCP-Accum1h_Sfc` is the preceding-hour precipitation accumulation.
+  `APCP-Accum1h_Sfc` is the preceding-hour precipitation accumulation. HRDPS
+  descriptors therefore give its flux layers, the flux inputs of its methods and
+  its flux-driven soaring layers `valid-time` support, not interval means.
 - Small negative precipitation differences within combined GRIB packing error
   clamp to `0`; larger negative rates become `unavailable`.
-- Lift pairs the trailing-interval surface heat fluxes with the valid-time
-  temperature profile.
+- Lift pairs the trailing-interval surface heat fluxes (HRDPS: the valid-time
+  snapshot) with the valid-time temperature profile.
 
 ## RRFS and Windgrams
 
