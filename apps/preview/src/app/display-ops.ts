@@ -196,8 +196,8 @@ export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, sign
   const disposers = [
     effect(() => { root.dataset.chrome = themeOption(view.intent.value.theme).darkChrome ? 'dark' : 'light'; }),
     effect(() => {
-      const { build, pendingModel, resolving, expired, playing, timeZone } = view.forecast.value;
-      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
+      const { build, pendingModel, resolving, expired, timeZone } = view.forecast.value;
+      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, timeZone });
       untracked(() => writer.notices(notices));
     }),
     effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '', newRun: '' })); })

@@ -3,7 +3,6 @@ import { DAY_MINUTES, localTimeFromMs, nearestFrameIndexForDay, scaleAtWidth, xT
 import { createFrameWindow } from './timeline-frame-window';
 import { clearGesture, createGesture, edgeStep, pointerTravelled, releaseSeeks } from './timeline-gesture';
 import type { TimelineFrame } from './timeline-model';
-import { createPlayback } from './timeline-playback';
 import { createTimelineView } from './timeline-view';
 
 
@@ -11,7 +10,6 @@ export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
   onIntent?(index: number): void;
   onPrepare?(index: number): void;
-  onPlayback?(playing: boolean): void;
   timeZone?: string;
   latitude?: number;
   longitude?: number;
@@ -25,24 +23,18 @@ export interface CompactTimeline {
   setVariant?(variant: DockViewId): void;
   setReadiness?(ready: number, total: number, loading?: boolean): void;
   setHighlightedDays?(days: readonly string[] | null): void;
-  pause(): void;
   destroy(): void;
 }
 
 /**
  * Compose the timeline: the frame window holds frames and selection, the gesture holds pointer
- * state, playback owns the timer, and the view paints. This module routes input between them.
+ * state, and the view paints. This module routes input between them.
  */
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
   let destroyed = false, sceneRequest: number | null = null;
   const win = createFrameWindow(options);
   const gesture = createGesture();
-  const playback = createPlayback({
-    atEnd: () => destroyed || win.selectedIndex >= win.frames.length - 1,
-    advance: () => select(win.selectedIndex + 1, 'replace', false),
-    finish: stopPlayback
-  });
   const view = createTimelineView(host, win, options.variant ?? DEFAULT_DOCK_VIEW, {
     prepareDay(group) {
       if (!options.onPrepare) return;
@@ -50,12 +42,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (idx >= 0) options.onPrepare(idx);
     },
     pickDay(group) {
-      if (playback.playing) stopPlayback();
       select(targetForDay(group), 'push', false);
     },
     resized: () => render()
   });
-  const { track, play } = view;
+  const { track } = view;
 
   function targetForDay(group: DayGroup): number {
     const minute = win.selectedMinute();
@@ -70,7 +61,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function render(width = view.trackWidth()): void {
     const scale = currentScale(width);
-    view.render({ scale, width, scrubMinute: gesture.pointer !== null ? gesture.scrubMinute : null, edgePull: gesture.edgePull, playing: playback.playing });
+    view.render({ scale, width, scrubMinute: gesture.pointer !== null ? gesture.scrubMinute : null, edgePull: gesture.edgePull });
   }
 
   function setTrackPull(px: number, armed: -1 | 0 | 1): void {
@@ -177,55 +168,10 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     else if (scrubMoved || gesture.edgePull !== prevPull) render(rect.width);
   }
 
-  function stopPlayback(): void {
-    if (playback.stop()) options.onPlayback?.(false);
-    if (!destroyed) render();
-  }
-
-  function wireStepper(button: HTMLButtonElement, delta: -1 | 1): void {
-    const targetIndex = (): number => {
-      if (!win.frames.length) return -1;
-      if (win.selectedIndex < 0) return delta > 0 ? 0 : -1;
-      return Math.max(0, Math.min(win.frames.length - 1, win.selectedIndex + delta));
-    };
-    const prepareStep = () => {
-      if (button.disabled || win.off() || !options.onPrepare) return;
-      const idx = targetIndex();
-      if (idx >= 0 && idx !== win.selectedIndex) options.onPrepare(idx);
-    };
-    button.addEventListener('pointerenter', prepareStep);
-    button.addEventListener('focus', prepareStep);
-    button.addEventListener('pointerdown', prepareStep);
-    button.addEventListener('click', () => {
-      if (button.disabled || win.off()) return;
-      if (playback.playing) stopPlayback();
-      const idx = targetIndex();
-      if (idx >= 0) select(idx, 'replace', false);
-    });
-  }
-  wireStepper(view.stepPrev, -1);
-  wireStepper(view.stepNext, 1);
-
-  play.addEventListener('click', () => {
-    if (gesture.pointer !== null) {
-      if (win.selectedIndex >= 0) select(win.selectedIndex, 'replace', false);
-      else invalidateGesture();
-    }
-    if (destroyed || win.off()) return;
-    if (playback.playing) { stopPlayback(); return; }
-    if (win.frames.length <= 1) { if (win.selectedIndex < 0) select(0, 'replace', false); if (!destroyed) render(); return; }
-    if (win.selectedIndex < 0 || win.selectedIndex >= win.frames.length - 1) select(0, 'replace', false);
-    if (destroyed || win.off()) return;
-    playback.start();
-    options.onPlayback?.(true);
-    if (!destroyed) render();
-  });
 
   track.addEventListener('pointerdown', event => {
     const pointer = event as PointerEvent;
     if (destroyed || gesture.pointer !== null || (pointer.button !== undefined && pointer.button !== 0) || win.off()) return;
-    if (playback.playing) stopPlayback();
-    if (destroyed || win.off() || gesture.pointer !== null || playback.playing) return;
     gesture.scale = null;
     gesture.moved = false;
     gesture.originX = pointer.clientX;
@@ -270,7 +216,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
     event.preventDefault();
     if (win.off()) return;
-    if (playback.playing) stopPlayback();
     const current = win.selectedIndex < 0 ? 0 : win.selectedIndex;
     const index = key === 'Home' ? 0
       : key === 'End' ? win.frames.length - 1
@@ -280,10 +225,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   };
   track.addEventListener('keydown', stepFromKey);
   view.root.addEventListener('keydown', event => { if (event.target !== track) stepFromKey(event); });
-
-  const onVisibility = () => { if (doc.visibilityState === 'hidden') stopPlayback(); };
-  doc.addEventListener('visibilitychange', onVisibility);
-  doc.defaultView?.addEventListener('pagehide', stopPlayback);
 
   return {
     cancelGesture() {
@@ -308,7 +249,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       win.disabled = nextDisabled;
       if (!sameFrames) syncDays();
       render();
-      if (win.off()) stopPlayback();
     },
     setTimeZone(next: string) {
       if (destroyed || !win.setTimeZone(next)) return;
@@ -326,9 +266,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     setHighlightedDays(nextDays) {
       if (!destroyed) view.setHighlightedDays(nextDays);
     },
-    pause() {
-      if (!destroyed && playback.playing) stopPlayback();
-    },
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !win.setCenter(nextLatitude, nextLongitude)) return;
       gesture.scale = null;
@@ -338,9 +275,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (destroyed) return;
       destroyed = true;
       invalidateGesture();
-      stopPlayback();
-      doc.removeEventListener('visibilitychange', onVisibility);
-      doc.defaultView?.removeEventListener('pagehide', stopPlayback);
       win.clearSolar();
       view.destroy();
     }

@@ -43,7 +43,6 @@ export class SkyComposite implements MapChannel {
   private rainVisible: boolean;
   private isobarsVisible: boolean;
   private peeking = false;
-  private playing = false;
   private moveTimer: ReturnType<typeof setTimeout> | null = null;
   private warmTimer: ReturnType<typeof setTimeout> | null = null;
   private synopticSeq = 0;
@@ -69,7 +68,7 @@ export class SkyComposite implements MapChannel {
     this.moveTimer = setTimeout(() => {
       this.moveTimer = null;
       if (this.disposed || !this.build || !this.frame || this.peeking) return;
-      this.syncActiveFrame(true);
+      this.syncActiveFrame();
     }, MOVE_SETTLE_MS);
   };
 
@@ -127,7 +126,7 @@ export class SkyComposite implements MapChannel {
       this.sampler.pauseWarming();
       this.rain.pauseWarming();
     }
-    this.syncActiveFrame(!this.playing);
+    this.syncActiveFrame();
   }
 
   /** Pre-fetches synoptic and/or rain data for an upcoming frame or hovered channel button. */
@@ -143,19 +142,6 @@ export class SkyComposite implements MapChannel {
     }
     if (wantRain && !this.rain.findCachedField(build, frame, raw)) {
       this.rain.warmHorizon(build, frame, raw);
-    }
-  }
-
-  setPlayback(playing: boolean): void {
-    if (this.playing === playing) return;
-    this.playing = playing;
-    if (playing) {
-      this.cancelWarmTimer();
-      this.sampler.pauseWarming();
-      this.rain.pauseWarming();
-    } else {
-      this.syncShown();
-      if (this.build && this.frame && !this.peeking) this.scheduleHorizonWarm();
     }
   }
 
@@ -195,7 +181,7 @@ export class SkyComposite implements MapChannel {
 
     const revealedAny = ((!prevClouds && this.cloudsVisible) || (!prevIso && this.isobarsVisible) || (!prevRain && this.rainVisible) || (prevPeek && !this.peeking));
     if (revealedAny && this.build && this.frame && !this.peeking) {
-      this.syncActiveFrame(!this.playing);
+      this.syncActiveFrame();
     } else {
       this.emitStatus();
     }
@@ -241,13 +227,12 @@ export class SkyComposite implements MapChannel {
   }
 
   /**
-   * Visible and drawing the selected build and frame. During playback a channel keeps the previous hour
-   * of the same build while the next one loads, so animation does not flash blank.
+   * Visible and drawing the selected build and frame.
    */
   private shown(channel: SkyChannel): boolean {
     const selected = this.selection(), painted = this.painted[channel];
     if (!this.wanted(channel) || selected === null || painted === null) return false;
-    return painted === selected || (this.playing && this.pending[channel] === 'loading' && painted.startsWith(`${this.build!.manifest.buildId}:`));
+    return painted === selected;
   }
 
   private syncShown(): void {
@@ -256,11 +241,11 @@ export class SkyComposite implements MapChannel {
     this.rain.syncStyleAndVisibility(this.styles, this.opacity, this.shown('rain'));
   }
 
-  /** Marks a channel loading; outside playback it hides another hour so that never stands in for the selection. */
+  /** Marks a channel loading and hides another hour so that never stands in for the selection. */
   private awaitChannel(channel: SkyChannel): void {
     if (this.painted[channel] === this.selection()) return;
     this.pending[channel] = 'loading';
-    if (!this.playing) this.painted[channel] = null;
+    this.painted[channel] = null;
   }
 
   /** Marks a channel still waiting on the selection as unavailable once its load settles. */
@@ -291,11 +276,11 @@ export class SkyComposite implements MapChannel {
 
   private scheduleHorizonWarm(): void {
     this.cancelWarmTimer();
-    if (this.disposed || this.playing || this.peeking || !this.build || !this.frame) return;
+    if (this.disposed || this.peeking || !this.build || !this.frame) return;
     const build = this.build, frame = this.frame;
     this.warmTimer = setTimeout(() => {
       this.warmTimer = null;
-      if (this.disposed || this.playing || this.peeking || this.build !== build || this.frame !== frame) return;
+      if (this.disposed || this.peeking || this.build !== build || this.frame !== frame) return;
       if (this.map.isMoving?.()) return;
       const raw = rawMapViewBounds(this.map);
       if (this.cloudsVisible || this.isobarsVisible) {
@@ -325,7 +310,7 @@ export class SkyComposite implements MapChannel {
     this.syncShown();
   }
 
-  private syncActiveFrame(allowWarm: boolean): void {
+  private syncActiveFrame(): void {
     const build = this.build, frame = this.frame;
     if (!build || !frame) return;
 
@@ -346,7 +331,7 @@ export class SkyComposite implements MapChannel {
       } else {
         if (showClouds) this.awaitChannel('clouds');
         if (showIso) this.awaitChannel('isobars');
-        void this.refreshSynoptic(build, frame, raw, allowWarm, seq);
+        void this.refreshSynoptic(build, frame, raw, seq);
       }
     } else {
       this.synopticSeq++;
@@ -370,14 +355,14 @@ export class SkyComposite implements MapChannel {
           this.pending.rain = null;
         } else {
           this.awaitChannel('rain');
-          void this.refreshRain(build, frame, raw, allowWarm);
+          void this.refreshRain(build, frame, raw);
         }
       }
     }
 
     this.syncShown();
     this.emitStatus();
-    if (allowWarm && synopticReady && rainReady) {
+    if (synopticReady && rainReady) {
       this.scheduleHorizonWarm();
     }
   }
@@ -400,7 +385,6 @@ export class SkyComposite implements MapChannel {
     build: PinnedBuild,
     frame: string,
     raw: ReturnType<typeof rawMapViewBounds>,
-    allowWarm: boolean,
     seq = ++this.synopticSeq
   ): Promise<void> {
     if (this.peeking || (!this.cloudsVisible && !this.isobarsVisible)) return;
@@ -411,16 +395,16 @@ export class SkyComposite implements MapChannel {
     });
     if (seq !== this.synopticSeq || this.disposed || this.build !== build || this.frame !== frame) return;
     // Evicted by a newer prefetch: the selection still needs this hour, so ask again.
-    if (field === undefined) { void this.refreshSynoptic(build, frame, rawMapViewBounds(this.map), allowWarm); return; }
+    if (field === undefined) { void this.refreshSynoptic(build, frame, rawMapViewBounds(this.map)); return; }
     if (field) this.paintSynopticField(field);
     this.settleChannel('clouds', selected);
     this.settleChannel('isobars', selected);
     this.syncShown();
     this.emitStatus();
-    if (field && allowWarm) this.scheduleHorizonWarm();
+    if (field) this.scheduleHorizonWarm();
   }
 
-  private async refreshRain(build: PinnedBuild, frame: string, raw: ReturnType<typeof rawMapViewBounds>, allowWarm: boolean): Promise<void> {
+  private async refreshRain(build: PinnedBuild, frame: string, raw: ReturnType<typeof rawMapViewBounds>): Promise<void> {
     if (this.peeking || !this.rainVisible) return;
     const selected = `${build.manifest.buildId}:${frame}`, seq = ++this.rainSeq;
     const readLive = (): LiveRainRenderState | null => {
@@ -441,6 +425,6 @@ export class SkyComposite implements MapChannel {
     else this.settleChannel('rain', selected);
     this.syncShown();
     this.emitStatus();
-    if (painted && allowWarm) this.scheduleHorizonWarm();
+    if (painted) this.scheduleHorizonWarm();
   }
 }

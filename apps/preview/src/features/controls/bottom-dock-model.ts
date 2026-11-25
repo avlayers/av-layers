@@ -9,7 +9,6 @@ export interface DockViewOption {
   readonly label: string;
   readonly shortLabel: string;
   readonly summary: string;
-  readonly showSteppers: boolean;
   readonly showLoupe: boolean;
 }
 
@@ -18,8 +17,7 @@ export const DOCK_VIEW_OPTIONS: readonly DockViewOption[] = [
     id: 'capsule',
     label: 'Slim capsule',
     shortLabel: 'Capsule',
-    summary: '54 px unified dock with top spectrum hairline, inline day tabs, scrub loupe, and thumb steppers',
-    showSteppers: true,
+    summary: '54 px unified dock with top spectrum hairline, inline day tabs and scrub loupe',
     showLoupe: true
   }
 ];

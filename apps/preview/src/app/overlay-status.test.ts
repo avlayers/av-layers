@@ -4,7 +4,7 @@ import { overlayNotices } from './overlay-status';
 
 describe('overlayNotices', () => {
   const idle = { displayed: null, requested: null } as unknown as OverlayState;
-  const ctx = { build: null, pendingModel: null, resolving: false, expired: false, playing: false, timeZone: 'UTC' };
+  const ctx = { build: null, pendingModel: null, resolving: false, expired: false, timeZone: 'UTC' };
 
   it('says loading while Auto resolves a first build, and nothing shown once it settles empty', () => {
     expect(overlayNotices(idle, { ...ctx, resolving: true }).frameStatus).toBe('Loading forecast…');

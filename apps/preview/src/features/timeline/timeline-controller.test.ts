@@ -244,14 +244,10 @@ it('labels hours from a fixed offset and regroups without changing the selected 
   const root = host.children[0]!;
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13']);
   expect(byClass(root, 'ct-time').textContent).toBe('13:00 (18:00 UTC)');
-  click(byClass(root, 'ct-play'));
   timeline.setTimeZone('UTC');
   expect(onSelect).not.toHaveBeenCalled();
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13', 'Sat 14']);
   expect(byClass(root, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
-  expect(byClass(root, 'ct-play').getAttribute('aria-pressed')).toBe('true');
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
   timeline.destroy();
 });
 
@@ -319,106 +315,6 @@ it('hatches a gap day and the hours outside a partial day', () => {
   pointer(track, 'pointerdown', 15 * 10);
   expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
   pointer(track, 'pointerup', 15 * 10);
-  timeline.destroy();
-});
-
-it('plays through available frames across midnight and stops at the last', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  click(play);
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  expect(onSelect).not.toHaveBeenCalled();
-
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(named(root, 'ct-day')[1]!.classList.contains('is-selected')).toBe(true);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).toHaveBeenCalledTimes(2);
-
-  click(play);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'replace');
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  timeline.destroy();
-});
-
-it('stops playback when the document hides and cleans up on destroy', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  click(play);
-  doc.visibilityState = 'hidden';
-  doc.dispatchEvent(new Event('visibilitychange'));
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).not.toHaveBeenCalled();
-
-  doc.visibilityState = 'visible';
-  click(play);
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  timeline.destroy();
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).toHaveBeenCalledTimes(1);
-  expect(host.children).toHaveLength(0);
-  doc.dispatchEvent(new Event('visibilitychange'));
-});
-
-it('disables controls and does not start playback when disabled', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a', true);
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  expect(play.disabled).toBe(true);
-  expect(named(root, 'ct-day').every(day => day.disabled)).toBe(true);
-  expect(byClass(root, 'ct-track').getAttribute('aria-disabled')).toBe('true');
-  click(play);
-  pointer(byClass(root, 'ct-track'), 'pointerdown', 10);
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).not.toHaveBeenCalled();
-
-  timeline.update(frames, 'b', false);
-  expect(play.disabled).toBe(false);
-  expect(byClass(root, 'ct-track').tabIndex).toBe(0);
-  timeline.destroy();
-});
-
-it('pauses playback when the user scrubs, picks a day, or uses arrow keys', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  const track = byClass(root, 'ct-track');
-  track.offsetWidth = 100;
-  click(play);
-  pointer(track, 'pointerdown', 10);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  const calls = onSelect.mock.calls.length;
-  vi.advanceTimersByTime(2100);
-  expect(onSelect.mock.calls.length).toBe(calls);
-
-  click(play);
-  key(root, 'ArrowRight');
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-
-  click(play);
-  click(named(root, 'ct-day')[1]!);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
   timeline.destroy();
 });
 
@@ -584,18 +480,6 @@ it('keeps a polar day on the linear hour scale', () => {
   timeline.destroy();
 });
 
-it('pause stops playback without selecting another frame', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  click(byClass(host.children[0]!, 'ct-play'));
-  timeline.pause();
-  expect(byClass(host.children[0]!, 'ct-play').getAttribute('aria-pressed')).toBe('false');
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).not.toHaveBeenCalled();
-  timeline.destroy();
-});
-
 it('records a scrub that starts with no selection', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, null);
@@ -607,7 +491,7 @@ it('records a scrub that starts with no selection', () => {
   timeline.destroy();
 });
 
-function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onIntent?: (index: number) => void) {
+function setupAnimationTimeline(onIntent?: (index: number) => void) {
   doc = new Document();
   const callbacks = new Map<number, FrameRequestCallback>();
   let nextId = 0;
@@ -618,7 +502,7 @@ function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onInten
   Object.defineProperty(doc, 'defaultView', { value: view });
   const host = doc.createElement('div');
   const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, ...(onPlayback ? { onPlayback } : {}), ...(onIntent ? { onIntent } : {}) });
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, ...(onIntent ? { onIntent } : {}) });
   const hours = [0, 6, 12, 18].map(hour => ({ id: `h${hour}`, validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z` }));
   timeline.update(hours, 'h0');
   const track = byClass(host.children[0]!, 'ct-track');
@@ -797,7 +681,7 @@ it('ignores a second pointer and commits the first pointer position', () => {
   timeline.destroy();
 });
 
-it('lets day and playback controls supersede pending drag work', () => {
+it('lets a day pick and a key supersede pending drag work', () => {
   vi.useFakeTimers();
   const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
   pointer(track, 'pointerdown', 0);
@@ -811,11 +695,11 @@ it('lets day and playback controls supersede pending drag work', () => {
   onSelect.mockClear();
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointermove', 60);
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(onSelect.mock.calls).toEqual([[1, 'replace'], [0, 'replace']]);
+  key(track, 'Home');
+  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
   pointer(track, 'pointerup', 60);
   flush();
-  expect(onSelect).toHaveBeenCalledTimes(2);
+  expect(onSelect).toHaveBeenCalledTimes(1);
   timeline.destroy();
 });
 
@@ -936,51 +820,9 @@ it('ignores subpixel movement on release after opening a folded night', () => {
   timeline.destroy();
 });
 
-it('does not start playback when an immediate selection destroys the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline(onPlayback);
-  pointer(track, 'pointerdown', 0);
-  pointer(track, 'pointermove', 60);
-  onSelect.mockImplementationOnce(() => timeline.destroy());
-  const play = byClass(host.children[0]!, 'ct-play');
-  click(play);
-  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-  flush();
-});
-
-it('does not start playback when a selection synchronously disables the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, track, timeline, onSelect, hours, flush } = setupAnimationTimeline(onPlayback);
-  pointer(track, 'pointerdown', 0);
-  pointer(track, 'pointermove', 60);
-  onSelect.mockImplementationOnce(() => timeline.update(hours, 'h6', true));
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-  flush();
-  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
-  timeline.destroy();
-});
-
-it('does not start playback when selecting the first frame destroys the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, timeline, onSelect, hours } = setupAnimationTimeline(onPlayback);
-  timeline.update(hours, 'h18');
-  onSelect.mockImplementationOnce(() => timeline.destroy());
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-});
-
 it('announces each changed drag intent before coalesced scene delivery', () => {
   const onIntent = vi.fn();
-  const { track, timeline, onSelect, flush } = setupAnimationTimeline(undefined, onIntent);
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline(onIntent);
   pointer(track, 'pointerdown', 60);
   pointer(track, 'pointermove', 60);
   pointer(track, 'pointermove', 120);
@@ -998,7 +840,7 @@ it('announces each changed drag intent before coalesced scene delivery', () => {
 it('cancels an obsolete Auto-like result before the next drag scene is delivered', async () => {
   let generation = 0;
   const onIntent = vi.fn(() => { generation++; });
-  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline(undefined, onIntent);
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline(onIntent);
   const requested = generation;
   let resolve!: () => void;
   const result = new Promise<void>(done => { resolve = done; }).then(() => {
@@ -1022,7 +864,7 @@ it.each(['destroy', 'disable', 'cancel'])('stops the gesture when onIntent synch
     else if (action === 'disable') timeline.update(hours, 'h0', true);
     else timeline.cancelGesture();
   });
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline, hours } = setup;
   pointer(setup.track, 'pointerdown', 60);
   pointer(setup.track, 'pointerup', 120);
@@ -1035,7 +877,7 @@ it.each(['destroy', 'disable', 'cancel'])('stops the gesture when onIntent synch
 
 it('does not commit release when onIntent invalidates the gesture', () => {
   const onIntent = vi.fn(() => timeline.cancelGesture());
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline } = setup;
   pointer(setup.track, 'pointerdown', 0);
   pointer(setup.track, 'pointerup', 120);
@@ -1051,7 +893,7 @@ it('does not let a reentrant release invalidate a newly started gesture', () => 
     timeline.cancelGesture();
     pointer(track, 'pointerdown', 180);
   });
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline, track } = setup;
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointerup', 120);
@@ -1060,28 +902,6 @@ it('does not let a reentrant release invalidate a newly started gesture', () => 
   pointer(track, 'pointerup', 180);
   setup.flush();
   expect(setup.onSelect.mock.calls).toEqual([[3, 'push']]);
-  timeline.destroy();
-});
-
-it.each(['destroy', 'disable'])('does not start a gesture when playback stop synchronously calls %s', action => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn((playing: boolean) => {
-    if (!playing) {
-      if (action === 'destroy') timeline.destroy();
-      else timeline.update(hours, 'h0', true);
-    }
-  });
-  const setup = setupAnimationTimeline(onPlayback);
-  const { timeline, hours } = setup;
-  click(byClass(setup.host.children[0]!, 'ct-play'));
-  pointer(setup.track, 'pointerdown', 60);
-  expect(setup.callbacks.size).toBe(0);
-  pointer(setup.track, 'pointerup', 120);
-  setup.flush();
-  expect(onPlayback.mock.calls).toEqual([[true], [false]]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(setup.callbacks.size).toBe(0);
-  expect(setup.onSelect).not.toHaveBeenCalled();
   timeline.destroy();
 });
 
@@ -1159,15 +979,14 @@ it('returns cancellation state based on the acknowledged scene without completin
   expect(timeline.cancelGesture()).toBeNull();
 });
 
-it.each(['day', 'key', 'play'])('does not select again on release when %s supersedes drag', control => {
+it.each(['day', 'key'])('does not select again on release when %s supersedes drag', control => {
   vi.useFakeTimers();
   const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointermove', 60);
   flush();
   if (control === 'day') click(named(host.children[0]!, 'ct-day')[0]!);
-  else if (control === 'key') key(track, 'End');
-  else click(byClass(host.children[0]!, 'ct-play'));
+  else key(track, 'End');
   const calls = onSelect.mock.calls.length;
   pointer(track, 'pointerup', 60);
   flush();
@@ -1261,46 +1080,16 @@ it('tracks pointer arbitrarily across sparse 3-hour intervals while dragging and
   timeline.destroy();
 });
 
-it('steps single frames via right-thumb steppers, pre-warms neighbors, and switches pluggable variants', () => {
-  const onPrepare = vi.fn();
-  doc = new Document();
-  const host = doc.createElement('div');
-  const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
+it('shows overview readiness on the track', () => {
+  const { host, timeline } = setup();
   const root = host.children[0]!;
-  const prev = byClass(root, 'ct-step-prev');
-  const next = byClass(root, 'ct-step-next');
-  const steppers = byClass(root, 'ct-steppers');
   const progress = byClass(root, 'ct-progress');
-  const progressBar = byClass(root, 'ct-progress-bar');
-
   timeline.update(frames, 'a');
-  expect(prev.disabled).toBe(true);
-  expect(next.disabled).toBe(false);
-
-  next.dispatchEvent(new Event('pointerenter'));
-  expect(onPrepare).toHaveBeenCalledWith(1);
-  click(next);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  expect(prev.disabled).toBe(false);
-
-  click(next);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(next.disabled).toBe(true);
-
-  click(prev);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-
   timeline.setReadiness?.(10, 40, true);
   expect(progress.getAttribute('hidden')).toBeNull();
-  expect(progressBar.style.transform).toBe('scaleX(0.25)');
+  expect(byClass(root, 'ct-progress-bar').style.transform).toBe('scaleX(0.25)');
   timeline.setReadiness?.(40, 40, false);
   expect(progress.getAttribute('hidden')).toBe('');
-
-  expect(steppers.getAttribute('hidden')).toBeNull();
-  expect(root.dataset.variant).toBe('capsule');
-  timeline.setVariant?.('capsule');
-  expect(steppers.getAttribute('hidden')).toBeNull();
   timeline.destroy();
 });
 

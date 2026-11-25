@@ -43,7 +43,6 @@ describe('bottom-dock-model', () => {
     expect(isDockViewId('classic')).toBe(false);
     expect(isDockViewId('unknown')).toBe(false);
     expect(isDockViewId(null)).toBe(false);
-    expect(dockViewOption('capsule').showSteppers).toBe(true);
     expect(dockViewOption('capsule').showLoupe).toBe(true);
     expect(DOCK_VIEW_OPTIONS.map(opt => opt.id)).toEqual(['capsule']);
   });

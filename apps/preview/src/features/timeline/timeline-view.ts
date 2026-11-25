@@ -9,9 +9,6 @@ import './compact-timeline.css';
 interface TimelineView {
   readonly root: HTMLElement;
   readonly track: HTMLElement;
-  readonly play: HTMLButtonElement;
-  readonly stepPrev: HTMLButtonElement;
-  readonly stepNext: HTMLButtonElement;
   render(paint: ViewPaint): void;
   rebuildDays(): void;
   trackWidth(): number;
@@ -32,7 +29,6 @@ interface ViewPaint {
   /** Unsnapped playhead minute while a pointer scrubs; null otherwise. */
   scrubMinute: number | null;
   edgePull: -1 | 0 | 1;
-  playing: boolean;
 }
 
 interface DayHandlers {
@@ -87,11 +83,6 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   daysRow.setAttribute('role', 'group');
   daysRow.setAttribute('aria-label', 'Forecast days');
   const controls = el('div', 'ct-controls');
-  const play = btn('ct-play', 'Play forecast');
-  const playGlyph = el('span', 'ct-play-glyph');
-  play.setAttribute('aria-pressed', 'false');
-  playGlyph.setAttribute('aria-hidden', 'true');
-  play.append(playGlyph);
   const timeLabel = el('time', 'ct-time');
   const localLabel = el('span', 'ct-time-local', '--:--'), utcLabel = el('span', 'ct-time-utc');
   timeLabel.append(localLabel, utcLabel);
@@ -121,15 +112,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   track.tabIndex = -1;
   track.append(ribbon, hatches, marks, moons, ticks, snapGhost, playhead, progress, loupe);
 
-  const steppers = el('div', 'ct-steppers');
-  steppers.setAttribute('role', 'group');
-  steppers.setAttribute('aria-label', 'Step forecast hour');
-  const stepPrev = btn('ct-step ct-step-prev', 'Previous forecast time', '‹');
-  const stepNext = btn('ct-step ct-step-next', 'Next forecast time', '›');
-  steppers.append(stepPrev, stepNext);
-  if (!dockViewOption(variant).showSteppers) steppers.setAttribute('hidden', '');
-
-  controls.append(play, timeLabel, track, steppers);
+  controls.append(timeLabel, track);
   root.append(daysRow, controls);
   host.append(root);
 
@@ -298,7 +281,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   }
 
   function render(paint: ViewPaint): void {
-    const { scale, width, playing } = paint;
+    const { scale, width } = paint;
     root.classList.toggle('is-scrubbing', paint.scrubMinute !== null);
     const off = win.off();
     paintDayButtons(off);
@@ -309,12 +292,6 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     track.setAttribute('aria-disabled', String(off));
     track.setAttribute('aria-valuemax', String(Math.max(0, win.frames.length - 1)));
     track.setAttribute('aria-valuenow', String(Math.max(0, win.selectedIndex)));
-    play.disabled = off;
-    play.classList.toggle('is-playing', playing);
-    play.setAttribute('aria-pressed', String(playing));
-    play.setAttribute('aria-label', playing ? 'Pause forecast playback' : 'Play forecast');
-    stepPrev.disabled = off || win.selectedIndex <= 0;
-    stepNext.disabled = off || win.selectedIndex < 0 || win.selectedIndex >= win.frames.length - 1;
     revealSelected();
   }
 
@@ -345,7 +322,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   resizeObserver?.observe(track);
 
   return {
-    root, track, play, stepPrev, stepNext, render, rebuildDays, trackWidth,
+    root, track, render, rebuildDays, trackWidth,
     painted: () => paintedWidth >= 0,
     setPull(px, armed) {
       const transform = px ? `translateX(${px}px)` : '';
@@ -361,8 +338,6 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       if (next === variant) return false;
       variant = next;
       root.dataset.variant = next;
-      if (dockViewOption(next).showSteppers) steppers.removeAttribute('hidden');
-      else steppers.setAttribute('hidden', '');
       return true;
     },
     setReadiness(ready, total, loading) {

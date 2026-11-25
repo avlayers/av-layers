@@ -36,7 +36,6 @@ export function createForecastWiring(ctx: PreviewContext, ops: PreviewOps): Retu
         live.wind?.syncSupport(); ops.updateTimeUi(); ops.updateOverlay(); ops.updateFreshness();
       },
       onSameBuild(frame) {
-        live.timeline?.pause();
         if (live.point?.feature.frameId === ctx.selectedFrame()) live.point.feature.followMapFrame(frame);
       },
       onCleared(message) {

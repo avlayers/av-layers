@@ -425,25 +425,6 @@ it.each(['sourcedata', 'sourcedataabort'] as const)('keeps the active viewport l
   } finally { f.overlay.destroy(); }
 });
 
-it('stays on the resident overview while playing and refines after pause', () => {
-  const f = fixture();
-  try {
-    const b = fixtureBuild(), [, second] = b.manifest.frames;
-    f.overlay.select(b, 'usable-lift-agl', b.manifest.frames[0].id);
-    vi.advanceTimersByTime(100);
-    f.overview().warm(second.id);
-    f.overlay.setPlayback(true);
-    f.overlay.select(b, 'usable-lift-agl', second.id);
-    f.emit('render');
-    vi.advanceTimersByTime(500);
-    expect(f.fine(second.id)).toBeUndefined();
-    expect(f.painted()).toEqual([{ frame: second.id, quality: 'overview', opacity: 0.7 }]);
-    f.overlay.setPlayback(false);
-    vi.advanceTimersByTime(100);
-    expect(f.fine(second.id)).toBeDefined();
-  } finally { f.overlay.destroy(); }
-});
-
 it.each([false, true])('keeps one fine source within a large viewport budget (overview ready: %s)', async ready => {
   const f = fixture(120);
   try {

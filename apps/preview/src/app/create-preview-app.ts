@@ -105,8 +105,7 @@ export function createPreviewApp(): PreviewApp {
         if (ctx.intent().model === AUTO_MODEL_ID) ctx.forecastSession.cancelAuto();
         ops.prepareFrameIndex(index);
       },
-      onPrepare: index => ops.prepareFrameIndex(index),
-      onPlayback: playing => commands.setPlaying(playing)
+      onPrepare: index => ops.prepareFrameIndex(index)
     });
 
     const point = live.point = createPointWiring({
@@ -154,14 +153,13 @@ export function createPreviewApp(): PreviewApp {
         const current = ctx.build();
         if (!current || !ctx.forecastSession.ensureLive()) return false;
         const frames = renderedFrames(current.manifest), index = frames.findIndex(frame => frame.id === ctx.selectedFrame());
-        live.timeline?.pause();
         ops.selectIndex(Math.max(0, Math.min(frames.length - 1, index + step)), 'replace');
         return true;
       }
     });
     const timeInput = root.querySelector<HTMLInputElement>('#time');
     if (timeInput) {
-      timeInput.addEventListener('input', () => { live.timeline?.pause(); ops.selectIndex(Number(timeInput.value), 'none'); }, { signal });
+      timeInput.addEventListener('input', () => ops.selectIndex(Number(timeInput.value), 'none'), { signal });
       timeInput.addEventListener('change', () => { ops.writeUrl('replace'); if (ctx.intent().model === AUTO_MODEL_ID) void ctx.forecastSession.loadAuto(); }, { signal });
     }
 
