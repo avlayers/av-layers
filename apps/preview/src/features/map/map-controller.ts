@@ -4,6 +4,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
+import { FORECAST_DISCLAIMER } from '@av/contracts/safety';
 
 maplibregl.setWorkerUrl(workerUrl);
 
@@ -21,6 +22,7 @@ export function createMap(options: MapOptions): maplibregl.Map {
     center: options.camera?.center ?? [0, 20], zoom: options.camera?.zoom ?? 2,
     maxTileCacheSize: RASTER_PAN_TILES,
     maxTileCacheZoomLevels: 2,
+    attributionControl: { customAttribution: FORECAST_DISCLAIMER },
     style: options.offlineFixture
       ? { version: 8, sources: {}, layers: [{ id: 'neutral-background', type: 'background', paint: { 'background-color': '#d5dde3' } }] }
       : compositeBasemapStyle(options.theme ?? DEFAULT_THEME)

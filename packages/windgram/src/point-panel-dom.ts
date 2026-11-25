@@ -1,5 +1,6 @@
 // Builds the point windgram panel: chart host, status lines, readout, and the bottom bar controls.
 
+import { FORECAST_DISCLAIMER } from '@av/contracts/safety';
 import { elementFactory } from './panel-dom.ts';
 import { POINT_VIEW_MODE_SPECS, type PointViewMode } from './point-view-mode.ts';
 
@@ -74,7 +75,7 @@ export function buildPointPanel(owner: Document, container: HTMLElement, idPrefi
   keyPop.append(keySummary, keyCard);
   bar.append(navRow, keyPop);
 
-  section.append(chartHost, liftSummary, time, profileStatus, incomplete, srReadout, bar);
+  section.append(chartHost, liftSummary, time, profileStatus, incomplete, srReadout, bar, node('p', 'av-windgram-disclaimer', FORECAST_DISCLAIMER));
   container.replaceChildren(section);
 
   return {

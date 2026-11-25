@@ -53,6 +53,12 @@ for every theme.
 - [packages/soaring](packages/soaring/README.md): thermal lift depth and updraft calculations.
 - [packages/windgram](packages/windgram/README.md): point windgram chart, scene, and height inspector.
 
+## Safety
+
+Forecast guidance only. Not for navigation or flight decisions; check official
+briefings. The map attribution and the Windgram panel show the same line from
+[`FORECAST_DISCLAIMER`](packages/contracts/src/safety.ts).
+
 ## More information
 
 - [Data guide](docs/data.md): units, coverage, forecast times, and missing values.
