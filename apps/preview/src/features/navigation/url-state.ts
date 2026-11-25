@@ -4,6 +4,7 @@ import { WIND_HEIGHTS } from '@av/contracts/wind-data';
 import { AUTO_MODEL_ID, type UnitSystem } from '@av/client';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../controls/bottom-dock-model';
 import { DEFAULT_THEME, parseMapTheme, type MapTheme } from '../../themes/registry';
+import { isLiftLayer, layerRecord } from '../../layers/registry';
 
 export type AltitudeReference = 'agl' | 'msl';
 type WindStyleParam = 'trails' | 'barbs' | 'hybrid';
@@ -31,7 +32,7 @@ export function previewQuery(search: string, offline: boolean) {
   const opacity = finiteParam(params.get('opacity'));
   const rawLayer = params.get('layer');
   const layer = rawLayer && (LAYER_IDS as readonly string[]).includes(rawLayer) ? rawLayer as LayerId : null;
-  const reference: AltitudeReference = params.get('ref') === 'msl' || layer === 'usable-lift-msl' ? 'msl' : 'agl';
+  const reference: AltitudeReference = params.get('ref') === 'msl' || (layer !== null && layerRecord(layer).lift?.reference === 'msl') ? 'msl' : 'agl';
   const wstyle = params.get('wstyle');
   const units = params.get('units');
   const theme = params.get('theme');
@@ -39,7 +40,7 @@ export function previewQuery(search: string, offline: boolean) {
   return {
     model: model && (model === AUTO_MODEL_ID ? !offline : offline || MODEL_OPTIONS.some(option => option.modelId === model)) ? model : null,
     reference,
-    layer: layer && layer !== 'usable-lift-agl' && layer !== 'usable-lift-msl' ? layer : null,
+    layer: layer && !isLiftLayer(layer) ? layer : null,
     opacity: opacity === null ? null : Math.min(1, Math.max(0, opacity)),
     validTime: params.get('t'),
     theme: parseMapTheme(theme),
@@ -81,7 +82,7 @@ export function previewUrl(pathname: string, state: {
     model: state.model, ref: state.reference, opacity: String(Math.round(state.opacity * 100) / 100),
     lat: state.lat.toFixed(4), lon: state.lon.toFixed(4), z: String(Math.round(state.zoom * 100) / 100)
   });
-  if (state.layer && state.layer !== 'usable-lift-agl' && state.layer !== 'usable-lift-msl') params.set('layer', state.layer);
+  if (state.layer && !isLiftLayer(state.layer)) params.set('layer', state.layer);
   if (state.validTime) params.set('t', state.validTime);
   if (state.theme && state.theme !== DEFAULT_THEME) params.set('theme', state.theme);
   if (state.dockView && state.dockView !== DEFAULT_DOCK_VIEW) params.set('dock', state.dockView);

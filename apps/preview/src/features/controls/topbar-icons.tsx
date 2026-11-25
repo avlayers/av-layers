@@ -3,15 +3,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { UnitSystem } from '@av/client';
 import { stepTheme, THEME_OPTIONS, themeOption, type MapTheme } from '../../themes/registry';
 import type { WindHeight, WindStatus, WindStyle } from '../wind/wind-model';
-import {
-  DOCK_CHANNELS,
-  formatWindLevelLabel,
-  readThemeInfoOpen,
-  WIND_ENCODING_OPTIONS,
-  writeThemeInfoOpen,
-  type DockChannelKey,
-  type WeatherChannelKey
-} from './topbar-model';
+import { DOCK_CHANNELS, formatWindLevelLabel, PEEK_CHANNEL, WEATHER_CHANNELS, weatherChannel, type DockChannelKey, type WeatherChannelKey } from '../../layers/channels';
+import { readThemeInfoOpen, WIND_ENCODING_OPTIONS, writeThemeInfoOpen } from './topbar-model';
 
 export function ModelEmblem({ isAuto }: { isAuto: boolean }) {
   if (isAuto) {
@@ -62,77 +55,22 @@ function ThemeGlyph({ theme }: { theme: MapTheme }) {
   );
 }
 
-function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: DockChannelKey; windStyle?: WindStyle }) {
-  const common = {
-    width: 17,
-    height: 17,
-    viewBox: '0 0 24 24',
-    fill: 'none',
-    stroke: 'currentColor',
-    'stroke-width': 1.9,
-    'stroke-linecap': 'round' as const,
-    'stroke-linejoin': 'round' as const,
-    'aria-hidden': true
-  };
-  switch (channel) {
-    case 'lift':
-      return (
-        <svg {...common}>
-          <path d="M12 19.5V4.8m0 0L8.2 8.6M12 4.8l3.8 3.8" />
-          <path d="M5.8 18c1.5-2.1 1.5-4.2 0-6.3M18.2 18c-1.5-2.1-1.5-4.2 0-6.3" stroke-width="1.6" />
-        </svg>
-      );
-    case 'wind':
-      if (windStyle === 'barbs') {
-        return (
-          <svg {...common}>
-            <circle cx="5.5" cy="17.5" r="1.7" />
-            <path d="M6.8 16.2 17.8 4.8m0 0 3.7 3m-6.8 0 3 2.5" />
-          </svg>
-        );
-      }
-      if (windStyle === 'hybrid') {
-        return (
-          <svg {...common}>
-            <path d="M3 7c3.2-2.4 5.8 2.4 9.2 0s4.8-1.8 7.3.4M3 13c2.8-2 5 1.8 8 0" />
-            <path d="M13.5 18.2 19.5 9.5m0 0 2.5 2.2" />
-          </svg>
-        );
-      }
-      return (
-        <svg {...common}>
-          <path d="M3 7.2h12.2a2.4 2.4 0 1 0-2.1-3.5M3 12h15.2a2.4 2.4 0 1 1-2.1 3.5M3 16.8h8.8" />
-        </svg>
-      );
-    case 'clouds':
-      return (
-        <svg {...common}>
-          <path d="M6.4 17.8h11.1a3.8 3.8 0 0 0 .5-7.56A5.3 5.3 0 0 0 7.5 8.9a3.6 3.6 0 0 0-1.1 8.9Z" />
-        </svg>
-      );
-    case 'rain':
-      return (
-        <svg {...common}>
-          <path d="M6.4 13h10.9a3.3 3.3 0 0 0 .4-6.56A4.6 4.6 0 0 0 8.2 5.2 3.2 3.2 0 0 0 6.4 13Z" />
-          <path d="m8.6 15.8-1.5 3.9M12.6 15.8l-1.5 3.9M16.6 15.8l-1.5 3.9" />
-        </svg>
-      );
-    case 'isobars':
-      return (
-        <svg {...common}>
-          <path d="M2.6 13.8C3.5 7 8.4 3.2 16 3.4c2.3.1 4.1.7 5.4 1.8" />
-          <path d="M5.2 19C6.2 11.8 10.4 8.2 17.2 8.4c1.6.1 2.9.5 4 1.3" stroke-width="1.65" />
-          <path d="M14.2 13.5v6.4M19.2 13.5v6.4M14.2 16.7h5" stroke-width="2.0" />
-        </svg>
-      );
-    case 'peek':
-      return (
-        <svg {...common}>
-          <path d="M2.2 12s3.6-6.3 9.8-6.3 9.8 6.3 9.8 6.3-3.6 6.3-9.8 6.3S2.2 12 2.2 12Z" />
-          <circle cx="12" cy="12" r="2.8" />
-        </svg>
-      );
-  }
+function ChannelGlyph({ channel, windStyle = 'trails' }: { channel: (typeof DOCK_CHANNELS)[number]; windStyle?: WindStyle }) {
+  return (
+    <svg
+      width={17}
+      height={17}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width={1.9}
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden
+    >
+      {(channel.styleGlyphs?.[windStyle] ?? channel.glyph).map((shape, index) => h(shape.tag, { key: index, ...shape.attrs }))}
+    </svg>
+  );
 }
 
 export function ThemeIconPicker(props: {
@@ -400,15 +338,7 @@ export function WeatherChannelDock(props: {
     clearHoverLeaveTimer();
   }, []);
 
-  const channelUnderlyingOn = (key: WeatherChannelKey): boolean => {
-    switch (key) {
-      case 'lift': return props.liftVisible;
-      case 'wind': return props.windVisible;
-      case 'clouds': return props.cloudsVisible;
-      case 'rain': return props.rainVisible;
-      case 'isobars': return props.isobarsVisible;
-    }
-  };
+  const channelUnderlyingOn = (key: WeatherChannelKey): boolean => props[weatherChannel(key).visibility];
 
   const channelActive = (key: DockChannelKey): boolean => {
     if (key === 'peek') return props.peeking;
@@ -416,14 +346,11 @@ export function WeatherChannelDock(props: {
     return channelUnderlyingOn(key);
   };
 
-  const visibleLayerChannels = DOCK_CHANNELS.filter(
-    (channel): channel is (typeof DOCK_CHANNELS)[number] & { readonly key: WeatherChannelKey } =>
-      channel.key !== 'peek' && (channel.key !== 'wind' || props.windSupported)
-  );
+  const visibleLayerChannels = WEATHER_CHANNELS.filter(channel => !channel.needsWindData || props.windSupported);
 
   const activeInfoKey = touchInspectKey ?? hoveredKey;
-  const activeDesc = activeInfoKey && (activeInfoKey !== 'wind' || props.windSupported)
-    ? DOCK_CHANNELS.find(c => c.key === activeInfoKey) ?? null
+  const activeDesc = activeInfoKey === 'peek' ? PEEK_CHANNEL
+    : activeInfoKey ? visibleLayerChannels.find(c => c.key === activeInfoKey) ?? null
     : null;
   const activeIsOn = activeInfoKey ? channelActive(activeInfoKey) : false;
   const windPausedActive = props.windVisible && props.windPaused && props.windStyle !== 'barbs';
@@ -492,7 +419,7 @@ export function WeatherChannelDock(props: {
                 props.onToggleChannel(key);
               }}
             >
-              <ChannelGlyph channel={key} windStyle={props.windStyle} />
+              <ChannelGlyph channel={channel} windStyle={props.windStyle} />
               <span class={`channel-bar bar-${key}`} aria-hidden="true" />
               {channel.hasStyles ? <span class="channel-menu-hint" aria-hidden="true" /> : null}
             </button>
@@ -553,7 +480,7 @@ export function WeatherChannelDock(props: {
           props.onSetPeeking(!props.peeking);
         }}
       >
-        <ChannelGlyph channel="peek" />
+        <ChannelGlyph channel={PEEK_CHANNEL} />
       </button>
 
       {activeDesc ? (

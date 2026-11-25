@@ -5,16 +5,14 @@ import { renderedFrames } from '@av/contracts/publication';
 import type { ModelId } from '@av/contracts/publication';
 import type { AltitudeReference } from '../navigation/url-state';
 import { frameIndexFor } from '../timeline/timeline-model';
+import { isLiftLayer, layerRecord, liftLayerFor } from '../../layers/registry';
 
-export const LIFT_LAYERS: readonly LayerId[] = ['usable-lift-agl', 'usable-lift-msl'];
-const HIDDEN_PREVIEW_LAYERS: ReadonlySet<LayerId> = new Set(['precip-rate']);
+export const LIFT_LAYERS: readonly LayerId[] = [liftLayerFor('agl'), liftLayerFor('msl')];
 
 export interface LayerOption { readonly id: 'lift' | LayerId; readonly label: string }
 
-export const isLiftLayer = (layer: LayerId): boolean => layer === 'usable-lift-agl' || layer === 'usable-lift-msl';
-
 export const visibleCustomLayer = (layer: LayerId | null): LayerId | null =>
-  layer && !HIDDEN_PREVIEW_LAYERS.has(layer) ? layer : null;
+  layer && !layerRecord(layer).hidden ? layer : null;
 
 export const restoredCustomLayer = (build: PinnedBuild | null, requested: LayerId | null, changingModel: boolean): LayerId | null =>
   changingModel ? requested : validatedCustomLayer(build, requested);
@@ -26,13 +24,13 @@ export const validatedCustomLayer = (build: PinnedBuild | null, requested: Layer
   requested && build && !build.templates[requested] ? null : requested;
 
 export const shortLayerName = (layer: LayerId, descriptor?: { label: string }): string =>
-  layer.startsWith('cloud') ? 'Cloud' : (descriptor?.label ?? layer).replace(/\s*\(.*\)$/, '');
+  layerRecord(layer).shortName ?? (descriptor?.label ?? layer).replace(/\s*\(.*\)$/, '');
 
 const liftLayers = (build: PinnedBuild): LayerId[] => LIFT_LAYERS.filter(layer => build.templates[layer]);
 
 const nonLiftLayers = (build: PinnedBuild): LayerId[] =>
   renderedLayers(build.manifest.layers, build.manifest.descriptors.layers)
-    .filter(layer => build.templates[layer] && !isLiftLayer(layer) && !HIDDEN_PREVIEW_LAYERS.has(layer));
+    .filter(layer => build.templates[layer] && !isLiftLayer(layer) && !layerRecord(layer).hidden);
 
 export function layerOptions(build: PinnedBuild | null): readonly LayerOption[] {
   if (!build) return [];
@@ -45,7 +43,7 @@ export function layerOptions(build: PinnedBuild | null): readonly LayerOption[] 
 export function activeLayer(build: PinnedBuild | null, reference: AltitudeReference, customLayer: LayerId | null): LayerId | null {
   if (!build) return null;
   if (customLayer && build.templates[customLayer]) return customLayer;
-  const preferred: LayerId = reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl';
+  const preferred = liftLayerFor(reference);
   return build.templates[preferred] ? preferred : liftLayers(build)[0] ?? nonLiftLayers(build)[0] ?? null;
 }
 
