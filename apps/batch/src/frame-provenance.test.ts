@@ -55,4 +55,13 @@ it('lets a retried shard adopt stored provenance that differs only in capture ti
   const different = await writeFrameProvenance(changed, identity, value, source('2026-11-05T03:40:00.000Z', 'b'));
   expect(await adoptStoredFrameProvenance(changed, store, different)).toEqual(different);
   expect(await adoptStoredFrameProvenance(changed, { get: async () => null }, different)).toEqual(different);
+
+  // Only the timestamps may differ: extra keys, other encodings or non-time values are refused.
+  const planted = (text: string) => ({ get: async () => ({ bytes: new TextEncoder().encode(text), etag: 'e' }) });
+  const text = storedBytes.toString();
+  for (const forged of [text.replace('"capturedAt":', '"note":{"capturedAt":"x"},"capturedAt":'), text.replace('{', '{ '),
+    text.replace('"2026-11-05T03:00:00.000Z"', '"not a time"'), text.replace('"capturedAt":"2026-11-05T03:00:00.000Z"', '"capturedAt":"2026-11-05T03:00:00.000Z","capturedAt":"2026-11-05T03:00:00.000Z"')]) {
+    expect(forged).not.toBe(text);
+    expect(await adoptStoredFrameProvenance(retry, planted(forged), local)).toEqual(local);
+  }
 });
