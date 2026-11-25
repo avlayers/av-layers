@@ -1,7 +1,7 @@
 import { CELL_BYTES } from '@av/contracts/format';
 import { LAYERS, STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID, SUPPORT_MASK, type LayerId, type LayerSpec } from '@av/contracts/layers';
 type ReductionSpec = Pick<LayerSpec, 'supportsNoLift' | 'supportsLiftFlags' | 'noLiftSampleValue' | 'zeroOnNoLiftInterpolation'>;
-import { isValidGridGeometry, LAMBERT_GRID_FIELDS, locateSampleCell, nearerContributor, prepareGridGeometry, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid } from '@av/contracts/geometry';
+import { isValidGridGeometry, LAMBERT_GRID_FIELDS, locateSampleCell, nearerContributor, prepareGridGeometry, ROTATED_GRID_FIELDS, snapGridCoordinate, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry, type LambertConformalGrid, type RotatedLatLonGrid } from '@av/contracts/geometry';
 export { nearerContributor } from '@av/contracts/geometry';
 import { getBit, isCovered, type CoverageMask } from '@av/contracts/coverage-query';
 import { sparseCoverageLookup, type SparseCoverage } from '@av/contracts/sparse-coverage';
@@ -161,20 +161,23 @@ function reduceCells(cells: ReturnType<typeof reductionBuffer>, count: number, s
   out.value = value; out.status = noLift ? STATUS_NO_LIFT : STATUS_VALID;
 }
 
-const lambertGeometries = /* @__PURE__ */ new WeakMap<LambertConformalGrid, { snapshot: LambertConformalGrid; geometry: GridGeometry }>();
-function lambertGeometry(grid: Grid): GridGeometry | null {
-  if (grid.kind !== 'lambert-conformal') return null;
-  const cached = lambertGeometries.get(grid);
-  if (cached && LAMBERT_GRID_FIELDS.every(field => grid[field] === cached.snapshot[field])) return cached.geometry;
-  const snapshot = Object.fromEntries(LAMBERT_GRID_FIELDS.map(field => [field, grid[field]])) as LambertConformalGrid;
+type ProjectedGrid = LambertConformalGrid | RotatedLatLonGrid;
+const projectedGeometries = /* @__PURE__ */ new WeakMap<ProjectedGrid, { snapshot: ProjectedGrid; geometry: GridGeometry }>();
+function projectedGeometry(grid: Grid): GridGeometry | null {
+  if (grid.kind === 'regular-latlon') return null;
+  const fields: readonly string[] = grid.kind === 'lambert-conformal' ? LAMBERT_GRID_FIELDS : ROTATED_GRID_FIELDS;
+  const cached = projectedGeometries.get(grid);
+  const current = grid as unknown as Record<string, unknown>;
+  if (cached && fields.every(field => current[field] === (cached.snapshot as unknown as Record<string, unknown>)[field])) return cached.geometry;
+  const snapshot = Object.fromEntries(fields.map(field => [field, current[field]])) as unknown as ProjectedGrid;
   const geometry = prepareGridGeometry(snapshot);
-  lambertGeometries.set(grid, { snapshot, geometry });
+  projectedGeometries.set(grid, { snapshot, geometry });
   return geometry;
 }
 
 export function planSample(grid: Grid, lat: number, lon: number): SamplePlan | null {
   let geometry: GridGeometry | null;
-  try { geometry = lambertGeometry(grid); } catch { return null; }
+  try { geometry = projectedGeometry(grid); } catch { return null; }
   const located = locateSampleCell(grid, lat, lon, geometry);
   if (!located) return null;
   const { column: x0, row: y0, fractionX: fx, fractionY: fy } = located;
@@ -231,7 +234,7 @@ export function samplingCovered(mask: SamplingMask, lat: number, lon: number): b
   if (!('coverage' in mask)) return isCovered(mask, lat, lon);
   if (!withinGeographicBounds(lat, lon, mask.bounds)) return false;
   let geometry: GridGeometry | null;
-  try { geometry = lambertGeometry(mask.grid); } catch { return false; }
+  try { geometry = projectedGeometry(mask.grid); } catch { return false; }
   const located = locateSampleCell(mask.grid, lat, lon, geometry);
   if (!located) return false;
   const { column, row, fractionX: fx, fractionY: fy } = located;
@@ -302,7 +305,7 @@ export function prepareGridSampling(mask: SamplingMask, latitudes: Float64Array,
   const width = longitudes.length, height = latitudes.length, total = width * height;
   if (!Number.isSafeInteger(total) || width < 1 || height < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
   validateSamplingMask(mask);
-  if (grid.kind === 'lambert-conformal') return prepareProjectedSampling(mask, latitudes, longitudes);
+  if (grid.kind !== 'regular-latlon') return prepareProjectedSampling(mask, latitudes, longitudes);
   return prepareSeparableSampling(mask, prepareGridAxis(mask, latitudes, 'row'), prepareGridAxis(mask, longitudes, 'column'));
 }
 
@@ -447,16 +450,49 @@ function prepareLocatedSample(
 
 const RAD = Math.PI / 180;
 const wrapRadians = (value: number) => ((value + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+const wrapDegrees = (value: number) => ((value + 180) % 360 + 360) % 360 - 180;
 
-/** Projected coordinates are not separable in grid space, but spherical Lambert rho(lat) and theta(lon) factor along the axes. */
+/** Factor 1D trigonometric terms along latitude and longitude axes for projected grids. */
 function prepareProjectedSampling(mask: SamplingMask, latitudes: Float64Array, longitudes: Float64Array): PreparedGridSampling {
   const grid = mask.grid;
-  if (grid.kind !== 'lambert-conformal') throw new RangeError('Projected sampling requires a Lambert grid');
+  if (grid.kind === 'regular-latlon') throw new RangeError('Projected sampling requires a projected grid');
   const width = longitudes.length, height = latitudes.length, total = width * height;
   const lowerX = new Uint32Array(total), lowerY = new Uint32Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();
   const cache = locatedSampleCache();
+  if (grid.kind === 'rotated-latlon') {
+    const zAngle = grid.southPoleLonDeg * RAD, yAngle = (90 + grid.southPoleLatDeg) * RAD;
+    const cosZ = Math.cos(zAngle), sinZ = Math.sin(zAngle), cosY = Math.cos(yAngle), sinY = Math.sin(yAngle);
+    const cosLon = new Float64Array(width), sinLon = new Float64Array(width), allowedColumns = new Uint8Array(width);
+    for (let x = 0; x < width; x++) {
+      const lon = longitudes[x];
+      if (!withinGeographicBounds(mask.bounds?.[1] ?? 0, lon, mask.bounds) || !Number.isFinite(lon)) continue;
+      const lonRad = lon * RAD;
+      cosLon[x] = Math.cos(lonRad);
+      sinLon[x] = Math.sin(lonRad);
+      allowedColumns[x] = 1;
+    }
+    for (let y = 0; y < height; y++) {
+      const lat = latitudes[y];
+      if (!withinGeographicBounds(lat, mask.bounds?.[0] ?? 0, mask.bounds) || !Number.isFinite(lat) || lat < -90 || lat > 90) continue;
+      const latRad = lat * RAD, cosLat = Math.cos(latRad), sinLat = Math.sin(latRad);
+      const rowOffset = y * width;
+      for (let x = 0; x < width; x++) if (allowedColumns[x]) {
+        const vx = cosLat * cosLon[x], vy = cosLat * sinLon[x];
+        const rx = vx * cosZ + vy * sinZ, gy = -vx * sinZ + vy * cosZ;
+        const gx = rx * cosY + sinLat * sinY, gz = -rx * sinY + sinLat * cosY;
+        const rotLat = Math.asin(Math.max(-1, Math.min(1, gz))) / RAD;
+        const rotLon = Math.atan2(gy, gx) / RAD;
+        const gridX = snap(wrapDegrees(rotLon - grid.lon0) / grid.dx);
+        const gridY = snap((rotLat - grid.lat0) / grid.dy);
+        if (!Number.isFinite(gridX) || !Number.isFinite(gridY) || gridX < 0 || gridX > grid.width - 1 || gridY < 0 || gridY > grid.height - 1) continue;
+        const column = Math.floor(gridX), row = Math.floor(gridY);
+        recordLocatedSample(grid, mask, column, row, gridX - column, gridY - row, rowOffset + x, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, cache);
+      }
+    }
+    return preparedFromCells(mask, width, lowerX, lowerY, fractionX, fractionY, covered, contributorSet, grid.wrapLongitude);
+  }
   const p1 = grid.standardParallel1Deg * RAD, p2 = grid.standardParallel2Deg * RAD;
   const t1 = Math.tan(Math.PI / 4 + p1 / 2), t2 = Math.tan(Math.PI / 4 + p2 / 2);
   const n = Math.abs(p1 - p2) < 1e-14 ? Math.sin(p1) : Math.log(Math.cos(p1) / Math.cos(p2)) / Math.log(t2 / t1);
@@ -493,7 +529,7 @@ export function preparePointSampling(mask: SamplingMask, latitudes: Float64Array
   const grid = mask.grid, total = latitudes.length;
   if (latitudes.length !== longitudes.length || total < 1 || total > MAX_PREPARED_SAMPLES) throw new RangeError('Prepared sampling coordinate budget exceeded');
   validateSamplingMask(mask);
-  const geometry = lambertGeometry(grid);
+  const geometry = projectedGeometry(grid);
   const lowerX = new Uint32Array(total), lowerY = new Uint32Array(total);
   const fractionX = new Float64Array(total), fractionY = new Float64Array(total);
   const covered = new Uint8Array(Math.ceil(total / 8)), contributorSet = new Set<number>();

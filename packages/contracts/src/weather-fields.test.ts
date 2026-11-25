@@ -11,6 +11,11 @@ describe('weather field definitions', () => {
       const descriptors = createWholeDomainDescriptors(product);
       for (const layer of WEATHER_LAYER_IDS) {
         const definition = weatherFieldDefinition(product.modelId, layer);
+        if (!product.layers.includes(layer)) {
+          expect(definition).toBeUndefined();
+          expect(descriptors.layers[layer]).toBeUndefined();
+          continue;
+        }
         expect(definition?.version).toBe(1);
         expect(weatherFieldDefinitionSchema.parse(definition)).toEqual(definition);
         expect(descriptors.layers[layer].definition).toEqual(definition);
@@ -20,6 +25,10 @@ describe('weather field definitions', () => {
     expect(weatherFieldDefinition('gfs', 'cape-jkg')).toMatchObject({ id: 'noaa-gfs-surface-cape-v1', parcel: 'surface-based', sourceParameter: 'CAPE', sourceLevel: 'surface' });
     expect(weatherFieldDefinition('icon-eu', 'cape-jkg')).toMatchObject({ parcel: 'mixed-layer', sourceParameter: 'CAPE_ML' });
     expect(weatherFieldDefinition('rrfs', 'cloud-cover-total')).toMatchObject({ sourceLevel: 'entire atmosphere (considered as a single layer)' });
+    expect(weatherFieldDefinition('hrdps', 'precip-rate')).toMatchObject({ id: 'eccc-hrdps-apcp-accum1h-v1', sourceParameter: 'APCP-Accum1h_Sfc', sourceLevel: 'surface' });
+    expect(weatherFieldDefinition('hrdps', 'cloud-cover-total')).toMatchObject({ id: 'eccc-hrdps-tcdc-total-v1', sourceParameter: 'TCDC_Sfc', sourceLevel: 'entire-atmosphere' });
+    expect(weatherFieldDefinition('hrdps', 'cape-jkg')).toMatchObject({ id: 'eccc-hrdps-surface-cape-v1', parcel: 'surface-based', sourceParameter: 'CAPE_Sfc', sourceLevel: 'surface' });
+    expect(weatherFieldDefinition('hrdps', 'cloud-cover-low')).toBeUndefined();
     const wrfCape = weatherFieldDefinition('av-wrf', 'cape-jkg');
     const wrfLow = weatherFieldDefinition('av-wrf', 'cloud-cover-low');
     expect(wrfCape?.kind === 'cape' ? wrfCape.producerDefinition : undefined).toBe(contract.capeParcelDefinition);

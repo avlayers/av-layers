@@ -27,6 +27,7 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     expect(formatModelResolutionKm('gfs')).toBe('28 km');
     expect(formatModelResolutionKm('icon-eu')).toBe('7 km');
     expect(formatModelResolutionKm('rrfs')).toBe('3 km');
+    expect(formatModelResolutionKm('hrdps')).toBe('2.5 km');
     expect(formatModelResolutionKm('av-wrf')).toBe('3 km');
     expect(formatModelResolutionKm('wrf-va-1km')).toBe('1 km');
     expect(formatModelResolutionKm(null)).toBeNull();

@@ -172,6 +172,33 @@ class FineMasksTest(unittest.TestCase):
             receipt = json.loads((Path(tmp) / 'source.json').read_text())
             self.assertEqual([test['observedOutput'] for test in receipt['tests']['cases']], [True, False])
 
+    def test_rotated_latlon_subdivision_dense_and_sparse_coverage(self):
+        settings = {'modelId': 'rotated-test', 'grid': {
+            'kind': 'rotated-latlon', 'width': 17, 'height': 13, 'earthRadiusM': 6371229,
+            'lon0': -14.82122, 'lat0': -12.302501, 'dx': 0.5, 'dy': 0.5,
+            'southPoleLatDeg': -36.08852, 'southPoleLonDeg': -114.694858, 'wrapLongitude': False},
+            'coverage': {'id': 'rotated-test', 'description': 'Rotated test', 'west': -140, 'south': 35,
+                         'east': -110, 'north': 55, 'maxNativeZoom': 6, 'seaBufferMeters': 0,
+                         'excludedA3': [], 'interpolationHaloCells': 1}}
+        fine = fine_masks.fine_grid(settings['grid'], 2)
+        self.assertEqual((fine['width'], fine['height'], fine['dx'], fine['dy']), (33, 25, 0.25, 0.25))
+        result = self.projected_hierarchy(settings, [box(-135, 39, -120, 48)], [], k=2)
+        out, halo = unpack(result['sparseBytes'])
+        self.assertGreater(len(out), 0)
+        expected_halo = {(x + dx, y + dy) for x, y in out for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                         if 0 <= x + dx < fine['width'] and 0 <= y + dy < fine['height']} - out
+        self.assertEqual(halo, expected_halo)
+        check_typescript(settings, 2, result)
+        settings['coverage']['probes'] = [['corner', 39.626034, -133.62952, True], ['outside', 36.0, -139.0, False]]
+        with tempfile.TemporaryDirectory() as tmp:
+            args = Namespace(source=None, output=Path(tmp), config=Path('fixture.json'), model='rotated-test', allow_local_libs=False)
+            with patch.object(build_masks, 'materialize_source', return_value=(Path('fixture.zip'), Path('fixture.shp'))), \
+                 patch.object(build_masks, 'load_features', return_value=([box(-135, 39, -120, 48)], build_masks.Polygon(), [], [])), \
+                 patch.object(build_masks, 'build_tile_geometry', side_effect=lambda *args: box(-135, 39, -120, 48)):
+                build_masks.write_projected_masks(settings, args)
+            receipt = json.loads((Path(tmp) / 'source.json').read_text())
+            self.assertEqual([test['observedOutput'] for test in receipt['tests']['cases']], [True, False])
+
     def test_model_selection_uses_configured_default_and_explicit_id(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'models.json'

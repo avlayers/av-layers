@@ -5,6 +5,7 @@ on:
     - cron: 35 4,10,16,22 * * *
     - cron: 20 5,11,17,23 * * *
     - cron: 45 3,9,15,21 * * *
+    - cron: 5 4,10,16,22 * * *
   repository_dispatch:
     types: [upstream-cycle-ready]
   workflow_dispatch:

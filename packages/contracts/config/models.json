@@ -583,6 +583,121 @@
       "upstream": {"protocol": "wrf-zarr-v3", "provider": "av-wrf", "modelId": "wrf-va-1km"},
       "terrainSubdivisionFactor": 1,
       "execution": {"zoom": 10, "parallelism": 12, "schedule": []}
+    },
+    {
+      "modelId": "hrdps",
+      "id": "hrdps-continental-soaring",
+      "coverageDir": "coverage/hrdps-continental-land-v1",
+      "source": {"modelFamily": "gem", "configurationId": "eccc-hrdps-continental-2p5km", "domainId": "canada-continental"},
+      "tier": "medium",
+      "label": "HRDPS",
+      "attribution": "ECCC HRDPS (Open Government Licence – Canada) · Aviation Forecast Layers",
+      "layers": [
+        "usable-lift-msl",
+        "usable-lift-agl",
+        "precip-rate",
+        "thermal-velocity",
+        "thermal-top-msl",
+        "pbl-height-agl",
+        "sensible-heat-flux",
+        "latent-heat-flux",
+        "surface-lcl-msl",
+        "cape-jkg",
+        "cloud-cover-total",
+        "sfc-temp-c",
+        "sfc-dewpoint-c",
+        "mslp-hpa",
+        "wind-10m-u",
+        "wind-10m-v",
+        "wind-gust-10m",
+        "bl-mean-wind-u",
+        "bl-mean-wind-v"
+      ],
+      "capabilities": {"verticalCoordinate": "isobaric", "maxVerticalLevels": 18, "daylightFrames": "all-hours"},
+      "grid": {
+        "kind": "rotated-latlon",
+        "width": 2540,
+        "height": 1290,
+        "earthRadiusM": 6371229,
+        "lon0": -14.82122,
+        "lat0": -12.302501,
+        "dx": 0.0225,
+        "dy": 0.0225,
+        "southPoleLatDeg": -36.08852,
+        "southPoleLonDeg": -114.694858,
+        "wrapLongitude": false
+      },
+      "forecast": {
+        "intervalHours": 1,
+        "cycleHoursUtc": [0, 6, 12, 18],
+        "statisticsResetHours": 1,
+        "window": {"hourlyThrough": 24, "endHour": 48, "tailStepHours": 3, "minHorizonHours": 36, "framesPerShard": 1}
+      },
+      "freshness": {"maxCycleAgeHours": 12},
+      "monitoring": {"environments": [], "maxCycleAgeHours": 12, "minHorizonHours": 36},
+      "coverage": {
+        "id": "hrdps-continental-land-v1",
+        "description": "Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.",
+        "west": -141.0,
+        "south": 41.6,
+        "east": -52.0,
+        "north": 65.0,
+        "seaBufferMeters": 50000,
+        "excludedA3": ["GRL", "USA", "SPM"],
+        "excludedContinents": [],
+        "interpolationHaloCells": 1,
+        "probes": [
+          ["vancouver", 49.2827, -123.1207, true],
+          ["pemberton", 50.3186, -122.8042, true],
+          ["golden", 51.3, -116.96, true],
+          ["cowley", 49.6333, -114.0833, true],
+          ["calgary", 51.0447, -114.0719, true],
+          ["toronto", 43.6532, -79.3832, true],
+          ["ottawa", 45.4215, -75.6972, true],
+          ["montreal", 45.5017, -73.5673, true],
+          ["halifax", 44.6488, -63.5752, true],
+          ["exclude_usa_seattle", 47.6062, -122.3321, false],
+          ["exclude_greenland", 64.1814, -51.6941, false],
+          ["pacific_ocean", 48.0, -135.0, false],
+          ["atlantic_ocean", 45.0, -45.0, false]
+        ]
+      },
+      "upstream": {
+        "pressureLevelsHpa": [1015, 1000, 985, 970, 950, 925, 900, 875, 850, 800, 750, 700, 650, 600, 550, 500, 450, 400],
+        "fields": {
+          "staticTerrain": {"field": "HGT_Sfc", "kind": "time-invariant", "parameter": [3, 5], "surface": [1, 0]},
+          "height": {"field": "HGT", "kind": "isobaric-level", "parameter": [3, 5], "surface": [100]},
+          "surfacePressure": {"field": "PRES_Sfc", "kind": "single-level", "parameter": [3, 0], "surface": [1]},
+          "temperature2m": {"field": "TMP_AGL-2m", "kind": "single-level", "parameter": [0, 0], "surface": [103, 2]},
+          "specificHumidity2m": {"field": "SPFH_AGL-2m", "kind": "single-level", "parameter": [1, 0], "surface": [103, 2]},
+          "sensibleHeatFlux": {"field": "SHTFL_Sfc", "kind": "single-level", "parameter": [0, 11], "surface": [1, 0], "scale": 1},
+          "latentHeatFlux": {"field": "LHTFL_Sfc", "kind": "single-level", "parameter": [0, 10], "surface": [1, 0], "scale": 1},
+          "temperature": {"field": "TMP", "kind": "isobaric-level", "parameter": [0, 0], "surface": [100]},
+          "precipitation": {"field": "APCP-Accum1h_Sfc", "kind": "single-level", "parameter": [1, 8], "surface": [1, 0], "statistic": 1}
+        },
+        "discoveryLagHours": 4,
+        "discoveryCandidates": 4,
+        "protocol": "split-grib2",
+        "provider": "ECCC",
+        "centre": 54,
+        "urlTemplate": "https://dd.weather.gc.ca/{date}/WXO-DD/model_hrdps/continental/2.5km/{cycleHour}/{forecastHour}/{date}T{cycleHour}Z_MSC_HRDPS_{field}{levelPath}_RLatLon0.0225_PT{forecastHour}H.grib2",
+        "auxSurface": {
+          "pblHeightM": {"field": "HPBL_Sfc", "kind": "single-level", "parameter": [3, 18], "surface": [1, 0], "unit": "m"},
+          "gust10mMps": {"field": "GUST_AGL-10m", "kind": "single-level", "parameter": [2, 22], "surface": [103, 10], "unit": "m/s"},
+          "mslpPa": {"field": "PRMSL_MSL", "kind": "single-level", "parameter": [3, 1], "surface": [101], "unit": "Pa"},
+          "u10mMps": {"field": "UGRD_AGL-10m", "kind": "single-level", "parameter": [2, 2], "surface": [103, 10], "unit": "m/s"},
+          "v10mMps": {"field": "VGRD_AGL-10m", "kind": "single-level", "parameter": [2, 3], "surface": [103, 10], "unit": "m/s"},
+          "cloudTotalPct": {"field": "TCDC_Sfc", "kind": "single-level", "parameter": [6, 1], "surface": [1], "unit": "%"},
+          "capeJkg": {"field": "CAPE_Sfc", "kind": "single-level", "parameter": [7, 6], "surface": [1], "sentinel": [-1, -999], "unit": "J/kg"}
+        },
+        "auxLevels": {
+          "spfhKgKg": {"field": "SPFH", "kind": "isobaric-level", "parameter": [1, 0], "surface": [100], "unit": "kg/kg"},
+          "uWindMps": {"field": "UGRD", "kind": "isobaric-level", "parameter": [2, 2], "surface": [100], "unit": "m/s"},
+          "vWindMps": {"field": "VGRD", "kind": "isobaric-level", "parameter": [2, 3], "surface": [100], "unit": "m/s"}
+        }
+      },
+      "terrainSubdivisionFactor": 2,
+      "execution": {"zoom": 10, "parallelism": 32, "schedule": ["5 4,10,16,22 * * *"]}
     }
   ]
 }

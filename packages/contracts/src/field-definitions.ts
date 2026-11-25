@@ -131,8 +131,24 @@ const wrf = {
   })
 } as const satisfies Record<WeatherLayerId, WeatherFieldDefinition>;
 
-const definitions: Record<string, Record<WeatherLayerId, WeatherFieldDefinition>> = {
-  gfs, rrfs, 'icon-eu': icon, 'av-wrf': wrf, 'wrf-va-1km': wrf
+const hrdps = {
+  'precip-rate': define({
+    version: 1, id: 'eccc-hrdps-apcp-accum1h-v1', kind: 'precipitation-rate', waterEquivalent: 'liquid',
+    statistic: 'interval-mean', sourceQuantity: 'accumulated-amount', normalization: 'trailing-window-recovery',
+    sourceParameter: 'APCP-Accum1h_Sfc', sourceLevel: 'surface'
+  }),
+  'cloud-cover-total': define({
+    version: 1, id: 'eccc-hrdps-tcdc-total-v1', kind: 'cloud-cover', layer: 'total-column',
+    sourceParameter: 'TCDC_Sfc', sourceLevel: 'entire-atmosphere', instantaneous: true
+  }),
+  'cape-jkg': define({
+    version: 1, id: 'eccc-hrdps-surface-cape-v1', kind: 'cape', parcel: 'surface-based',
+    sourceParameter: 'CAPE_Sfc', sourceLevel: 'surface', instantaneous: true
+  })
+} as const satisfies Partial<Record<WeatherLayerId, WeatherFieldDefinition>>;
+
+const definitions: Record<string, Partial<Record<WeatherLayerId, WeatherFieldDefinition>>> = {
+  gfs, rrfs, 'icon-eu': icon, 'av-wrf': wrf, 'wrf-va-1km': wrf, hrdps
 };
 
 export function weatherFieldDefinition(modelId: string, layerId: string): WeatherFieldDefinition | undefined {

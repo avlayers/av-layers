@@ -42,7 +42,7 @@ def build_tiles(output, grid, bounds, max_zoom):
     columns = (grid['width'] + 15) // 16
     x_boundaries = [-180 + x * 360 / n for x in range(n + 1)]
     y_boundaries = [-math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n)))) for y in range(n + 1)]
-    projected = ProjectedFootprints(grid, bounds) if grid['kind'] == 'lambert-conformal' else None
+    projected = ProjectedFootprints(grid, bounds) if grid['kind'] in ('lambert-conformal', 'rotated-latlon') else None
 
     def indices(boundaries, lo, hi):
         return max(0, bisect.bisect_left(boundaries, lo) - 1), min(n - 1, bisect.bisect_right(boundaries, hi) - 1)

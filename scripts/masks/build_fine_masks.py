@@ -22,26 +22,33 @@ MASK_BYTES = 32
 
 
 def fine_grid(native, k):
-    if type(k) is not int or not 1 <= k <= 64 or native['kind'] not in ('regular-latlon', 'lambert-conformal'):
+    if type(k) is not int or not 1 <= k <= 64 or native['kind'] not in ('regular-latlon', 'lambert-conformal', 'rotated-latlon'):
         raise ValueError('Expected a supported grid and positive subdivision')
-    projected = native['kind'] == 'lambert-conformal'
-    if not projected and (native['dx'] <= 0 or native['dy'] >= 0):
+    lambert = native['kind'] == 'lambert-conformal'
+    rotated = native['kind'] == 'rotated-latlon'
+    if native['kind'] == 'regular-latlon' and (native['dx'] <= 0 or native['dy'] >= 0):
         raise ValueError('Grid must run west to east and north to south')
+    if rotated and (native['wrapLongitude'] or native['dx'] <= 0 or native['dy'] <= 0):
+        raise ValueError('Rotated grid must run west to east and south to north without wrap')
     if native['wrapLongitude'] and (native['lon0'] != -180 or not math.isclose(native['width'] * native['dx'], 360)):
         raise ValueError('Wrapping grid must start at -180 and span 360 degrees')
     width = native['width'] * k if native['wrapLongitude'] else (native['width'] - 1) * k + 1
     height = (native['height'] - 1) * k + 1
     if width < 1 or height < 1 or width * height >= 0xffffffff:
         raise ValueError('Fine grid exceeds the index space')
-    steps = ('dxM', 'dyM') if projected else ('dx', 'dy')
-    if projected and (native['wrapLongitude'] or any(not math.isfinite(native[key]) or native[key] == 0 for key in steps)):
+    steps = ('dxM', 'dyM') if lambert else ('dx', 'dy')
+    if lambert and (native['wrapLongitude'] or any(not math.isfinite(native[key]) or native[key] == 0 for key in steps)):
         raise ValueError('Projected grid requires finite nonzero spacing without wrap')
     return {**native, 'width': width, 'height': height, **{key: native[key] / k for key in steps}}
 
 
 def canonical_grid_json(grid):
-    axes = ['lon0', 'lat0', 'dx', 'dy'] if grid['kind'] == 'regular-latlon' else [
-        'centralMeridianDeg', 'latitudeOfOriginDeg', 'standardParallel1Deg', 'standardParallel2Deg', 'x0M', 'y0M', 'dxM', 'dyM']
+    if grid['kind'] == 'regular-latlon':
+        axes = ['lon0', 'lat0', 'dx', 'dy']
+    elif grid['kind'] == 'rotated-latlon':
+        axes = ['lon0', 'lat0', 'dx', 'dy', 'southPoleLatDeg', 'southPoleLonDeg']
+    else:
+        axes = ['centralMeridianDeg', 'latitudeOfOriginDeg', 'standardParallel1Deg', 'standardParallel2Deg', 'x0M', 'y0M', 'dxM', 'dyM']
     keys = ['kind', 'width', 'height', 'earthRadiusM', *axes, 'wrapLongitude']
     ordered = {key: grid[key] for key in keys}
     return subprocess.run(['node', '-e', "process.stdout.write(JSON.stringify(JSON.parse(require('fs').readFileSync(0,'utf8'))))"],
@@ -131,7 +138,7 @@ def build_hierarchy(settings, k, source):
     if not isinstance(coverage['maxNativeZoom'], int) or not 0 <= coverage['maxNativeZoom'] <= max_native_zoom():
         raise ValueError('Invalid maximum native zoom')
     grid_hash = hashlib.sha256(canonical_grid_json(fine).encode()).hexdigest()
-    projected = ProjectedFootprints(fine, bounds) if fine['kind'] == 'lambert-conformal' else None
+    projected = ProjectedFootprints(fine, bounds) if fine['kind'] in ('lambert-conformal', 'rotated-latlon') else None
     cells = projected.footprints if projected else lambda *indices: footprint(fine, bounds, *indices)
     with build_masks.tempfile.TemporaryDirectory(prefix='fine-mask-') as tmp:
         _, shp = build_masks.materialize_source(source, Path(tmp))

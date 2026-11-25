@@ -13,7 +13,8 @@ export function modelApproxKm(modelId: string | null | undefined): number | null
   if (!modelId) return null;
   const option = MODEL_OPTIONS.find(item => item.modelId === modelId);
   if (!option || !Number.isFinite(option.nominalDxMeters) || option.nominalDxMeters <= 0) return null;
-  return Math.max(1, Math.round(option.nominalDxMeters / 1000));
+  const step = option.nominalDxMeters < 5000 ? 500 : 1000;
+  return Math.max(0.5, Math.round(option.nominalDxMeters / step) * (step / 1000));
 }
 
 export function formatModelResolutionKm(modelId: string | null | undefined): string | null {
@@ -28,7 +29,8 @@ const MODEL_REGION_SUBTITLES: Readonly<Record<ConfiguredModelId, string>> = {
   'icon-eu': 'Europe',
   rrfs: 'North America',
   'av-wrf': 'Caucasus',
-  'wrf-va-1km': 'Northern Virginia'
+  'wrf-va-1km': 'Northern Virginia',
+  hrdps: 'Canada'
 };
 
 export function modelRegionSubtitle(modelId: string | null | undefined): string | undefined {

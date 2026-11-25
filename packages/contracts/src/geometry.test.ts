@@ -3,7 +3,7 @@ import { NORTHERN_LAMBERT, SOUTHERN_LAMBERT } from '../../../tests/lambert-fixtu
 import { describe, expect, it } from 'vitest';
 import fixture from './fixtures/lambert.json';
 import { gridSchema } from './grid-schema.js';
-import { boundsOverlap, boundsOverlapFraction, earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid } from './geometry.js';
+import { boundsOverlap, boundsOverlapFraction, earthVectorToGrid, geographicToGrid, gridOutline, gridToGeographic, gridVectorToEarth, prepareGridGeometry, withinGeographicBounds, type Grid, type LambertConformalGrid, type RotatedLatLonGrid } from './geometry.js';
 import { isCovered, type CoverageMask } from './index.js';
 import { getProduct } from './products.js';
 
@@ -93,6 +93,40 @@ describe('native spherical grid geometry', () => {
     const spherical = prepareGridGeometry(INDEXED_GRID).rotationAndMetrics(60, 0)!;
     expect(spherical.metersPerColumn / spherical.metersPerRow).toBeCloseTo(0.5, 12);
     expect(prepareGridGeometry(INDEXED_GRID).rotationAndMetrics(90, 0)).toBeNull();
+  });
+
+  it('matches ECCC HRDPS Continental 2.5 km rotated lat-lon controls and orthogonal wind rotation', () => {
+    const hrdpsGrid: RotatedLatLonGrid = {
+      kind: 'rotated-latlon', width: 2540, height: 1290, earthRadiusM: 6371229,
+      lon0: -14.82122, lat0: -12.302501, dx: 0.0225, dy: 0.0225,
+      southPoleLatDeg: -36.08852, southPoleLonDeg: -114.694858, wrapLongitude: false
+    };
+    expect(gridSchema.parse(hrdpsGrid)).toEqual(hrdpsGrid);
+    const geometry = prepareGridGeometry(hrdpsGrid);
+    const controls = [
+      { x: 0, y: 0, lat: 39.626034, lon: -133.62952 },
+      { x: 2539, y: 0, lat: 27.284597, lon: -66.96642 },
+      { x: 585, y: 346, lat: 49.364271, lon: -117.234411 },
+      { x: 2539, y: 1289, lat: 47.876457, lon: -40.708557 }
+    ] as const;
+    for (const point of controls) {
+      const geo = geometry.gridToGeographic(point.x, point.y)!;
+      expect(geo.lat).toBeCloseTo(point.lat, 4);
+      expect(geo.lon).toBeCloseTo(point.lon, 4);
+      const fromControl = geometry.geographicToGrid(point.lat, point.lon)!;
+      expect(fromControl.x).toBeCloseTo(point.x, 3);
+      expect(fromControl.y).toBeCloseTo(point.y, 3);
+      const gridPoint = geometry.geographicToGrid(geo.lat, geo.lon)!;
+      expect(gridPoint.x).toBeCloseTo(point.x, 9);
+      expect(gridPoint.y).toBeCloseTo(point.y, 9);
+      const rotation = geometry.rotationAndMetrics(geo.lat, geo.lon)!;
+      expect(Math.hypot(rotation.cos, rotation.sin)).toBeCloseTo(1, 12);
+      expect(rotation.mapScale).toBeNull();
+      const earth = gridVectorToEarth(8.5, -3.25, rotation);
+      const back = earthVectorToGrid(earth.east, earth.north, rotation);
+      expect(back.u).toBeCloseTo(8.5, 12);
+      expect(back.v).toBeCloseTo(-3.25, 12);
+    }
   });
 
   it('requires an explicit admitted geometry and rejects singular/oversized inputs', () => {

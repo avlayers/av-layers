@@ -1,0 +1,244 @@
+{
+  "source": {
+    "dataset": "Natural Earth 1:50m Admin 0 Countries",
+    "release": "5.1.1",
+    "url": "https://naturalearth.s3.amazonaws.com/50m_cultural/ne_50m_admin_0_countries.zip",
+    "sha256": "5fed433373581fa648920435f937d95f2d3c0200e067409c6478dcdf1b853139",
+    "archiveBytes": 799734,
+    "license": "public-domain",
+    "excludedA3": [
+      "GRL",
+      "USA",
+      "SPM"
+    ],
+    "excludedContinents": [],
+    "isoExceptions": [
+      {
+        "admin": "Ashmore and Cartier Islands",
+        "adm0_a3": "ATC",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Northern Cyprus",
+        "adm0_a3": "CYN",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "France",
+        "adm0_a3": "FRA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "FRA",
+        "iso_a2": "-99",
+        "iso_a2_eh": "FR"
+      },
+      {
+        "admin": "Indian Ocean Territories",
+        "adm0_a3": "IOA",
+        "iso_a3": "-99",
+        "iso_a3_eh": "AUS",
+        "iso_a2": "-99",
+        "iso_a2_eh": "AU"
+      },
+      {
+        "admin": "Siachen Glacier",
+        "adm0_a3": "KAS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      },
+      {
+        "admin": "Kosovo",
+        "adm0_a3": "KOS",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "XK"
+      },
+      {
+        "admin": "Norway",
+        "adm0_a3": "NOR",
+        "iso_a3": "-99",
+        "iso_a3_eh": "NOR",
+        "iso_a2": "-99",
+        "iso_a2_eh": "NO"
+      },
+      {
+        "admin": "Somaliland",
+        "adm0_a3": "SOL",
+        "iso_a3": "-99",
+        "iso_a3_eh": "-99",
+        "iso_a2": "-99",
+        "iso_a2_eh": "-99"
+      }
+    ],
+    "continentExclusions": []
+  },
+  "grid": {
+    "kind": "rotated-latlon",
+    "width": 2540,
+    "height": 1290,
+    "earthRadiusM": 6371229,
+    "lon0": -14.82122,
+    "lat0": -12.302501,
+    "dx": 0.0225,
+    "dy": 0.0225,
+    "southPoleLatDeg": -36.08852,
+    "southPoleLonDeg": -114.694858,
+    "wrapLongitude": false
+  },
+  "output": {
+    "bytes": 409575,
+    "sha256": "010c0455e0c225fa3cb7dfa4c2c0cd82e74cf7228c21ac517655e50c326d1cf3",
+    "counts": {
+      "activeCells": 1386879
+    }
+  },
+  "halo": {
+    "bytes": 409575,
+    "sha256": "6c73e5fceca8b5b70851a39bf8da18faf5eae169d212e096d661a91987a6cfc3",
+    "counts": {
+      "haloOnlyCells": 14361
+    }
+  },
+  "tiles": {
+    "bytes": 174763,
+    "sha256": "f3beaed2c400f009e5dcb791f4698b0ff18e23a93ea2bce9df14fdd237d4b42d",
+    "countsByZoom": {
+      "0": 1,
+      "1": 1,
+      "2": 2,
+      "3": 3,
+      "4": 9,
+      "5": 31,
+      "6": 103,
+      "7": 348,
+      "8": 1296,
+      "9": 4885,
+      "10": 19040
+    }
+  },
+  "tests": {
+    "cases": [
+      {
+        "name": "vancouver",
+        "lat": 49.2827,
+        "lon": -123.1207,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "pemberton",
+        "lat": 50.3186,
+        "lon": -122.8042,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "golden",
+        "lat": 51.3,
+        "lon": -116.96,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "cowley",
+        "lat": 49.6333,
+        "lon": -114.0833,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "calgary",
+        "lat": 51.0447,
+        "lon": -114.0719,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "toronto",
+        "lat": 43.6532,
+        "lon": -79.3832,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "ottawa",
+        "lat": 45.4215,
+        "lon": -75.6972,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "montreal",
+        "lat": 45.5017,
+        "lon": -73.5673,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "halifax",
+        "lat": 44.6488,
+        "lon": -63.5752,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "exclude_usa_seattle",
+        "lat": 47.6062,
+        "lon": -122.3321,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": true
+      },
+      {
+        "name": "exclude_greenland",
+        "lat": 64.1814,
+        "lon": -51.6941,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      },
+      {
+        "name": "pacific_ocean",
+        "lat": 48.0,
+        "lon": -135.0,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": true
+      },
+      {
+        "name": "atlantic_ocean",
+        "lat": 45.0,
+        "lon": -45.0,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
+      }
+    ]
+  },
+  "regeneration": {
+    "command": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model hrdps --output packages/contracts/coverage/hrdps-continental-land-v1",
+    "toolingSha256": "640a762ef6afae89b572cf36969ee16b9a9f905a830306f65487dcc9c60ea282",
+    "rasterizerSha256": "1718730b25dca09e20c58cd925273db25eb85b4e786ec49dc946eb39c4517195",
+    "geometrySha256": "19861d4207889c1efb05e169c0e115228171d1258377aa7245c258c4276fa3d3",
+    "tilesSha256": "49b028ecd3c84aa40ef2b83271128ba2309f7643e42dceb61c8353ab69f42736",
+    "GEOS": "3.13.1",
+    "PROJ": "9.5.1"
+  }
+}

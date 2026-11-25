@@ -13,10 +13,11 @@ point queries. See [data](data.md) for output units and status meanings.
 fields, levels and intervals. The [indexed adapter](../apps/batch/src/indexed-grib/README.md)
 supplies GFS and RRFS isobaric heights and temperatures; the
 [split adapter](../apps/batch/src/split-grib/README.md) supplies ICON-EU per-column
-pressure and temperature. Full-level heights average adjacent half levels;
-the bottom half level must match model terrain. All sources provide terrain,
-surface pressure, 2 m temperature and specific humidity, and sensible and latent
-heat flux. Indexed sources also supply precipitation accumulations.
+pressure and temperature and HRDPS isobaric heights and temperatures. Full-level
+heights average adjacent half levels; the bottom half level must match model
+terrain. All sources provide terrain, surface pressure, 2 m temperature and
+specific humidity, and sensible and latent heat flux. Indexed and split sources
+also supply precipitation accumulations.
 
 Specific humidity converts to mixing ratio via $r = q / (1 - q)$. Below-ground
 profile levels are screened before column derivation; levels with missing
@@ -50,6 +51,8 @@ windows in GRIB2 metadata and pass them to
 - ICON-EU `ASHFL_S` and `ALHFL_S` are run-averaged (`0..h`) downward fluxes;
   differencing consecutive hours and negating yields the preceding-hour upward
   flux (`f001` negates its `0..1h` mean directly).
+- HRDPS `SHTFL_Sfc` and `LHTFL_Sfc` are instantaneous upward surface fluxes, and
+  `APCP-Accum1h_Sfc` is the preceding-hour precipitation accumulation.
 - Small negative precipitation differences within combined GRIB packing error
   clamp to `0`; larger negative rates become `unavailable`.
 - Lift pairs the trailing-interval surface heat fluxes with the valid-time

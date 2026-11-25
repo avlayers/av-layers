@@ -118,7 +118,7 @@ export function layerMaxZoom(manifest: ManifestV5, layer: LayerId): number {
 }
 
 function gridSpacing(grid: Grid): string {
-  return grid.kind === 'regular-latlon' ? `${grid.dx}° × ${Math.abs(grid.dy)}°` : `${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m`;
+  return grid.kind === 'lambert-conformal' ? `${Math.abs(grid.dxM)} × ${Math.abs(grid.dyM)} m` : `${grid.dx}° × ${Math.abs(grid.dy)}°`;
 }
 
 export function buildDiagnosticRows(build: PinnedBuild): Array<[string, string]> {

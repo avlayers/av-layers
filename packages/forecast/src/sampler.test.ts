@@ -290,6 +290,43 @@ describe('point sampling', () => {
       expect(prepared.status).not.toBe(STATUS_OUTSIDE);
     }
   });
+  it('matches grid, point and scalar sampling on rotated-latlon grids and refreshes cached geometry on mutation', () => {
+    const rotated: Grid = {
+      kind: 'rotated-latlon', width: 6, height: 6, earthRadiusM: 6371229,
+      lon0: -14.82, lat0: -12.3025, dx: 0.0225, dy: 0.0225,
+      southPoleLatDeg: -36.0885, southPoleLonDeg: -114.695, wrapLongitude: false
+    };
+    const geometry = prepareGridGeometry(rotated), mask = coverage(rotated);
+    mask.output.fill(0);
+    for (let i = 0; i < 36; i++) setBit(i % 5 ? mask.output : mask.halo, i);
+    const latitudes = Float64Array.from([1, 2, 2.5, 4].map(y => geometry.gridToGeographic(2, y)!.lat).concat(NaN, 91));
+    const longitudes = Float64Array.from([1, 2, 2.5, 4].map(x => geometry.gridToGeographic(x, 2)!.lon).concat(NaN, -180));
+    const pairedLatitudes = Float64Array.from(Array.from(latitudes).flatMap(lat => Array.from(longitudes, () => lat)));
+    const pairedLongitudes = Float64Array.from(Array.from(latitudes).flatMap(() => Array.from(longitudes)));
+    for (const samplingMask of [mask, { grid: rotated, tiles: mask.tiles, maxZoom: 0,
+      coverage: sparseCoverageFromDense({ ...rotated, gridHash: 'a'.repeat(64), output: mask.output, halo: mask.halo }) }]) {
+      const prepared = prepareGridSampling(samplingMask, latitudes, longitudes);
+      const paired = preparePointSampling(samplingMask, pairedLatitudes, pairedLongitudes);
+      expect(paired.contributors).toEqual(prepared.contributors);
+      const field = { values: Float32Array.from({ length: 36 }, (_, i) => i + 100),
+        flags: Uint8Array.from({ length: 36 }, (_, i) => i % 7 === 0 ? STATUS_UNAVAILABLE : i % 11 === 0 ? STATUS_NO_LIFT : 0),
+        ...('coverage' in samplingMask ? { coverage: samplingMask.coverage } : {}) };
+      const sample = prepared.bind(field, 'usable-lift-msl'), point = paired.bind(field, 'usable-lift-msl');
+      for (let i = 0; i < pairedLatitudes.length; i++) {
+        const actual = result(), pair = result();
+        sample(i % longitudes.length, Math.floor(i / longitudes.length), actual);
+        point(i, 0, pair);
+        expect(actual).toEqual(sampleGrid(rotated, field, pairedLatitudes[i], pairedLongitudes[i], 'usable-lift-msl', samplingMask));
+        expect(pair).toEqual(actual);
+      }
+    }
+    const { lat, lon } = geometry.gridToGeographic(3, 3)!;
+    expect(planSample(rotated, lat, lon)?.contributors.map(cell => cell.index)).toEqual([21]);
+    rotated.lon0 += rotated.dx;
+    expect(planSample(rotated, lat, lon)?.contributors.map(cell => cell.index)).toEqual([20]);
+    rotated.southPoleLatDeg = 90;
+    expect(planSample(rotated, lat, lon)).toBeNull();
+  });
 });
 
 describe('stored weather scalars', () => {

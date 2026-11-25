@@ -1,5 +1,5 @@
 import { gridSchema } from './grid-schema.js';
-import { snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid } from './geometry.js';
+import { snapGridCoordinate, type Grid, type LambertConformalGrid, type RegularLatLonGrid, type RotatedLatLonGrid } from './geometry.js';
 
 const MAX_UINT32_CELLS = 0xffffffff;
 
@@ -11,6 +11,7 @@ export interface WholeDomainGrid<T extends Grid = Grid> {
 
 export function planWholeDomainGrid(rawNative: RegularLatLonGrid, k: number): WholeDomainGrid<RegularLatLonGrid>;
 export function planWholeDomainGrid(rawNative: LambertConformalGrid, k: number): WholeDomainGrid<LambertConformalGrid>;
+export function planWholeDomainGrid(rawNative: RotatedLatLonGrid, k: number): WholeDomainGrid<RotatedLatLonGrid>;
 export function planWholeDomainGrid(rawNative: Grid, k: number): WholeDomainGrid;
 export function planWholeDomainGrid(rawNative: Grid, k: number): WholeDomainGrid {
   if (!Number.isSafeInteger(k) || k < 1) throw new RangeError('Whole-domain subdivision factor must be a positive integer');
@@ -23,7 +24,7 @@ export function planWholeDomainGrid(rawNative: Grid, k: number): WholeDomainGrid
       || !Number.isSafeInteger(width * height) || width * height >= MAX_UINT32_CELLS) {
     throw new RangeError('Whole-domain fine grid exceeds the admitted index space');
   }
-  const spacing = native.kind === 'regular-latlon' ? { dx: native.dx / k, dy: native.dy / k } : { dxM: native.dxM / k, dyM: native.dyM / k };
+  const spacing = native.kind === 'lambert-conformal' ? { dxM: native.dxM / k, dyM: native.dyM / k } : { dx: native.dx / k, dy: native.dy / k };
   if (Object.values(spacing).some(step => !Number.isFinite(step) || step === 0)) throw new RangeError('Whole-domain fine spacing underflows');
   const fine = gridSchema.parse({ ...native, width, height, ...spacing });
   return { k, native, fine };
