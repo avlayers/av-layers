@@ -79,6 +79,7 @@ scalar chart covers builds that publish no native profiles.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
 - [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
+- [src/features/map/map-controller.ts](src/features/map/map-controller.ts) `MapCamera.timeZone()`: the map clock is the map centre's civil IANA zone (`tz-lookup`, loaded after startup; UTC offshore), or the browser zone until the camera follows a place. The timeline, status line and horizon notice take each instant's own offset in that zone, so DST days group correctly.
 - [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): routes timeline input; the view, folded-night [day scale](src/features/timeline/day-scale.ts), gesture, frame window and playback each have their own module beside it.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
 - [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.

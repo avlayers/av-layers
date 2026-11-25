@@ -1,4 +1,4 @@
-import { placeDateKey } from '@av/client';
+import { timeZoneOffsetMinutesAt, zoneDateKey } from '@av/client';
 import type { TimelineFrame } from './timeline-model';
 
 /** Local-day geometry for the timeline track: frame lookup by local clock time and the folded-night x scale. */
@@ -12,21 +12,22 @@ export const DAY_MS = 86_400_000;
 export const DAY_MINUTES = 1440;
 const MOON_PX = 28;
 
-export function localTimeFromMs(ms: number, offsetMinutes: number): LocalTime | null {
-  if (!Number.isFinite(ms) || !Number.isFinite(offsetMinutes)) return null;
-  const shifted = new Date(ms + offsetMinutes * 60_000);
+/** Civil date and clock of `ms` in IANA `timeZone`, using that instant's own offset. */
+export function localTimeFromMs(ms: number, timeZone: string): LocalTime | null {
+  if (!Number.isFinite(ms)) return null;
+  const shifted = new Date(ms + timeZoneOffsetMinutesAt(ms, timeZone) * 60_000);
   const day = shifted.toISOString().slice(0, 10);
   return /^\d{4}-\d{2}-\d{2}$/.test(day) ? { day, hour: shifted.getUTCHours(), minute: shifted.getUTCMinutes() } : null;
 }
 
-export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, hour: number, minute: number): number {
+export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string, hour: number, minute: number): number {
   if (!indices.length) return -1;
   const target = hour * 60 + minute;
   let best = indices[0]!, bestDist = Infinity, bestMs = Infinity;
   for (const index of indices) {
     const frame = frames[index];
     if (!frame) continue;
-    const ms = Date.parse(frame.validTime), local = localTimeFromMs(ms, offsetMinutes);
+    const ms = Date.parse(frame.validTime), local = localTimeFromMs(ms, timeZone);
     if (!local) continue;
     const dist = Math.abs(local.hour * 60 + local.minute - target);
     if (dist < bestDist || (dist === bestDist && ms < bestMs)) { best = index; bestDist = dist; bestMs = ms; }
@@ -34,26 +35,26 @@ export function nearestFrameIndexForDay(frames: readonly TimelineFrame[], indice
   return best;
 }
 
-function localMinutes(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): number[] {
+function localMinutes(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string): number[] {
   const minutes: number[] = [];
   for (const index of indices) {
     const frame = frames[index];
     if (!frame) continue;
-    const local = localTimeFromMs(Date.parse(frame.validTime), offsetMinutes);
+    const local = localTimeFromMs(Date.parse(frame.validTime), timeZone);
     if (local) minutes.push(local.hour * 60 + local.minute);
   }
   minutes.sort((left, right) => left - right);
   return minutes;
 }
 
-export function frameIndexForDayFraction(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number, fraction: number): number {
+export function frameIndexForDayFraction(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string, fraction: number): number {
   if (!Number.isFinite(fraction)) return -1;
   const minute = Math.round(Math.min(1, Math.max(0, fraction)) * 1440);
-  return nearestFrameIndexForDay(frames, indices, offsetMinutes, Math.floor(minute / 60), minute % 60);
+  return nearestFrameIndexForDay(frames, indices, timeZone, Math.floor(minute / 60), minute % 60);
 }
 
-export function dayHatchFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number }[] {
-  const minutes = localMinutes(frames, indices, offsetMinutes);
+export function dayHatchFractions(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string): { start: number; end: number }[] {
+  const minutes = localMinutes(frames, indices, timeZone);
   if (!minutes.length) return [];
   const segments: { start: number; end: number }[] = [];
   const push = (from: number, to: number) => { if (to > from) segments.push({ start: from, end: to }); };
@@ -62,8 +63,8 @@ export function dayHatchFractions(frames: readonly TimelineFrame[], indices: rea
   return segments;
 }
 
-export function coarseSpanFractions(frames: readonly TimelineFrame[], indices: readonly number[], offsetMinutes: number): { start: number; end: number }[] {
-  const minutes = localMinutes(frames, indices, offsetMinutes);
+export function coarseSpanFractions(frames: readonly TimelineFrame[], indices: readonly number[], timeZone: string): { start: number; end: number }[] {
+  const minutes = localMinutes(frames, indices, timeZone);
   const spans: { start: number; end: number }[] = [];
   for (let i = 1; i < minutes.length; i++) {
     const previous = minutes[i - 1]!, next = minutes[i]!;
@@ -135,10 +136,10 @@ export function xToMinute(scale: DayScale, x: number): number {
 }
 
 /** Every local day from the first to the last frame, including empty gap days. */
-export function localDayGroups(frames: readonly TimelineFrame[], offsetMinutes: number): DayGroup[] {
+export function localDayGroups(frames: readonly TimelineFrame[], timeZone: string): DayGroup[] {
   const present = new Map<string, number[]>();
   frames.forEach((frame, index) => {
-    const day = placeDateKey(Date.parse(frame.validTime), offsetMinutes);
+    const day = zoneDateKey(Date.parse(frame.validTime), timeZone);
     if (!day) return;
     const indices = present.get(day);
     if (indices) indices.push(index);

@@ -191,3 +191,56 @@ export function mapForecastHorizonNotice(manifest: MapTimeline, nowMs = Date.now
 export function buildAgeMs(createdAt: string, now = Date.now()): number {
   return Math.max(0, now - frameTime(createdAt));
 }
+
+/** True for the zones the preview treats as plain UTC. */
+export const isUtcZone = (timeZone: string): boolean => timeZone === 'UTC' || timeZone === 'Etc/UTC';
+
+export function cachedFormatter(
+  cache: Map<string, Intl.DateTimeFormat>,
+  timeZone: string,
+  options: Intl.DateTimeFormatOptions,
+): Intl.DateTimeFormat | null {
+  let formatter = cache.get(timeZone);
+  if (!formatter) {
+    try {
+      formatter = new Intl.DateTimeFormat('en-US', { timeZone, ...options });
+      if (cache.size >= 64) cache.clear();
+      cache.set(timeZone, formatter);
+    } catch {
+      return null;
+    }
+  }
+  return formatter;
+}
+
+const offsetFormatters = new Map<string, Intl.DateTimeFormat>();
+const OFFSET_PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+};
+
+/** UTC offset in minutes (east positive, west negative) for `validMs` in `timeZone`. */
+export function timeZoneOffsetMinutesAt(validMs: number, timeZone: string): number {
+  if (!Number.isFinite(validMs) || isUtcZone(timeZone)) return 0;
+  const formatter = cachedFormatter(offsetFormatters, timeZone, OFFSET_PARTS_OPTIONS);
+  if (!formatter) return 0;
+  const parts = formatter.formatToParts(new Date(validMs));
+  const get = (type: string) => Number(parts.find(p => p.type === type)?.value ?? 0);
+  const localAsUtcMs = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return Math.round((localAsUtcMs - validMs) / 60_000) || 0;
+}
+
+/** Local calendar date `YYYY-MM-DD` of `utcMs` in IANA `timeZone`, with that instant's own UTC offset. */
+export function zoneDateKey(utcMs: number, timeZone: string): string {
+  return placeDateKey(utcMs, timeZoneOffsetMinutesAt(utcMs, timeZone));
+}
+
+/** `formatPlaceTime` in IANA `timeZone`, with that instant's own UTC offset (DST-correct). */
+export function formatZoneTime(utcMs: number, timeZone: string, style: PlaceTimeStyle = 'stamp'): string {
+  return formatPlaceTime(utcMs, timeZoneOffsetMinutesAt(utcMs, timeZone), style);
+}

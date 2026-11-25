@@ -24,9 +24,9 @@ export function installMapWiring(ctx: PreviewContext, ops: PreviewOps, map: mapl
       live.timeline?.setMapCenter(next.center.lat, next.center.lng);
     }
     if (!next.changed) return;
-    const offsetMinutes = camera.offsetMinutes();
-    writer.forecast({ offsetMinutes });
-    live.timeline?.setOffsetMinutes(offsetMinutes);
+    const timeZone = camera.timeZone();
+    writer.forecast({ timeZone });
+    live.timeline?.setTimeZone(timeZone);
     ops.updateTimeUi(); ops.updateOverlayStatus(); ops.paintMapHorizon(); live.point?.feature.syncSelection();
   }
 

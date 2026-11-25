@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID } from '@av/client';
+import { AUTO_MODEL_ID, timeZoneOffsetMinutesAt } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { createLocationController } from '../features/location/location-controller';
 import { BasemapChannel } from '../features/map/basemap';
@@ -56,8 +56,8 @@ export function createPreviewApp(): PreviewApp {
     const camera = live.camera = createMapCamera(map, {
       home: { lat: openedAt.lat, lng: openedAt.lng },
       followsPlace: startup.query.camera !== null,
-      initialOffset: startup.initialOffset,
-      browserOffset: startup.browserOffsetMinutes
+      browserTimeZone: startup.browserZone,
+      loadZoneLookup: () => import('@av/client/timezone').then(module => module.resolveCivilTimeZone)
     });
 
     const { forecastScheduler, preparationBudget } = services;
@@ -95,7 +95,7 @@ export function createPreviewApp(): PreviewApp {
     ops.syncChannels();
 
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
-      offsetMinutes: ctx.forecast().offsetMinutes,
+      timeZone: ctx.forecast().timeZone,
       variant: ctx.intent().dockView,
       ...(camera.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, mode = 'push') => ops.selectIndex(index, mode, true),
@@ -109,7 +109,10 @@ export function createPreviewApp(): PreviewApp {
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,
-      offsetMinutes: () => ctx.forecast().offsetMinutes,
+      mapOffsetMinutes: () => {
+        const frame = ctx.build()?.manifest.frames.find(item => item.id === ctx.selectedFrame());
+        return timeZoneOffsetMinutesAt(frame ? Date.parse(frame.validTime) : Date.now(), ctx.forecast().timeZone);
+      },
       displayedFrame: () => {
         const displayed = view.overlay.value.displayed;
         return displayed && displayed.build === ctx.build() ? displayed.frame : null;

@@ -12,7 +12,7 @@ export interface CompactTimelineOptions {
   onIntent?(index: number): void;
   onPrepare?(index: number): void;
   onPlayback?(playing: boolean): void;
-  offsetMinutes?: number;
+  timeZone?: string;
   latitude?: number;
   longitude?: number;
   variant?: DockViewId;
@@ -20,7 +20,7 @@ export interface CompactTimelineOptions {
 export interface CompactTimeline {
   update(frames: readonly TimelineFrame[], selectedFrame: string | null, disabled?: boolean): void;
   cancelGesture(): { changed: boolean; delivered: boolean } | null;
-  setOffsetMinutes(offsetMinutes: number): void;
+  setTimeZone(timeZone: string): void;
   setMapCenter(latitude: number, longitude: number): void;
   setVariant?(variant: DockViewId): void;
   setReadiness?(ready: number, total: number, loading?: boolean): void;
@@ -59,7 +59,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function targetForDay(group: DayGroup): number {
     const minute = win.selectedMinute();
-    return nearestFrameIndexForDay(win.frames, group.indices, win.offsetMinutes, minute === null ? 12 : Math.floor(minute / 60), minute === null ? 0 : minute % 60);
+    return nearestFrameIndexForDay(win.frames, group.indices, win.timeZone, minute === null ? 12 : Math.floor(minute / 60), minute === null ? 0 : minute % 60);
   }
 
   function currentScale(width: number): DayScale {
@@ -137,7 +137,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const targetIndex = direction > 0 ? neighbor.indices[0]! : neighbor.indices.at(-1)!;
     if (targetIndex < 0 || targetIndex >= win.frames.length) return;
     const targetFrame = win.frames[targetIndex];
-    const targetLocal = targetFrame ? localTimeFromMs(Date.parse(targetFrame.validTime), win.offsetMinutes) : null;
+    const targetLocal = targetFrame ? localTimeFromMs(Date.parse(targetFrame.validTime), win.timeZone) : null;
     gesture.scrubMinute = targetLocal ? targetLocal.hour * 60 + targetLocal.minute : (direction > 0 ? 0 : DAY_MINUTES);
     gesture.preparedBounceIndex = -1;
     setTrackPull(0, 0);
@@ -170,7 +170,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     }
     const rawMinute = Math.min(DAY_MINUTES, Math.max(0, xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)))));
     const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(rawMinute)));
-    const index = nearestFrameIndexForDay(win.frames, group.indices, win.offsetMinutes, Math.floor(rounded / 60), rounded % 60);
+    const index = nearestFrameIndexForDay(win.frames, group.indices, win.timeZone, Math.floor(rounded / 60), rounded % 60);
     const scrubMoved = gesture.scrubMinute === null || Math.abs(rawMinute - gesture.scrubMinute) >= 0.05;
     gesture.scrubMinute = rawMinute;
     if (index >= 0 && index !== win.selectedIndex) scrubTo(index, rect.width, queue);
@@ -310,8 +310,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       render();
       if (win.off()) stopPlayback();
     },
-    setOffsetMinutes(next: number) {
-      if (destroyed || !win.setOffsetMinutes(next)) return;
+    setTimeZone(next: string) {
+      if (destroyed || !win.setTimeZone(next)) return;
       gesture.scale = null;
       syncDays();
       render();

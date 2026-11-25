@@ -33,8 +33,8 @@ it('ignores repeat offsets and centres that round to the same 0.01 degree', () =
   expect(win.setCenter(47.004, 8.001)).toBe(false);
   expect(win.setCenter(91, 8)).toBe(false);
   expect(win.setCenter(47.02, 8)).toBe(true);
-  expect(win.setOffsetMinutes(0)).toBe(false);
-  expect(win.setOffsetMinutes(60)).toBe(true);
+  expect(win.setTimeZone('UTC')).toBe(false);
+  expect(win.setTimeZone('Etc/GMT-1')).toBe(true);
   expect(createFrameWindow({}).centerKey()).toBe('|');
   expect(createFrameWindow({}).daySolar('2026-03-13')).toEqual({ stops: null, bounds: null });
 });

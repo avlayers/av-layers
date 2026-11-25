@@ -11,7 +11,7 @@ function initial(): PreviewInitialState {
     },
     forecast: {
       build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-      offsetMinutes: 0, mapCenter: null, playing: false
+      timeZone: 'UTC', mapCenter: null, playing: false
     },
     overlay: emptyOverlay,
     wind: { status: 'unavailable', overview: false, displayed: false, supported: false },

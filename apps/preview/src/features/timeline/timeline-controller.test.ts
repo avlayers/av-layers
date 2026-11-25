@@ -81,13 +81,13 @@ class Document extends EventTarget {
 
 let doc: Document;
 
-function setup(offsetMinutes?: number, place?: { latitude: number; longitude: number }) {
+function setup(timeZone?: string, place?: { latitude: number; longitude: number }) {
   doc = new Document();
   const host = doc.createElement('div');
   const onSelect = vi.fn();
   const timeline = createCompactTimeline(host as unknown as HTMLElement, {
     onSelect,
-    ...(offsetMinutes !== undefined ? { offsetMinutes } : {}),
+    ...(timeZone !== undefined ? { timeZone } : {}),
     ...place
   });
   return { host, onSelect, timeline };
@@ -141,16 +141,16 @@ it('chooses the nearest frame on a target day and keeps ties stable', () => {
     { id: 'c', validTime: '2026-11-14T16:00:00Z' },
     { id: 'd', validTime: '2026-11-14T22:00:00Z' }
   ];
-  expect(nearestFrameIndexForDay(day, [0, 1, 2, 3], 0, 12, 0)).toBe(1);
+  expect(nearestFrameIndexForDay(day, [0, 1, 2, 3], 'UTC', 12, 0)).toBe(1);
   const tied: TimelineFrame[] = [
     { id: 'a', validTime: '2026-11-14T10:00:00Z' },
     { id: 'b', validTime: '2026-11-14T14:00:00Z' }
   ];
-  expect(nearestFrameIndexForDay(tied, [0, 1], 0, 12, 0)).toBe(0);
-  expect(frameIndexForDayFraction(frames, [0, 1, 2], 0, 0.9)).toBe(1);
-  expect(frameIndexForDayFraction(frames, [0, 1, 2], 0, 0.05)).toBe(2);
-  expect(frameIndexForDayFraction(frames, [], 0, 0.5)).toBe(-1);
-  expect(frameIndexForDayFraction(frames, [0], 0, Number.NaN)).toBe(-1);
+  expect(nearestFrameIndexForDay(tied, [0, 1], 'UTC', 12, 0)).toBe(0);
+  expect(frameIndexForDayFraction(frames, [0, 1, 2], 'UTC', 0.9)).toBe(1);
+  expect(frameIndexForDayFraction(frames, [0, 1, 2], 'UTC', 0.05)).toBe(2);
+  expect(frameIndexForDayFraction(frames, [], 'UTC', 0.5)).toBe(-1);
+  expect(frameIndexForDayFraction(frames, [0], 'UTC', Number.NaN)).toBe(-1);
 });
 
 it('snaps a coarse gap to the nearest frame and marks the span', () => {
@@ -158,19 +158,19 @@ it('snaps a coarse gap to the nearest frame and marks the span', () => {
     id: `h${hour}`, validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z`
   }));
   const indices = hourly.map((_, index) => index);
-  expect(frameIndexForDayFraction(hourly, indices, 0, (13 + 20 / 60) / 24)).toBe(1);
-  expect(frameIndexForDayFraction(hourly, indices, 0, 16.5 / 24)).toBe(3);
-  expect(frameIndexForDayFraction(hourly, indices, 0, 17.75 / 24)).toBe(4);
-  expect(coarseSpanFractions(hourly, indices, 0)).toEqual([
+  expect(frameIndexForDayFraction(hourly, indices, 'UTC', (13 + 20 / 60) / 24)).toBe(1);
+  expect(frameIndexForDayFraction(hourly, indices, 'UTC', 16.5 / 24)).toBe(3);
+  expect(frameIndexForDayFraction(hourly, indices, 'UTC', 17.75 / 24)).toBe(4);
+  expect(coarseSpanFractions(hourly, indices, 'UTC')).toEqual([
     { start: 15 / 24, end: 18 / 24 },
     { start: 18 / 24, end: 21 / 24 }
   ]);
-  expect(dayHatchFractions(hourly, indices, 0)).toEqual([
+  expect(dayHatchFractions(hourly, indices, 'UTC')).toEqual([
     { start: 0, end: 12 / 24 },
     { start: 21 / 24, end: 1 }
   ]);
-  expect(coarseSpanFractions(frames, [0, 1], 0)).toEqual([{ start: 18 / 24, end: 21 / 24 }]);
-  expect(dayHatchFractions(frames, [], 0)).toEqual([]);
+  expect(coarseSpanFractions(frames, [0, 1], 'UTC')).toEqual([{ start: 18 / 24, end: 21 / 24 }]);
+  expect(dayHatchFractions(frames, [], 'UTC')).toEqual([]);
 });
 
 function luminance(hex: string): number {
@@ -239,13 +239,13 @@ it('keeps the neutral ribbon until a map center arrives and ignores a small pan'
 
 it('labels hours from a fixed offset and regroups without changing the selected frame', () => {
   vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup(-300);
+  const { host, onSelect, timeline } = setup('Etc/GMT+5');
   timeline.update(frames, 'a');
   const root = host.children[0]!;
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13']);
   expect(byClass(root, 'ct-time').textContent).toBe('13:00 (18:00 UTC)');
   click(byClass(root, 'ct-play'));
-  timeline.setOffsetMinutes(0);
+  timeline.setTimeZone('UTC');
   expect(onSelect).not.toHaveBeenCalled();
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13', 'Sat 14']);
   expect(byClass(root, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
@@ -452,7 +452,7 @@ it('folds both nights during daylight and opens only the night that contains the
     id: `h${hour}`,
     validTime: new Date(start + hour * 3_600_000).toISOString()
   }));
-  const { host, onSelect, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const { host, onSelect, timeline } = setup('Etc/GMT+5', { latitude: 37.54, longitude: -77.46 });
   const root = host.children[0]!;
   const track = byClass(root, 'ct-track');
   track.offsetWidth = 480;
@@ -488,7 +488,7 @@ it('keeps the folded scale steady while a drag crosses into the night', () => {
     id: `h${hour}`,
     validTime: new Date(start + hour * 3_600_000).toISOString()
   }));
-  const { host, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const { host, timeline } = setup('Etc/GMT+5', { latitude: 37.54, longitude: -77.46 });
   const root = host.children[0]!;
   const track = byClass(root, 'ct-track');
   track.offsetWidth = 480;
@@ -517,7 +517,7 @@ it('keeps the folded scale when the app echoes the scrubbed frame', () => {
   const host = doc.createElement('div');
   const timeline = createCompactTimeline(host as unknown as HTMLElement, {
     onSelect(index) { timeline.update(hourly, hourly[index]!.id); },
-    offsetMinutes,
+    timeZone: 'Etc/GMT+5',
     latitude: 37.54,
     longitude: -77.46
   });
@@ -543,7 +543,7 @@ it('drops a frozen drag scale when the frames or map center change, and keeps it
     id: `h${hour}`,
     validTime: new Date(start + hour * 3_600_000).toISOString()
   }));
-  const { host, onSelect, timeline } = setup(offsetMinutes, { latitude: 37.54, longitude: -77.46 });
+  const { host, onSelect, timeline } = setup('Etc/GMT+5', { latitude: 37.54, longitude: -77.46 });
   const root = host.children[0]!;
   const track = byClass(root, 'ct-track');
   track.offsetWidth = 480;
@@ -575,7 +575,7 @@ it('drops a frozen drag scale when the frames or map center change, and keeps it
 
 it('keeps a polar day on the linear hour scale', () => {
   expect(solarMinuteBounds(78, 15, '2025-12-21', 0)).toBeNull();
-  const { host, timeline } = setup(0, { latitude: 78, longitude: 15 });
+  const { host, timeline } = setup('UTC', { latitude: 78, longitude: 15 });
   const root = host.children[0]!;
   byClass(root, 'ct-track').offsetWidth = 480;
   timeline.update([{ id: 'noon', validTime: '2025-12-21T12:00:00Z' }], 'noon');
@@ -770,7 +770,7 @@ it('does not re-seek a repeated release coordinate after opening a folded night'
     id: `h${hour}`, validTime: `2026-11-16T${String(hour).padStart(2, '0')}:00:00Z`
   }));
   timeline.setMapCenter(37.54, -77.46);
-  timeline.setOffsetMinutes(-300);
+  timeline.setTimeZone('Etc/GMT+5');
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);
@@ -841,7 +841,7 @@ it('preserves the frozen night scale across old scene updates and synchronous ec
   }));
   const bounds = solarMinuteBounds(37.54, -77.46, '2026-11-16', -300);
   timeline.setMapCenter(37.54, -77.46);
-  timeline.setOffsetMinutes(-300);
+  timeline.setTimeZone('Etc/GMT+5');
   timeline.update(hourly, 'h21');
   onSelect.mockImplementation((index: number) => timeline.update(hourly, hourly[index]!.id));
   track.offsetWidth = 480;
@@ -924,7 +924,7 @@ it('ignores subpixel movement on release after opening a folded night', () => {
     id: `h${hour}`, validTime: `2026-11-16T${String(hour).padStart(2, '0')}:00:00Z`
   }));
   timeline.setMapCenter(37.54, -77.46);
-  timeline.setOffsetMinutes(-300);
+  timeline.setTimeZone('Etc/GMT+5');
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);

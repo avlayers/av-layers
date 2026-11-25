@@ -26,7 +26,7 @@ interface PointWiringOptions {
   readonly series: PointSeriesController;
   readonly build: () => PinnedBuild | null;
   readonly selectedFrame: () => string | null;
-  readonly offsetMinutes: () => number;
+  readonly mapOffsetMinutes: () => number;
   readonly displayedFrame: () => string | null;
   readonly wind: () => PointWind | null;
   readonly ensureLive: () => boolean;
@@ -89,7 +89,7 @@ export function createPointWiring(options: PointWiringOptions): PointWiring {
     getUnits: () => view.intent.value.units,
     getHorizon: () => view.intent.value.pointHorizon,
     getViewMode: () => view.intent.value.pointViewMode,
-    getMapOffset: options.offsetMinutes,
+    getMapOffset: options.mapOffsetMinutes,
     getDisplayedFrame: options.displayedFrame,
     getWind: options.wind,
     ensureLive: options.ensureLive,

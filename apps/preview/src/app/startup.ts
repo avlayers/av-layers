@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID, longitudeOffsetHours, type UnitSystem } from '@av/client';
+import { AUTO_MODEL_ID, browserTimeZone, type UnitSystem } from '@av/client';
 import type { PointViewMode } from '@av/windgram';
 import type { ModelId } from '@av/contracts/publication';
 import { DEFAULT_DOCK_VIEW, isDockViewId, type DockViewId } from '../features/controls/bottom-dock-model';
@@ -68,8 +68,7 @@ interface StartupSnapshot {
   readonly query: PreviewQuery;
   readonly preferences: Preferences;
   readonly initial: PreviewInitialState;
-  readonly initialOffset: number;
-  readonly browserOffsetMinutes: number;
+  readonly browserZone: string;
 }
 
 /** URL, stored preferences and defaults in their established precedence. */
@@ -94,8 +93,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
   const initialModel = query.model ?? (offline ? fixtureModel : AUTO_MODEL_ID);
   const initialPointViewMode: PointViewMode = preferences.pointViewMode() ?? '3d';
   const initialFixedHeight = typeof display.windHeight === 'number' ? display.windHeight : storedWind?.fixedHeight ?? WIND_STOPS[0];
-  const browserOffsetMinutes = -new Date().getTimezoneOffset();
-  const initialOffset = query.camera && Number.isFinite(query.camera.center[1]) ? longitudeOffsetHours(query.camera.center[0]) * 60 : browserOffsetMinutes;
+  const browserZone = browserTimeZone();
   const initial: PreviewInitialState = {
     intent: {
       model: initialModel, reference: query.reference, customLayer: visibleCustomLayer(query.layer), ...display, peeking: false,
@@ -104,7 +102,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     },
     forecast: {
       build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-      offsetMinutes: initialOffset, mapCenter: query.camera ? { lat: query.camera.center[1], lng: query.camera.center[0] } : null, playing: false
+      timeZone: browserZone, mapCenter: query.camera ? { lat: query.camera.center[1], lng: query.camera.center[0] } : null, playing: false
     },
     overlay: emptyOverlay,
     wind: { status: 'unavailable', overview: false, displayed: false, supported: false },
@@ -112,7 +110,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     location: { message: '', detail: '', busy: false },
     notices: { error: '', tileError: '', horizon: '', freshness: 'Loading latest immutable build…', frameStatus: 'Loading forecast…', skyStatus: '', overviewReady: 0, overviewTotal: 0, overviewFailed: 0, detailReady: 0, preparationLimited: false, scaleWidth: 1, scaleText: '' }
   };
-  return { query, preferences, initial, initialOffset, browserOffsetMinutes };
+  return { query, preferences, initial, browserZone };
 }
 
 export function safeStorage(): StorageLike | null {

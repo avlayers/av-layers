@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID, formatPlaceTime } from '@av/client';
+import { AUTO_MODEL_ID, formatZoneTime } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import type { ModelId } from '@av/contracts/publication';
@@ -65,7 +65,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
   const selectedIndex = Math.max(0, frames.findIndex(frame => frame.id === forecast.selectedFrame));
   const selected = frames.find(frame => frame.id === forecast.selectedFrame);
   const timestamp = !build || !selected ? (forecast.expired ? 'Build expired — overlay removed' : 'No frame selected')
-    : `Selected · ${formatPlaceTime(Date.parse(selected.validTime), forecast.offsetMinutes, 'stamp')}`;
+    : `Selected · ${formatZoneTime(Date.parse(selected.validTime), forecast.timeZone, 'stamp')}`;
   const controlsDisabled = !build || forecast.expired || forecast.mapFailed || forecast.pendingModel !== null;
   const displayed = overlay.displayed;
 

@@ -1,7 +1,6 @@
 import * as maplibregl from 'maplibre-gl';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { longitudeOffsetHours } from '@av/client';
 import { RASTER_PAN_TILES } from '../raster/raster-budget';
 import { compositeBasemapStyle } from './basemap';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
@@ -33,25 +32,35 @@ export { maplibregl };
 interface MapCameraOptions {
   readonly home: { lat: number; lng: number };
   readonly followsPlace: boolean;
-  readonly initialOffset: number;
-  readonly browserOffset: number;
+  /** Zone the clock uses until the camera follows a place: the browser's. */
+  readonly browserTimeZone: string;
+  /** Civil zone lookup, loaded lazily so `tz-lookup` stays out of the startup bundle. */
+  readonly loadZoneLookup?: () => Promise<(lat: number, lng: number) => string>;
 }
 
 export interface MapCamera {
   readonly home: { lat: number; lng: number };
-  offsetMinutes(): number;
+  /** IANA zone of the map centre (`UTC` offshore), or the browser zone before the camera follows a place. */
+  timeZone(): string;
+  /** Settles once the zone lookup has loaded (or failed); `sync` then resolves place zones. */
+  readonly zoneReady: Promise<void>;
   followsPlace(): boolean;
   sync(): { changed: boolean; center: { lat: number; lng: number } };
   focusRegion(bounds: readonly [number, number, number, number] | undefined): void;
   scale(units: 'metric' | 'imperial'): { width: number; text: string };
 }
 
+const ZONE_LOOKUP_STEP_DEG = 0.05;
+
 /** Camera-derived clock, regional focus and scale for the preview map. */
 export function createMapCamera(map: maplibregl.Map, options: MapCameraOptions): MapCamera {
-  let follows = options.followsPlace, offset = options.initialOffset;
+  let follows = options.followsPlace, zone = options.browserTimeZone;
+  let lookup: ((lat: number, lng: number) => string) | null = null, lookedUp: { lat: number; lng: number } | null = null;
+  const zoneReady = options.loadZoneLookup?.().then(fn => { lookup = fn; }, () => {}) ?? Promise.resolve();
   return {
     home: options.home,
-    offsetMinutes: () => offset,
+    zoneReady,
+    timeZone: () => zone,
     followsPlace: () => follows,
     sync() {
       const center = map.getCenter();
@@ -59,9 +68,14 @@ export function createMapCamera(map: maplibregl.Map, options: MapCameraOptions):
         const moved = Math.abs(center.lat - options.home.lat) > 1e-4 || Math.abs(((center.lng - options.home.lng + 540) % 360) - 180) > 1e-4;
         if (moved) follows = true;
       }
-      const next = Number.isFinite(center.lng) ? longitudeOffsetHours(center.lng) * 60 : offset;
-      const changed = next !== offset;
-      offset = next;
+      let next = zone;
+      if (!follows) next = options.browserTimeZone;
+      else if (lookup && Number.isFinite(center.lat) && Number.isFinite(center.lng)) {
+        const stale = !lookedUp || Math.abs(center.lat - lookedUp.lat) >= ZONE_LOOKUP_STEP_DEG || Math.abs(center.lng - lookedUp.lng) >= ZONE_LOOKUP_STEP_DEG;
+        if (stale) { next = lookup(center.lat, center.lng); lookedUp = { lat: center.lat, lng: center.lng }; }
+      }
+      const changed = next !== zone;
+      zone = next;
       return { changed, center: { lat: center.lat, lng: center.lng } };
     },
     focusRegion(bounds) {

@@ -362,7 +362,7 @@ describe('scrub, layer-switch & pan/zoom performance invariants', () => {
       },
       forecast: {
         build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
-        offsetMinutes: 0, mapCenter: { lat: 40.18, lng: 44.51 }, playing: false
+        timeZone: 'UTC', mapCenter: { lat: 40.18, lng: 44.51 }, playing: false
       },
       overlay: emptyOverlay,
       wind: { status: 'ready', overview: false, displayed: true, supported: true },
