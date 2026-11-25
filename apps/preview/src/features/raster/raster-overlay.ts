@@ -4,7 +4,7 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAX_RASTER_SOURCES } from './raster-budget';
-import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
+import { FOCUS_DWELL_MS, RasterOverview, type PreviewDraw } from './raster-overview';
 import type { ChannelView, MapChannel } from '../../channels/channel';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 import { coveredTileKeys, DetailTracker } from './detail-readiness';
@@ -214,6 +214,14 @@ export class RasterOverlay implements MapChannel {
     for (const slot of [...this.slots]) if (slot !== this.active) this.abandonEmpty(slot);
     this.prepareNext(); this.emit();
   }
+
+  /** Copies `frame`'s overview of the current view into `target`; see `RasterOverview.drawPreview`. */
+  drawPreview(build: PinnedBuild, layer: LayerId, frame: string, target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, width: number, height: number): PreviewDraw {
+    return this.disposed ? 'unavailable' : this.overview?.drawPreview(build, layer, frame, target, width, height) ?? 'pending';
+  }
+
+  /** Overview frames to prepare right after the selected one. */
+  preferPreviewFrames(frames: readonly string[]): void { this.overview?.preferFrames(frames); }
 
   isPrepared(build: PinnedBuild, layer: LayerId, frame: string): boolean {
     const slot = this.pool.find({ build, layer, frame });
