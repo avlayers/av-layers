@@ -1,4 +1,5 @@
 import { AUTO_MODEL_ID, type PointHorizon } from '@av/client';
+import { liftLayerFor } from '../layers/registry';
 import type { PreviewContext } from './context';
 import type { PreviewOps } from './display-ops';
 import type { PreviewCommands } from './preview-commands';
@@ -52,7 +53,7 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
     selectLayer(selected) { showLayer({ customLayer: selected === 'lift' ? null : selected }); },
     prepareLayer(target) {
       const current = ctx.build(), frame = ctx.selectedFrame();
-      const id = target === 'lift' ? (ctx.intent().reference === 'agl' ? 'usable-lift-agl' : 'usable-lift-msl') : target;
+      const id = target === 'lift' ? liftLayerFor(ctx.intent().reference) : target;
       if (current && frame && current.templates[id]) live.overlay?.prepare(id, frame);
     },
     prepareWeatherChannel(channel) {
