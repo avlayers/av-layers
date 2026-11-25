@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID, formatBuildFreshness, formatRunAge, formatZoneTime, mapForecastHorizonNotice, type UnitSystem } from '@av/client';
+import { AUTO_MODEL_ID, formatBuildFreshness, formatRunAge, formatZoneTime, mapForecastHorizonNotice, type PinnedBuild, type UnitSystem } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { layerOptions, validatedCustomLayer } from '../features/forecast/forecast-model';
@@ -11,6 +11,7 @@ import { overlayNotices } from './overlay-status';
 /** The operations the wiring modules call on each other, resolved at call time. */
 export interface PreviewOps {
   syncChannels(): void;
+  syncSky(revealing?: { build: PinnedBuild; frame: string } | null): void;
   clearForecast(): void;
   syncLayers(): void;
   syncSelectedAdmission(): void;
@@ -35,11 +36,31 @@ export interface PreviewOps {
 /** Keeps the store's notices, the timeline and every map channel in step with the selected build and frame. */
 export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<PreviewOps, 'writeUrl' | 'applyHistory'> {
   const { writer, view } = ctx.store, { live, state } = ctx;
+  // The raster selection on screen: the latest reveal (which can precede the overlay state commit) or the committed display.
+  let onScreen: { build: PinnedBuild; frame: string } | null = null;
   return {
     /** Forwards theme, opacity, visibility and units to every map channel. */
     syncChannels() {
       for (const channel of live.channels) channel.update(ctx.intent());
       live.wind?.syncHostVisibility();
+      if (!state.selectingOverlay) ops.syncSky();
+    },
+
+    /**
+     * Sky (clouds, isobars, rain) shows the hour of the visible lift raster, which the timeline reports, and
+     * warms the selected hour meanwhile. Call it with the raster selection about to appear, or with `null`
+     * when the committed display changed. With lift hidden or nothing on screen, sky follows the selection.
+     */
+    syncSky(revealing) {
+      if (revealing !== undefined) onScreen = revealing ?? view.overlay.value.displayed;
+      // A raster cleared with nothing requested (page hide, forecast cleared) must not restart sky.
+      if (revealing === null && !view.overlay.value.requested) return;
+      const current = ctx.build(), frame = ctx.selectedFrame(), intent = ctx.intent();
+      if (!live.sky || !current || !frame) return;
+      const shown = intent.liftVisible && !intent.peeking ? onScreen : null;
+      if (!shown) { live.sky.select(current, frame); return; }
+      live.sky.select(shown.build, shown.frame);
+      if (shown.build !== current || shown.frame !== frame) live.sky.prepare(current, frame);
     },
 
     clearForecast() {
@@ -111,8 +132,9 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       ops.updateWind();
       writer.notices({ error: '' }); state.selectingOverlay = true;
       try {
+        // Before select: the raster may reveal the new hour synchronously and advance sky through beforeReveal.
+        ops.syncSky();
         live.overlay!.select(current, selected, frame);
-        live.sky?.select(current, frame);
         ops.syncChannels();
         ops.refreshSeam();
       } catch (error) { ops.showError(`Overlay display failed: ${error instanceof Error ? error.message : String(error)}`); }

@@ -14,7 +14,7 @@ import { createPreviewContext } from './context';
 import { createDisplayOps, installDerivedViews, type PreviewOps } from './display-ops';
 import { createForecastWiring } from './forecast-wiring';
 import { installMapWiring } from './map-wiring';
-import { overlayUiChanged } from './overlay-status';
+import { overlayUiChanged, sameSelection } from './overlay-status';
 import { createPageLifecycle } from './page-lifecycle';
 import { createPointWiring } from './point-wiring';
 import type { PreviewCommands } from './preview-commands';
@@ -74,14 +74,16 @@ export function createPreviewApp(): PreviewApp {
     });
     const overlay = live.overlay = new RasterOverlay(map, apiBaseUrl, ctx.intent().opacity, next => {
       if (!overlayUiChanged(view.overlay.value, next)) return;
+      const displayedChanged = !sameSelection(view.overlay.value.displayed, next.displayed);
       writer.overlay(next);
+      if (displayedChanged) ops.syncSky(null);
       wind.session.reconcile();
       ops.updatePreparation();
       if (!state.selectingOverlay) live.point?.feature.syncSelection();
     }, forecastScheduler.fetch, spec => forecastScheduler.request(spec), {
       budget: preparationBudget, requestLimits: services.requestLimits, theme: ctx.intent().theme,
       protectedBytes: wind.protectedBytes,
-      beforeReveal: selection => wind.session.beforeRasterReveal(selection),
+      beforeReveal: selection => { wind.session.beforeRasterReveal(selection); ops.syncSky(selection); },
       onSelectedPending: pending => { state.rasterPending = pending; ops.syncSelectedAdmission(); }
     });
     const cur = ctx.intent();
