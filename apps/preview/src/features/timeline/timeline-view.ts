@@ -21,6 +21,8 @@ interface TimelineView {
   painted(): boolean;
   /** Available day buttons' horizontal spans, or null while they wrap onto more than one row. */
   dayTargets(): DayTarget[] | null;
+  /** Visible note that the map still shows another hour; empty clears it. */
+  setShowing(text: string): void;
   focusDay(day: string): void;
   setVariant(next: DockViewId): boolean;
   setReadiness(ready: number, total: number, loading: boolean): void;
@@ -138,7 +140,8 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
 
   let dayButtons: HTMLButtonElement[] = [];
   let highlightedDays = new Set<string>(), highlightedKey = '';
-  let paintedWidth = -1, decorationKey = '', destroyed = false;
+  let paintedWidth = -1, decorationKey = '', destroyed = false, showing = '';
+  let lastNote: { local: { hour: number; minute: number } | null; comparisonMinute: number | null } = { local: null, comparisonMinute: null };
 
   function trackWidth(): number {
     const width = track.getBoundingClientRect().width;
@@ -234,11 +237,14 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     loupe.removeAttribute('hidden');
   }
 
+  /** The readout note: what the map still shows while loading, else the comparison time a day pick snapped from. */
   function paintNote(local: { hour: number; minute: number } | null, comparisonMinute: number | null): void {
-    const off = comparisonMinute === null || !local || local.hour * 60 + local.minute === comparisonMinute;
-    if (off) { note.setAttribute('hidden', ''); note.textContent = ''; return; }
-    note.textContent = `Nearest to ${clockLabel(comparisonMinute)}`;
-    note.removeAttribute('hidden');
+    lastNote = { local, comparisonMinute };
+    const snapped = comparisonMinute !== null && !!local && local.hour * 60 + local.minute !== comparisonMinute;
+    const text = showing || (snapped ? `Nearest to ${clockLabel(comparisonMinute)}` : '');
+    note.textContent = text;
+    note.classList.toggle('is-showing', Boolean(showing));
+    if (text) note.removeAttribute('hidden'); else note.setAttribute('hidden', '');
   }
 
   function paintTime({ scale, width, scrubMinute, comparisonMinute }: ViewPaint): void {
@@ -344,6 +350,11 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       });
       if (!spans.length || spans.some(span => span.top !== spans[0]!.top)) return null;
       return spans.map(({ left, right, group }) => ({ left, right, group }));
+    },
+    setShowing(text) {
+      if (text === showing) return;
+      showing = text;
+      paintNote(lastNote.local, lastNote.comparisonMinute);
     },
     focusDay(day) {
       dayButtons.find(button => button.dataset.day === day)?.focus({ preventScroll: true });

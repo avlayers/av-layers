@@ -23,6 +23,8 @@ export interface CompactTimeline {
   setVariant?(variant: DockViewId): void;
   setReadiness?(ready: number, total: number, loading?: boolean): void;
   setHighlightedDays?(days: readonly string[] | null): void;
+  /** Visible note while the map still shows another hour (see `shownTimeNote`); empty clears it. */
+  setShowing?(text: string): void;
   destroy(): void;
 }
 
@@ -313,6 +315,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     },
     setHighlightedDays(nextDays) {
       if (!destroyed) view.setHighlightedDays(nextDays);
+    },
+    setShowing(text) {
+      if (!destroyed) view.setShowing(text);
     },
     setMapCenter(nextLatitude: number, nextLongitude: number) {
       if (destroyed || !win.setCenter(nextLatitude, nextLongitude)) return;

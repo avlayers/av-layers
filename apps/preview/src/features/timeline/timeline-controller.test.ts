@@ -1250,3 +1250,16 @@ it('resets the comparison hour when the rail or an outside selection moves the t
   expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
   timeline.destroy();
 });
+
+it('puts the on-screen hour ahead of the comparison note while it loads', () => {
+  const { host, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, buttons } = dayRow(host);
+  click(buttons[1]!);
+  timeline.update(comparison, 'd2-15');
+  timeline.setShowing?.('Showing Fri 14:00 · loading');
+  expect(byClass(root, 'ct-note').textContent).toBe('Showing Fri 14:00 · loading');
+  timeline.setShowing?.('');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  timeline.destroy();
+});
