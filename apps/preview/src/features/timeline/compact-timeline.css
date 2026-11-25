@@ -37,6 +37,8 @@
   grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
   gap: 4px;
   min-width: 0;
+  /* Horizontal drags pick days; the browser must not pan or scroll under them. */
+  touch-action: none;
 }
 
 .compact-timeline .ct-day {
@@ -98,35 +100,6 @@
   background: #e7edf2;
   cursor: pointer;
   touch-action: none;
-  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
-}
-.compact-timeline[data-bounce="next-a"] .ct-track { animation: ct-bounce-next-a 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
-.compact-timeline[data-bounce="next-b"] .ct-track { animation: ct-bounce-next-b 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
-.compact-timeline[data-bounce="prev-a"] .ct-track { animation: ct-bounce-prev-a 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
-.compact-timeline[data-bounce="prev-b"] .ct-track { animation: ct-bounce-prev-b 0.22s cubic-bezier(0.22, 1, 0.36, 1); }
-.compact-timeline.is-track-pulled .ct-track {
-  transition: none;
-  animation: none;
-}
-@keyframes ct-bounce-next-a {
-  0% { transform: translateX(7px); }
-  55% { transform: translateX(-2px); }
-  100% { transform: translateX(0); }
-}
-@keyframes ct-bounce-next-b {
-  0% { transform: translateX(7px); }
-  55% { transform: translateX(-2px); }
-  100% { transform: translateX(0); }
-}
-@keyframes ct-bounce-prev-a {
-  0% { transform: translateX(-7px); }
-  55% { transform: translateX(2px); }
-  100% { transform: translateX(0); }
-}
-@keyframes ct-bounce-prev-b {
-  0% { transform: translateX(-7px); }
-  55% { transform: translateX(2px); }
-  100% { transform: translateX(0); }
 }
 .ct-track[aria-disabled="true"] { cursor: default; }
 .ct-ribbon, .ct-hatches, .ct-marks, .ct-moons, .ct-ticks, .ct-snap-ghost, .ct-playhead, .ct-progress, .ct-loupe { position: absolute; pointer-events: none; }
@@ -238,9 +211,6 @@
   box-shadow: 0 4px 14px rgba(11, 27, 40, 0.35);
 }
 .ct-loupe[hidden] { display: none; }
-.compact-timeline.is-edge-armed .ct-loupe {
-  box-shadow: 0 0 0 1.5px #38bdf8, 0 4px 14px rgba(11, 27, 40, 0.4);
-}
 .ct-loupe::after {
   content: '';
   position: absolute;
@@ -311,9 +281,6 @@
   background: #f8fafcf2;
   color: #0f172a;
 }
-#app[data-chrome="dark"] .compact-timeline.is-edge-armed .ct-loupe {
-  box-shadow: 0 0 0 1.5px #f59e0b, 0 4px 14px rgba(11, 27, 40, 0.45);
-}
 #app[data-chrome="dark"] .ct-loupe::after {
   border-top-color: #f8fafcf2;
 }
@@ -322,7 +289,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ct-track,
   .ct-playhead {
     transition: none;
     animation: none !important;

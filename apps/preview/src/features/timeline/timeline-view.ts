@@ -3,6 +3,7 @@ import { dockViewOption, type DockViewId } from '../controls/bottom-dock-model';
 import { coarseSpanFractions, DAY_MINUTES, dayHatchFractions, localTimeFromMs, minuteToX, type DayGroup, type DayScale } from './day-scale';
 import { monotonicStops, ribbonGradient } from './solar-day';
 import type { FrameWindow } from './timeline-frame-window';
+import type { DayTarget } from './timeline-gesture';
 import './compact-timeline.css';
 
 /**
@@ -12,14 +13,15 @@ import './compact-timeline.css';
 interface TimelineView {
   readonly root: HTMLElement;
   readonly track: HTMLElement;
+  readonly daysRow: HTMLElement;
   render(paint: ViewPaint): void;
   rebuildDays(): void;
   trackWidth(): number;
   /** True once `render` has run. */
   painted(): boolean;
-  setPull(px: number, armed: boolean): void;
-  isPulled(): boolean;
-  setBounce(direction: -1 | 1, parity: boolean): void;
+  /** Available day buttons' horizontal spans, or null while they wrap onto more than one row. */
+  dayTargets(): DayTarget[] | null;
+  focusDay(day: string): void;
   setVariant(next: DockViewId): boolean;
   setReadiness(ready: number, total: number, loading: boolean): void;
   setHighlightedDays(days: readonly string[] | null): void;
@@ -31,12 +33,14 @@ interface ViewPaint {
   width: number;
   /** Unsnapped playhead minute while a pointer scrubs; null otherwise. */
   scrubMinute: number | null;
-  edgePull: -1 | 0 | 1;
+  /** Clock time day picks aim for; the readout notes it when the selected frame differs. */
+  comparisonMinute: number | null;
 }
 
 interface DayHandlers {
   prepareDay(group: DayGroup): void;
   pickDay(group: DayGroup): void;
+  dayKey(event: KeyboardEvent, group: DayGroup): void;
   /** Track or day row changed width since the last paint. */
   resized(): void;
 }
@@ -57,6 +61,10 @@ function dayButtonLabel(day: string): string {
 /** `Thu 26 Nov` for a local day key, read as a calendar date. */
 function readoutDate(day: string): string {
   return new Date(`${day}T00:00:00Z`).toLocaleDateString('en-GB', LONG_DAY).replace(',', '');
+}
+
+function clockLabel(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
 
 function percent(value: number): string {
@@ -219,26 +227,28 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     loupe.setAttribute('hidden', '');
   }
 
-  function paintLoupe(headFraction: number, width: number, baseText: string, edgePull: -1 | 0 | 1): void {
+  function paintLoupe(headFraction: number, width: number, text: string): void {
     const minFrac = width > LOUPE_HALF_PX * 2 ? LOUPE_HALF_PX / width : 0.5;
-    const clampedLoupe = Math.min(1 - minFrac, Math.max(minFrac, headFraction));
-    const neighbor = edgePull !== 0 ? win.adjacentGroup(edgePull) : undefined;
-    loupeText.textContent = neighbor
-      ? edgePull > 0
-        ? `${baseText} → ${dayButtonLabel(neighbor.day)}`
-        : `${dayButtonLabel(neighbor.day)} ← ${baseText}`
-      : baseText;
-    loupe.style.left = percent(clampedLoupe);
+    loupeText.textContent = text;
+    loupe.style.left = percent(Math.min(1 - minFrac, Math.max(minFrac, headFraction)));
     loupe.removeAttribute('hidden');
   }
 
-  function paintTime({ scale, width, scrubMinute, edgePull }: ViewPaint): void {
+  function paintNote(local: { hour: number; minute: number } | null, comparisonMinute: number | null): void {
+    const off = comparisonMinute === null || !local || local.hour * 60 + local.minute === comparisonMinute;
+    if (off) { note.setAttribute('hidden', ''); note.textContent = ''; return; }
+    note.textContent = `Nearest to ${clockLabel(comparisonMinute)}`;
+    note.removeAttribute('hidden');
+  }
+
+  function paintTime({ scale, width, scrubMinute, comparisonMinute }: ViewPaint): void {
     const frame = win.selectedIndex >= 0 ? win.frames[win.selectedIndex] : undefined;
     const ms = frame ? Date.parse(frame.validTime) : Number.NaN;
     if (!frame || !Number.isFinite(ms)) {
       localLabel.textContent = '--:--'; utcLabel.textContent = ''; dateLabel.textContent = '';
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
+      paintNote(null, null);
       hideMarkers();
       return;
     }
@@ -251,6 +261,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     utcLabel.textContent = split < 0 ? '' : clock.slice(split);
     timeLabel.setAttribute('dateTime', frame.validTime);
     track.setAttribute('aria-valuetext', formatZoneTime(ms, win.timeZone, 'stamp'));
+    paintNote(local, comparisonMinute);
     if (!local) { hideMarkers(); return; }
     const frameFraction = placeMinute(scale, local.hour * 60 + local.minute);
     const headFraction = scrubMinute !== null ? placeMinute(scale, scrubMinute) : frameFraction;
@@ -262,7 +273,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     } else {
       snapGhost.setAttribute('hidden', '');
     }
-    if (scrubMinute !== null && dockViewOption(variant).showLoupe) paintLoupe(headFraction, width, `${dayButtonLabel(local.day)} · ${localClock}`, edgePull);
+    if (scrubMinute !== null && dockViewOption(variant).showLoupe) paintLoupe(headFraction, width, `${dayButtonLabel(local.day)} · ${localClock}`);
     else loupe.setAttribute('hidden', '');
   }
 
@@ -308,6 +319,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       button.addEventListener('focus', prepareDay);
       button.addEventListener('pointerdown', prepareDay);
       button.addEventListener('click', () => { if (usable()) handlers.pickDay(group); });
+      button.addEventListener('keydown', event => { if (usable()) handlers.dayKey(event as KeyboardEvent, group); });
       return button;
     });
     daysRow.replaceChildren(...dayButtons);
@@ -323,17 +335,18 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   resizeObserver?.observe(track);
 
   return {
-    root, track, render, rebuildDays, trackWidth,
+    root, track, daysRow, render, rebuildDays, trackWidth,
     painted: () => paintedWidth >= 0,
-    setPull(px, armed) {
-      const transform = px ? `translateX(${px}px)` : '';
-      track.style.transform = transform;
-      root.classList.toggle('is-track-pulled', Boolean(transform));
-      root.classList.toggle('is-edge-armed', armed);
+    dayTargets() {
+      const spans = dayButtons.flatMap((button, index) => {
+        const group = win.days[index], rect = button.getBoundingClientRect();
+        return group?.indices.length && !button.disabled && rect.width > 0 ? [{ left: rect.left, right: rect.left + rect.width, top: rect.top ?? 0, group }] : [];
+      });
+      if (!spans.length || spans.some(span => span.top !== spans[0]!.top)) return null;
+      return spans.map(({ left, right, group }) => ({ left, right, group }));
     },
-    isPulled: () => Boolean(track.style.transform),
-    setBounce(direction, parity) {
-      root.dataset.bounce = direction > 0 ? (parity ? 'next-a' : 'next-b') : (parity ? 'prev-a' : 'prev-b');
+    focusDay(day) {
+      dayButtons.find(button => button.dataset.day === day)?.focus({ preventScroll: true });
     },
     setVariant(next) {
       if (next === variant) return false;

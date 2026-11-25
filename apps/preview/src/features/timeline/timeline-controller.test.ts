@@ -271,14 +271,15 @@ it('selects a day at the current hour, snaps the track, and steps across midnigh
   pointer(track, 'pointerup', 90);
   expect(onSelect).toHaveBeenLastCalledWith(1, 'push');
 
+  // Rail keys stay inside the selected day (Fri 13: frames 0 and 1).
   const right = key(track, 'ArrowRight');
   expect(right.defaultPrevented).toBe(true);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(doc.activeElement).toBe(track);
+  expect(onSelect).toHaveBeenCalledTimes(3);
   key(track, 'Home');
   expect(onSelect).toHaveBeenLastCalledWith(0, 'replace');
+  expect(doc.activeElement).toBe(track);
   key(track, 'End');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
   timeline.destroy();
 });
 
@@ -765,7 +766,8 @@ it('does not seek a pointercancel coordinate and permits reentrant RAF schedulin
   expect(callbacks.size).toBe(1);
   flush();
   pointer(track, 'pointercancel', 180);
-  expect(onSelect.mock.calls).toEqual([[1, 'none'], [2, 'none'], [2, 'push']]);
+  // A cancelled gesture keeps its last frame and replaces the history entry.
+  expect(onSelect.mock.calls).toEqual([[1, 'none'], [2, 'none'], [2, 'replace']]);
   timeline.destroy();
 });
 
@@ -1093,90 +1095,6 @@ it('shows overview readiness on the track', () => {
   timeline.destroy();
 });
 
-it('previews elastic edge pull, bounces across gap days at 20px overscroll, and guards outer-edge release', () => {
-  const onPrepare = vi.fn();
-  doc = new Document();
-  const host = doc.createElement('div');
-  const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
-  const root = host.children[0]!;
-  const track = byClass(root, 'ct-track');
-  const playhead = byClass(root, 'ct-playhead');
-  const loupe = byClass(root, 'ct-loupe');
-  track.offsetLeft = 0;
-  track.offsetWidth = 240;
-
-  // Fri 13 (12:00, 18:00), Sat 14 unavailable gap, Sun 15 (09:00, 15:00), Mon 16 (06:00).
-  const multiDay: TimelineFrame[] = [
-    { id: 'f12', validTime: '2026-11-13T12:00:00Z' },
-    { id: 'f18', validTime: '2026-11-13T18:00:00Z' },
-    { id: 's09', validTime: '2026-11-15T09:00:00Z' },
-    { id: 's15', validTime: '2026-11-15T15:00:00Z' },
-    { id: 'm06', validTime: '2026-11-16T06:00:00Z' }
-  ];
-  timeline.update(multiDay, 'f18');
-
-  // Scrub inside right edge (x = 240): stays on Fri 13 without pulling or bouncing.
-  pointer(track, 'pointerdown', 180);
-  pointer(track, 'pointermove', 240);
-  expect(root.classList.contains('is-edge-armed')).toBe(false);
-  expect(track.style.transform ?? '').toBe('');
-  expect(loupe.textContent).toBe('Fri 13 · 18:00');
-  expect(onPrepare).not.toHaveBeenCalled();
-
-  // Pull 10px past right edge (x = 250): rubber-bands track, pre-warms Sun 15 first frame, previews arrow in loupe.
-  pointer(track, 'pointermove', 250);
-  expect(root.classList.contains('is-track-pulled')).toBe(true);
-  expect(root.classList.contains('is-edge-armed')).toBe(true);
-  expect(track.style.transform).toMatch(/^translateX\(/);
-  expect(loupe.textContent).toBe('Fri 13 · 18:00 → Sun 15');
-  expect(onPrepare).toHaveBeenCalledExactlyOnceWith(2);
-
-  // Pull 22px past right edge (x = 262): bounces across unavailable Sat 14 to Sun 15 09:00 (index 2).
-  pointer(track, 'pointermove', 262);
-  expect(root.dataset.bounce).toBe('next-a');
-  expect(root.classList.contains('is-track-pulled')).toBe(false);
-  expect(root.classList.contains('is-edge-armed')).toBe(false);
-  expect(track.style.transform).toBe('');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
-  expect(playhead.style.left).toBe('37.5%');
-  expect(loupe.textContent).toBe('Sun 15 · 09:00');
-
-  // Slight outer wiggle at x = 270 does not runaway-bounce or snap to end of Sun 15.
-  pointer(track, 'pointermove', 270);
-  expect(onSelect).toHaveBeenCalledTimes(1);
-  expect(playhead.style.left).toBe('37.5%');
-
-  // Pulling another 32px outward (x = 296 >= 262 + 32) steps one more day to Mon 16 06:00 (index 4).
-  pointer(track, 'pointermove', 296);
-  expect(root.dataset.bounce).toBe('next-b');
-  expect(onSelect).toHaveBeenLastCalledWith(4, 'none');
-  expect(playhead.style.left).toBe('25%');
-
-  // Releasing while still outside the right edge commits Mon 16 06:00 cleanly without re-seeking x = 298.
-  pointer(track, 'pointerup', 298);
-  expect(onSelect).toHaveBeenLastCalledWith(4, 'push');
-  expect(playhead.style.left).toBe('25%');
-
-  // Left-edge pull & bounce backward from Sun 15 to Fri 13 latest frame (18:00, index 1), then re-enter to scrub Fri 13.
-  timeline.update(multiDay, 's09');
-  pointer(track, 'pointerdown', 60);
-  pointer(track, 'pointermove', -10);
-  expect(loupe.textContent).toBe('Fri 13 ← Sun 15 · 09:00');
-  pointer(track, 'pointermove', -22);
-  expect(root.dataset.bounce).toBe('prev-a');
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'none');
-  expect(playhead.style.left).toBe('75%');
-
-  // Slide back inside track (x = 120 >= 10px inside left edge) to continue scrubbing Fri 13 smoothly in one gesture!
-  pointer(track, 'pointermove', 120);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
-  expect(playhead.style.left).toBe('50%');
-  pointer(track, 'pointerup', 120);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'push');
-  timeline.destroy();
-});
-
 it('highlights multi-day window pills cleanly and clears them when closed', () => {
   const { host, timeline } = setup();
   const root = host.children[0]!;
@@ -1212,7 +1130,7 @@ const comparison: TimelineFrame[] = [
   { id: 'd3-15', validTime: '2026-11-15T15:00:00Z' }
 ];
 
-it.fails('keeps the comparison hour across a sparse day', () => {
+it('keeps the comparison hour across a sparse day', () => {
   const { host, onSelect, timeline } = setup('UTC');
   timeline.update(comparison, 'd1-14');
   const days = named(host.children[0]!, 'ct-day');
@@ -1224,7 +1142,7 @@ it.fails('keeps the comparison hour across a sparse day', () => {
   timeline.destroy();
 });
 
-it.fails('keeps the second repeated DST hour when its own day is picked again', () => {
+it('keeps the second repeated DST hour when its own day is picked again', () => {
   const fallBack: TimelineFrame[] = [
     { id: 'first-01', validTime: '2026-11-01T05:00:00Z' },
     { id: 'second-01', validTime: '2026-11-01T06:00:00Z' }
@@ -1236,7 +1154,7 @@ it.fails('keeps the second repeated DST hour when its own day is picked again', 
   timeline.destroy();
 });
 
-it.fails('moves a focused day to the next day at the same hour, not the next frame', () => {
+it('moves a focused day to the next day at the same hour, not the next frame', () => {
   const { host, onSelect, timeline } = setup('UTC');
   timeline.update(comparison, 'd1-14');
   const days = named(host.children[0]!, 'ct-day');
@@ -1246,7 +1164,7 @@ it.fails('moves a focused day to the next day at the same hour, not the next fra
   timeline.destroy();
 });
 
-it.fails('keeps an hour drag inside the selected day', () => {
+it('keeps an hour drag inside the selected day', () => {
   const { host, onSelect, timeline } = setup('UTC');
   timeline.update(comparison, 'd2-15');
   const track = byClass(host.children[0]!, 'ct-track');
@@ -1255,5 +1173,80 @@ it.fails('keeps an hour drag inside the selected day', () => {
   for (const x of [230, 250, 270, 300, 340]) pointer(track, 'pointermove', x);
   pointer(track, 'pointerup', 340);
   expect(onSelect.mock.calls.every(([index]) => index === 1 || index === 2)).toBe(true);
+  timeline.destroy();
+});
+
+function dayRow(host: Element) {
+  const root = host.children[0]!;
+  const row = byClass(root, 'ct-days');
+  const buttons = named(root, 'ct-day');
+  buttons.forEach((button, index) => { button.offsetLeft = index * 60; button.offsetWidth = 56; });
+  return { root, row, buttons };
+}
+
+it('drags across days at the comparison hour, then commits once and swallows the click', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  pointer(row, 'pointermove', 24);
+  expect(onSelect).not.toHaveBeenCalled();
+  pointer(row, 'pointermove', 80);
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  pointer(row, 'pointermove', 140);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'none');
+  pointer(row, 'pointermove', 900);
+  pointer(row, 'pointerup', 900);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  expect(onSelect.mock.calls.filter(([, history]) => history !== 'none')).toHaveLength(1);
+  click(buttons[2]!);
+  expect(onSelect).toHaveBeenCalledTimes(3);
+  expect(byClass(root, 'ct-note').getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('returns to the starting frame when a day drag comes back, with no new history entry', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd2-03');
+  const { row } = dayRow(host);
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'none');
+  pointer(row, 'pointermove', 80);
+  pointer(row, 'pointerup', 80);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+  timeline.destroy();
+});
+
+it('leaves a day press under 6px to the click and drops a day drag on a zone change', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 70);
+  pointer(row, 'pointermove', 74);
+  pointer(row, 'pointerup', 74);
+  click(buttons[1]!);
+  expect(onSelect.mock.calls).toEqual([[2, 'push']]);
+  timeline.update(comparison, 'd2-15');
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
+  timeline.setTimeZone('Asia/Tokyo');
+  pointer(row, 'pointerup', 140);
+  expect(onSelect.mock.calls.at(-1)).toEqual([3, 'none']);
+  timeline.destroy();
+});
+
+it('resets the comparison hour when the rail or an outside selection moves the time', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, buttons } = dayRow(host);
+  click(buttons[1]!);
+  timeline.update(comparison, 'd2-15');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  timeline.update(comparison, 'd2-03');
+  expect(byClass(root, 'ct-note').getAttribute('hidden')).toBe('');
+  click(buttons[2]!);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
   timeline.destroy();
 });

@@ -1,7 +1,7 @@
 import { DEFAULT_DOCK_VIEW, type DockViewId } from '../controls/bottom-dock-model';
-import { DAY_MINUTES, localTimeFromMs, nearestFrameIndexForDay, scaleAtWidth, xToMinute, type DayGroup, type DayScale } from './day-scale';
+import { DAY_MINUTES, nearestFrameIndexForDay, scaleAtWidth, xToMinute, type DayGroup, type DayScale } from './day-scale';
 import { createFrameWindow } from './timeline-frame-window';
-import { clearGesture, createGesture, edgeStep, pointerTravelled, releaseSeeks } from './timeline-gesture';
+import { clearGesture, createGesture, dayAtX, pointerTravelled, releaseSeeks } from './timeline-gesture';
 import type { TimelineFrame } from './timeline-model';
 import { createTimelineView } from './timeline-view';
 
@@ -26,13 +26,22 @@ export interface CompactTimeline {
   destroy(): void;
 }
 
+const DAY_KEYS = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+const RAIL_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+
 /**
- * Compose the timeline: the frame window holds frames and selection, the gesture holds pointer
- * state, and the view paints. This module routes input between them.
+ * Compose the timeline: the frame window holds frames and selection, the gesture holds pointer state, and
+ * the view paints. This module routes input between them.
+ *
+ * Day picks (tap, drag, keys) keep a comparison clock time, so moving through a sparse day that only has
+ * 15:00 returns to 14:00 on the next day that has it. Rail input, a zone change and an outside selection
+ * reset it to the selected frame's own clock.
  */
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
-  let destroyed = false, sceneRequest: number | null = null;
+  let destroyed = false, sceneRequest: number | null = null, suppressClick = false;
+  /** Local minute of day that day picks aim for; null follows the selected frame. */
+  let comparisonMinute: number | null = null;
   const win = createFrameWindow(options);
   const gesture = createGesture();
   const view = createTimelineView(host, win, options.variant ?? DEFAULT_DOCK_VIEW, {
@@ -42,15 +51,45 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (idx >= 0) options.onPrepare(idx);
     },
     pickDay(group) {
-      select(targetForDay(group), 'push', false);
+      if (suppressClick) { suppressClick = false; return; }
+      pickDay(group, false);
     },
+    dayKey(event, group) { dayKey(event, group); },
     resized: () => render()
   });
-  const { track } = view;
+  const { track, daysRow } = view;
+
+  function targetMinute(): number | null {
+    return comparisonMinute ?? win.selectedMinute();
+  }
 
   function targetForDay(group: DayGroup): number {
-    const minute = win.selectedMinute();
+    // The selected day keeps its exact frame, including the second of two repeated DST hours.
+    if (group.indices.includes(win.selectedIndex)) return win.selectedIndex;
+    const minute = targetMinute();
     return nearestFrameIndexForDay(win.frames, group.indices, win.timeZone, minute === null ? 12 : Math.floor(minute / 60), minute === null ? 0 : minute % 60);
+  }
+
+  /** Selects `group` at the comparison time, remembering that time first. */
+  function pickDay(group: DayGroup, moveFocus: boolean): void {
+    if (win.off() || !group.indices.length) return;
+    comparisonMinute = targetMinute();
+    const index = targetForDay(group);
+    if (gesture.pointer === null && index === win.selectedIndex && index === win.sceneIndex) { if (moveFocus) view.focusDay(group.day); render(); return; }
+    select(index, 'push', false);
+    if (moveFocus && !destroyed) view.focusDay(group.day);
+  }
+
+  /** Day keys move between available days at the comparison time. */
+  function dayKey(event: KeyboardEvent, focused: DayGroup): void {
+    if (!DAY_KEYS.includes(event.key)) return;
+    event.preventDefault();
+    const available = win.days.filter(group => group.indices.length);
+    const at = Math.max(0, available.findIndex(group => group.day === focused.day));
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1
+      : Math.min(available.length - 1, Math.max(0, at + (event.key === 'ArrowRight' ? 1 : -1)));
+    const group = available[next];
+    if (group) pickDay(group, true);
   }
 
   function currentScale(width: number): DayScale {
@@ -61,12 +100,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function render(width = view.trackWidth()): void {
     const scale = currentScale(width);
-    view.render({ scale, width, scrubMinute: gesture.pointer !== null ? gesture.scrubMinute : null, edgePull: gesture.edgePull });
-  }
-
-  function setTrackPull(px: number, armed: -1 | 0 | 1): void {
-    view.setPull(px, armed !== 0);
-    gesture.edgePull = armed;
+    view.render({ scale, width, scrubMinute: gesture.pointer !== null && gesture.kind === 'rail' ? gesture.scrubMinute : null, comparisonMinute });
   }
 
   function syncDays(): void {
@@ -81,7 +115,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   function invalidateGesture(): void {
     clearGesture(gesture);
     cancelSceneRequest();
-    setTrackPull(0, 0);
   }
 
   function deliverScene(index: number, history: 'push' | 'replace' | 'none'): void {
@@ -112,119 +145,129 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (moveFocus && !destroyed) track.focus({ preventScroll: true });
   }
 
-  /** Show a scrub-selected index; queue its scene unless the gesture ended meanwhile. */
-  function scrubTo(index: number, width: number, queue: boolean, refreezeScale = false): void {
+  /** Show a gesture-selected index; queue its scene unless the gesture ended meanwhile. */
+  function scrubTo(index: number, width: number | undefined, queue: boolean): void {
     const version = gesture.version;
     win.selectedIndex = index;
     gesture.changed = true;
-    if (refreezeScale) gesture.scale = win.liveScale(width);
     render(width);
     options.onIntent?.(index);
     if (destroyed || win.off() || gesture.pointer === null || version !== gesture.version) return;
     if (queue) queueScene();
   }
 
-  function bounceToDay(neighbor: DayGroup, direction: -1 | 1, overPx: number, width: number, queue: boolean): void {
-    const targetIndex = direction > 0 ? neighbor.indices[0]! : neighbor.indices.at(-1)!;
-    if (targetIndex < 0 || targetIndex >= win.frames.length) return;
-    const targetFrame = win.frames[targetIndex];
-    const targetLocal = targetFrame ? localTimeFromMs(Date.parse(targetFrame.validTime), win.timeZone) : null;
-    gesture.scrubMinute = targetLocal ? targetLocal.hour * 60 + targetLocal.minute : (direction > 0 ? 0 : DAY_MINUTES);
-    gesture.preparedBounceIndex = -1;
-    setTrackPull(0, 0);
-    gesture.bounceParity = !gesture.bounceParity;
-    view.setBounce(direction, gesture.bounceParity);
-    gesture.lock = { direction, anchorOverPx: overPx };
-    scrubTo(targetIndex, width, queue, true);
-  }
-
+  /** Rail scrub: the nearest frame to the pointer inside the selected day. */
   function seek(clientX: number, queue = true): void {
     const group = win.selectedGroup();
     if (!group || win.off()) return;
     const rect = track.getBoundingClientRect();
     if (rect.width <= 0) return;
-    const step = edgeStep({ clientX, left: rect.left, width: rect.width, moved: gesture.moved, lock: gesture.lock, hasNeighbor: direction => win.adjacentGroup(direction) !== undefined });
-    if (step.kind === 'hold') { gesture.lock = step.lock; return; }
-    if (step.kind === 'bounce') { bounceToDay(win.adjacentGroup(step.direction)!, step.direction, step.overPx, rect.width, queue); return; }
-    gesture.lock = null;
-    const prevPull = gesture.edgePull;
-    if (step.kind === 'pull') {
-      setTrackPull(step.px, step.armed ? step.direction : 0);
-      const neighbor = step.armed ? win.adjacentGroup(step.direction) : undefined;
-      const previewIdx = neighbor ? (step.direction > 0 ? neighbor.indices[0]! : neighbor.indices.at(-1)!) : -1;
-      if (previewIdx >= 0 && previewIdx !== gesture.preparedBounceIndex) {
-        gesture.preparedBounceIndex = previewIdx;
-        options.onPrepare?.(previewIdx);
-      }
-    } else if (gesture.edgePull !== 0 || view.isPulled()) {
-      setTrackPull(0, 0);
-    }
     const rawMinute = Math.min(DAY_MINUTES, Math.max(0, xToMinute(currentScale(rect.width), Math.min(rect.width, Math.max(0, clientX - rect.left)))));
     const rounded = Math.min(DAY_MINUTES, Math.max(0, Math.round(rawMinute)));
     const index = nearestFrameIndexForDay(win.frames, group.indices, win.timeZone, Math.floor(rounded / 60), rounded % 60);
     const scrubMoved = gesture.scrubMinute === null || Math.abs(rawMinute - gesture.scrubMinute) >= 0.05;
     gesture.scrubMinute = rawMinute;
+    comparisonMinute = null;
     if (index >= 0 && index !== win.selectedIndex) scrubTo(index, rect.width, queue);
-    else if (scrubMoved || gesture.edgePull !== prevPull) render(rect.width);
+    else if (scrubMoved) render(rect.width);
   }
 
+  /** Day drag: the day under the pointer's x, at the comparison time. */
+  function seekDay(clientX: number, queue = true): void {
+    const group = gesture.days ? dayAtX(gesture.days, clientX) : undefined;
+    if (!group || win.off()) return;
+    const index = group.indices.includes(gesture.startIndex) ? gesture.startIndex : targetForDay(group);
+    if (index >= 0 && index !== win.selectedIndex) scrubTo(index, undefined, queue);
+  }
 
-  track.addEventListener('pointerdown', event => {
-    const pointer = event as PointerEvent;
-    if (destroyed || gesture.pointer !== null || (pointer.button !== undefined && pointer.button !== 0) || win.off()) return;
+  function beginGesture(pointer: PointerEvent, kind: 'rail' | 'days', target: HTMLElement): number | null {
+    if (destroyed || gesture.pointer !== null || (pointer.button !== undefined && pointer.button !== 0) || win.off()) return null;
+    gesture.kind = kind;
     gesture.scale = null;
+    gesture.days = null;
     gesture.moved = false;
     gesture.originX = pointer.clientX;
+    gesture.originY = pointer.clientY ?? 0;
     gesture.lastX = pointer.clientX;
     gesture.startIndex = win.selectedIndex;
     gesture.pointer = pointer.pointerId ?? 1;
-    const version = ++gesture.version;
-    if (typeof track.setPointerCapture === 'function' && pointer.pointerId !== undefined) track.setPointerCapture(pointer.pointerId);
+    if (kind === 'rail' && typeof target.setPointerCapture === 'function' && pointer.pointerId !== undefined) target.setPointerCapture(pointer.pointerId);
+    return ++gesture.version;
+  }
+
+  track.addEventListener('pointerdown', event => {
+    const pointer = event as PointerEvent;
+    const version = beginGesture(pointer, 'rail', track);
+    if (version === null) return;
     seek(pointer.clientX);
     if (destroyed || win.off() || gesture.pointer === null || version !== gesture.version) return;
     const width = track.getBoundingClientRect().width;
     if (width > 0) gesture.scale = win.liveScale(width);
     if (!destroyed) render(width > 0 ? width : undefined);
   });
+
+  daysRow.addEventListener('pointerdown', event => {
+    const pointer = event as PointerEvent;
+    suppressClick = false;
+    if (beginGesture(pointer, 'days', daysRow) === null) return;
+    comparisonMinute = targetMinute();
+    gesture.days = view.dayTargets();
+  });
+
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
-    if (!pointerTravelled(gesture, pointer.clientX)) return;
+    if (!pointerTravelled(gesture, pointer.clientX, pointer.clientY)) return;
+    if (gesture.kind === 'days') {
+      if (!gesture.days) return;
+      if (!gesture.moved && typeof daysRow.setPointerCapture === 'function' && pointer.pointerId !== undefined) daysRow.setPointerCapture(pointer.pointerId);
+    }
     gesture.moved = true;
     gesture.lastX = pointer.clientX;
-    seek(pointer.clientX);
+    if (gesture.kind === 'rail') seek(pointer.clientX);
+    else seekDay(pointer.clientX);
   };
   const releasePointer = (event: Event) => {
     const pointer = event as PointerEvent;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
-    const version = gesture.version;
-    if (releaseSeeks(gesture, event.type, pointer.clientX)) seek(pointer.clientX, false);
+    const version = gesture.version, kind = gesture.kind, dragged = gesture.moved;
+    if (releaseSeeks(gesture, event.type, pointer.clientX)) {
+      if (kind === 'rail') seek(pointer.clientX, false);
+      else if (dragged) seekDay(pointer.clientX, false);
+    }
     if (destroyed || win.off() || gesture.pointer === null || version !== gesture.version) return;
     const start = gesture.startIndex;
     const changed = gesture.changed;
     invalidateGesture();
+    // A drag across days ends with no click; a plain tap falls through to the button's click.
+    if (kind === 'days' && dragged) suppressClick = event.type === 'pointerup';
     const completedVersion = gesture.version;
-    if (changed && win.selectedIndex >= 0) deliverScene(win.selectedIndex, win.selectedIndex !== start ? 'push' : 'replace');
+    const history = event.type === 'pointercancel' ? 'replace' : win.selectedIndex !== start ? 'push' : 'replace';
+    if (changed && win.selectedIndex >= 0) deliverScene(win.selectedIndex, history);
     if (destroyed || win.off() || completedVersion !== gesture.version) return;
     render();
   };
-  track.addEventListener('pointermove', movePointer);
-  track.addEventListener('pointerup', releasePointer);
-  track.addEventListener('pointercancel', releasePointer);
-  const stepFromKey = (event: Event) => {
+  for (const target of [track, daysRow]) {
+    target.addEventListener('pointermove', movePointer);
+    target.addEventListener('pointerup', releasePointer);
+    target.addEventListener('pointercancel', releasePointer);
+  }
+
+  /** Rail keys step through the selected day's frames. */
+  track.addEventListener('keydown', event => {
     const key = (event as KeyboardEvent).key;
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(key)) return;
+    if (!RAIL_KEYS.includes(key)) return;
     event.preventDefault();
-    if (win.off()) return;
-    const current = win.selectedIndex < 0 ? 0 : win.selectedIndex;
-    const index = key === 'Home' ? 0
-      : key === 'End' ? win.frames.length - 1
-        : key === 'ArrowLeft' || key === 'ArrowUp' ? Math.max(0, current - 1)
-          : Math.min(win.frames.length - 1, win.selectedIndex < 0 ? 0 : current + 1);
-    select(index, 'replace', true);
-  };
-  track.addEventListener('keydown', stepFromKey);
-  view.root.addEventListener('keydown', event => { if (event.target !== track) stepFromKey(event); });
+    const group = win.selectedGroup();
+    if (win.off() || !group) return;
+    const at = Math.max(0, group.indices.indexOf(win.selectedIndex));
+    const next = key === 'Home' ? 0
+      : key === 'End' ? group.indices.length - 1
+        : key === 'ArrowLeft' || key === 'ArrowDown' ? Math.max(0, at - 1)
+          : Math.min(group.indices.length - 1, win.selectedIndex < 0 ? 0 : at + 1);
+    comparisonMinute = null;
+    select(group.indices[next]!, 'replace', true);
+  });
 
   return {
     cancelGesture() {
@@ -243,6 +286,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (view.painted() && sameFrames && nextDisabled === win.disabled && nextIndex === win.sceneIndex && (active || nextIndex === win.selectedIndex)) return;
       const echo = active && sameFrames && nextDisabled === win.disabled && nextIndex === win.sceneIndex;
       if (!echo && (active || !sameFrames || nextDisabled !== win.disabled || nextIndex !== win.sceneIndex)) invalidateGesture();
+      // A selection from outside (a point time, the URL, a new run) sets its own clock time.
+      if (!echo && nextIndex !== win.sceneIndex) comparisonMinute = null;
       if (!sameFrames) win.setFrames(nextFrames);
       if (!echo) win.selectedIndex = nextIndex;
       win.sceneIndex = nextIndex;
@@ -252,6 +297,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     },
     setTimeZone(next: string) {
       if (destroyed || !win.setTimeZone(next)) return;
+      // Days regroup under the pointer: drop the gesture, keep the delivered frame, restart the clock target.
+      if (gesture.pointer !== null) { invalidateGesture(); win.selectedIndex = win.sceneIndex; }
+      comparisonMinute = null;
       gesture.scale = null;
       syncDays();
       render();
