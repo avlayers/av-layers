@@ -281,12 +281,15 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
   /** Retries network failures and 502/503/504 twice; the last failure surfaces as itself. */
   async function request(task: TileTask): Promise<RasterTileResponse & { until: number; lease: PreparationLease | null }> {
     const signal = task.controller.signal;
+    // p-retry drops a result when the signal aborts just after it resolves; release its lease then.
+    let settled: { lease: PreparationLease | null } | undefined;
     try {
-      return await pRetry(() => requestOnce(task), {
+      return await pRetry(async () => (settled = await requestOnce(task)), {
         retries: 2, minTimeout: retryDelayMs, factor: 2, randomize: true, signal,
         shouldRetry: ({ error }) => error instanceof RasterTransientError && !signal.aborted
       });
     } catch (error) {
+      settled?.lease?.release();
       throw error instanceof RasterTransientError ? error.cause : error;
     }
   }

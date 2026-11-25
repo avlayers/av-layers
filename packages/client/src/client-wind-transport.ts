@@ -85,15 +85,25 @@ export class WindTransport implements WindOwner {
     attemptSignal.throwIfAborted();
     if (this.cache.failureRemaining(url) > 0) throw new Error('Numeric resource is cooling down');
     const transient = (error: unknown) => error instanceof WindTransientError || (error instanceof TypeError && !attemptSignal.aborted);
-    try {
-      return await pRetry(() => this.readOnce(url, type, targets, pending), {
-        retries: this.options.retries ?? 2, minTimeout: this.options.retryMinTimeoutMs ?? 250, factor: 4, randomize: true, signal: attemptSignal,
-        shouldRetry: ({ error }) => error === DEMOTED_REQUEST || transient(error),
-        shouldConsumeRetry: ({ error }) => error !== DEMOTED_REQUEST
-      });
-    } catch (error) {
-      if (transient(error)) this.cache.recordFailure(url);
-      throw error;
+    // A demotion re-runs at once and never spends a retry, even after the last one; p-retry
+    // checks its retry budget before any predicate, so demotions are looped here instead.
+    const retries = this.options.retries ?? 2;
+    let spent = 0;
+    for (;;) {
+      try {
+        // p-retry gives up at once on a TypeError it does not recognise as a network failure.
+        return await pRetry(() => this.readOnce(url, type, targets, pending).catch((error: unknown) => {
+          throw error instanceof TypeError && !attemptSignal.aborted ? Object.assign(new WindTransientError(error.message), { cause: error }) : error;
+        }), {
+          retries: Math.max(0, retries - spent), minTimeout: this.options.retryMinTimeoutMs ?? 250, factor: 4, randomize: true, signal: attemptSignal,
+          shouldRetry: ({ error }) => transient(error),
+          onFailedAttempt: ({ error }) => { if (transient(error)) spent++; }
+        });
+      } catch (error) {
+        if (error === DEMOTED_REQUEST) { attemptSignal.throwIfAborted(); continue; }
+        if (transient(error)) this.cache.recordFailure(url);
+        throw error;
+      }
     }
   }
 

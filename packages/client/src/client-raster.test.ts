@@ -861,3 +861,15 @@ it('reconsiders cache eviction for a queued request after capacity is released',
     blocker.release();
   } finally { protocol.dispose(); scheduler.dispose(); }
 });
+
+it('releases the tile lease when the request aborts right after its body is read', async () => {
+  const budget = createPreparationBudget(4 * 1024 * 1024);
+  const fetchImpl = vi.fn<typeof fetch>(async () => webp());
+  const protocol = setupSources({ fetchImpl, budget });
+  let disposed = false;
+  // The compacted 12-byte lease exists once the body is read; abort on the next release, before the request settles.
+  budget.onRelease(() => { if (!disposed && budget.snapshot()['raster-compressed'] === 12) { disposed = true; protocol.dispose(); } });
+  await expect(protocol.requestTile(tile()).response).rejects.toMatchObject({ name: 'AbortError' });
+  expect(disposed).toBe(true);
+  expect(budget.used).toBe(0);
+});
