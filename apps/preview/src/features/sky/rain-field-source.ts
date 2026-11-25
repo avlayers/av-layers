@@ -9,7 +9,7 @@ import { decodePrecipRgbaToField, type PrecipField } from './precip-field';
 import type { ViewportBounds } from './synoptic-sampler';
 
 const RAIN_FIELD_SIZE = 224;
-const MAX_RAIN_FIELD_CACHE = 80;
+const MAX_RAIN_FIELD_CACHE = 96;
 
 function planRainCrop(raw: ViewportBounds, mapZoom: number, maxzoom: number): RasterCrop | null {
   const view: [number, number, number, number] = [raw.west, raw.south, raw.east, raw.north];
