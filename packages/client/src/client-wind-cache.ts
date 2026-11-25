@@ -2,7 +2,6 @@ import { WIND_FRAME_LIMIT } from '@av/contracts/wind-data';
 import type { PackedWindChunk } from '@av/forecast/wind';
 import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
 import type { ForecastRequestHandle } from './client-request-scheduler.ts';
-import type { WindDataSource } from './client-wind.ts';
 
 export const WIND_NUMERIC_BYTES = 8 * 1024 * 1024;
 export const WIND_WINDOW_BYTES = 128 * 1024 * 1024;
@@ -15,13 +14,19 @@ export class WindCapacityError extends Error {
   constructor(message = 'Wind cache exceeds byte budget', readonly resource: 'numeric' | 'preparation' = 'preparation') { super(message); this.name = 'WindCapacityError'; }
 }
 
+/** Bytes read, `null` for a missing resource; the strings steer span fallback and build availability. */
+export type WindReadResult = number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single';
+
+/** A cache entry holder; any foreground owner keeps a shared fill at foreground priority. */
+export interface WindOwner { readonly foreground: boolean }
+
 export interface CachedBytes {
   url: string;
   bytes: Uint8Array;
   capacity: number;
   used: number | null;
   references: number;
-  owners: Set<WindDataSource>;
+  owners: Set<WindOwner>;
   expiresAt: number;
   decoded?: PackedWindChunk | DataView;
   lease?: PreparationLease;
@@ -30,7 +35,7 @@ export interface CachedBytes {
 
 export interface PendingBytes {
   controller: AbortController;
-  promise: Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'>;
+  promise: Promise<WindReadResult>;
   handles: Set<ForecastRequestHandle>;
   revoke: Map<ForecastRequestHandle, () => void>;
   wake: Set<() => void>;
@@ -237,7 +242,7 @@ export class WindDataCache {
     if (this.entries.delete(entry)) { this.bytes -= entry.bytes.length; entry.lease?.release(); }
   }
 
-  start(entries: CachedBytes[], run: (pending: PendingBytes) => Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'>, responseLease?: PreparationLease): PendingBytes {
+  start(entries: CachedBytes[], run: (pending: PendingBytes) => Promise<WindReadResult>, responseLease?: PreparationLease): PendingBytes {
     const pending: PendingBytes = { controller: new AbortController(), handles: new Set(), revoke: new Map(), wake: new Set(), entries, responseLease, promise: undefined! };
     for (const entry of entries) entry.pending = pending;
     pending.promise = Promise.resolve().then(() => run(pending)).finally(() => {
