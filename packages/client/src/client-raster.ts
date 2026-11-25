@@ -1,9 +1,15 @@
+import pRetry from 'p-retry';
 import { DEFAULT_REQUEST_TIMEOUT_MS, MAX_TILE_BYTES } from '@av/contracts/format';
 import { ForecastCapacityError, type ForecastRequestHandle, type ForecastRequestSpec, type RequestPriority } from './client-request-scheduler.ts';
 import type { PreparationBudget, PreparationLease } from './client-preparation-budget.ts';
 export { createForecastRequestScheduler } from './client-request-scheduler.ts';
 
 const INITIAL_TILE_RESERVE = 16 * 1024;
+
+/** A failure worth another attempt; `cause` is what the caller sees once retries run out. */
+class RasterTransientError extends Error {
+  constructor(override readonly cause: unknown) { super('Transient raster failure', { cause }); }
+}
 
 /** Compressed tile transport shared by map adapters; dispose with the mounted map. */
 export interface RasterTileResponse { data: ArrayBuffer; cacheControl?: string; expires?: string }
@@ -227,15 +233,6 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
     } catch (error) { finish(task, undefined, error); }
     finally { active.delete(task); pump(); }
   }
-  async function delay(ms: number, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    await new Promise<void>((resolve, reject) => {
-      const finish = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
-      const abort = () => { finish(); reject(signal.reason); };
-      const timer = setTimeout(() => { finish(); resolve(); }, ms);
-      signal.addEventListener('abort', abort, { once: true });
-    });
-  }
   async function body(response: Response, signal: AbortSignal, task: TileTask): Promise<{ data: ArrayBuffer; lease: PreparationLease | null }> {
     const length = response.headers.get('content-length'), size = Number(length);
     if (!response.body || (length !== null && (!/^\d+$/.test(length) || size > MAX_TILE_BYTES)) || response.headers.get('content-type')?.split(';')[0] !== 'image/webp') {
@@ -281,9 +278,21 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
       signal.removeEventListener('abort', abort); await (cancellation ?? reader.cancel().catch(() => {})); reader.releaseLock();
     }
   }
+  /** Retries network failures and 502/503/504 twice; the last failure surfaces as itself. */
   async function request(task: TileTask): Promise<RasterTileResponse & { until: number; lease: PreparationLease | null }> {
     const signal = task.controller.signal;
-    for (let attempt = 0; ; attempt++) {
+    try {
+      return await pRetry(() => requestOnce(task), {
+        retries: 2, minTimeout: retryDelayMs, factor: 2, randomize: true, signal,
+        shouldRetry: ({ error }) => error instanceof RasterTransientError && !signal.aborted
+      });
+    } catch (error) {
+      throw error instanceof RasterTransientError ? error.cause : error;
+    }
+  }
+  async function requestOnce(task: TileTask): Promise<RasterTileResponse & { until: number; lease: PreparationLease | null }> {
+    const signal = task.controller.signal;
+    {
       signal.throwIfAborted();
       const foreground = interactive(task);
       let response: Response | undefined;
@@ -317,14 +326,13 @@ function createProtocol(baseUrl: string, options: RasterTileOptions, sourceRegis
         }
         } catch (error) {
           signal.throwIfAborted();
-          if (!(error instanceof TypeError) || attempt === 2) throw error;
+          throw error instanceof TypeError ? new RasterTransientError(error) : error;
         }
-        if (!response || ([502, 503, 504].includes(response.status) && attempt < 2)) {
-          await response?.body?.cancel().catch(() => {});
-          responseLease?.release(); responseLease = null;
-          await delay(retryDelayMs * (attempt + 1) + Math.random() * retryDelayMs, signal); continue;
+        if (response.status !== 200) {
+          await response.body?.cancel().catch(() => {});
+          const failure = new Error(`Raster request failed: HTTP ${response.status}`);
+          throw [502, 503, 504].includes(response.status) ? new RasterTransientError(failure) : failure;
         }
-        if (response.status !== 200) { await response.body?.cancel().catch(() => {}); throw new Error(`Raster request failed: HTTP ${response.status}`); }
         task.retain = true;
         const cacheControl = response.headers.get('cache-control') ?? undefined, expires = response.headers.get('expires') ?? undefined;
         const maxAge = Number(/(?:^|,)\s*max-age=(\d+)/i.exec(cacheControl ?? '')?.[1]);
