@@ -108,7 +108,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
     wind: { status: 'unavailable', overview: false, displayed: false, supported: false },
     point: { open: false, location: '', horizonSelectable: false, horizonLabel: '24 hours', busy: false, status: '', wind: '' },
     location: { message: '', detail: '', busy: false },
-    notices: { error: '', tileError: '', horizon: '', freshness: 'Loading latest immutable build…', frameStatus: 'Loading forecast…', skyStatus: '', overviewReady: 0, overviewTotal: 0, overviewFailed: 0, detailReady: 0, preparationLimited: false, scaleWidth: 1, scaleText: '' }
+    notices: { error: '', tileError: '', horizon: '', freshness: 'Loading latest immutable build…', runAge: '', frameStatus: 'Loading forecast…', skyStatus: '', overviewReady: 0, overviewTotal: 0, overviewFailed: 0, detailReady: 0, preparationLimited: false, scaleWidth: 1, scaleText: '' }
   };
   return { query, preferences, initial, browserZone };
 }

@@ -149,6 +149,15 @@ export function formatBuildFreshness(
   return `Pinned build ${manifest.buildId} · age ${formatDuration(buildAgeMs(manifest.createdAt, now))} · expires in ${formatDuration(expiresAtMs - now)}`;
 }
 
+/** Compact model-run label for the model picker: `06Z run · 3 h old`. */
+export function formatRunAge(cycle: string, now = Date.now()): string {
+  const cycleMs = Date.parse(cycle);
+  if (!Number.isFinite(cycleMs)) return '';
+  const minutes = Math.max(0, Math.round((now - cycleMs) / 60_000));
+  const age = minutes < 60 ? `${minutes} min` : minutes < 2880 ? `${Math.round(minutes / 60)} h` : `${Math.round(minutes / 1440)} d`;
+  return `${new Date(cycleMs).toISOString().slice(11, 13)}Z run · ${age} old`;
+}
+
 export function watchBuildExpiry(expiresAtMs: number, expire: () => void, targets: EventTarget[]): () => void {
   if (!Number.isFinite(expiresAtMs)) throw new RangeError('Invalid expiry deadline');
   let fired = false;

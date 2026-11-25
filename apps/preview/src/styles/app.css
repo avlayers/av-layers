@@ -542,6 +542,18 @@ html, body, #app { margin: 0; height: 100%; }
 #model-name {
   white-space: nowrap;
 }
+.model-copy {
+  display: inline-flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+#model-run {
+  font-size: 9.5px;
+  font-weight: 550;
+  opacity: 0.82;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .model-res-badge {
   padding: 1.5px 4px;
   border-radius: 4px;

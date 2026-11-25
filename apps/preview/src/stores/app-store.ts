@@ -80,6 +80,8 @@ interface NoticeView {
   readonly tileError: string;
   readonly horizon: string;
   readonly freshness: string;
+  /** Visible model-run label, e.g. `06Z run · 3 h old`; empty without a live build. */
+  readonly runAge: string;
   readonly frameStatus: string;
   /** Sky channels not drawing the selected hour; empty when every visible one is. */
   readonly skyStatus: string;

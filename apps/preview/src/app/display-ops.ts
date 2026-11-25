@@ -1,4 +1,4 @@
-import { AUTO_MODEL_ID, formatBuildFreshness, formatZoneTime, mapForecastHorizonNotice, type UnitSystem } from '@av/client';
+import { AUTO_MODEL_ID, formatBuildFreshness, formatRunAge, formatZoneTime, mapForecastHorizonNotice, type UnitSystem } from '@av/client';
 import { MODEL_OPTIONS } from '@av/contracts/model-options';
 import { renderedFrames, type ModelId } from '@av/contracts/publication';
 import { layerOptions, validatedCustomLayer } from '../features/forecast/forecast-model';
@@ -104,7 +104,10 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       const now = Date.now();
       if (current.expiresAtMs <= now) { ctx.forecastSession.expire(); return; }
       ops.paintMapHorizon(now);
-      writer.notices({ freshness: (ctx.intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now) });
+      writer.notices({
+        freshness: (ctx.intent().model === AUTO_MODEL_ID ? `${current.manifest.model} · ` : '') + formatBuildFreshness(current.manifest, current.expiresAtMs, now),
+        runAge: formatRunAge(current.manifest.cycle, now)
+      });
     },
 
     updateTimeUi() {

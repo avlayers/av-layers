@@ -50,8 +50,8 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         {
           modelId: AUTO_MODEL_ID as ModelId,
           label: 'Auto',
-          subtitle: 'Best model for map view',
-          kmBadge: isAutoModel && activeModelKm ? activeModelKm : 'Best km',
+          subtitle: 'Finest available for this view',
+          kmBadge: isAutoModel && activeModelKm ? activeModelKm : 'Finest',
           isAuto: true
         },
         ...MODEL_OPTIONS.map(option => ({
@@ -82,7 +82,10 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
               title={activeModelKm ? `${name} · Approx. ${activeModelKm} grid spacing` : name}
             >
               {isAutoModel ? <ModelEmblem isAuto /> : null}
-              <span id="model-name">{name}</span>
+              <span class="model-copy">
+                <span id="model-name">{name}</span>
+                {notices.runAge ? <span id="model-run">{notices.runAge}</span> : null}
+              </span>
               {activeModelKm ? <span class="model-res-badge" aria-label={`Approximate resolution ${activeModelKm}`}>{activeModelKm}</span> : null}
               <span class="model-caret" aria-hidden="true">▾</span>
             </summary>
