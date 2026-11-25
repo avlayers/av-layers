@@ -199,7 +199,7 @@ export function App({ store, commands, offline, fixtureModel }: AppProps) {
         opacity={intent.opacity}
         scaleWidth={notices.scaleWidth}
         scaleText={notices.scaleText}
-        frameStatus={notices.frameStatus}
+        frameStatus={notices.skyStatus ? `${notices.frameStatus} · ${notices.skyStatus}` : notices.frameStatus}
         quality={overlay.quality ?? 'none'}
         windActive={intent.windVisible && wind.supported}
         overviewReady={notices.overviewReady}

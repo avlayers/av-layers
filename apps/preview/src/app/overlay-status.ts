@@ -1,5 +1,6 @@
 import { formatPlaceTime, type PinnedBuild } from '@av/client';
 import type { OverlayState } from '../features/raster/raster-overlay';
+import type { SkyStatus } from '../features/sky/sky-composite';
 
 function sameSelection(a: OverlayState['displayed'], b: OverlayState['displayed']): boolean {
   return a === b || (!!a && !!b && a.build === b.build && a.layer === b.layer && a.frame === b.frame);
@@ -55,4 +56,18 @@ export function overlayNotices(state: OverlayState, ctx: StatusContext): { frame
         : viewLoading ? `${displayedLabel} · Loading this view…` : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
   const tileError = replacementFailed ? `Forecast replacement failed. ${showing}` : incomplete ? `Overlay tile failed to load — forecast display may be incomplete. ${showing}` : pendingModel ? `Loading ${pendingModel}. ${showing}` : olderBuild ? showing : '';
   return { frameStatus, overviewFailed, tileError };
+}
+
+const SKY_NAMES = { clouds: 'clouds', isobars: 'pressure', rain: 'rain' } as const;
+
+/** Status suffix for sky channels that are not drawing the selected hour, e.g. `Clouds, rain loading`. */
+export function skyStatusText(status: SkyStatus): string {
+  const parts: string[] = [];
+  for (const state of ['loading', 'unavailable'] as const) {
+    const names = (Object.keys(SKY_NAMES) as (keyof SkyStatus)[]).filter(channel => status[channel] === state).map(channel => SKY_NAMES[channel]);
+    if (!names.length) continue;
+    const list = names.join(', ');
+    parts.push(`${list[0]!.toUpperCase()}${list.slice(1)} ${state === 'loading' ? 'loading…' : 'unavailable'}`);
+  }
+  return parts.join(' · ');
 }

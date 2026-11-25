@@ -80,6 +80,8 @@ interface NoticeView {
   readonly horizon: string;
   readonly freshness: string;
   readonly frameStatus: string;
+  /** Sky channels not drawing the selected hour; empty when every visible one is. */
+  readonly skyStatus: string;
   readonly overviewReady: number;
   readonly overviewTotal: number;
   readonly overviewFailed: number;
