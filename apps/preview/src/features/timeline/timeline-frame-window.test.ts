@@ -1,5 +1,6 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { createFrameWindow } from './timeline-frame-window';
+import * as solarDay from './solar-day';
 
 const frames = ['2026-03-13T09:00:00Z', '2026-03-13T18:00:00Z', '2026-03-15T09:00:00Z'].map((validTime, index) => ({ id: `f${index}`, validTime }));
 
@@ -37,4 +38,17 @@ it('ignores repeat offsets and centres that round to the same 0.01 degree', () =
   expect(win.setTimeZone('Etc/GMT-1')).toBe(true);
   expect(createFrameWindow({}).centerKey()).toBe('|');
   expect(createFrameWindow({}).daySolar('2026-03-13')).toEqual({ stops: null, bounds: null });
+});
+
+it.each([
+  ['America/Los_Angeles', '2026-03-08', '2026-03-08T08:00:00Z', '2026-03-09T07:00:00Z'],
+  ['America/Los_Angeles', '2026-11-01', '2026-11-01T07:00:00Z', '2026-11-02T08:00:00Z'],
+  ['Europe/Berlin', '2026-03-29', '2026-03-28T23:00:00Z', '2026-03-29T22:00:00Z'],
+  ['Pacific/Auckland', '2026-09-27', '2026-09-26T12:00:00Z', '2026-09-27T11:00:00Z']
+])('runs the %s ribbon from local midnight to local midnight on the DST day %s', (timeZone, day, start, end) => {
+  const ribbon = vi.spyOn(solarDay, 'solarRibbonStops');
+  const win = createFrameWindow({ latitude: 40, longitude: 0, timeZone });
+  win.daySolar(day);
+  expect(ribbon).toHaveBeenLastCalledWith(40, 0, Date.parse(start), Date.parse(end));
+  ribbon.mockRestore();
 });

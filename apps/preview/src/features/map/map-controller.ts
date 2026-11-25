@@ -42,7 +42,7 @@ interface MapCameraOptions {
 
 export interface MapCamera {
   readonly home: { lat: number; lng: number };
-  /** IANA zone of the map centre (`UTC` offshore), or the browser zone before the camera follows a place. */
+  /** IANA zone of the map centre (the nautical longitude zone offshore), or the browser zone before the camera follows a place. */
   timeZone(): string;
   /** Settles once the zone lookup has loaded (or failed); `sync` then resolves place zones. */
   readonly zoneReady: Promise<void>;

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveCivilTimeZone } from '@av/client/timezone';
+import { mapClockTimeZone } from '@av/client/timezone';
 import { createMap, createMapCamera, maplibregl } from './map-controller';
 
 vi.mock('maplibre-gl', () => ({ setWorkerUrl: vi.fn(), Map: vi.fn(function () { return {}; }) }));
@@ -9,11 +9,11 @@ it('uses the bounded per-source tile cache on every memory class', () => {
   expect(maplibregl.Map).toHaveBeenCalledWith(expect.objectContaining({ maxTileCacheSize: 24, maxTileCacheZoomLevels: 2 }));
 });
 
-function camera(lng: number) {
+function camera(lng: number, lat = 40) {
   const map = {
-    getCenter: () => ({ lat: 40, lng }), getZoom: () => 5, fitBounds: vi.fn()
+    getCenter: () => ({ lat, lng }), getZoom: () => 5, fitBounds: vi.fn()
   };
-  return { map, camera: createMapCamera(map as never, { home: { lat: 40, lng: 0 }, followsPlace: false, browserTimeZone: 'America/Denver', loadZoneLookup: async () => (lat, lon) => resolveCivilTimeZone(lat, lon) }) };
+  return { map, camera: createMapCamera(map as never, { home: { lat: 40, lng: 0 }, followsPlace: false, browserTimeZone: 'America/Denver', loadZoneLookup: async () => mapClockTimeZone }) };
 }
 
 describe('map camera', () => {
@@ -31,6 +31,13 @@ describe('map camera', () => {
     expect(test.camera.sync().changed).toBe(true);
     expect(test.camera.followsPlace()).toBe(true);
     expect(test.camera.timeZone()).toBe('Asia/Yerevan');
+  });
+
+  it('uses the nautical longitude zone offshore', async () => {
+    const test = camera(-45, 30);
+    await test.camera.zoneReady;
+    test.camera.sync();
+    expect(test.camera.timeZone()).toBe('Etc/GMT+3');
   });
 
   it('computes a metric or imperial scale', () => {

@@ -38,6 +38,12 @@ export function resolveCivilTimeZone(lat: number, lon: number): string {
   return resolveSiteTimeZone(lat, lon).timeZone;
 }
 
+/** Map clock zone: the civil zone on land, the nautical longitude zone (`Etc/GMT±N`) offshore. */
+export function mapClockTimeZone(lat: number, lon: number): string {
+  const site = resolveSiteTimeZone(lat, lon);
+  return site.isUtcFallback && Number.isFinite(lon) ? timeZoneForLongitude(lon) : site.timeZone;
+}
+
 const shortZoneFormatters = new Map<string, Intl.DateTimeFormat>();
 const SHORT_ZONE_OPTIONS: Intl.DateTimeFormatOptions = { timeZoneName: 'short' };
 

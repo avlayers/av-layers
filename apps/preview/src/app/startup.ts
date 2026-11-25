@@ -101,7 +101,7 @@ export function createStartup(search: string, storage: StorageLike | null, offli
       pointHorizon: initialPointViewMode === '3d' ? 'forecast' : 'day', pointViewMode: initialPointViewMode, requestedTime: query.validTime
     },
     forecast: {
-      build: null, selectedFrame: null, pendingModel: null, expired: false, mapReady: false, mapFailed: false, layers: [],
+      build: null, selectedFrame: null, pendingModel: null, resolving: false, expired: false, mapReady: false, mapFailed: false, layers: [],
       timeZone: browserZone, mapCenter: query.camera ? { lat: query.camera.center[1], lng: query.camera.center[0] } : null, playing: false
     },
     overlay: emptyOverlay,

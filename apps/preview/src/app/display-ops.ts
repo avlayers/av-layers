@@ -5,7 +5,7 @@ import { layerOptions, validatedCustomLayer } from '../features/forecast/forecas
 import { preparedAxisReadiness } from '../stores/app-store';
 import { themeOption } from '../themes/registry';
 import type { PreviewContext } from './context';
-import { effect } from '@preact/signals';
+import { effect, untracked } from '@preact/signals';
 import { overlayNotices } from './overlay-status';
 
 /** The operations the wiring modules call on each other, resolved at call time. */
@@ -166,15 +166,16 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
 
 /**
  * Effects for the views that derive purely from store signals (root chrome, frame status line, tile
- * notice), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
+ * notice, run age cleared with the build), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
  */
 export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, signal: AbortSignal): void {
   const { writer, view } = ctx.store;
   const disposers = [
     effect(() => { root.dataset.chrome = themeOption(view.intent.value.theme).darkChrome ? 'dark' : 'light'; }),
     effect(() => {
-      const { build, pendingModel, expired, playing, timeZone } = view.forecast.value;
-      writer.notices(overlayNotices(view.overlay.value, { build, pendingModel, expired, playing, timeZone }));
+      const { build, pendingModel, resolving, expired, playing, timeZone } = view.forecast.value;
+      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
+      untracked(() => writer.notices(build ? notices : { ...notices, runAge: '' }));
     })
   ];
   signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });

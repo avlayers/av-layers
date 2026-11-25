@@ -56,7 +56,7 @@ export function createPreviewApp(): PreviewApp {
       home: { lat: openedAt.lat, lng: openedAt.lng },
       followsPlace: startup.query.camera !== null,
       browserTimeZone: startup.browserZone,
-      loadZoneLookup: () => import('@av/client/timezone').then(module => module.resolveCivilTimeZone)
+      loadZoneLookup: () => import('@av/client/timezone').then(module => module.mapClockTimeZone)
     });
 
     const { forecastScheduler, preparationBudget } = services;

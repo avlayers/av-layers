@@ -41,6 +41,8 @@ interface ForecastView {
   readonly build: PinnedBuild | null;
   readonly selectedFrame: string | null;
   readonly pendingModel: ModelId | null;
+  /** Auto is resolving a first build for this view. */
+  readonly resolving: boolean;
   readonly expired: boolean;
   readonly mapReady: boolean;
   readonly mapFailed: boolean;

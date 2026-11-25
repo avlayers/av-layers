@@ -134,7 +134,7 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
     const time = Date.parse(intent().requestedTime ?? '');
     const custom = intent().customLayer;
     const layers = custom ? [custom, ...LIFT_LAYERS] : intent().reference === 'agl' ? [...LIFT_LAYERS] : [...LIFT_LAYERS].reverse();
-    if (!build) writer.notices({ freshness: 'Finding a forecast for this location…' });
+    if (!build) { writer.notices({ freshness: 'Finding a forecast for this location…' }); writer.forecast({ resolving: true }); }
     try {
       const next = await resolveAutoBuild(autoApi, {
         ...(located ? normalizePoint(raw.lat, raw.lon) : {}),
@@ -169,7 +169,7 @@ export function createForecastSession(options: ForecastSessionOptions): Forecast
       hooks.onUrl('replace');
     } catch (error) {
       if (!request.signal.aborted) writer.notices({ error: error instanceof Error ? error.message : String(error) });
-    } finally { if (autoAbort === request) autoAbort = null; }
+    } finally { if (autoAbort === request) { autoAbort = null; writer.forecast({ resolving: false }); } }
   }
 
   async function load(model: ModelId, resolved?: AutoForecastSelection): Promise<void> {

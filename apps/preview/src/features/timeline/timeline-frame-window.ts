@@ -116,10 +116,10 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
       const key = `${latitude.toFixed(2)},${longitude.toFixed(2)},${day},${timeZone}`;
       const cached = solarCache.get(key);
       if (cached) return cached;
-      // The day's offset at local noon, so a DST change at 02:00 does not shift midnight.
-      const offset = timeZoneOffsetMinutesAt(Date.parse(`${day}T12:00:00Z`), timeZone);
-      const start = Date.parse(`${day}T00:00:00Z`) - offset * 60_000;
-      const solar = { stops: solarRibbonStops(latitude, longitude, start, start + DAY_MS), bounds: solarMinuteBounds(latitude, longitude, day, offset) };
+      // The ribbon runs from this local midnight to the next, so 23 h and 25 h days keep both ends.
+      const start = localMidnight(day, timeZone), end = localMidnight(nextDay(day), timeZone);
+      const offset = timeZoneOffsetMinutesAt(start + DAY_MS / 2, timeZone);
+      const solar = { stops: solarRibbonStops(latitude, longitude, start, end), bounds: solarMinuteBounds(latitude, longitude, day, offset) };
       solarCache.set(key, solar);
       if (solarCache.size > SOLAR_CACHE_DAYS) solarCache.delete(solarCache.keys().next().value!);
       return solar;
@@ -133,3 +133,11 @@ export function createFrameWindow(options: FrameWindowOptions): FrameWindow {
   };
   return win;
 }
+
+/** UTC instant of 00:00 on `day` in `timeZone`, using the offset in force at that midnight. */
+function localMidnight(day: string, timeZone: string): number {
+  const utc = Date.parse(`${day}T00:00:00Z`);
+  return utc - timeZoneOffsetMinutesAt(utc - timeZoneOffsetMinutesAt(utc, timeZone) * 60_000, timeZone) * 60_000;
+}
+
+const nextDay = (day: string) => new Date(Date.parse(`${day}T00:00:00Z`) + DAY_MS).toISOString().slice(0, 10);

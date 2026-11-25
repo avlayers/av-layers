@@ -36,6 +36,7 @@ export function overlayUiChanged(prev: OverlayState, next: OverlayState): boolea
 interface StatusContext {
   readonly build: PinnedBuild | null;
   readonly pendingModel: string | null;
+  readonly resolving: boolean;
   readonly expired: boolean;
   readonly playing: boolean;
   readonly timeZone: string;
@@ -50,7 +51,7 @@ export function overlayNotices(state: OverlayState, ctx: StatusContext): { frame
   const olderBuild = displayed && displayed.build !== ctx.build;
   const displayedTime = displayed?.build.manifest.frames.find(frame => frame.id === displayed.frame)?.validTime;
   const displayedLabel = displayedTime ? formatZoneTime(Date.parse(displayedTime), ctx.timeZone, 'stamp') : '';
-  const frameStatus = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : ctx.expired ? 'Forecast expired' : pendingModel ? 'Loading forecast…' : 'No forecast shown'
+  const frameStatus = !displayed ? requested ? replacementFailed ? 'Forecast unavailable · No forecast shown' : 'Loading selected time · No forecast shown' : ctx.expired ? 'Forecast expired' : pendingModel || ctx.resolving ? 'Loading forecast…' : 'No forecast shown'
     : pending ? `Showing ${displayedLabel} · ${replacementFailed ? 'Selected time unavailable' : 'Loading selected time…'}`
       : quality === 'overview' ? `${displayedLabel} · Overview${playing ? '' : (replacementFailed ? ' · Detail unavailable' : ' · Loading detail…')}`
         : viewLoading ? `${displayedLabel} · Loading this view…` : `${displayedLabel} · ${incomplete ? 'Detail incomplete' : 'Full detail'}`;
