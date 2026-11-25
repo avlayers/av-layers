@@ -6,6 +6,7 @@ import {
 import { RASTER_TILE_SIZE } from '@av/contracts/format';
 import { planRasterCrop, type RasterCrop } from '../raster/raster-crop';
 import { decodePrecipRgbaToField, type PrecipField } from './precip-field';
+import { alignedTo } from './lon-window';
 import type { ViewportBounds } from './synoptic-sampler';
 
 const RAIN_FIELD_SIZE = 224;
@@ -27,7 +28,8 @@ function planRainCrop(raw: ViewportBounds, mapZoom: number, maxzoom: number): Ra
  * Checks whether a cached `PrecipField` covers the viewport without over-coarsening relative to
  * the layer's native `maxzoom` (e.g., GFS `precip-rate` `maxzoom = 4..6`, where 1 tile spans 5.6°–22.5°).
  */
-function precipFieldCoversView(field: PrecipField, raw: ViewportBounds, maxzoom: number): boolean {
+function precipFieldCoversView(field: PrecipField, view: ViewportBounds, maxzoom: number): boolean {
+  const raw = alignedTo(view, field);
   const viewSpanLon = raw.east - raw.west;
   if (viewSpanLon >= 145) return field.east - field.west >= 320;
   if (raw.west < field.west || raw.east > field.east || raw.south < field.south || raw.north > field.north) {

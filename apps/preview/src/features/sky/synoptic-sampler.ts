@@ -2,6 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { ApiClient, normalizePoint, type PinnedBuild } from '@av/client';
 import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
+import { alignedTo, lonWindow, type LonLatWindow } from './lon-window';
 
 export interface SynopticField {
   readonly id: string;
@@ -22,12 +23,7 @@ export interface SynopticField {
   readonly mslpEvaluated?: boolean;
 }
 
-export interface ViewportBounds {
-  readonly west: number;
-  readonly south: number;
-  readonly east: number;
-  readonly north: number;
-}
+export type ViewportBounds = LonLatWindow;
 
 interface SynopticChannelNeed {
   readonly needClouds?: boolean;
@@ -39,19 +35,10 @@ const SAMPLE_COLS = 8;
 const SAMPLE_ROWS = 6;
 const MAX_FIELD_CACHE = 256;
 const MAX_FOREGROUND_INFLIGHT = 3;
-const MAX_LAT = 85.05112878;
 
 export function rawMapViewBounds(map: MapLibreMap): ViewportBounds {
   const b = map.getBounds();
-  let west = b.getWest(), east = b.getEast();
-  if (east <= west) east += 360;
-  if (east - west > 340) { west = -179.9; east = 179.9; }
-  const south = Math.max(-MAX_LAT, b.getSouth());
-  const north = Math.min(MAX_LAT, b.getNorth());
-  west = Math.max(-179.9, west);
-  east = Math.min(179.9, east);
-  if (east - west < 0.04) east = Math.min(179.9, west + 0.04);
-  return { west, south, east, north };
+  return lonWindow(b.getWest(), b.getSouth(), b.getEast(), b.getNorth());
 }
 
 /**
@@ -63,16 +50,14 @@ export function scaleAdaptiveSampleBox(raw: ViewportBounds): ViewportBounds & { 
   const spanLat = Math.max(0.03, raw.north - raw.south);
   const padLon = Math.min(20, spanLon * 0.38);
   const padLat = Math.min(14, spanLat * 0.38);
-  const west = Math.max(-179.9, raw.west - padLon);
-  const east = Math.min(179.9, raw.east + padLon);
-  const south = Math.max(-MAX_LAT, raw.south - padLat);
-  const north = Math.min(MAX_LAT, raw.north + padLat);
+  const box = lonWindow(raw.west - padLon, raw.south - padLat, raw.east + padLon, raw.north + padLat);
   const step = Math.max(0.01, Math.min(0.5, Math.min(spanLon, spanLat) * 0.12));
   const q = (v: number) => (Math.round(v / step) * step).toFixed(3);
-  return { west, south, east, north, key: `${q(west)},${q(south)},${q(east)},${q(north)}` };
+  return { ...box, key: `${q(box.west)},${q(box.south)},${q(box.east)},${q(box.north)}` };
 }
 
-export function synopticFieldCoversView(field: ViewportBounds, raw: ViewportBounds): boolean {
+export function synopticFieldCoversView(field: ViewportBounds, view: ViewportBounds): boolean {
+  const raw = alignedTo(view, field);
   if (field.west > raw.west || field.east < raw.east || field.south > raw.south || field.north < raw.north) {
     return false;
   }
