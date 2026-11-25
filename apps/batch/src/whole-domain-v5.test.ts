@@ -1008,7 +1008,7 @@ describe('whole-domain v5 production', () => {
     const prepared = await prepareWholeDomain({ product, mask: nativeMask, out, maxLevels: source.provider.maxLevels, wholeDomain: setup });
     const common = { out, cycle: CYCLE, product, mask: nativeMask, provider: source.provider, prepared,
       buildId: 'cleanup-test', createdAt: new Date().toISOString(), journalPrefix: 'cleanup-journal', hours: [2, 4] };
-    await expect(buildWholeDomainFrames({ ...common, prepared: { ...prepared, terrain: { ...prepared.terrain, arrayBytes: 3 * 1024 ** 3 } } })).rejects.toThrow('exceeds capacity');
+    await expect(buildWholeDomainFrames({ ...common, prepared: { ...prepared, terrain: { ...prepared.terrain, arrayBytes: BUILD_BUDGETS.workingSetBytes + 1 } } })).rejects.toThrow('exceeds capacity');
     expect(source.open).not.toHaveBeenCalled();
     const directory = join(out, 'builds', product.modelId, common.buildId, 'surfaces', 'native', 'samples');
     await mkdir(directory, { recursive: true }); await writeFile(join(directory, '0.bin'), 'existing');
@@ -1191,7 +1191,7 @@ describe('whole-domain v5 production', () => {
     const atLimit = { ...input, columns: { ...columns,
       byteLength: columns.byteLength + BUILD_BUDGETS.workingSetBytes - admitted.estimatedPeakBytes + admitted.workingSet.prefetchFrame! } };
     expect(admitWholeDomain(atLimit).violations).toEqual([]);
-    expect(admitWholeDomain({ ...atLimit, sourceMappingBytesPerCell: 4 }).violations).toContain('whole-domain working set exceeds the 2 GiB process budget');
+    expect(admitWholeDomain({ ...input, columns: { ...columns, byteLength: columns.byteLength + BUILD_BUDGETS.workingSetBytes } }).violations).toContain(`whole-domain working set exceeds the ${BUILD_BUDGETS.workingSetBytes / 1024 ** 3} GiB process budget`);
     const layouts = wholeDomainSampleGroupLayouts(input);
     expect(admitted.workingSet.packBuffers).toBe(samplePackWriterBufferBytes(layouts.native!) + samplePackWriterBufferBytes(layouts.fine!));
     vi.mocked(rasterWorkerCount).mockReturnValueOnce(3);
@@ -1220,8 +1220,8 @@ describe('whole-domain v5 production', () => {
     expect(sparseAdmission.workingSet.nativeFields).toBe(admitted.workingSet.nativeFields);
     expect(sparseAdmission.workingSet.diagnostics).toBe(admitted.workingSet.diagnostics);
     expect(sparseAdmission.workingSet.nativeFrame).toBeLessThan(admitted.workingSet.nativeFrame);
-    const rejected = admitWholeDomain({ ...input, terrainBytes: 3 * 1024 ** 3 });
-    expect(rejected.violations).toContain('whole-domain working set exceeds the 2 GiB process budget');
+    const rejected = admitWholeDomain({ ...input, terrainBytes: BUILD_BUDGETS.workingSetBytes + 1 });
+    expect(rejected.violations).toContain(`whole-domain working set exceeds the ${BUILD_BUDGETS.workingSetBytes / 1024 ** 3} GiB process budget`);
   });
 
   it('admits exact per-surface tile counts at the cap and rejects the next covered tile', () => {

@@ -24,10 +24,8 @@ import pRetry from 'p-retry';
 const TERRAIN_ATTEMPTS = 3;
 
 const SUPERSEDED = 'This revision was superseded on main; rerun the latest revision';
-/** The compare API lists at most 300 files and 250 commits; a longer gap is treated as a producer change. */
-const MAX_COMPARED_FILES = 300, MAX_COMPARED_COMMITS = 250;
-/** Producer content plus the workflows that run it. A change elsewhere (preview, API Worker, docs, tests) cannot alter a frozen build. */
-const PUBLICATION_PATHS: readonly string[] = [...PRODUCER_SOURCE_PATHS, '.github'];
+/** Producer content plus the workflows that run it and the client its serving check uses. */
+const PUBLICATION_PATHS = [...PRODUCER_SOURCE_PATHS, 'packages/client', '.github'];
 
 async function mainRevision(repository: string, signal?: AbortSignal): Promise<string> {
   const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/git/ref/heads/main`, '--jq', '.object.sha'], { timeout: 15_000, signal });
@@ -40,41 +38,19 @@ export async function assertCurrentMain(signal?: AbortSignal): Promise<void> {
   if (await mainRevision(repository, signal) !== revision) throw new Error(SUPERSEDED);
 }
 
-/** Changed paths from a GitHub compare that a frozen build cannot publish across; null when the comparison is incomplete. */
-export function publicationBlockingChanges(compare: { status?: unknown; total_commits?: unknown; files?: unknown }): string[] | null {
-  const files = compare.files;
-  if (compare.status !== 'ahead' || typeof compare.total_commits !== 'number' || compare.total_commits >= MAX_COMPARED_COMMITS
-      || !Array.isArray(files) || files.length >= MAX_COMPARED_FILES) return null;
-  const paths: string[] = [];
-  for (const file of files) {
-    if (!file || typeof file !== 'object') return null;
-    const { filename, previous_filename: previous } = file as { filename?: unknown; previous_filename?: unknown };
-    if (typeof filename !== 'string' || (previous !== undefined && typeof previous !== 'string')) return null;
-    paths.push(filename, ...(typeof previous === 'string' ? [previous] : []));
-  }
-  return paths.filter(path => PUBLICATION_PATHS.some(root => path === root || path.startsWith(`${root}/`)));
-}
-
 /**
- * Check immediately before publishing a completed forecast. Main may have moved on by commits that leave the
- * producer and its workflows unchanged; any other difference, or one the compare API cannot list, still refuses.
+ * Check immediately before publishing a completed forecast. Main may have moved by commits that leave
+ * `PUBLICATION_PATHS` byte-identical; the checkout's tree is compared with main's tree.
  */
 export async function assertPublishableRevision(signal?: AbortSignal): Promise<void> {
   const { repository, revision } = workflowContext();
   const main = await mainRevision(repository, signal);
   if (main === revision) return;
-  if (!/^[a-f0-9]{40}$/.test(main)) throw new Error(SUPERSEDED);
-  let blocking: string[] | null;
-  try {
-    const { stdout } = await promisify(execFile)('gh', ['api', `repos/${repository}/compare/${revision}...${main}`, '--jq',
-      '{status, total_commits, files: [(.files // [])[] | {filename, previous_filename}]}'], { timeout: 30_000, maxBuffer: 4 * 1024 * 1024, signal });
-    blocking = publicationBlockingChanges(JSON.parse(stdout) as Record<string, unknown>);
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw new Error(SUPERSEDED, { cause: error });
-  }
-  if (blocking === null) throw new Error(SUPERSEDED);
-  if (blocking.length) throw new Error(`${SUPERSEDED} (changed: ${[...new Set(blocking)].slice(0, 5).join(', ')})`);
+  const git = promisify(execFile);
+  await git('git', ['fetch', '--quiet', '--no-tags', '--depth=1', 'origin', main], { timeout: 60_000, signal });
+  const { stdout } = await git('git', ['diff', '--name-only', revision, main, '--', ...PUBLICATION_PATHS], { timeout: 30_000, maxBuffer: 1024 * 1024, signal });
+  const changed = stdout.split('\n').filter(Boolean);
+  if (changed.length) throw new Error(`${SUPERSEDED} (changed: ${changed.slice(0, 5).join(', ')})`);
   console.log(`Main advanced to ${main} without producer changes; publishing the ${revision} build`);
 }
 

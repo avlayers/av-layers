@@ -24,7 +24,7 @@ jobs:
   deploy:
     needs: verify
     if: github.ref == 'refs/heads/main'
-    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/spot=false/image=ubuntu24-full-arm64/extras=s3-cache
+    runs-on: runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/spot=false/image=ubuntu24-full-arm64
     timeout-minutes: 45
     environment: ${{ inputs.environment || 'production' }}
     env:

@@ -88,7 +88,7 @@ worker ceilings and frame groups for their workers.
 
 Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
 changes reuse the same terrain cache and preserve retained builds.
-The [build budgets](../apps/batch/src/capacity.ts) admit a 2 GiB planned working
+The [build budgets](../apps/batch/src/capacity.ts) admit a 4 GiB planned working
 set and accept up to 8 GiB of observed process RSS, half of a 16 GiB
 `ubuntu-24.04` runner. Worker selection and
 compaction use the working-set limit.
@@ -100,12 +100,10 @@ new build after expiry or rotation. Also start a new build
 when a failed shard uploaded frame provenance without completing its receipt.
 Reacquisition can change the immutable provenance timestamp.
 Workers and assembly finish under their frozen revision when main advances.
-Publication proceeds when main advanced only outside the producer paths
-(`PRODUCER_SOURCE_PATHS` in [identity.ts](../apps/batch/src/identity.ts)) and
-`.github`. A change inside them refuses publication;
+Publication proceeds when main advanced without changing `PUBLICATION_PATHS`
+in [publication-workflow.ts](../scripts/publication-workflow.ts); otherwise
 [resume the completed artifact](#resume-a-build) from a current-main run with
-matching producer content. Each shard's `forecast-stage` log line carries its
-acquire, derive, pack and render wall time (`phasesMs`).
+matching producer content.
 
 `forecast-terrain` prepares a missing R2 cache or validates the existing arrays,
 reporting progress in the job log. Planning requires that cache; a missing cache
@@ -190,9 +188,8 @@ tile routes, and any serving failure there fails deployment.
 After Cloudflare Pages deploys, the job checks the revision marker.
 
 CI and deploy run on the [RunsOn](https://runs-on.com) AWS stack that av-wrf
-uses (4 vCPU Graviton; spot for CI, on-demand for deploy), so they never queue
-behind forecast shards on GitHub-hosted runners. Pull requests from forks and
-Dependabot run CI on `ubuntu-24.04`. Forecast jobs stay on GitHub-hosted runners.
+uses: 4 vCPU Graviton, spot for pull requests and on-demand on `main`. Fork and
+Dependabot pull requests run CI on `ubuntu-24.04`, as do forecast jobs.
 
 Deployment checks each available model's tile front cache with bounded repeated
 GETs. Workers Cache serves tile hits before API admission; TTL ends by the

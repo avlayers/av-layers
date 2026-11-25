@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import { MODEL_CONFIG_PATH, LIFT_RENDER_STYLE, LIFT_STEP_RENDER_STYLE, liftRenderStyle } from '@av/contracts';
 import { sha256 } from './terrain/contract.js';
-import { buildIdentity, readProducerSourceState } from './identity.js';
+import { buildIdentity, PRODUCER_GROUPS, PRODUCER_SOURCE_PATHS, readProducerSourceState } from './identity.js';
 
 it('records producer configuration edits while allowing unrelated client edits', async () => {
   const root = await mkdtemp(join(tmpdir(), 'av-source-state-'));
@@ -118,4 +118,9 @@ it.each([MODEL_CONFIG_PATH, 'packages/contracts/schemas/wrf-zarr-v3.schema.json'
     expect(after.recipe.hash).not.toBe(before.recipe.hash);
     expect(after.scienceHash).toBe(before.scienceHash);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+it('keeps every hashed recipe input under the producer source paths', () => {
+  const inputs = Object.values(PRODUCER_GROUPS).flatMap(group => [...group.directories, ...group.settings]);
+  for (const path of [...inputs, 'pnpm-lock.yaml']) expect(PRODUCER_SOURCE_PATHS.some(root => path === root || path.startsWith(`${root}/`)), path).toBe(true);
 });

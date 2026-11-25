@@ -978,7 +978,7 @@ Complete-build limits:
 - `peakRssBytes`: `8589934592`.
 - `samplePackBytes`: `268435456`.
 - `tiles`: `5000000`.
-- `workingSetBytes`: `2147483648`.
+- `workingSetBytes`: `4294967296`.
 
 Shared limits and storage constants:
 
