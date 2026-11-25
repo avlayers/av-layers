@@ -11,7 +11,7 @@ import { installBrowserLifecycle } from '../platform/browser-lifecycle';
 import type { PreviewStore } from '../stores/app-store';
 import { createCommands } from './command-handlers';
 import { createPreviewContext } from './context';
-import { createDisplayOps, type PreviewOps } from './display-ops';
+import { createDisplayOps, installDerivedViews, type PreviewOps } from './display-ops';
 import { createForecastWiring } from './forecast-wiring';
 import { installMapWiring } from './map-wiring';
 import { overlayUiChanged, skyStatusText } from './overlay-status';
@@ -46,8 +46,7 @@ export function createPreviewApp(): PreviewApp {
 
   function start(root: HTMLElement): void {
     if (live.map || state.destroyed) return;
-    live.appRoot = root;
-    ops.syncRootTheme();
+    installDerivedViews(ctx, root, ctx.lifecycle.signal);
     const container = root.querySelector<HTMLElement>('#map');
     if (!container) throw new Error('Missing element #map');
     for (const id of ['#wind-controls', '#compact-timeline']) if (!root.querySelector(id)) throw new Error(`Missing element ${id}`);
@@ -77,7 +76,8 @@ export function createPreviewApp(): PreviewApp {
       if (!overlayUiChanged(view.overlay.value, next)) return;
       writer.overlay(next);
       wind.session.reconcile();
-      ops.updateOverlayStatus();
+      ops.updatePreparation();
+      if (!state.selectingOverlay) live.point?.feature.syncSelection();
     }, forecastScheduler.fetch, spec => forecastScheduler.request(spec), {
       budget: preparationBudget, requestLimits: services.requestLimits, theme: ctx.intent().theme,
       protectedBytes: wind.protectedBytes,

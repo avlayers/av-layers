@@ -27,7 +27,7 @@ export function installMapWiring(ctx: PreviewContext, ops: PreviewOps, map: mapl
     const timeZone = camera.timeZone();
     writer.forecast({ timeZone });
     live.timeline?.setTimeZone(timeZone);
-    ops.updateTimeUi(); ops.updateOverlayStatus(); ops.paintMapHorizon(); live.point?.feature.syncSelection();
+    ops.updateTimeUi(); ops.paintMapHorizon(); live.point?.feature.syncSelection();
   }
 
   map.on('click', event => {

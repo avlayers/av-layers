@@ -5,11 +5,11 @@ import { layerOptions, validatedCustomLayer } from '../features/forecast/forecas
 import { preparedAxisReadiness } from '../stores/app-store';
 import { themeOption } from '../themes/registry';
 import type { PreviewContext } from './context';
+import { effect } from '@preact/signals';
 import { overlayNotices } from './overlay-status';
 
 /** The operations the wiring modules call on each other, resolved at call time. */
 export interface PreviewOps {
-  syncRootTheme(): void;
   syncChannels(): void;
   clearForecast(): void;
   syncLayers(): void;
@@ -17,7 +17,6 @@ export interface PreviewOps {
   showError(message: string): void;
   updatePreparation(): void;
   updateScale(): void;
-  updateOverlayStatus(): void;
   paintMapHorizon(now?: number): void;
   updateFreshness(): void;
   updateTimeUi(): void;
@@ -37,11 +36,6 @@ export interface PreviewOps {
 export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<PreviewOps, 'writeUrl' | 'applyHistory'> {
   const { writer, view } = ctx.store, { live, state } = ctx;
   return {
-    syncRootTheme() {
-      if (!live.appRoot?.dataset) return;
-      live.appRoot.dataset.chrome = themeOption(ctx.intent().theme).darkChrome ? 'dark' : 'light';
-    },
-
     /** Forwards theme, opacity, visibility and units to every map channel. */
     syncChannels() {
       for (const channel of live.channels) channel.update(ctx.intent());
@@ -82,13 +76,6 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       if (!live.camera) return;
       const scale = live.camera.scale(ctx.intent().units);
       writer.notices({ scaleWidth: scale.width, scaleText: scale.text });
-    },
-
-    updateOverlayStatus() {
-      const { pendingModel, expired, playing } = ctx.forecast();
-      writer.notices(overlayNotices(view.overlay.value, { build: ctx.build(), pendingModel, expired, playing, timeZone: ctx.forecast().timeZone }));
-      ops.updatePreparation();
-      if (!state.selectingOverlay) live.point?.feature.syncSelection();
     },
 
     paintMapHorizon(now = Date.now()) {
@@ -175,4 +162,20 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
       ops.writeUrl('replace');
     }
   };
+}
+
+/**
+ * Effects for the views that derive purely from store signals (root chrome, frame status line, tile
+ * notice), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
+ */
+export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, signal: AbortSignal): void {
+  const { writer, view } = ctx.store;
+  const disposers = [
+    effect(() => { root.dataset.chrome = themeOption(view.intent.value.theme).darkChrome ? 'dark' : 'light'; }),
+    effect(() => {
+      const { build, pendingModel, expired, playing, timeZone } = view.forecast.value;
+      writer.notices(overlayNotices(view.overlay.value, { build, pendingModel, expired, playing, timeZone }));
+    })
+  ];
+  signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });
 }
