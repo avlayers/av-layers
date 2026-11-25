@@ -7,6 +7,9 @@ those guides and the code they link, not here.
 
 ## Deferred from the 25 Nov 2026 foundation review
 
+The first three change published formats that nothing reads yet; the science
+case set is a project of its own; numeric rain waits for value tiles.
+
 - **Coherent Windgram climb column:** publish fine-column depth and thermal
   velocity beside fine lift so the climb dome and the map ceiling share one
   column (today the profile uses the nearest native donor).

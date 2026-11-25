@@ -380,7 +380,7 @@ it('samples every v5 surface through one, listed and all frame selections', asyn
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true });
-    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }], deploymentId });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
@@ -407,7 +407,7 @@ it('uses a bounded covered land candidate when the descriptor center is outside 
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true });
-    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }], deploymentId });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60' } });
@@ -429,7 +429,7 @@ it('fails clearly when every bounded candidate is outside coverage', async () =>
   const fetchImpl = vi.fn<typeof fetch>(async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true });
-    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }], deploymentId });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     tileRequests.push(path);
@@ -458,7 +458,7 @@ it.each([false, true])('pages native profiles and records tile metrics with fron
   await probeApi({ baseUrl: 'https://api.example', model: manifest.model, observeProbe, fetchImpl: async input => {
     const path = new URL(String(input)).pathname;
     if (path === '/healthz') return Response.json({ ok: true });
-    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }], deploymentId });
+    if (path === '/v1/catalog') return Response.json({ models: [{ model: manifest.model, available: true }] });
     if (path.endsWith('/runs')) return Response.json({ retained: [{ buildId: manifest.buildId }] });
     if (path.endsWith('/provenance')) return inlineProvenance(manifest, input);
     return new Response('RIFF1234WEBP0000000000000000', { headers: { 'content-type': 'image/webp', 'access-control-allow-origin': '*', 'cache-control': 'public,max-age=60',
