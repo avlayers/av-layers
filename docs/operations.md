@@ -89,7 +89,8 @@ worker ceilings and frame groups for their workers.
 Rendered zoom selects a subset of the bundled coverage pyramid. Supported zoom
 changes reuse the same terrain cache and preserve retained builds.
 The [build budgets](../apps/batch/src/capacity.ts) admit a 2 GiB planned working
-set and accept up to 4 GiB of observed process RSS. Worker selection and
+set and accept up to 8 GiB of observed process RSS, half of a 16 GiB
+`ubuntu-24.04` runner. Worker selection and
 compaction use the working-set limit.
 
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while

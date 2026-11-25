@@ -975,7 +975,7 @@ Complete-build limits:
 - `elapsedMs`: `10800000`.
 - `gridCells`: `4000000`.
 - `numericBytes`: `137438953472`.
-- `peakRssBytes`: `4294967296`.
+- `peakRssBytes`: `8589934592`.
 - `samplePackBytes`: `268435456`.
 - `tiles`: `5000000`.
 - `workingSetBytes`: `2147483648`.

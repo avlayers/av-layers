@@ -325,6 +325,8 @@ export async function buildShard(options: ForecastInputs & { plan: BuildPlan; sh
       sourceStore: options.store, sourcePin: plan.sourcePin, hours: plan.groups[shard], deadlineAt: deadline, journalPrefix: prefix, sampleGroup: shard,
       ...(numericWriter ? { onNumericFrame: numericWriter.writeFrame } : {}) });
     const numericResult = numericWriter?.finishShard() ?? { frames: [], objects: [] };
+    // Reject an over-budget shard before uploading objects that no receipt would reference.
+    withProcessPeakRss(result.metrics);
     const numericReader = createLocalFileReader(MAX_V5_SHARD_BYTES), validation = { reader: numericReader, signal: options.signal };
     for (const surface of result.surfaces) {
       const coverage = surface.id === 'native' ? whole.native : whole.fine;
