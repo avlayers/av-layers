@@ -1,9 +1,9 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { encodeBoundedJson, MAX_PROVENANCE_BYTES, MAX_PROVENANCE_JSON_TOKENS, parseProvenance, type ManifestV5, type ProvenanceFrameReference } from '@av/contracts';
-import { readFrameProvenance, writeFrameProvenance } from './frame-provenance.js';
+import { adoptStoredFrameProvenance, readFrameProvenance, writeFrameProvenance } from './frame-provenance.js';
 
 const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))); });
@@ -36,4 +36,23 @@ it('rejects mismatched windows, references and changed chunk bytes', async () =>
   await expect(readFrameProvenance(directory, identity, value, { ...ref, key: '../outside.json' })).rejects.toThrow('reference');
   await writeFile(join(directory, ref.key), ' '.repeat(ref.bytes));
   await expect(readFrameProvenance(directory, identity, value, ref)).rejects.toThrow('hash');
+});
+
+it('lets a retried shard adopt stored provenance that differs only in capture times, and nothing else', async () => {
+  const value = frame(1), source = (capturedAt: string, etag = 'a') => ({ hour: 1, intervals: intervals(value), receipt: { capturedAt, objects: [{ key: 'gfs.t00z', etag }] } });
+  const first = await root(), retry = await root(), changed = await root();
+  const stored = await writeFrameProvenance(first, identity, value, source('2026-11-05T03:00:00.000Z'));
+  const storedBytes = await readFile(join(first, stored.key));
+  const store = { get: async (key: string) => key === stored.key ? { bytes: new Uint8Array(storedBytes), etag: 'e' } : null };
+
+  const local = await writeFrameProvenance(retry, identity, value, source('2026-11-05T03:40:00.000Z'));
+  expect(local.sha256).not.toBe(stored.sha256);
+  const adopted = await adoptStoredFrameProvenance(retry, store, local);
+  expect(adopted).toEqual(stored);
+  expect(Buffer.compare(await readFile(join(retry, stored.key)), storedBytes)).toBe(0);
+  expect((await readFrameProvenance(retry, identity, value, adopted)).hour).toBe(1);
+
+  const different = await writeFrameProvenance(changed, identity, value, source('2026-11-05T03:40:00.000Z', 'b'));
+  expect(await adoptStoredFrameProvenance(changed, store, different)).toEqual(different);
+  expect(await adoptStoredFrameProvenance(changed, { get: async () => null }, different)).toEqual(different);
 });

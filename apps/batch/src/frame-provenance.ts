@@ -29,6 +29,27 @@ export async function writeFrameProvenance(root: string, identity: Identity, fra
   return reference;
 }
 
+const withoutCaptureTimes = (value: unknown): unknown => Array.isArray(value) ? value.map(withoutCaptureTimes)
+  : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== 'capturedAt').map(([key, item]) => [key, withoutCaptureTimes(item)])) : value;
+
+/**
+ * A retried shard reacquires the same upstream objects with a new `capturedAt`. When an interrupted attempt
+ * already stored this frame's immutable provenance and it differs only in capture times, the stored bytes
+ * replace the local ones so the retry finishes the same build. Any other difference (changed upstream
+ * objects) keeps the new bytes, and the immutable write still refuses them.
+ */
+export async function adoptStoredFrameProvenance(root: string, store: Pick<ObjectStorage, 'get'>, reference: ProvenanceFrameReference, signal?: AbortSignal): Promise<ProvenanceFrameReference> {
+  const stored = await store.get(reference.key, undefined, MAX_PROVENANCE_BYTES, signal);
+  if (!stored) return reference;
+  const sha256 = digest(stored.bytes);
+  if (sha256 === reference.sha256) return reference;
+  const file = localPath(root, reference.key), local = await readLocalFile(file, MAX_PROVENANCE_BYTES, reference.bytes);
+  const comparable = (bytes: Uint8Array) => JSON.stringify(withoutCaptureTimes(parseBoundedJson(bytes, MAX_PROVENANCE_JSON_TOKENS)));
+  if (comparable(stored.bytes) !== comparable(local)) return reference;
+  await writeFile(file, stored.bytes);
+  return provenanceFrameReferenceSchema.parse({ ...reference, bytes: stored.bytes.byteLength, sha256 });
+}
+
 export async function readFrameProvenance(source: string | { store: ObjectStorage; signal?: AbortSignal }, identity: Identity, frame: Frame, reference: ProvenanceFrameReference) {
   provenanceFrameReferenceSchema.parse(reference);
   if (reference.frame !== frame.id || reference.key !== frameKey(identity, frame)) throw new Error('Invalid provenance frame reference');

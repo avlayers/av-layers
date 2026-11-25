@@ -96,9 +96,10 @@ compaction use the working-set limit.
 If a shard fails, `gh run rerun <run_id> --failed` reuses completed shard artifacts while
 the plan meets the [build elapsed budget](../apps/batch/src/capacity.ts),
 its scoped credentials and the environment sealing key remain valid. Start a
-new build after expiry or rotation. Also start a new build
-when a failed shard uploaded frame provenance without completing its receipt.
-Reacquisition can change the immutable provenance timestamp.
+new build after expiry or rotation. A shard that failed after uploading frame
+provenance but before completing its receipt can be rerun too: when the
+reacquired upstream objects match, it adopts the stored provenance, whose only
+difference is the capture time. Changed upstream objects still need a new build.
 Workers and assembly finish under their frozen revision when main advances.
 Publication proceeds when main advanced without changing `PUBLICATION_PATHS`
 in [publication-workflow.ts](../scripts/publication-workflow.ts); otherwise
