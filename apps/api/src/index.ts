@@ -67,7 +67,7 @@ async function discovery(c: Context<Env>, build: () => unknown, observed: readon
   }
   const until = deadlines.length ? Math.min(...deadlines) : now;
   const config = await (discoveryConfig ??= sha256(new TextEncoder().encode(JSON.stringify(products))));
-  const representation = `discovery-v2:${config}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
+  const representation = `discovery-v2:${config}:${c.env.AV_DEPLOYMENT_ID ?? 'local'}:${states.map(state => state?.identity ?? 'uncached').join(':')}`;
   return cached(c.req.raw, expiresAt, c.executionCtx, async () => json(build()), representation, until);
 }
 const modelId = (c: Context<Env>): ModelId => {
@@ -201,16 +201,18 @@ registerJsonRoute(
         }
       })
     );
+    // The Worker version that built this representation, so a deployment check can tell an old isolate's catalog apart.
+    const deployment = c.env.AV_DEPLOYMENT_ID ? { deploymentId: c.env.AV_DEPLOYMENT_ID } : {};
     const expiries = results.flatMap(({ row }) => row.expiresAt === undefined ? [] : [row.expiresAt]);
     const expiresAt = expiries.length ? new Date(Math.min(...expiries.map(Date.parse))).toISOString() : undefined;
     try {
-      return await discovery(c, () => ({ models: results.map(({ row }) => row) }), results.map(({ observed }) => observed), expiries, expiresAt);
+      return await discovery(c, () => ({ models: results.map(({ row }) => row), ...deployment }), results.map(({ observed }) => observed), expiries, expiresAt);
     } catch (error) {
       if (!(error instanceof Problem) || error.code !== 'not-retained') throw error;
       const now = Date.now();
       const models = results.map(({ row }) => row.expiresAt !== undefined && Date.parse(row.expiresAt) <= now
         ? unavailableCatalogModel(row.model, 'not-retained') : row);
-      return finish(c.req.raw, json({ models }));
+      return finish(c.req.raw, json({ models, ...deployment }));
     }
   }
 );

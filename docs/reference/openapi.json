@@ -1986,6 +1986,10 @@
               "application/json": {
                 "schema": {
                   "properties": {
+                    "deploymentId": {
+                      "maxLength": 128,
+                      "type": "string"
+                    },
                     "models": {
                       "items": {
                         "properties": {

@@ -177,10 +177,12 @@ Pushes to `main` deploy production automatically. `deploy.yml` runs CI, builds
 the clients, deploys the API Worker, and checks the complete model catalog.
 A model without a servable publication (missing, expired, invalid or
 incomplete) only logs a warning and skips its probes: forecast data problems
-belong to the health monitor, not to code deploys. A newly registered model the
-catalog does not list yet is retried for about a minute, because an old Worker
-isolate can still answer after `/healthz` reports the new deployment, and is
-then also only warned about. Deployment fails if no model has a publication.
+belong to the health monitor, not to code deploys. The catalog names the
+Worker deployment that built it (`deploymentId`), so a catalog from an old
+isolate that still answers after `/healthz` reports the new deployment is
+retried for about two minutes. Deployment fails if the new deployment never
+answers, if its catalog omits a registered model, or if no model has a
+publication.
 Hourly health checks only models enrolled for that environment, so a
 new model can stay registered before its first publication. Every available
 model is verified through its latest build, retained list, point, provenance and
