@@ -67,7 +67,7 @@ scalar chart covers builds that publish no native profiles.
 - [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the [context](src/app/context.ts) (store, services, live parts) and the wiring modules, then creates the map channels on `start`. Wiring modules call each other through the shared `PreviewOps` table in [display-ops.ts](src/app/display-ops.ts).
 - [display-ops.ts](src/app/display-ops.ts), [forecast-wiring.ts](src/app/forecast-wiring.ts), [url-wiring.ts](src/app/url-wiring.ts), [command-handlers.ts](src/app/command-handlers.ts), [map-wiring.ts](src/app/map-wiring.ts), [page-lifecycle.ts](src/app/page-lifecycle.ts): channel and notice sync, forecast session events, URL write and history restore, UI commands, camera events, and back/forward-cache suspension and disposal.
 - [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
-- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. The root forwards theme, opacity, visibility, units, playback and teardown to every channel in one loop.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. [display-ops.ts](src/app/display-ops.ts) forwards theme, opacity, visibility, units and teardown to every channel in one loop; [command-handlers.ts](src/app/command-handlers.ts) forwards playback.
 - [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
@@ -94,8 +94,8 @@ values and typed commands. URL/history behavior is tested through
 To change a control, update its store intent, command and component; leave the
 graphics engine alone. To add a map layer group, implement `MapChannel` and add
 it to the root's channel list, which updates, clears and destroys every channel.
-A group that loads forecast data also needs a select call where the root selects
-the raster and sky frames;
+A group that loads forecast data also needs a select call beside the raster and
+sky selects in [display-ops.ts](src/app/display-ops.ts);
 to add a theme, see [src/themes/README.md](src/themes/README.md). To add a behavior, use the existing client/contracts
 types and publish through the owning feature controller.
 

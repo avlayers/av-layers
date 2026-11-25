@@ -31,15 +31,17 @@ Kept, with the gap that blocks the library:
 | `apps/batch/src/concurrent.ts` | `p-map` | `p-map` rejects while other tasks still run; callers rely on every in-flight task settling first |
 | Raster and derive worker pools | `piscina` | Raster tiles stay on a fixed worker to keep its geometry cache warm; derive jobs go to every partition worker. Both start workers through `apps/batch/src/ts-worker.ts` |
 | Small browser `Map` caches evicting `keys().next()` | `lru-cache` | 4 to 24 entries, most disposing GPU or decoded data on eviction; the library costs about 6 KB gzip per bundle. The Node-only caches in `apps/batch/src/validate.ts` and `terrain/local-store.ts` use it |
-| `features/sky/contours.ts`, one marching-squares routine for isobars, cloud and rain edges | `d3-contour` | `d3-contour` emits closed polygons with border artefacts for lines and has no validity mask or centre-based saddle choice |
+| `features/sky/contours.ts`, one marching-squares routine for map isobars, cloud and rain edges | `d3-contour` | `d3-contour` emits closed polygons with border artefacts for lines and has no validity mask or centre-based saddle choice |
+| `packages/windgram/src/windgram-isobands.ts`, filled bands on the windgram's uneven time axis | `d3-contour` plus a coordinate transform | No gap for filled bands. Not moved yet: the swap changes the chart's SVG, so it needs its own visual review |
 
 ## Consequences
 
-- One retry vocabulary in Node code. Each call site keeps its own predicate.
+- One retry vocabulary in Node and browser code. Each call site keeps its own predicate.
 - `lru-cache` adds about 6.8 KB gzip to the Worker. Zero-byte entries count as one byte.
-- p-retry backoff jitter spans ×1 to ×2 of the base delay, narrower than the old ×0.5 to ×1.5.
-- Browser retries (`client-wind.ts`, `client-raster.ts`) use `p-retry` too; demoted
-  wind requests re-run without spending a retry through `shouldConsumeRetry`.
+- p-retry backoff grows by its factor per attempt with jitter of ×1 to ×2; the Node loops used ×0.5 to ×1.5, the browser wind reads ×0.85 to ×1.15 and the raster transport a linear step.
+- Browser retries (`client-wind-transport.ts`, `client-raster.ts`) use `p-retry` too.
+  Demoted wind requests re-run outside p-retry without spending a retry, because
+  p-retry checks its retry budget before any predicate.
 - Two issues found while reviewing the kept code are fixed: cloud and rain edges
   now share the isobar routine, so saddles join the right corners, and `finish()`
   compares `If-None-Match` weakly through `fresh`, so a `W/` tag revalidates to 304.
