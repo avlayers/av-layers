@@ -46,7 +46,7 @@ describe('topbar icon controls, model km resolution badges & composable per-chan
     expect(formatWindLevelLabel('surface', 'metric')).toBe('SFC');
     expect(formatWindLevelLabel('lift', 'imperial')).toBe('TOL');
     expect(formatWindLevelLabel(1000, 'metric')).toBe('1,000 m AGL');
-    expect(formatWindLevelLabel(1000, 'imperial')).toBe('3,000 ft AGL');
+    expect(formatWindLevelLabel(1000, 'imperial')).toBe('3,300 ft AGL');
     for (const channel of DOCK_CHANNELS) {
       for (const theme of MAP_THEMES) {
         expect(channel.detail(theme).length).toBeGreaterThan(15);
