@@ -49,4 +49,17 @@ describe('contourLines', () => {
     const lines = contourLines(diagonal, 4, 4, 0.6, toGeo, { valid });
     expect(lines).toHaveLength(1);
   });
+
+  it('keeps one line where grid values sit exactly on the level', () => {
+    // Column 2 equals the level; the field falls west to east, so one straight north-south line.
+    const grid = Array.from({ length: 30 }, (_, i) => 1012 - (i % 6) * 0.5 + 1);
+    const lines = contourLines(grid, 6, 5, 1012, toGeo, { minVertices: 2 });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]!.length).toBeGreaterThan(4);
+  });
+
+  it('drops the speck around a lone on-level vertex', () => {
+    const grid = [0, 0, 0, 0, 1, 0, 0, 0, 0];
+    expect(contourLines(grid, 3, 3, 1, toGeo, { minVertices: 2 })).toEqual([]);
+  });
 });

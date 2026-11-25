@@ -38,12 +38,16 @@ export function contourLines(
     const d = vb - va;
     return Math.abs(d) < 1e-6 ? 0.5 : Math.max(0, Math.min(1, (level - va) / d));
   };
+  // A value exactly on the level is nudged to the high side so no contour point lands on a grid
+  // vertex, where segments from four cells would meet and branch.
+  const nudge = 1e-9 * Math.max(1, Math.abs(level));
+  const at = (i: number): number => { const v = grid[i]!; return v === level ? v + nudge : v; };
   const segments: Array<[GeoPt, GeoPt]> = [];
   for (let y = 0; y < rows - 1; y++) {
     for (let x = 0; x < cols - 1; x++) {
       const i00 = y * cols + x, i10 = i00 + 1, i01 = i00 + cols, i11 = i01 + 1;
       if (valid && (!valid[i00] || !valid[i10] || !valid[i01] || !valid[i11])) continue;
-      const v00 = grid[i00]!, v10 = grid[i10]!, v11 = grid[i11]!, v01 = grid[i01]!;
+      const v00 = at(i00), v10 = at(i10), v11 = at(i11), v01 = at(i01);
       const mask = (v00 >= level ? 8 : 0) | (v10 >= level ? 4 : 0) | (v11 >= level ? 2 : 0) | (v01 >= level ? 1 : 0);
       if (mask === 0 || mask === 15) continue;
       const point = (edge: Edge): GeoPt => edge === T ? [x + interp(v00, v10), y]
@@ -83,9 +87,16 @@ function stitch(segments: ReadonlyArray<[GeoPt, GeoPt]>, minVertices: number): G
     const backward: GeoPt[] = [];
     for (let prev = take(byEnd, a, 0); prev; prev = take(byEnd, prev, 0)) backward.push(prev);
     const line = backward.reverse().concat(forward);
-    if (line.length >= minVertices) lines.push(line);
+    if (line.length >= minVertices && extent(line) > 1e-3) lines.push(line);
   }
   return lines;
+}
+
+/** Largest side of a line's bounding box in grid cells; specks around a single on-level vertex are near 0. */
+function extent(line: readonly GeoPt[]): number {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of line) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
+  return Math.max(maxX - minX, maxY - minY);
 }
 
 function smooth(line: GeoPt[]): GeoPt[] {
