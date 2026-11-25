@@ -1,3 +1,4 @@
+import pRetry from 'p-retry';
 import { normalizeLon, prepareGridGeometry, withinGeographicBounds, type GeographicBounds, type Grid, type GridGeometry } from '@av/contracts/geometry';
 import { STATUS_MASK, STATUS_NO_LIFT, STATUS_OUTSIDE, STATUS_UNAVAILABLE, STATUS_VALID } from '@av/contracts/layers';
 import { WIND_CHUNK_LIMIT, WIND_FINE_CELL_BYTES, WIND_FRAME_LIMIT, WIND_HEIGHTS, WIND_INDEX_ENTRIES, WIND_OVERVIEW_CELL_BYTES, WIND_OVERVIEW_TILE_SIZE, WIND_OVERVIEW_VALUES, assertWindFrameLayout, decodeTileMask, encodeWindByte, parseWindFrame, windLayout, windOverviewLayout, type TileMask } from '@av/contracts/wind-data';
@@ -45,7 +46,8 @@ const empty = (status: WindStatus): WindSample => ({ status, u: null, v: null })
 const DETAIL_MAX_BYTES = WIND_NUMERIC_BYTES / 2 - WIND_FRAME_LIMIT, SINGLE_VIEW_MAX_BYTES = WIND_NUMERIC_BYTES - WIND_FRAME_LIMIT;
 const MAX_SPAN_BYTES = 1024 * 1024, SPAN_STRIPE = 8;
 const REQUEST_TIMEOUT_MS = 15_000, FIELD_SLOTS = 8192;
-const DEMOTED_REQUEST = Symbol('demoted wind request');
+/** Cancel reason for a queued request moved behind newer work; it re-runs without spending a retry. */
+const DEMOTED_REQUEST = new Error('Demoted wind request');
 const DEFAULT_PREPARED_GRID_SIZE = 128;
 const PREPARATION_SLICE_MS = 4, PREPARATION_SLICE_ROWS = 8;
 export const WIND_FIELD_SAMPLER_BYTES = FIELD_SLOTS * 17;
@@ -62,9 +64,9 @@ interface WindSourceOptions {
   horizon?: number;
   overviewForHorizon?: boolean;
   coalesceSpans?: boolean;
-  retryDelaysMs?: readonly number[];
-  sleep?: (ms: number) => Promise<void>;
-  random?: () => number;
+  /** Transient failures retry with p-retry backoff: `retryMinTimeoutMs`, then ×4, jittered ×1–2. */
+  retries?: number;
+  retryMinTimeoutMs?: number;
 }
 
 class WindTransientError extends Error {
@@ -368,22 +370,16 @@ export class WindDataSource {
       const attemptSignal = pending.controller.signal;
       attemptSignal.throwIfAborted();
       if (this.cache.failureRemaining(url) > 0) throw new Error('Numeric resource is cooling down');
-      const delays = this.options.retryDelaysMs ?? [250, 1000];
-      const sleep = this.options.sleep ?? ((ms: number) => new Promise<void>((resolve, reject) => {
-        const abort = () => { clearTimeout(timer); reject(attemptSignal.reason); };
-        const timer = setTimeout(() => { attemptSignal.removeEventListener('abort', abort); resolve(); }, ms);
-        attemptSignal.addEventListener('abort', abort, { once: true });
-      }));
-      for (let attempt = 0; ; attempt++) try {
-        return await readOnce(url, type, targets, pending);
+      const transient = (error: unknown) => error instanceof WindTransientError || (error instanceof TypeError && !attemptSignal.aborted);
+      try {
+        return await pRetry(() => readOnce(url, type, targets, pending), {
+          retries: this.options.retries ?? 2, minTimeout: this.options.retryMinTimeoutMs ?? 250, factor: 4, randomize: true, signal: attemptSignal,
+          shouldRetry: ({ error }) => error === DEMOTED_REQUEST || transient(error),
+          shouldConsumeRetry: ({ error }) => error !== DEMOTED_REQUEST
+        });
       } catch (error) {
-        if (error === DEMOTED_REQUEST) { attempt--; attemptSignal.throwIfAborted(); continue; }
-        const transient = error instanceof WindTransientError || (error instanceof TypeError && !attemptSignal.aborted);
-        if (!transient) { if (error instanceof WindTransientError) this.cache.recordFailure(url); throw error; }
-        if (attempt >= delays.length || attemptSignal.aborted) { this.cache.recordFailure(url); throw error; }
-        const jitter = 0.85 + (this.options.random?.() ?? Math.random()) * 0.3;
-        await sleep(delays[attempt]! * jitter);
-        attemptSignal.throwIfAborted();
+        if (transient(error)) this.cache.recordFailure(url);
+        throw error;
       }
     };
     const readOnce = async (url: string, type: string, targets: CachedBytes[], pending: PendingBytes): Promise<number | null | 'product-unavailable' | 'unsupported-span' | 'retry-single'> => {

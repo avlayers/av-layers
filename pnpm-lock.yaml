@@ -172,6 +172,9 @@ importers:
       geotiff:
         specifier: 3.0.5
         version: 3.0.5
+      lru-cache:
+        specifier: 11.5.3
+        version: 11.5.3
       p-retry:
         specifier: 9.0.0
         version: 9.0.0
@@ -254,6 +257,9 @@ importers:
       '@photostructure/tz-lookup':
         specifier: 11.8.0
         version: 11.8.0
+      p-retry:
+        specifier: 9.0.0
+        version: 9.0.0
 
   packages/contracts:
     dependencies:

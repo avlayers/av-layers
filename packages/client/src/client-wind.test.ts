@@ -863,20 +863,20 @@ it('retries transient numeric responses and cools an exhausted immutable resourc
     }
     return reply(target.includes('/wind/') ? wind : fine);
   });
-  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  const source = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache, retries: 2, retryMinTimeoutMs: 1 });
   expect(await source.load({ build: pinned, frame, bounds })).toBe('ready');
   expect(windAttempts).toBe(2);
   source.dispose();
 
   windAttempts = 0; fail = true;
   const failingCache = new WindDataCache();
-  const failing = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {}, random: () => 0.5 });
+  const failing = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retries: 2, retryMinTimeoutMs: 1 });
   await expect(failing.load({ build: pinned, frame, bounds })).rejects.toThrow('Transient numeric response 503');
   expect(fetcher.mock.calls.filter(call => String(call[0]).includes('/wind/'))).toHaveLength(5);
   failing.dispose();
 
   const before = fetcher.mock.calls.length;
-  const cooling = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retryDelaysMs: [1, 1], sleep: async () => {} });
+  const cooling = new WindDataSource('https://api.test', { fetchImpl: fetcher, cache: failingCache, retries: 2, retryMinTimeoutMs: 1 });
   await expect(cooling.load({ build: pinned, frame, bounds })).rejects.toThrow('cooling down');
   expect(fetcher.mock.calls).toHaveLength(before);
   expect(failingCache.failedResources).toBeGreaterThan(0);

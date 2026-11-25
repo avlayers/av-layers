@@ -15,6 +15,7 @@
     "@av/contracts": "workspace:*",
     "@av/forecast": "workspace:*",
     "@av/soaring": "workspace:*",
-    "@photostructure/tz-lookup": "11.8.0"
+    "@photostructure/tz-lookup": "11.8.0",
+    "p-retry": "9.0.0"
   }
 }
