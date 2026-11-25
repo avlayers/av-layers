@@ -2,7 +2,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { clampOpacity, previewRasterLayer } from '@av/client';
 import type { ResolvedChannelStyles } from '../map/channel-styles';
 import type { CloudStyleId } from '../../themes/theme';
-import { extractOrientedContours, type GeoPt } from './contour-rings';
+import { contourLines, type GeoPt } from './contours';
 import {
   cloudRasterBeforeId,
   isBitmapPendingOnImageSource,
@@ -264,7 +264,7 @@ export function buildCloudContourGeoJson(field: SynopticField, style: CloudStyle
 
   for (const { tier, threshold } of levels) {
     if (maxCover < threshold) continue;
-    for (const coordinates of extractOrientedContours(grid, CONTOUR_GRID_W, CONTOUR_GRID_H, threshold, toGeo, 4)) {
+    for (const coordinates of contourLines(grid, CONTOUR_GRID_W, CONTOUR_GRID_H, threshold, toGeo, { minVertices: 4 })) {
       features.push({
         type: 'Feature',
         properties: { tier },

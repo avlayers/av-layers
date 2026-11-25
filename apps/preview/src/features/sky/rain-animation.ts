@@ -1,10 +1,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { paletteValueLut, RAIN_COLORS, RAIN_EDGES } from '@av/contracts/layers';
 import type { ResolvedChannelStyles } from '../map/channel-styles';
-import {
-  extractOrientedContours,
-  type GeoPt
-} from './contour-rings';
+import { contourLines, type GeoPt } from './contours';
 
 const MAX_LAT = 85.05112878;
 const DEG = Math.PI / 180;
@@ -485,7 +482,7 @@ export function buildRainContourGeoJson(field: PrecipField): RainContourGeoJson 
 
   for (const { tier, mmh } of levels) {
     if (field.maxMmh < mmh) continue;
-    const rings = extractOrientedContours(grid, cols, rows, mmh, toGeo, 4);
+    const rings = contourLines(grid, cols, rows, mmh, toGeo, { minVertices: 4 });
     for (const ring of rings) {
       features.push({
         type: 'Feature',

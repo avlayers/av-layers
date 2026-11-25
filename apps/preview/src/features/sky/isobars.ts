@@ -1,3 +1,5 @@
+import { contourLines, type GeoPt } from './contours';
+
 interface IsobarViewportBox {
   readonly west: number;
   readonly south: number;
@@ -133,73 +135,7 @@ function upsampleMslp(
   return { values: smoothed, valid };
 }
 
-type Pt = [number, number];
-
-function stitchSegments(segments: Array<[Pt, Pt]>): Pt[][] {
-  if (!segments.length) return [];
-  const keyOf = (p: Pt) => `${Math.round(p[0] * 1e4)},${Math.round(p[1] * 1e4)}`;
-  const used = new Uint8Array(segments.length);
-  const byStart = new Map<string, number[]>();
-  const byEnd = new Map<string, number[]>();
-
-  for (let i = 0; i < segments.length; i++) {
-    const [a, b] = segments[i]!;
-    const ka = keyOf(a), kb = keyOf(b);
-    let sa = byStart.get(ka); if (!sa) { sa = []; byStart.set(ka, sa); } sa.push(i);
-    let eb = byEnd.get(kb); if (!eb) { eb = []; byEnd.set(kb, eb); } eb.push(i);
-  }
-
-  const takeConnected = (point: Pt): Pt | null => {
-    const k = keyOf(point);
-    for (const idx of byStart.get(k) ?? []) {
-      if (!used[idx]) { used[idx] = 1; return segments[idx]![1]; }
-    }
-    for (const idx of byEnd.get(k) ?? []) {
-      if (!used[idx]) { used[idx] = 1; return segments[idx]![0]; }
-    }
-    return null;
-  };
-
-  const lines: Pt[][] = [];
-  for (let i = 0; i < segments.length; i++) {
-    if (used[i]) continue;
-    used[i] = 1;
-    const [a, b] = segments[i]!;
-    const forward: Pt[] = [a, b];
-    for (;;) {
-      const next = takeConnected(forward[forward.length - 1]!);
-      if (!next) break;
-      forward.push(next);
-    }
-    const backward: Pt[] = [];
-    let tail = a;
-    for (;;) {
-      const prev = takeConnected(tail);
-      if (!prev) break;
-      backward.push(prev);
-      tail = prev;
-    }
-    backward.reverse();
-    const merged = backward.concat(forward);
-    if (merged.length >= 3) lines.push(merged);
-  }
-  return lines;
-}
-
-function chaikinSmooth(line: Pt[]): Pt[] {
-  if (line.length < 4) return line;
-  const closed = Math.hypot(line[0]![0] - line[line.length - 1]![0], line[0]![1] - line[line.length - 1]![1]) < 1e-4;
-  const out: Pt[] = closed ? [] : [line[0]!];
-  const limit = line.length - 1;
-  for (let i = 0; i < limit; i++) {
-    const p0 = line[i]!, p1 = line[i + 1]!;
-    out.push([0.75 * p0[0] + 0.25 * p1[0], 0.75 * p0[1] + 0.25 * p1[1]]);
-    out.push([0.25 * p0[0] + 0.75 * p1[0], 0.25 * p0[1] + 0.75 * p1[1]]);
-  }
-  if (closed && out.length) out.push(out[0]!);
-  else out.push(line[limit]!);
-  return out;
-}
+type Pt = GeoPt;
 
 /**
  * Extracts smoothed sea-level pressure isobar polylines and H/L synoptic centers
@@ -239,58 +175,10 @@ export function buildIsobarGeoJson(
     box.north - (gy / (FINE_ROWS - 1)) * (box.north - box.south)
   ];
 
-  const interp = (va: number, vb: number, level: number): number => {
-    const d = vb - va;
-    return Math.abs(d) < 1e-6 ? 0.5 : Math.max(0, Math.min(1, (level - va) / d));
-  };
-
   const lineFeatures: IsobarGeoJson['lines']['features'] = [];
-
   for (let hpa = startHpa; hpa <= endHpa; hpa += minorStep) {
-    const segs: Array<[Pt, Pt]> = [];
-    for (let y = 0; y < FINE_ROWS - 1; y++) {
-      for (let x = 0; x < FINE_COLS - 1; x++) {
-        const i00 = y * FINE_COLS + x;
-        const i10 = i00 + 1;
-        const i01 = i00 + FINE_COLS;
-        const i11 = i01 + 1;
-        if (!valid[i00] || !valid[i10] || !valid[i01] || !valid[i11]) continue;
-
-        const v00 = values[i00]!, v10 = values[i10]!, v11 = values[i11]!, v01 = values[i01]!;
-        const mask = (v00 >= hpa ? 8 : 0) | (v10 >= hpa ? 4 : 0) | (v11 >= hpa ? 2 : 0) | (v01 >= hpa ? 1 : 0);
-        if (mask === 0 || mask === 15) continue;
-
-        const top = (): Pt => toGeo(x + interp(v00, v10, hpa), y);
-        const right = (): Pt => toGeo(x + 1, y + interp(v10, v11, hpa));
-        const bottom = (): Pt => toGeo(x + interp(v01, v11, hpa), y + 1);
-        const left = (): Pt => toGeo(x, y + interp(v00, v01, hpa));
-
-        switch (mask) {
-          case 1: case 14: segs.push([left(), bottom()]); break;
-          case 2: case 13: segs.push([bottom(), right()]); break;
-          case 3: case 12: segs.push([left(), right()]); break;
-          case 4: case 11: segs.push([top(), right()]); break;
-          case 6: case 9: segs.push([top(), bottom()]); break;
-          case 7: case 8: segs.push([left(), top()]); break;
-          case 5: {
-            const center = 0.25 * (v00 + v10 + v11 + v01);
-            if (center >= hpa) { segs.push([left(), top()], [bottom(), right()]); }
-            else { segs.push([left(), bottom()], [top(), right()]); }
-            break;
-          }
-          case 10: {
-            const center = 0.25 * (v00 + v10 + v11 + v01);
-            if (center >= hpa) { segs.push([left(), bottom()], [top(), right()]); }
-            else { segs.push([left(), top()], [bottom(), right()]); }
-            break;
-          }
-        }
-      }
-    }
-
     const major = hpa % majorStep === 0;
-    for (const rawLine of stitchSegments(segs)) {
-      const coordinates = chaikinSmooth(rawLine);
+    for (const coordinates of contourLines(values, FINE_COLS, FINE_ROWS, hpa, toGeo, { valid })) {
       lineFeatures.push({
         type: 'Feature',
         properties: { hpa, major, label: `${hpa}` },
