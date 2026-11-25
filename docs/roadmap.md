@@ -2,7 +2,24 @@
 
 See [deployments](status.md) for live applications, [science](science.md) for
 current calculations, and [extensions](extensions.md) for adding models and
-layers.
+layers. This page lists proposed work only; shipped behaviour is described by
+those guides and the code they link, not here.
+
+## Deferred from the 25 Nov 2026 foundation review
+
+- **Coherent Windgram climb column:** publish fine-column depth and thermal
+  velocity beside fine lift so the climb dome and the map ceiling share one
+  column (today the profile uses the nearest native donor).
+- **Per-cell derivation code:** carry reconstructed-column, extrapolated and
+  clearance-fallback branches through packing to the point details, as a
+  versioned quality extension rather than redefined flags.
+- **Exercised retained-build migration:** keep representative prior-release
+  artifacts and test dual-read/new-write before the next format change.
+- **Independent science case set:** a small archived replay set (dry
+  convection, inversion, cloud-limited, wind, ridge and valley) with a
+  repeatable before/after report.
+- **Numeric rain transport:** carry precipitation values separately from
+  palette colours before rain feeds any quantitative readout.
 
 ## Publication tiers and fast client delivery
 
@@ -143,24 +160,11 @@ and [serving budgets](serving-budgets.md):
   cells (and `msl - agl` on valid cells) in
   [`serveSample`](../apps/api/src/sample.ts) so the client always knows exact
   model/DEM ground elevation at the clicked point without extra channels.
-- **Single-click point readout and diurnal bar chart (`@av/client`):**
-  auto-fetch `/sample` on map click to show an immediate callout (`MSL`, `AGL`,
-  `Terrain`, and `Cu`/`Blue` badge for the active frame) plus a clickable
-  daytime bar chart (ground floor + usable lift column) alongside the table.
-- **Units (`m` / `ft`) and local solar/timezone time formatting:** round
-  displayed heights to whole meters/feet in
-  [`client-view.ts`](../packages/client/src/client-view.ts) (instead of raw
-  `Float32` decimals), add a client `m` / `ft` toggle for legends and readouts,
-  and display local time alongside UTC.
 - **Basemap hillshade, roads/labels above overlay, and patch outline:** place
   terrain hillshade beneath the forecast raster,
   render roads, borders, and place/peak labels in a symbol layer above the
   forecast raster, render refinement polygon outlines (`zone-001`), and allow
   `maxZoom: 9` inside 1 km patches.
-- **Flicker-free frame scrubbing (`←` / `→`):** update or prefetch tile sources
-  across adjacent frames in [the raster overlay](../apps/preview/src/features/raster/raster-overlay.ts)
-  without tearing down the active MapLibre layer on every step.
-
 ## 6. Route cross-sections, soundings, high-res feeds, and calibration
 
 - **Route cross-sections and client block caching:** extend
@@ -169,9 +173,6 @@ and [serving budgets](serving-budgets.md):
   and optionally expose immutable $16 \times 16$ spatial blocks so the browser
   can evaluate [`sampleCells`](../packages/forecast/src/sampler.ts) locally at
   60 FPS while dragging route waypoints.
-- **Atmospheric profiles (`profiles.bin`):** pack quantized native-grid vertical
-  profiles in $16 \times 16$ spatial blocks for interactive Skew-T and Windgram
-  sounding charts.
 - **Additional public NWP adapters:** add pluggable providers for
   `0.1°` ECMWF IFS Open Data and `2–3 km` regional convection-permitting feeds
   (`ICON-D2`, `HRRR`, `AROME`).
