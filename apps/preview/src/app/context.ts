@@ -2,7 +2,6 @@ import {
   ApiClient, createForecastRequestScheduler, createPreparationBudget, PointSeriesController, type PinnedBuild
 } from '@av/client';
 import { WindDataCache } from '@av/client/wind';
-import type { ModelId } from '@av/contracts/publication';
 import type { MapChannel } from '../channels/channel';
 import { activeLayer } from '../features/forecast/forecast-model';
 import type { createForecastSession } from '../features/forecast/forecast-session';
@@ -75,9 +74,8 @@ export function createPreviewContext() {
   };
   const state = {
     admissionEpoch: 0, rasterPending: false, windPending: false,
-    mapOffsetMinutes: startup.initialOffset, lastTimelineLat: Number.NaN, lastTimelineLng: Number.NaN,
-    urlReady: false, selectingOverlay: false, destroyed: false,
-    expiryTimer: null as number | null, resumeModel: null as ModelId | null
+    lastTimelineLat: Number.NaN, lastTimelineLng: Number.NaN,
+    urlReady: false, selectingOverlay: false, destroyed: false
   };
   const lifecycle = new AbortController();
   const intent = () => view.intent.value;

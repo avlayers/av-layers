@@ -94,7 +94,7 @@ export function createPreviewApp(): PreviewApp {
     ops.syncChannels();
 
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
-      offsetMinutes: state.mapOffsetMinutes,
+      offsetMinutes: ctx.forecast().offsetMinutes,
       variant: ctx.intent().dockView,
       ...(camera.followsPlace() && Number.isFinite(camera.home.lat) && Number.isFinite(camera.home.lng) ? { latitude: camera.home.lat, longitude: camera.home.lng } : {}),
       onSelect: (index, mode = 'push') => ops.selectIndex(index, mode, true),
@@ -108,7 +108,7 @@ export function createPreviewApp(): PreviewApp {
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,
-      offsetMinutes: () => state.mapOffsetMinutes,
+      offsetMinutes: () => ctx.forecast().offsetMinutes,
       displayedFrame: () => {
         const displayed = view.overlay.value.displayed;
         return displayed && displayed.build === ctx.build() ? displayed.frame : null;

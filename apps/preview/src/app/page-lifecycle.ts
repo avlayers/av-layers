@@ -1,4 +1,5 @@
 import { maplibregl } from '../features/map/map-controller';
+import type { ModelId } from '@av/contracts/publication';
 import type { PreviewContext } from './context';
 import type { PreviewOps } from './display-ops';
 
@@ -11,6 +12,7 @@ function cleanup(releases: readonly (() => void)[]): void {
 /** Back/forward-cache suspension, map failure and permanent disposal, each releasing in reverse build order. */
 export function createPageLifecycle(ctx: PreviewContext, ops: PreviewOps) {
   const { writer } = ctx.store, { live, state, services } = ctx;
+  let resumeModel: ModelId | null = null;
 
   function disposePermanently(): void {
     if (state.destroyed) return;
@@ -35,7 +37,7 @@ export function createPageLifecycle(ctx: PreviewContext, ops: PreviewOps) {
       if (!event.persisted) { disposePermanently(); return; }
       const pointInterrupted = live.point?.feature.pending;
       cleanup([
-        () => { state.resumeModel = ctx.forecastSession.suspend(); },
+        () => { resumeModel = ctx.forecastSession.suspend(); },
         () => live.wind?.session.clear(), () => services.windCache.clear(), () => live.locationController?.reset(),
         () => {
           live.point?.marker.clear();
@@ -49,7 +51,7 @@ export function createPageLifecycle(ctx: PreviewContext, ops: PreviewOps) {
 
     pageShow(event: PageTransitionEvent): void {
       if (!event.persisted) return;
-      if (state.resumeModel !== null) { const model = state.resumeModel; state.resumeModel = null; ctx.forecastSession.resume(model); return; }
+      if (resumeModel !== null) { const model = resumeModel; resumeModel = null; ctx.forecastSession.resume(model); return; }
       if (ctx.build() && ctx.forecastSession.ensureLive()) { ops.updateTimeUi(); ops.updateOverlay(); ops.refreshSeam(); ops.updateFreshness(); }
     },
 

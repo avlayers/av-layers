@@ -7,6 +7,7 @@ import type { PreviewOps } from './display-ops';
 /** Creates the forecast session and routes its build, expiry and URL events to the display. */
 export function createForecastWiring(ctx: PreviewContext, ops: PreviewOps): ReturnType<typeof createForecastSession> {
   const { writer } = ctx.store, { live, state } = ctx;
+  let expiryTimer: number | null = null;
   return createForecastSession({
     api: ctx.services.api, writer, intent: ctx.intent,
     center: () => { const center = live.map!.getCenter(); return normalizePoint(center.lat, center.lng); },
@@ -51,8 +52,8 @@ export function createForecastWiring(ctx: PreviewContext, ops: PreviewOps): Retu
       },
       onUrl(mode) { ops.writeUrl(mode); },
       watchExpiry(next, expire) { return watchBuildExpiry(next.expiresAtMs, expire, [document, window]); },
-      startTimer() { if (state.expiryTimer === null) state.expiryTimer = window.setInterval(() => ops.updateFreshness(), 5000); },
-      stopTimer() { if (state.expiryTimer !== null) { window.clearInterval(state.expiryTimer); state.expiryTimer = null; } }
+      startTimer() { if (expiryTimer === null) expiryTimer = window.setInterval(() => ops.updateFreshness(), 5000); },
+      stopTimer() { if (expiryTimer !== null) { window.clearInterval(expiryTimer); expiryTimer = null; } }
     }
   });
 }

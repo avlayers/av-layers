@@ -86,7 +86,7 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
 
     updateOverlayStatus() {
       const { pendingModel, expired, playing } = ctx.forecast();
-      writer.notices(overlayNotices(view.overlay.value, { build: ctx.build(), pendingModel, expired, playing, offsetMinutes: state.mapOffsetMinutes }));
+      writer.notices(overlayNotices(view.overlay.value, { build: ctx.build(), pendingModel, expired, playing, offsetMinutes: ctx.forecast().offsetMinutes }));
       ops.updatePreparation();
       if (!state.selectingOverlay) live.point?.feature.syncSelection();
     },
@@ -94,7 +94,7 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
     paintMapHorizon(now = Date.now()) {
       const current = ctx.build();
       if (!current || ctx.forecast().expired) return;
-      writer.notices({ horizon: mapForecastHorizonNotice(current.manifest, now, ms => formatPlaceTime(ms, state.mapOffsetMinutes, 'stamp')) ?? '' });
+      writer.notices({ horizon: mapForecastHorizonNotice(current.manifest, now, ms => formatPlaceTime(ms, ctx.forecast().offsetMinutes, 'stamp')) ?? '' });
     },
 
     updateFreshness() {
