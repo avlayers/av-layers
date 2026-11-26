@@ -26,7 +26,7 @@ const MAX_DPR = 2;
 const FALLBACK_BOX = { width: 64, height: 36 };
 
 export function createDayPreviews(source: DayPreviewSource, frameClock: Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame' | 'devicePixelRatio'> | null): DayPreviews {
-  let request: number | null = null, queued: (() => void) | null = null, preferred = '';
+  let request: number | null = null, queued: (() => void) | null = null;
   const raf = frameClock && typeof frameClock.requestAnimationFrame === 'function' ? frameClock : null;
   return {
     schedule(paint) {
@@ -52,12 +52,9 @@ export function createDayPreviews(source: DayPreviewSource, frameClock: Pick<Win
       if (index < 0 || width <= 0 || height <= 0) return 'unavailable';
       return source.draw(index, context, width, height);
     },
-    prefer(indices) {
-      const key = indices.join(',');
-      if (key === preferred) return;
-      preferred = key;
-      source.prefer(indices);
-    },
+    // Not de-duplicated here: the same indices can name other frames after a build change, and the source
+    // compares the frames it is given.
+    prefer(indices) { source.prefer(indices); },
     destroy(canvases) {
       if (request !== null) raf?.cancelAnimationFrame(request);
       request = null; queued = null;

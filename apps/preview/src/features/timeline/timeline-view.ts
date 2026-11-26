@@ -346,7 +346,8 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       const prepareDay = () => { if (usable()) handlers.prepareDay(group); };
       const hover = (event: Event) => { prepareDay(); if (usable() && (event as PointerEvent).pointerType !== 'touch') handlers.hoverDay(group); };
       button.addEventListener('pointerenter', hover);
-      button.addEventListener('focus', hover);
+      // Keyboard focus opens the enlarged preview; focus that follows a tap or click does not.
+      button.addEventListener('focus', () => { prepareDay(); if (usable() && focusVisible(button)) handlers.hoverDay(group); });
       button.addEventListener('pointerleave', () => handlers.hoverDay(null));
       button.addEventListener('blur', () => handlers.hoverDay(null));
       button.addEventListener('pointerdown', prepareDay);
@@ -439,4 +440,8 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       root.remove();
     }
   };
+}
+
+function focusVisible(element: HTMLElement): boolean {
+  try { return typeof element.matches !== 'function' || element.matches(':focus-visible'); } catch { return true; }
 }

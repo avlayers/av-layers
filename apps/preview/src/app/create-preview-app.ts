@@ -125,6 +125,7 @@ export function createPreviewApp(): PreviewApp {
         prefer(indices) {
           const current = ctx.build();
           if (!current) return;
+          if (!ctx.intent().liftVisible) { overlay.preferPreviewFrames([]); return; }
           const frames = renderedFrames(current.manifest);
           overlay.preferPreviewFrames(indices.flatMap(index => frames[index]?.id ?? []));
         }

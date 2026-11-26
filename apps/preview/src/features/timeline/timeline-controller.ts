@@ -46,7 +46,7 @@ const RAIL_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'E
  */
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
-  let destroyed = false, sceneRequest: number | null = null, suppressClick = false;
+  let destroyed = false, sceneRequest: number | null = null, suppressClickUntil = 0, lastPointerEvent: Event | null = null;
   /** Local minute of day that day picks aim for; null follows the selected frame. */
   let comparisonMinute: number | null = null;
   const win = createFrameWindow(options);
@@ -61,7 +61,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (idx >= 0) options.onPrepare(idx);
     },
     pickDay(group) {
-      if (suppressClick) { suppressClick = false; return; }
+      // Only the click that trails a day drag is dropped; a later keyboard or assistive click still picks.
+      if (Date.now() < suppressClickUntil) { suppressClickUntil = 0; return; }
+      suppressClickUntil = 0;
       pickDay(group, false);
     },
     dayKey(event, group) { if (event.key === 'Escape') setLoupe(null); else dayKey(event, group); },
@@ -223,8 +225,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const group = gesture.days ? dayAtX(gesture.days, clientX) : undefined;
     if (!group || win.off()) return;
     const index = group.indices.includes(gesture.startIndex) ? gesture.startIndex : targetForDay(group);
-    if (index < 0 || index === win.selectedIndex) return;
-    loupeDay = group.day;
+    if (index < 0) return;
+    setLoupe(group.day);
+    if (index === win.selectedIndex) return;
     doc.defaultView?.navigator?.vibrate?.(8);
     scrubTo(index, undefined, queue);
   }
@@ -257,7 +260,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   daysRow.addEventListener('pointerdown', event => {
     const pointer = event as PointerEvent;
-    suppressClick = false;
+    suppressClickUntil = 0;
     if (beginGesture(pointer, 'days', daysRow) === null) return;
     comparisonMinute = targetMinute();
     gesture.days = view.dayTargets();
@@ -266,8 +269,12 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (pressed) setLoupe(pressed.day);
   });
 
+  // Pointer events are heard on the rail and day row and again on the document, so a press released
+  // off the timeline (a day press slid up onto the loupe or map before it is captured) still ends.
+  const once = (event: Event) => { if (event === lastPointerEvent) return false; lastPointerEvent = event; return true; };
   const movePointer = (event: Event) => {
     const pointer = event as PointerEvent;
+    if (!once(event)) return;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
     if (!pointerTravelled(gesture, pointer.clientX, pointer.clientY)) return;
     if (gesture.kind === 'days') {
@@ -281,6 +288,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   };
   const releasePointer = (event: Event) => {
     const pointer = event as PointerEvent;
+    if (!once(event)) return;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
     const version = gesture.version, kind = gesture.kind, dragged = gesture.moved;
     if (releaseSeeks(gesture, event.type, pointer.clientX)) {
@@ -292,7 +300,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const changed = gesture.changed;
     invalidateGesture();
     // A drag across days ends with no click; a plain tap falls through to the button's click.
-    if (kind === 'days' && dragged) suppressClick = event.type === 'pointerup';
+    if (kind === 'days' && dragged && event.type === 'pointerup') suppressClickUntil = Date.now() + 400;
     if (kind === 'days') setLoupe(null);
     const completedVersion = gesture.version;
     const history = event.type === 'pointercancel' ? 'replace' : win.selectedIndex !== start ? 'push' : 'replace';
@@ -305,6 +313,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     target.addEventListener('pointerup', releasePointer);
     target.addEventListener('pointercancel', releasePointer);
   }
+  for (const [type, listener] of [['pointermove', movePointer], ['pointerup', releasePointer], ['pointercancel', releasePointer]] as const) doc.addEventListener(type, listener);
 
   /** Rail keys step through the selected day's frames. */
   track.addEventListener('keydown', event => {
@@ -351,7 +360,13 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     setTimeZone(next: string) {
       if (destroyed || !win.setTimeZone(next)) return;
       // Days regroup under the pointer: drop the gesture, keep the delivered frame, restart the clock target.
-      if (gesture.pointer !== null) { invalidateGesture(); win.selectedIndex = win.sceneIndex; }
+      if (gesture.pointer !== null) {
+        const changed = gesture.changed;
+        invalidateGesture();
+        win.selectedIndex = win.sceneIndex;
+        // A frame the drag already put on screen is kept and committed, so the URL matches the map.
+        if (changed && win.sceneIndex >= 0) deliverScene(win.sceneIndex, 'replace');
+      }
       comparisonMinute = null;
       gesture.scale = null;
       syncDays();
@@ -382,6 +397,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (destroyed) return;
       destroyed = true;
       invalidateGesture();
+      for (const [type, listener] of [['pointermove', movePointer], ['pointerup', releasePointer], ['pointercancel', releasePointer]] as const) doc.removeEventListener(type, listener);
       if (loupeHover !== null) clearTimeout(loupeHover);
       previews?.destroy([view.loupeCanvas, ...view.cards().map(card => card.canvas)]);
       win.clearSolar();

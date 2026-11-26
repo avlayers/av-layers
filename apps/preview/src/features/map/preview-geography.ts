@@ -11,7 +11,7 @@ type ScaffoldMap = Pick<MapLibreMap, 'queryRenderedFeatures' | 'project' | 'getC
 type Target = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 type Surface = HTMLCanvasElement | OffscreenCanvas;
 
-export interface PreviewGeography {
+interface PreviewGeography {
   /** Land and water under the raster; false when there is no scaffold for this view. */
   drawBase(target: Target, width: number, height: number): boolean;
   /** Boundaries over the raster. */
@@ -113,11 +113,13 @@ export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, 
       centreCrop(target, lines, width, height);
     },
     destroy() {
+      base = lines = null;
+      // The map may already be torn down by the time the page lifecycle ends.
+      if (typeof map.off !== 'function') return;
       map.off('movestart', onMoveStart);
       map.off('moveend', onMoveEnd);
       map.off('sourcedata', onData);
       map.off('idle', onIdle);
-      base = lines = null;
     }
   };
 }

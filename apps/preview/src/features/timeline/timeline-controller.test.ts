@@ -1236,8 +1236,10 @@ it('leaves a day press under 6px to the click and drops a day drag on a zone cha
   pointer(row, 'pointerdown', 80);
   pointer(row, 'pointermove', 140);
   timeline.setTimeZone('Asia/Tokyo');
+  // The frame the drag put on screen is committed, so the URL follows the map.
+  expect(onSelect.mock.calls.slice(-2)).toEqual([[3, 'none'], [3, 'replace']]);
   pointer(row, 'pointerup', 140);
-  expect(onSelect.mock.calls.at(-1)).toEqual([3, 'none']);
+  expect(onSelect.mock.calls.at(-1)).toEqual([3, 'replace']);
   timeline.destroy();
 });
 
@@ -1311,5 +1313,40 @@ it('opens the enlarged preview on press, follows a drag across days, and closes 
   expect(draw.mock.calls.some(([index, , width]) => index === 3 && width === 36)).toBe(true);
   pointer(row, 'pointerup', 140);
   expect(loupe.getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('ends a day press released off the timeline, so the rail and hover work again', () => {
+  const { root, row, timeline, onSelect } = previewSetup();
+  pointer(row, 'pointerdown', 80);
+  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBeNull();
+  pointer(doc as unknown as Element, 'pointerup', 80);
+  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBe('');
+  expect(timeline.cancelGesture()).toBeNull();
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('drops only the click that trails a day drag, not a later keyboard pick', () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  pointer(row, 'pointermove', 80);
+  pointer(row, 'pointerup', 80);
+  const calls = onSelect.mock.calls.length;
+  now.mockReturnValue(5_000);
+  click(buttons[2]!);
+  expect(onSelect.mock.calls.length).toBe(calls + 1);
+  now.mockRestore();
+  timeline.destroy();
+});
+
+it('shows the start day in the enlarged preview when a drag slides back onto it', () => {
+  const { root, row, timeline } = previewSetup();
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 20);
+  expect(byClass(root, 'ct-day-loupe-title').textContent).toMatch(/^Fri 13 Nov/);
   timeline.destroy();
 });
