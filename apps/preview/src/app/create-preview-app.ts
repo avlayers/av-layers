@@ -5,6 +5,7 @@ import { createLocationController } from '../features/location/location-controll
 import { BasemapChannel } from '../features/map/basemap';
 import { CoverageSeam } from '../features/map/coverage-seam';
 import { createMap, createMapCamera } from '../features/map/map-controller';
+import { createPreviewGeography } from '../features/map/preview-geography';
 import { RasterOverlay } from '../features/raster/raster-overlay';
 import { SkyComposite } from '../features/sky/sky-composite';
 import { createCompactTimeline } from '../features/timeline/timeline-controller';
@@ -97,6 +98,8 @@ export function createPreviewApp(): PreviewApp {
     live.channels = [new BasemapChannel(map, ctx.intent().theme), overlay, live.sky, wind.overlay];
     ops.syncChannels();
 
+    const geography = createPreviewGeography(map, () => ctx.intent().theme, () => live.timeline?.refreshPreviews?.());
+    ctx.lifecycle.signal.addEventListener('abort', () => geography.destroy(), { once: true });
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
       timeZone: ctx.forecast().timeZone,
       variant: ctx.intent().dockView,
@@ -113,7 +116,11 @@ export function createPreviewApp(): PreviewApp {
           const current = ctx.build(), requested = view.overlay.value.requested;
           if (!current || !requested || requested.build !== current || !ctx.intent().liftVisible) return 'unavailable';
           const frame = renderedFrames(current.manifest)[index];
-          return frame ? overlay.drawPreview(current, requested.layer, frame.id, target, width, height) : 'unavailable';
+          if (!frame) return 'unavailable';
+          geography.drawBase(target, width, height);
+          const drawn = overlay.drawPreview(current, requested.layer, frame.id, target, width, height);
+          if (drawn === 'ready') geography.drawLines(target, width, height);
+          return drawn;
         },
         prefer(indices) {
           const current = ctx.build();
