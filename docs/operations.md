@@ -102,7 +102,12 @@ reacquired upstream objects match, it adopts the stored provenance, whose only
 difference is the capture time. Changed upstream objects still need a new build.
 Workers and assembly finish under their frozen revision when main advances.
 Publication proceeds when main advanced without changing `PUBLICATION_PATHS`
-in [publication-workflow.ts](../scripts/publication-workflow.ts); otherwise
+in [publication-workflow.ts](../scripts/publication-workflow.ts): producer code,
+the publisher scripts (`PUBLISHER_SCRIPTS`, kept equal to the forecast
+workflows' import closure by a test), the client and the forecast workflows,
+ignoring tests and Markdown, plus the API's `wrangler.json` (bucket names) and
+`.npmrc`. Benches, other non-publisher scripts and CI or deploy workflow
+changes do not stop a finished build. Otherwise
 [resume the completed artifact](#resume-a-build) from a current-main run with
 matching producer content.
 

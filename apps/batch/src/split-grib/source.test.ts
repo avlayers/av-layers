@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getProduct } from '@av/contracts/models';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   coverageIndices,
@@ -1064,6 +1065,47 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
     return out;
   }
 
+  function hrdpsResponse(url: string, cycle: string): Response {
+    const match = /_MSC_HRDPS_(.+?)(?:_ISBL_(\d{4}))?_RLatLon0\.0225_PT(\d{3})H\.grib2$/.exec(url);
+    if (!match) throw new Error(`Unexpected HRDPS URL ${url}`);
+    const [, field, levelRaw, hourRaw] = match;
+    const level = levelRaw ? Number(levelRaw) : null;
+    const hour = Number(hourRaw);
+    const spec = hrdpsSource.specs[field!]!;
+    const isAccum = spec.templateNumber === 8;
+    const surfaceValue = level !== null ? level * 100 : spec.firstFixedSurfaceValue;
+    const constantValue =
+      field === 'HGT_Sfc' ? 250 :
+      field === 'HGT' ? (level === 1000 ? 150 : 1500) :
+      field === 'TMP' ? (level === 1000 ? 290 : 280) :
+      field === 'PRES_Sfc' ? 98500 :
+      field === 'TMP_AGL-2m' ? 293 :
+      field === 'SPFH_AGL-2m' ? 0.008 :
+      field === 'SHTFL_Sfc' ? 180 :
+      field === 'LHTFL_Sfc' ? 90 :
+      field === 'APCP-Accum1h_Sfc' ? 1.5 :
+      field === 'TCDC_Sfc' ? 40 :
+      field === 'CAPE_Sfc' ? -999 :
+      field === 'HPBL_Sfc' ? 1200 :
+      field === 'SPFH' ? 0.006 :
+      field === 'UGRD_AGL-10m' || field === 'UGRD' ? 10 :
+      field === 'VGRD_AGL-10m' || field === 'VGRD' ? 0 : 0;
+    const overrides = field === 'CAPE_Sfc' ? { 1: -799 } : undefined;
+    return new Response(Buffer.from(buildRotatedGrib2({
+      referenceTimeIso: cycle,
+      templateNumber: isAccum ? 8 : 0,
+      statisticalProcess: 1,
+      parameterCategory: spec.parameterCategory,
+      parameterNumber: spec.parameterNumber,
+      firstFixedSurfaceType: spec.firstFixedSurfaceType,
+      firstFixedSurfaceValue: surfaceValue,
+      hour,
+      startHour: isAccum ? hour - 1 : undefined,
+      constantValue,
+      overrides
+    })));
+  }
+
   it('constructs MSC Datamart URLs, sentinel probes, and acquires rotated-latlon isobaric frames with CAPE sentinel masking and wind rotation', async () => {
     const cycle = '2026-10-08T00:00:00Z';
     expect(splitGribFieldUrl(hrdpsSource, 'HGT_Sfc', cycle)).toBe(
@@ -1080,47 +1122,7 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
 
     const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-session-'));
     tempDirs.push(cacheDir);
-    const fetchImpl: typeof fetch = async input => {
-      const url = String(input);
-      const match = /_MSC_HRDPS_(.+?)(?:_ISBL_(\d{4}))?_RLatLon0\.0225_PT(\d{3})H\.grib2$/.exec(url);
-      if (!match) throw new Error(`Unexpected HRDPS URL ${url}`);
-      const [, field, levelRaw, hourRaw] = match;
-      const level = levelRaw ? Number(levelRaw) : null;
-      const hour = Number(hourRaw);
-      const spec = hrdpsSource.specs[field!]!;
-      const isAccum = spec.templateNumber === 8;
-      const surfaceValue = level !== null ? level * 100 : spec.firstFixedSurfaceValue;
-      const constantValue =
-        field === 'HGT_Sfc' ? 250 :
-        field === 'HGT' ? (level === 1000 ? 150 : 1500) :
-        field === 'TMP' ? (level === 1000 ? 290 : 280) :
-        field === 'PRES_Sfc' ? 98500 :
-        field === 'TMP_AGL-2m' ? 293 :
-        field === 'SPFH_AGL-2m' ? 0.008 :
-        field === 'SHTFL_Sfc' ? 180 :
-        field === 'LHTFL_Sfc' ? 90 :
-        field === 'APCP-Accum1h_Sfc' ? 1.5 :
-        field === 'TCDC_Sfc' ? 40 :
-        field === 'CAPE_Sfc' ? -999 :
-        field === 'HPBL_Sfc' ? 1200 :
-        field === 'SPFH' ? 0.006 :
-        field === 'UGRD_AGL-10m' || field === 'UGRD' ? 10 :
-        field === 'VGRD_AGL-10m' || field === 'VGRD' ? 0 : 0;
-      const overrides = field === 'CAPE_Sfc' ? { 1: -799 } : undefined;
-      return new Response(Buffer.from(buildRotatedGrib2({
-        referenceTimeIso: cycle,
-        templateNumber: isAccum ? 8 : 0,
-        statisticalProcess: 1,
-        parameterCategory: spec.parameterCategory,
-        parameterNumber: spec.parameterNumber,
-        firstFixedSurfaceType: spec.firstFixedSurfaceType,
-        firstFixedSurfaceValue: surfaceValue,
-        hour,
-        startHour: isAccum ? hour - 1 : undefined,
-        constantValue,
-        overrides
-      })));
-    };
+    const fetchImpl: typeof fetch = async input => hrdpsResponse(String(input), cycle);
 
     const active = Uint32Array.of(0, 1);
     const target = createNormalizedFrameTarget(2, 2, false, true);
@@ -1193,6 +1195,135 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
       expect(Math.abs(v10)).toBeGreaterThan(1);
     } finally {
       await session.close();
+    }
+  });
+  it('reads objects from a configured mirror, falls back to the primary host per object and stops trying a failing mirror', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    const mirrored = splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 1,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', 'https://hpfx.collab.science.gc.ca')] } });
+    const requests: { url: string; agent: string | null }[] = [];
+    let mirrorUp = true;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      requests.push({ url, agent: new Headers(init?.headers).get('user-agent') });
+      if (url.startsWith('https://hpfx.') && (!mirrorUp || url.includes('_TMP_ISBL_0850_'))) return new Response('missing', { status: 404 });
+      return hrdpsResponse(url.replace('https://hpfx.collab.science.gc.ca', 'https://dd.weather.gc.ca'), cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-mirror-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(mirrored, { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      const frame = await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      const objects = frame.receipt.objects as readonly { url: string }[];
+      expect(objects.every(object => object.url.startsWith('https://dd.weather.gc.ca/'))).toBe(true);
+      expect(requests.every(request => request.agent?.startsWith('av-layers-forecast'))).toBe(true);
+      const tmp850 = requests.filter(request => request.url.includes('_TMP_ISBL_0850_') && request.url.includes('PT001H'));
+      expect(tmp850.map(request => new URL(request.url).host)).toEqual(['hpfx.collab.science.gc.ca', 'dd.weather.gc.ca']);
+      expect(session.stats).toMatchObject({ mirrorFallbacks: 1, mirrorDownloads: objects.length - 1, retries: 0 });
+      expect(session.stats.downloadMs).toBeGreaterThan(0);
+      expect(session.stats.decodeMs).toBeGreaterThan(0);
+
+      // Down mirror: it keeps getting tries until it has failed 3 objects and more than a fifth of its tries.
+      mirrorUp = false;
+      requests.length = 0;
+      const triesBefore = session.stats.mirrorDownloads + session.stats.mirrorFallbacks;
+      await session.acquire(2, createNormalizedFrameTarget(2, 2, false, true));
+      const hosts = requests.map(request => new URL(request.url).host);
+      const mirrorTries = hosts.filter(host => host.startsWith('hpfx.')).length;
+      let failures = 1, tries = triesBefore, expected = 0;
+      while (failures < 3 || failures * 5 < tries) { failures += 1; tries += 1; expected += 1; }
+      expect(mirrorTries).toBe(expected);
+      expect(hosts.lastIndexOf('hpfx.collab.science.gc.ca')).toBeLessThan(hosts.length - 1);
+      expect(hosts.slice(hosts.lastIndexOf('hpfx.collab.science.gc.ca') + 1).every(host => host === 'dd.weather.gc.ca')).toBe(true);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('falls back to the primary when a mirror answers 200 with a body that does not decode', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    const mirrored = splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 1,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', 'https://hpfx.collab.science.gc.ca')] } });
+    const hosts: string[] = [];
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      hosts.push(new URL(url).host);
+      if (url.startsWith('https://hpfx.')) return new Response('<html>maintenance</html>', { status: 200 });
+      return hrdpsResponse(url, cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-mirror-page-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(mirrored, { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      const frame = await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      expect([...frame.temp2mK]).toEqual([293, 293]);
+      expect(session.stats.mirrorDownloads).toBe(0);
+      expect(session.stats.mirrorFallbacks).toBe(3);
+      expect(hosts.slice(0, 6)).toEqual(['hpfx.collab.science.gc.ca', 'dd.weather.gc.ca', 'hpfx.collab.science.gc.ca', 'dd.weather.gc.ca', 'hpfx.collab.science.gc.ca', 'dd.weather.gc.ca']);
+      expect(hosts.slice(6).every(host => host === 'dd.weather.gc.ca')).toBe(true);
+      // The cached object is the primary's valid copy.
+      expect((await readdir(join(cacheDir, 'objects'))).length).toBeGreaterThan(0);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('stops using a mirror that fails every other object', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    const mirrored = splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 1,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', 'https://hpfx.collab.science.gc.ca')] } });
+    let mirrorCalls = 0;
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.startsWith('https://hpfx.') && mirrorCalls++ % 2 === 1) return new Response('busy', { status: 503 });
+      return hrdpsResponse(url.replace('https://hpfx.collab.science.gc.ca', 'https://dd.weather.gc.ca'), cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-mirror-flaky-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(mirrored, { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      await session.acquire(2, createNormalizedFrameTarget(2, 2, false, true));
+      expect(session.stats).toMatchObject({ mirrorDownloads: 3, mirrorFallbacks: 3 });
+      expect(mirrorCalls).toBe(6);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('parses the configured HRDPS mirror and fetch concurrency from models.json', () => {
+    const source = splitSource(getProduct('hrdps')!);
+    expect(source.upstream.fetchConcurrency).toBe(12);
+    expect(source.upstream.mirrorUrlTemplates).toEqual([source.upstream.urlTemplate.replace('https://dd.weather.gc.ca/', 'https://hpfx.collab.science.gc.ca/')]);
+  });
+
+  it('uses the configured fetch concurrency and rejects mirrors that change the object path', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    let active = 0, peak = 0;
+    const fetchImpl: typeof fetch = async input => {
+      active += 1; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      return hrdpsResponse(String(input), cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-concurrency-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 3 } }),
+      { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      expect(peak).toBe(3);
+    } finally {
+      await session.close();
+    }
+    expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream,
+      mirrorUrlTemplates: ['https://hpfx.collab.science.gc.ca/today/model_hrdps/{field}.grib2'] } })).toThrow('primary template path');
+    expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://', 'http://')] } })).toThrow();
+    expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 33 } })).toThrow();
+    for (const host of ['https://DD.weather.gc.ca', 'https://dd.weather.gc.ca:443', 'https://user:pw@hpfx.collab.science.gc.ca', 'https://hpfx.collab.science.gc.ca:8443']) {
+      expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream,
+        mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', host)] } }), host).toThrow('primary template path');
     }
   });
 });

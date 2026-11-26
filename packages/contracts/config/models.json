@@ -681,6 +681,8 @@
         "provider": "ECCC",
         "centre": 54,
         "urlTemplate": "https://dd.weather.gc.ca/{date}/WXO-DD/model_hrdps/continental/2.5km/{cycleHour}/{forecastHour}/{date}T{cycleHour}Z_MSC_HRDPS_{field}{levelPath}_RLatLon0.0225_PT{forecastHour}H.grib2",
+        "mirrorUrlTemplates": ["https://hpfx.collab.science.gc.ca/{date}/WXO-DD/model_hrdps/continental/2.5km/{cycleHour}/{forecastHour}/{date}T{cycleHour}Z_MSC_HRDPS_{field}{levelPath}_RLatLon0.0225_PT{forecastHour}H.grib2"],
+        "fetchConcurrency": 12,
         "auxSurface": {
           "pblHeightM": {"field": "HPBL_Sfc", "kind": "single-level", "parameter": [3, 18], "surface": [1, 0], "unit": "m"},
           "gust10mMps": {"field": "GUST_AGL-10m", "kind": "single-level", "parameter": [2, 22], "surface": [103, 10], "unit": "m/s"},

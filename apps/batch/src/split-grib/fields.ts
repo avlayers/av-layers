@@ -20,6 +20,8 @@ export function splitGribFieldUrl(source: SplitSource,
     readonly hour?: number;
     readonly level?: number | null;
     readonly baseUrl?: string;
+    /** A configured mirror template with the same path as `upstream.urlTemplate`. */
+    readonly urlTemplate?: string;
   } = {}
 ): string {
   const spec = (Object.hasOwn(source.specs, field) ? source.specs[field] : undefined);
@@ -37,7 +39,7 @@ export function splitGribFieldUrl(source: SplitSource,
   const hour = options.hour ?? 0;
   if (!Number.isInteger(hour) || hour < 0 || hour > 120) throw new Error(`Source forecast hour out of range: ${hour}`);
   const normalizedCycle = validateSplitGribCycle(source, cycleIso);
-  let template = source.upstream.urlTemplate;
+  let template = options.urlTemplate ?? source.upstream.urlTemplate;
   if (options.baseUrl) {
     const suffixIndex = template.includes('/{field}') ? template.indexOf('/{field}') : template.indexOf('/{date}');
     template = options.baseUrl.replace(/\/+$/, '') + (suffixIndex >= 0 ? template.slice(suffixIndex) : '');
