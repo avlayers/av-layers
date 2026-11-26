@@ -86,7 +86,9 @@ export function createPreviewApp(): PreviewApp {
       budget: preparationBudget, requestLimits: services.requestLimits, theme: ctx.intent().theme,
       protectedBytes: wind.protectedBytes,
       beforeReveal: selection => { wind.session.beforeRasterReveal(selection); ops.syncSky(selection); },
-      onSelectedPending: pending => { state.rasterPending = pending; ops.syncSelectedAdmission(); }
+      onSelectedPending: pending => { state.rasterPending = pending; ops.syncSelectedAdmission(); },
+      // Day previews repaint as each overview frame lands, not only when the overlay's own state changes.
+      onPreviewsChanged: () => live.timeline?.refreshPreviews?.()
     });
     const cur = ctx.intent();
     live.sky = new SkyComposite(map, services.api, apiBaseUrl, {
@@ -110,6 +112,8 @@ export function createPreviewApp(): PreviewApp {
         ops.prepareFrameIndex(index);
       },
       onPrepare: index => ops.prepareFrameIndex(index),
+      // The Windgram belongs to the day it opened on; a new day closes it.
+      onDayChange: () => { if (live.point?.isOpen()) live.point.close(); },
       // Day previews: the active lift raster's overview of this view, on the pinned build. Hidden lift shows plain dates.
       preview: {
         draw(index, target, width, height) {

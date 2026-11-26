@@ -14,9 +14,32 @@ interface MapOptions {
   readonly theme?: MapTheme;
 }
 
+/**
+ * Attribution as the compact ⓘ button at every width, starting collapsed. MapLibre expands a compact control the
+ * first time it compacts; this collapses it again so the credits open only on request.
+ */
+class CollapsedAttribution extends maplibregl.AttributionControl {
+  constructor() {
+    super({ compact: true });
+    const update = this._updateCompact;
+    this._updateCompact = () => {
+      const wasCompact = this._container?.classList.contains('maplibregl-compact') ?? false;
+      update();
+      if (!wasCompact && this._container?.classList.contains('maplibregl-compact')) this._updateCompactMinimize();
+    };
+  }
+}
+
 /** Owns the single MapLibre instance for one preview app lifetime. */
 export function createMap(options: MapOptions): maplibregl.Map {
+  const map = createMapInstance(options);
+  if (typeof map.addControl === 'function') map.addControl(new CollapsedAttribution(), 'bottom-right');
+  return map;
+}
+
+function createMapInstance(options: MapOptions): maplibregl.Map {
   return new maplibregl.Map({
+    attributionControl: false,
     container: options.container,
     center: options.camera?.center ?? [0, 20], zoom: options.camera?.zoom ?? 2,
     maxTileCacheSize: RASTER_PAN_TILES,

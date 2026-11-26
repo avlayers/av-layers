@@ -184,6 +184,8 @@ export class RasterOverview {
     if (!context.frames.includes(frame)) return 'unavailable';
     const image = this.previews.get(frame);
     const region = viewInCrop(context.preview, bounds(this.map));
+    // A frame whose overview failed shows a plain date rather than waiting forever.
+    if (!image && this.attempts.failed(frame)) return 'unavailable';
     if (!image || image === this.failedImage || !region) return 'pending';
     const scaleX = image.bitmap.width / context.preview.width, scaleY = image.bitmap.height / context.preview.height;
     const aspect = width / height;

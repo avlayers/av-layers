@@ -27,7 +27,10 @@ interface TimelineView {
   /** Each day button's preview canvas. */
   cards(): { group: DayGroup; canvas: HTMLCanvasElement }[];
   /** Shows the preview state on a day button: an image, a neutral placeholder, or a plain date. */
-  setThumb(day: string, state: PreviewDraw): void;
+  /** Card state for frame `index`; the card names its own time when it is 30+ minutes from `aimMinute`. */
+  setThumb(day: string, state: PreviewDraw, index?: number, aimMinute?: number | null): void;
+  /** Whether any card shows an image; then every card keeps the image's height so the row never jumps. */
+  setRowThumbs(on: boolean): void;
   readonly loupeCanvas: HTMLCanvasElement;
   readonly dayLoupe: HTMLElement;
   /** Opens the enlarged day preview titled for frame `index`, or closes it with null. */
@@ -51,8 +54,6 @@ interface ViewPaint {
 interface DayHandlers {
   prepareDay(group: DayGroup): void;
   pickDay(group: DayGroup): void;
-  /** A pointer rests on, or keyboard focus reaches, a day (null when it leaves). */
-  hoverDay(group: DayGroup | null): void;
   dayKey(event: KeyboardEvent, group: DayGroup): void;
   /** Track or day row changed width since the last paint. */
   resized(): void;
@@ -157,6 +158,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
 
   let dayButtons: HTMLButtonElement[] = [];
   const canvases = new WeakMap<HTMLButtonElement, HTMLCanvasElement>();
+  const thumbTimes = new WeakMap<HTMLButtonElement, HTMLElement>();
   let highlightedDays = new Set<string>(), highlightedKey = '';
   let paintedWidth = -1, decorationKey = '', destroyed = false, showing = '';
   let lastNote: { local: { hour: number; minute: number } | null; comparisonMinute: number | null } = { local: null, comparisonMinute: null };
@@ -341,17 +343,16 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       thumb.setAttribute('aria-hidden', 'true');
       const canvas = el('canvas', 'ct-day-canvas');
       canvases.set(button, canvas);
-      thumb.append(canvas);
+      const thumbTime = el('span', 'ct-day-thumb-time');
+      thumbTime.setAttribute('hidden', '');
+      thumbTimes.set(button, thumbTime);
+      thumb.append(canvas, thumbTime);
       button.append(thumb, el('span', 'ct-day-label', label));
       button.dataset.day = group.day;
       const usable = () => !button.disabled && !win.off() && group.indices.length > 0;
       const prepareDay = () => { if (usable()) handlers.prepareDay(group); };
-      const hover = (event: Event) => { prepareDay(); if (usable() && (event as PointerEvent).pointerType !== 'touch') handlers.hoverDay(group); };
-      button.addEventListener('pointerenter', hover);
-      // Keyboard focus opens the enlarged preview; focus that follows a tap or click does not.
-      button.addEventListener('focus', () => { prepareDay(); if (usable() && focusVisible(button)) handlers.hoverDay(group); });
-      button.addEventListener('pointerleave', () => handlers.hoverDay(null));
-      button.addEventListener('blur', () => handlers.hoverDay(null));
+      button.addEventListener('pointerenter', prepareDay);
+      button.addEventListener('focus', prepareDay);
       button.addEventListener('pointerdown', prepareDay);
       button.addEventListener('click', () => { if (usable()) handlers.pickDay(group); });
       button.addEventListener('keydown', event => { if (usable()) handlers.dayKey(event as KeyboardEvent, group); });
@@ -387,11 +388,23 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
         return group && canvas ? [{ group, canvas }] : [];
       });
     },
-    setThumb(day, state) {
+    setThumb(day, state, index = -1, aimMinute = null) {
       const button = dayButtons.find(candidate => candidate.dataset.day === day);
       if (!button) return;
       button.classList.toggle('has-thumb', state !== 'unavailable');
       button.classList.toggle('is-pending', state === 'pending');
+      const badge = thumbTimes.get(button), frame = index >= 0 ? win.frames[index] : undefined;
+      const local = frame ? localTimeFromMs(Date.parse(frame.validTime), win.timeZone) : null;
+      const minute = local ? local.hour * 60 + local.minute : null;
+      // A day without a frame near the compared hour says which hour its image shows.
+      const differs = state !== 'unavailable' && minute !== null && aimMinute !== null && Math.abs(minute - aimMinute) >= 30;
+      if (badge) {
+        badge.textContent = differs ? clockLabel(minute) : '';
+        if (differs) badge.removeAttribute('hidden'); else badge.setAttribute('hidden', '');
+      }
+    },
+    setRowThumbs(on) {
+      daysRow.classList.toggle('has-thumbs', on);
     },
     setDayLoupe(index) {
       const frame = index === null ? undefined : win.frames[index];
@@ -442,8 +455,4 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       root.remove();
     }
   };
-}
-
-function focusVisible(element: HTMLElement): boolean {
-  try { return typeof element.matches !== 'function' || element.matches(':focus-visible'); } catch { return true; }
 }

@@ -102,7 +102,7 @@ describe('BottomDock pluggable capsule view', () => {
     const html = serializeVNode(<BottomDock {...baseProps} dockView="capsule" />);
     expect(html).toContain('data-dock-view="capsule"');
     expect(html).toContain('capsule-spectrum-lip');
-    expect(html).toContain('capsule-ref-flip');
+    expect(html).toContain('capsule-ref-seg');
     expect(html).toContain('50%');
     expect(html).toContain('id="compact-timeline"');
     expect(html).toContain('timebar-status sr-only');

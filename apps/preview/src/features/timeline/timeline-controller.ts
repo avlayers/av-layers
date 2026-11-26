@@ -11,6 +11,8 @@ export interface CompactTimelineOptions {
   onSelect(index: number, history: 'push' | 'replace' | 'none'): void;
   onIntent?(index: number): void;
   onPrepare?(index: number): void;
+  /** A committed timeline selection moved to another local day. */
+  onDayChange?(): void;
   timeZone?: string;
   latitude?: number;
   longitude?: number;
@@ -55,9 +57,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const gesture = createGesture();
   const previews = options.preview ? createDayPreviews(options.preview, doc.defaultView) : null;
   /** Day the enlarged preview shows (pressed, dragged, hovered or focused); null when closed. */
-  let loupeDay: string | null = null, loupeHover: ReturnType<typeof setTimeout> | null = null;
+  let loupeDay: string | null = null;
   /** A touch on the rail seeks only once it travels or lifts as a tap, so a finger reaching for a day doesn't move the hour. */
   let railTouch = false;
+  /** The last selection the app committed (from here or outside), for telling when a pick changes day. */
+  let committedIndex = -1;
   const view = createTimelineView(host, win, options.variant ?? DEFAULT_DOCK_VIEW, {
     prepareDay(group) {
       if (!options.onPrepare) return;
@@ -75,19 +79,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       // Escape closes an open preview and nothing else, so the point card stays.
       if (loupeDay !== null) { event.preventDefault(); setLoupe(null); }
     },
-    hoverDay(group) {
-      if (loupeHover !== null) clearTimeout(loupeHover);
-      loupeHover = null;
-      if (gesture.pointer !== null && gesture.kind === 'days') return;
-      // A short grace lets the pointer cross the gap between buttons without the loupe flickering shut.
-      if (group) setLoupe(group.day); else loupeHover = setTimeout(() => { loupeHover = null; setLoupe(null); }, 120);
-    },
     resized: () => render()
   });
   const { track, daysRow } = view;
-  // The loupe stays open while the pointer is on it, so hovering it never dismisses it.
-  view.dayLoupe.addEventListener('pointerenter', () => { if (loupeHover !== null) clearTimeout(loupeHover); loupeHover = null; });
-  view.dayLoupe.addEventListener('pointerleave', () => { if (gesture.pointer === null) setLoupe(null); });
 
   function targetMinute(): number | null {
     return comparisonMinute ?? win.selectedMinute();
@@ -133,13 +127,18 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   function paintPreviews(): void {
     if (!previews || destroyed) return;
     const targets: number[] = [];
-    let loupeIndex = -1;
+    let loupeIndex = -1, anyThumb = false;
+    const aim = targetMinute();
     for (const { group, canvas } of view.cards()) {
+      // Each day's card follows the compared hour (or the selected one while the rail scrubs) to that day's nearest frame.
       const index = win.off() || !group.indices.length ? -1 : targetForDay(group);
       if (index >= 0) targets.push(index);
       if (group.day === loupeDay) loupeIndex = index;
-      view.setThumb(group.day, previews.paint(canvas, index));
+      const state = previews.paint(canvas, index);
+      if (state !== 'unavailable') anyThumb = true;
+      view.setThumb(group.day, state, index, aim);
     }
+    view.setRowThumbs(anyThumb);
     // A rail scrub changes the targets every frame; the selected frame's neighbours matter more until it ends.
     if (gesture.pointer === null || gesture.kind !== 'rail') previews.prefer(targets);
     if (loupeDay !== null) {
@@ -181,7 +180,14 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function deliverScene(index: number, history: 'push' | 'replace' | 'none'): void {
     win.sceneIndex = index;
+    const dayChanged = history !== 'none' && dayOf(index) !== dayOf(committedIndex);
+    if (history !== 'none') committedIndex = index;
     options.onSelect(index, history);
+    if (dayChanged && !destroyed) options.onDayChange?.();
+  }
+
+  function dayOf(index: number): string | undefined {
+    return index < 0 ? undefined : win.days.find(group => group.indices.includes(index))?.day;
   }
 
   function queueScene(): void {
@@ -279,9 +285,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (beginGesture(pointer, 'days', daysRow) === null) return;
     comparisonMinute = targetMinute();
     gesture.days = view.dayTargets();
-    // A mouse or pen press opens the enlarged preview at once; on touch it waits for the drag, so a tap doesn't flash it.
-    const pressed = gesture.days ? dayAtX(gesture.days, pointer.clientX) : undefined;
-    if (pressed && pointer.pointerType !== 'touch') setLoupe(pressed.day);
+    // The enlarged preview appears only once the press becomes a drag (`seekDay`), so a tap or click never flashes it.
   });
 
   // Pointer events are heard on the rail and day row and again on the document, so a press released
@@ -370,6 +374,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (!sameFrames) win.setFrames(nextFrames);
       if (!echo) win.selectedIndex = nextIndex;
       win.sceneIndex = nextIndex;
+      if (!active) committedIndex = nextIndex;
       win.disabled = nextDisabled;
       if (!sameFrames) syncDays();
       render();
@@ -415,7 +420,6 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       destroyed = true;
       invalidateGesture();
       for (const [type, listener] of [['pointermove', movePointer], ['pointerup', releasePointer], ['pointercancel', releasePointer]] as const) doc.removeEventListener(type, listener);
-      if (loupeHover !== null) clearTimeout(loupeHover);
       previews?.destroy([view.loupeCanvas, ...view.cards().map(card => card.canvas)]);
       win.clearSolar();
       view.destroy();

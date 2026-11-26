@@ -1303,11 +1303,12 @@ it('keeps plain date buttons when the source has no preview', () => {
   timeline.destroy();
 });
 
-it('opens the enlarged preview on press, follows a drag across days, and closes on release', () => {
+it('shows the enlarged preview only once a press slides, follows it across days, and closes on release', () => {
   const { root, row, timeline, draw } = previewSetup();
   const loupe = byClass(root, 'ct-day-loupe'), title = byClass(root, 'ct-day-loupe-title');
   pointer(row, 'pointerdown', 80);
-  expect(loupe.getAttribute('hidden')).toBeNull();
+  expect(loupe.getAttribute('hidden')).toBe('');
+  pointer(row, 'pointermove', 88);
   expect(title.textContent).toBe('Sat 14 Nov · 15:00');
   draw.mockClear();
   pointer(row, 'pointermove', 140);
@@ -1318,12 +1319,12 @@ it('opens the enlarged preview on press, follows a drag across days, and closes 
   timeline.destroy();
 });
 
-it('ends a day press released off the timeline, so the rail and hover work again', () => {
-  const { root, row, timeline, onSelect } = previewSetup();
+it('ends a day press released off the timeline, so the rail works again', () => {
+  const { row, timeline, onSelect } = previewSetup();
   pointer(row, 'pointerdown', 80);
-  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBeNull();
+  expect(timeline.cancelGesture()).not.toBeNull();
+  pointer(row, 'pointerdown', 80);
   pointer(doc as unknown as Element, 'pointerup', 80);
-  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBe('');
   expect(timeline.cancelGesture()).toBeNull();
   expect(onSelect).not.toHaveBeenCalled();
   timeline.destroy();
@@ -1382,7 +1383,48 @@ it('opens the enlarged preview on touch only once the drag starts, and Escape cl
   touch(row, 'pointerup', 140);
   expect(key(buttons[0]!, 'Escape').defaultPrevented).toBe(false);
   pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
   expect(key(buttons[1]!, 'Escape').defaultPrevented).toBe(true);
   expect(loupe.getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('keeps every other day on its nearest valid frame while the rail scrubs the selected day', () => {
+  const { root, timeline, prefer, draw } = previewSetup();
+  timeline.update(comparison, 'd2-03');
+  timeline.refreshPreviews?.();
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 480;
+  const badges = () => named(root, 'ct-day-thumb-time').map(badge => badge.getAttribute('hidden') === null ? badge.textContent : '');
+  expect(prefer).toHaveBeenLastCalledWith([0, 1, 3]);
+  expect(badges()).toEqual(['14:00', '', '14:00']);
+  prefer.mockClear();
+  draw.mockClear();
+  pointer(track, 'pointerdown', 470);
+  pointer(track, 'pointermove', 472);
+  // Cards follow the scrubbed hour, each to a frame of its own day; preparation waits for the release.
+  const drawn = new Set(draw.mock.calls.map(([index]) => index));
+  expect(drawn.has(2) && drawn.has(4)).toBe(true);
+  expect(drawn.has(3)).toBe(false);
+  expect(prefer).not.toHaveBeenCalled();
+  pointer(track, 'pointerup', 472);
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 4]);
+  expect(badges()).toEqual(['14:00', '', '']);
+  timeline.destroy();
+});
+
+it('reports a committed move to another day, but not an hour change within the day', () => {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn(), onDayChange = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onDayChange, timeZone: 'UTC' });
+  timeline.update(comparison, 'd3-14');
+  const { buttons } = dayRow(host);
+  key(byClass(host.children[0]!, 'ct-track'), 'ArrowRight');
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'replace');
+  expect(onDayChange).not.toHaveBeenCalled();
+  timeline.update(comparison, 'd3-15');
+  click(buttons[0]!);
+  expect(onDayChange).toHaveBeenCalledTimes(1);
   timeline.destroy();
 });

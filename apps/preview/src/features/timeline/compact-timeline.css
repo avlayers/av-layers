@@ -14,20 +14,23 @@
 
 .ct-readout {
   grid-area: readout;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-areas: "date note" "time time";
+  /* Date, time and UTC on one line; the note follows on the same line when it fits. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
   align-content: center;
   column-gap: 8px;
-  row-gap: 2px;
+  row-gap: 0;
   min-width: 0;
   color: #1c2430;
 }
-.ct-date { grid-area: date; font-size: 13px; font-weight: 600; white-space: nowrap; }
-.ct-time { grid-area: time; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ct-time-local { font-size: 24px; font-weight: 750; letter-spacing: -0.01em; }
-.ct-time-utc { overflow: hidden; color: #526170; font-size: 12.5px; font-weight: 550; text-overflow: ellipsis; }
-.ct-note { grid-area: note; align-self: center; justify-self: end; overflow: hidden; color: #9a4b00; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.ct-date { font-size: 13px; font-weight: 650; white-space: nowrap; }
+.ct-time { display: flex; align-items: baseline; column-gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ct-time-local { font-size: 19px; font-weight: 750; letter-spacing: -0.01em; }
+.ct-time-utc { overflow: hidden; color: #526170; font-size: 12px; font-weight: 550; text-overflow: ellipsis; }
+.ct-note { min-width: 0; overflow: hidden; color: #9a4b00; font-size: 12.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+/* On phones the note takes the UTC time's place rather than adding a line. */
+@media (max-width: 720px) { .ct-readout:has(.ct-note:not([hidden])) .ct-time-utc { display: none; } }
 .ct-note[hidden] { display: none; }
 .ct-note.is-showing { color: #526170; font-weight: 600; }
 
@@ -74,20 +77,48 @@
 .compact-timeline .ct-day:not(.has-thumb) .ct-day-label { line-height: 44px; }
 /* Preview image above an opaque date footer; the date never sits on forecast pixels. */
 .ct-day-thumb { display: none; position: relative; height: 36px; margin: 2px 2px 0; overflow: hidden; border-radius: 6px 6px 3px 3px; background: #dfe7ee; }
-.ct-day.has-thumb .ct-day-thumb { display: block; }
+.ct-day.has-thumb .ct-day-thumb,
+.ct-days.has-thumbs .ct-day-thumb { display: block; }
+.compact-timeline .ct-days.has-thumbs .ct-day:not(.has-thumb) .ct-day-label { line-height: 22px; }
+/* The hour a card shows when its day has no frame near the compared hour. */
+.ct-day-thumb-time {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #0b1b28cc;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.ct-day-thumb-time[hidden] { display: none; }
 .ct-day-canvas { display: block; width: 100%; height: 100%; }
 /* Opacity only, so the wait pulse stays on the compositor. */
 .ct-day.is-pending .ct-day-canvas { animation: ct-thumb-wait 1.2s ease-in-out infinite alternate; }
 @keyframes ct-thumb-wait { from { opacity: 1; } to { opacity: 0.45; } }
 @media (min-width: 721px) { .ct-day-thumb { height: 40px; } }
+/* Short screens keep the day cards to a strip so the map keeps its height. */
+@media (max-height: 560px) { .ct-day-thumb { height: 22px; } }
+/* Narrow phones: smaller readout type so date, time and UTC stay on one line beside Key and AGL/MSL. */
+@media (max-width: 400px) {
+  .ct-date { font-size: 12px; }
+  .ct-time-local { font-size: 17px; }
+  .ct-time-utc { font-size: 11px; }
+  .ct-readout { column-gap: 6px; }
+  .ct-time { column-gap: 4px; }
+}
 
-/* Enlarged day preview: opens on press, follows a drag across days, or shows a hovered or focused day. */
+/* Enlarged day preview: shown while a press slides across the days. */
 .ct-day-loupe {
   position: absolute;
   z-index: 8;
   left: 50%;
   bottom: calc(100% + 10px);
-  width: min(66%, 440px);
+  /* Sized near the overview's own resolution, so the enlarged frame stays sharp. */
+  width: min(72%, 300px);
   transform: translateX(-50%);
   overflow: hidden;
   border-radius: 12px;
@@ -98,7 +129,6 @@
 .ct-day-loupe[hidden] { display: none; }
 .ct-day-loupe-canvas { display: block; width: 100%; aspect-ratio: 16 / 10; background: #dfe7ee; }
 .ct-day-loupe-title { display: block; padding: 6px 10px; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
-@media (max-width: 720px) { .ct-day-loupe { width: calc(100% - 16px); } }
 @media (prefers-reduced-motion: reduce) { .ct-day.is-pending .ct-day-canvas { animation: none; } }
 .compact-timeline .ct-day:hover:not(:disabled) { background: #e3ecf5; color: #16324f; }
 .compact-timeline .ct-day.is-in-window:not(.is-selected) { color: #1d4ed8; box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45); }

@@ -17,7 +17,7 @@ import { matches, RasterBudgetError, releaseAll, SlotPool, type RasterSelection,
 
 export type { OverlayState } from './overlay-state';
 type Selection = RasterSelection;
-export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
+export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme; /** An overview frame finished, failed or was dropped, so day previews may draw differently. */ onPreviewsChanged?: () => void }
 
 /**
  * Owns the displayed raster and a bounded prepared window; dispose with the map.
@@ -459,7 +459,7 @@ export class RasterOverlay implements MapChannel {
     if (this.protocol) return;
     this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request, budget: this.options.budget, ...(this.options.requestLimits ?? { maxActive: 24, maxPrefetchActive: 20 }) });
     registerRasterProtocol(() => this.protocol, this.protocol.scheme, () => this.theme);
-    this.overview = new RasterOverview(this.map, this.protocol, () => { this.advance(); this.emit(); }, { ...this.options, theme: this.theme });
+    this.overview = new RasterOverview(this.map, this.protocol, () => { this.advance(); this.emit(); this.options.onPreviewsChanged?.(); }, { ...this.options, theme: this.theme });
   }
 
   private addSlot(sel: Selection, interactive: boolean): void {
