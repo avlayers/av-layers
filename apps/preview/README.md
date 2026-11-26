@@ -62,9 +62,10 @@ starting day restores the starting frame.
 While the selected hour loads the readout notes the hour still on screen.
 Each day button shows a small preview of its target frame: the active lift
 layer's overview for the current view, with coastlines and borders from the
-basemap once the map settles. Drag across the days (or press, hover or
-keyboard-focus one with a mouse or keyboard) to see that preview enlarged above
-the timeline. Previews need the lift layer to be visible
+basemap once the map settles. Sliding across the days shows the preview under
+the finger enlarged above the timeline. A day without a frame near the compared
+hour labels its card with the hour it shows. Moving to another day closes an
+open Windgram. Map credits sit behind the ⓘ button. Previews need the lift layer to be visible
 and show plain dates otherwise. There is no playback.
 After the camera rests, every map frame of the active layer and the wind field
 stay decoded for that view. A short pan and a time change reuse them. Fine tiles

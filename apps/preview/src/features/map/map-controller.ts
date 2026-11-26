@@ -18,22 +18,26 @@ interface MapOptions {
  * Attribution as the compact ⓘ button at every width, starting collapsed. MapLibre expands a compact control the
  * first time it compacts; this collapses it again so the credits open only on request.
  */
-class CollapsedAttribution extends maplibregl.AttributionControl {
-  constructor() {
-    super({ compact: true });
-    const update = this._updateCompact;
-    this._updateCompact = () => {
-      const wasCompact = this._container?.classList.contains('maplibregl-compact') ?? false;
-      update();
-      if (!wasCompact && this._container?.classList.contains('maplibregl-compact')) this._updateCompactMinimize();
-    };
+function collapsedAttribution(): maplibregl.AttributionControl {
+  // Defined on first use: the class extends a MapLibre export, which tests may mock away.
+  class CollapsedAttribution extends maplibregl.AttributionControl {
+    constructor() {
+      super({ compact: true, customAttribution: '<a href="https://maplibre.org/" target="_blank">MapLibre</a>' });
+      const update = this._updateCompact;
+      this._updateCompact = () => {
+        const wasCompact = this._container?.classList.contains('maplibregl-compact') ?? false;
+        update();
+        if (!wasCompact && this._container?.classList.contains('maplibregl-compact')) this._updateCompactMinimize();
+      };
+    }
   }
+  return new CollapsedAttribution();
 }
 
 /** Owns the single MapLibre instance for one preview app lifetime. */
 export function createMap(options: MapOptions): maplibregl.Map {
   const map = createMapInstance(options);
-  if (typeof map.addControl === 'function') map.addControl(new CollapsedAttribution(), 'bottom-right');
+  if (typeof map.addControl === 'function' && typeof maplibregl.AttributionControl === 'function') map.addControl(collapsedAttribution(), 'bottom-right');
   return map;
 }
 

@@ -1432,3 +1432,17 @@ it('reports a committed move to another day, but not an hour change within the d
   expect(onDayChange).toHaveBeenCalledTimes(1);
   timeline.destroy();
 });
+
+it('compares days by date, so an outside update during a press leaves a same-day pick quiet', () => {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn(), onDayChange = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onDayChange, timeZone: 'UTC' });
+  timeline.update(comparison, 'd1-14');
+  const { row } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  timeline.update(comparison.slice(1), 'd3-14');
+  key(byClass(host.children[0]!, 'ct-track'), 'ArrowRight');
+  expect(onDayChange).not.toHaveBeenCalled();
+  timeline.destroy();
+});

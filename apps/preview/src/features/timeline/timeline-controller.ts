@@ -1,5 +1,5 @@
 import { DEFAULT_DOCK_VIEW, type DockViewId } from '../controls/bottom-dock-model';
-import { DAY_MINUTES, nearestFrameIndexForDay, scaleAtWidth, xToMinute, type DayGroup, type DayScale } from './day-scale';
+import { DAY_MINUTES, localTimeFromMs, nearestFrameIndexForDay, scaleAtWidth, xToMinute, type DayGroup, type DayScale } from './day-scale';
 import { createDayPreviews, type DayPreviewSource } from './day-previews';
 import { createFrameWindow } from './timeline-frame-window';
 import { clearGesture, createGesture, dayAtX, pointerTravelled, releaseSeeks } from './timeline-gesture';
@@ -61,8 +61,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   let loupeDay: string | null = null, preferTimer: ReturnType<typeof setTimeout> | null = null;
   /** A touch on the rail seeks only once it travels or lifts as a tap, so a finger reaching for a day doesn't move the hour. */
   let railTouch = false;
-  /** The last selection the app committed (from here or outside), for telling when a pick changes day. */
-  let committedIndex = -1;
+  /** Local day of the last selection the app committed (from here or outside), for telling when a pick changes day. */
+  let committedDay: string | undefined;
+  /** Escape shut the enlarged preview during this drag; it stays shut until release. */
+  let loupeDismissed = false;
+  let preferKey = '';
   const view = createTimelineView(host, win, options.variant ?? DEFAULT_DOCK_VIEW, {
     prepareDay(group) {
       if (!options.onPrepare) return;
@@ -78,7 +81,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     dayKey(event, group) {
       if (event.key !== 'Escape') { dayKey(event, group); return; }
       // Escape closes an open preview and nothing else, so the point card stays.
-      if (loupeDay !== null) { event.preventDefault(); setLoupe(null); }
+      if (loupeDay !== null) { event.preventDefault(); loupeDismissed = gesture.pointer !== null; setLoupe(null); }
     },
     resized: () => render()
   });
@@ -142,10 +145,17 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     view.setRowThumbs(anyThumb);
     // A rail scrub changes the targets every frame: they are asked for once the finger rests, so cards fill in
     // mid-scrub without re-sorting the overview queue on every frame.
-    if (preferTimer !== null) clearTimeout(preferTimer);
-    preferTimer = null;
-    if (gesture.pointer === null || gesture.kind !== 'rail') previews.prefer(targets);
-    else preferTimer = setTimeout(() => { preferTimer = null; if (!destroyed) previews?.prefer(targets); }, PREFER_REST_MS);
+    const key = targets.join(',');
+    if (gesture.pointer === null || gesture.kind !== 'rail') {
+      if (preferTimer !== null) clearTimeout(preferTimer);
+      preferTimer = null; preferKey = '';
+      previews.prefer(targets);
+    } else if (key !== preferKey) {
+      // Only a changed target set restarts the rest timer; repaints from loading frames don't hold it off.
+      if (preferTimer !== null) clearTimeout(preferTimer);
+      preferKey = key;
+      preferTimer = setTimeout(() => { preferTimer = null; preferKey = ''; if (!destroyed) previews?.prefer(targets); }, PREFER_REST_MS);
+    }
     if (loupeDay !== null) {
       // Shown before it is painted, so the canvas is sized to its real box.
       view.setDayLoupe(loupeIndex);
@@ -179,20 +189,24 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
 
   function invalidateGesture(): void {
     if (gesture.pointer !== null && gesture.kind === 'days') setLoupe(null);
+    loupeDismissed = false;
     clearGesture(gesture);
     cancelSceneRequest();
   }
 
   function deliverScene(index: number, history: 'push' | 'replace' | 'none'): void {
     win.sceneIndex = index;
-    const dayChanged = history !== 'none' && dayOf(index) !== dayOf(committedIndex);
-    if (history !== 'none') committedIndex = index;
+    const day = dayOf(index);
+    const dayChanged = history !== 'none' && committedDay !== undefined && day !== committedDay;
+    if (history !== 'none') committedDay = day;
     options.onSelect(index, history);
     if (dayChanged && !destroyed) options.onDayChange?.();
   }
 
+  /** The frame's own local date, so a reindexed new run or regrouped zone can't skew the comparison. */
   function dayOf(index: number): string | undefined {
-    return index < 0 ? undefined : win.days.find(group => group.indices.includes(index))?.day;
+    const frame = index >= 0 ? win.frames[index] : undefined;
+    return frame ? localTimeFromMs(Date.parse(frame.validTime), win.timeZone)?.day : undefined;
   }
 
   function queueScene(): void {
@@ -251,7 +265,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!group || win.off()) return;
     const index = group.indices.includes(gesture.startIndex) ? gesture.startIndex : targetForDay(group);
     if (index < 0) return;
-    setLoupe(group.day);
+    if (!loupeDismissed) setLoupe(group.day);
     if (index === win.selectedIndex) return;
     doc.defaultView?.navigator?.vibrate?.(8);
     scrubTo(index, undefined, queue);
@@ -379,7 +393,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (!sameFrames) win.setFrames(nextFrames);
       if (!echo) win.selectedIndex = nextIndex;
       win.sceneIndex = nextIndex;
-      if (!active) committedIndex = nextIndex;
+      if (!echo) committedDay = dayOf(nextIndex);
       win.disabled = nextDisabled;
       if (!sameFrames) syncDays();
       render();

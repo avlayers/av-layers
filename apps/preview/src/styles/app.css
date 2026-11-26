@@ -844,7 +844,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   left: 0;
   bottom: calc(100% + 8px);
   width: min(296px, calc(100vw - 24px));
-  max-height: min(62dvh, 420px);
+  /* Never taller than the room above the dock, so it can't run off the top of a short screen. */
+  max-height: min(62dvh, 420px, calc(100dvh - var(--dock-clearance, 0px) - 16px));
   overflow: auto;
   padding: 10px 11px;
   background: #fffffff7;
@@ -888,11 +889,6 @@ button:disabled { opacity: 0.45; cursor: default; }
 .capsule-legend:not([hidden]) { grid-area: key; display: flex; align-items: center; }
 @media (max-width: 720px) {
   .capsule-legend:not([hidden]) { justify-self: end; }
-}
-/* Very narrow (or 200 % text): Key and AGL drop below the readout so the time keeps its width. */
-@media (max-width: 359px) {
-  #map-dock { grid-template-columns: minmax(0, 1fr); grid-template-areas: "readout" "key" "rail" "days"; }
-  .capsule-legend:not([hidden]) { justify-self: start; }
 }
 
 .capsule-inline-controls {
@@ -963,6 +959,8 @@ button:disabled { opacity: 0.45; cursor: default; }
 .capsule-ref-option.is-selected { background: #16324f; color: #fff; box-shadow: 0 1px 2px #0b1b2833; cursor: default; }
 .capsule-ref-option:hover:not(:disabled):not(.is-selected) { background: #dfe9f4; color: #16324f; }
 .capsule-ref-option:disabled { opacity: 0.5; cursor: default; }
+/* Each half's touch area is widened to 44 px without changing the pill. */
+.capsule-ref-option::after { content: ''; position: absolute; top: -11px; bottom: -11px; left: -4px; right: -4px; }
 @media (max-width: 400px) { .capsule-ref-option { min-width: 32px; padding: 0 6px; } }
 .ribbon-key.capsule-key > summary.capsule-key-trigger:hover,
 .ribbon-key.capsule-key[open] > summary.capsule-key-trigger {
@@ -1368,4 +1366,11 @@ a { color: #1c6b8a; }
 @media (max-height: 560px) and (min-width: 600px) {
   #map-controls { right: calc(max(8px, env(safe-area-inset-right)) + 60px); }
   .maplibregl-ctrl-bottom-right { bottom: env(safe-area-inset-bottom, 0px); }
+  /* Opened credits sit over the dock rather than behind it. */
+  .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) { z-index: 3; }
+  /* Readout and controls beside the rail and days, as on desktop: two rows instead of three. */
+  #map-dock { grid-template-columns: 228px minmax(0, 1fr); grid-template-areas: "readout rail" "key days"; column-gap: 14px; }
+  .capsule-legend:not([hidden]) { justify-self: start; }
 }
+/* The ⓘ would sit on the open point card; it returns when the card closes. */
+#app:has(#point-card:not([hidden])) .maplibregl-ctrl-bottom-right { visibility: hidden; }

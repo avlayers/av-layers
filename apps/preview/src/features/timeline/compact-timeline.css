@@ -16,7 +16,7 @@
   grid-area: readout;
   /* Date, time and UTC on one line; the note follows on the same line when it fits. */
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: baseline;
   align-content: center;
   column-gap: 8px;
@@ -24,13 +24,13 @@
   min-width: 0;
   color: #1c2430;
 }
-.ct-date { font-size: 13px; font-weight: 650; white-space: nowrap; }
-.ct-time { display: flex; align-items: baseline; column-gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ct-time-local { font-size: 19px; font-weight: 750; letter-spacing: -0.01em; }
-.ct-time-utc { overflow: hidden; color: #526170; font-size: 12px; font-weight: 550; text-overflow: ellipsis; }
+.ct-date { flex: none; font-size: 13px; font-weight: 650; white-space: nowrap; }
+.ct-time { flex: 0 1 auto; overflow: hidden; display: flex; align-items: baseline; column-gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ct-time-local { flex: none; font-size: 19px; font-weight: 750; letter-spacing: -0.01em; }
+.ct-time-utc { min-width: 0; overflow: hidden; color: #526170; font-size: 12px; font-weight: 550; text-overflow: ellipsis; }
 .ct-note { min-width: 0; overflow: hidden; color: #9a4b00; font-size: 12.5px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-/* On phones the note takes the UTC time's place rather than adding a line. */
-@media (max-width: 720px) { .ct-readout:has(.ct-note:not([hidden])) .ct-time-utc { display: none; } }
+/* The note takes the UTC time's place rather than adding a line, so the dock never changes height. */
+.ct-readout:has(.ct-note:not([hidden])) .ct-time-utc { display: none; }
 .ct-note[hidden] { display: none; }
 .ct-note.is-showing { color: #526170; font-weight: 600; }
 
@@ -101,7 +101,7 @@
 @keyframes ct-thumb-wait { from { opacity: 1; } to { opacity: 0.45; } }
 @media (min-width: 721px) { .ct-day-thumb { height: 40px; } }
 /* Short screens keep the day cards to a strip so the map keeps its height. */
-@media (max-height: 560px) { .ct-day-thumb { height: 22px; } }
+@media (max-height: 560px) { .ct-day-thumb { height: 22px; } .ct-day-loupe { width: min(50%, 220px); } }
 /* Narrow phones: smaller readout type so date, time and UTC stay on one line beside Key and AGL/MSL. */
 @media (max-width: 400px) {
   .ct-date { font-size: 12px; }
@@ -110,6 +110,8 @@
   .ct-readout { column-gap: 6px; }
   .ct-time { column-gap: 4px; }
 }
+/* Very narrow: UTC gives way so the readout keeps one line beside Key and AGL/MSL. */
+@media (max-width: 359px) { .ct-time-utc { display: none; } }
 
 /* Enlarged day preview: shown while a press slides across the days. */
 .ct-day-loupe {

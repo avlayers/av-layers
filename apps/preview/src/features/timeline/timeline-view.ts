@@ -391,16 +391,18 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     setThumb(day, state, index = -1, aimMinute = null) {
       const button = dayButtons.find(candidate => candidate.dataset.day === day);
       if (!button) return;
-      button.classList.toggle('has-thumb', state !== 'unavailable');
-      button.classList.toggle('is-pending', state === 'pending');
+      if (button.classList.contains('has-thumb') !== (state !== 'unavailable')) button.classList.toggle('has-thumb', state !== 'unavailable');
+      if (button.classList.contains('is-pending') !== (state === 'pending')) button.classList.toggle('is-pending', state === 'pending');
       const badge = thumbTimes.get(button), frame = index >= 0 ? win.frames[index] : undefined;
       const local = frame ? localTimeFromMs(Date.parse(frame.validTime), win.timeZone) : null;
       const minute = local ? local.hour * 60 + local.minute : null;
       // A day without a frame near the compared hour says which hour its image shows.
       const differs = state !== 'unavailable' && minute !== null && aimMinute !== null && Math.abs(minute - aimMinute) >= 30;
       if (badge) {
-        badge.textContent = differs ? clockLabel(minute) : '';
-        if (differs) badge.removeAttribute('hidden'); else badge.setAttribute('hidden', '');
+        // Written only on change: each write invalidates style before the next card's box is read.
+        const text = differs ? clockLabel(minute) : '';
+        if (badge.textContent !== text) badge.textContent = text;
+        if ((badge.getAttribute('hidden') === null) !== differs) { if (differs) badge.removeAttribute('hidden'); else badge.setAttribute('hidden', ''); }
       }
     },
     setRowThumbs(on) {
