@@ -159,7 +159,8 @@ export function planWholeDomainCapacity(input: WholeDomainCapacityInput) {
   const windReserveBytes = input.windWorkingSetBytes ?? 0;
   let inlinePeakBytes = Object.values(workingSet).reduce((sum, bytes) => sum + bytes, 0);
   let prefetchFrameCount: 0 | 1 = 1;
-  if (inlinePeakBytes + windReserveBytes > BUILD_BUDGETS.workingSetBytes) {
+  // A one-frame group has no next frame to prefetch.
+  if ((input.groupFrames ?? frames) < 2 || inlinePeakBytes + windReserveBytes > BUILD_BUDGETS.workingSetBytes) {
     prefetchFrameCount = 0;
     inlinePeakBytes -= workingSet.prefetchFrame;
     workingSet.prefetchFrame = 0;

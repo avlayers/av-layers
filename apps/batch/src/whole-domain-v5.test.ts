@@ -1216,6 +1216,9 @@ describe('whole-domain v5 production', () => {
     expect(singleFrame.workingSet.prefetchFrame).toBe(0);
     expect(singleFrame.estimatedPeakBytes).toBeLessThanOrEqual(BUILD_BUDGETS.workingSetBytes);
     expect(singleFrame.violations).toEqual([]);
+    const oneFrameGroup = admitWholeDomain({ ...input, groupFrames: 1 });
+    expect(oneFrameGroup.prefetchFrameCount).toBe(0);
+    expect(oneFrameGroup.workingSet.prefetchFrame).toBe(0);
     const sparseAdmission = admitWholeDomain({ ...input, nativeActive: 1 });
     expect(sparseAdmission.workingSet.nativeFields).toBe(admitted.workingSet.nativeFields);
     expect(sparseAdmission.workingSet.diagnostics).toBe(admitted.workingSet.diagnostics);
