@@ -26,8 +26,8 @@
 .ct-date { grid-area: date; font-size: 13px; font-weight: 600; white-space: nowrap; }
 .ct-time { grid-area: time; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 6px; min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ct-time-local { font-size: 24px; font-weight: 750; letter-spacing: -0.01em; }
-.ct-time-utc { overflow: hidden; color: #526170; font-size: 11.5px; font-weight: 550; text-overflow: ellipsis; }
-.ct-note { grid-area: note; align-self: center; justify-self: end; overflow: hidden; color: #9a4b00; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.ct-time-utc { overflow: hidden; color: #526170; font-size: 12.5px; font-weight: 550; text-overflow: ellipsis; }
+.ct-note { grid-area: note; align-self: center; justify-self: end; overflow: hidden; color: #9a4b00; font-size: 13px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
 .ct-note[hidden] { display: none; }
 .ct-note.is-showing { color: #526170; font-weight: 600; }
 
@@ -35,7 +35,9 @@
 .ct-days {
   grid-area: days;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(44px, 1fr));
+  /* One row whatever the day count, so a press can always slide across every day. */
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
   min-width: 0;
   /* Horizontal drags pick days; the browser must not pan or scroll under them. */
@@ -47,7 +49,7 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  min-width: 44px;
+  min-width: 0;
   min-height: 44px;
   margin: 0;
   padding: 0;
@@ -74,8 +76,9 @@
 .ct-day-thumb { display: none; position: relative; height: 36px; margin: 2px 2px 0; overflow: hidden; border-radius: 6px 6px 3px 3px; background: #dfe7ee; }
 .ct-day.has-thumb .ct-day-thumb { display: block; }
 .ct-day-canvas { display: block; width: 100%; height: 100%; }
-.ct-day.is-pending .ct-day-thumb { background: linear-gradient(90deg, #dfe7ee, #eef3f7, #dfe7ee); background-size: 200% 100%; animation: ct-thumb-wait 1.2s linear infinite; }
-@keyframes ct-thumb-wait { to { background-position: -200% 0; } }
+/* Opacity only, so the wait pulse stays on the compositor. */
+.ct-day.is-pending .ct-day-canvas { animation: ct-thumb-wait 1.2s ease-in-out infinite alternate; }
+@keyframes ct-thumb-wait { from { opacity: 1; } to { opacity: 0.45; } }
 @media (min-width: 721px) { .ct-day-thumb { height: 40px; } }
 
 /* Enlarged day preview: opens on press, follows a drag across days, or shows a hovered or focused day. */
@@ -89,14 +92,14 @@
   overflow: hidden;
   border-radius: 12px;
   border: 1px solid #d5dfe8;
-  background: #fffffff7;
+  background: #ffffff;
   box-shadow: 0 12px 32px #0b1b2840;
 }
 .ct-day-loupe[hidden] { display: none; }
 .ct-day-loupe-canvas { display: block; width: 100%; aspect-ratio: 16 / 10; background: #dfe7ee; }
 .ct-day-loupe-title { display: block; padding: 6px 10px; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
 @media (max-width: 720px) { .ct-day-loupe { width: calc(100% - 16px); } }
-@media (prefers-reduced-motion: reduce) { .ct-day.is-pending .ct-day-thumb { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .ct-day.is-pending .ct-day-canvas { animation: none; } }
 .compact-timeline .ct-day:hover:not(:disabled) { background: #e3ecf5; color: #16324f; }
 .compact-timeline .ct-day.is-in-window:not(.is-selected) { color: #1d4ed8; box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.45); }
 .compact-timeline .ct-day.is-selected { color: #16324f; background: #e6f0fa; box-shadow: inset 0 0 0 1.5px #2563eb; }
@@ -144,15 +147,15 @@
   bottom: 0;
   background: repeating-linear-gradient(-45deg, #d5dde3, #d5dde3 3px, #eef2f5 3px, #eef2f5 6px);
 }
-.ct-ticks { z-index: 2; inset: 1px 2px auto; height: 11px; pointer-events: none; }
+.ct-ticks { z-index: 2; inset: 1px 2px auto; height: 12px; pointer-events: none; }
 .ct-tick {
   position: absolute;
   top: 0;
   transform: translateX(-50%);
   color: #16324f;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 11px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 12px;
   font-variant-numeric: tabular-nums;
   text-shadow: 0 0 2px #fff, 0 0 2px #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 1px 0 #fff, 0 -1px 0 #fff;
 }
@@ -304,7 +307,7 @@
 #app[data-chrome="dark"] .compact-timeline .ct-day { background: #162231; box-shadow: inset 0 0 0 1px #29384c; }
 #app[data-chrome="dark"] .compact-timeline .ct-day.is-selected::after { background: #f59e0b; }
 #app[data-chrome="dark"] .ct-day-thumb, #app[data-chrome="dark"] .ct-day-loupe-canvas { background: #1e2e42; }
-#app[data-chrome="dark"] .ct-day-loupe { background: #111b27f2; border-color: #29384c; }
+#app[data-chrome="dark"] .ct-day-loupe { background: #111b27; border-color: #29384c; }
 #app[data-chrome="dark"] .ct-hatch {
   background: repeating-linear-gradient(-45deg, #1b2838, #1b2838 3px, #243447 3px, #243447 6px);
 }

@@ -36,7 +36,7 @@ describe('preview geography', () => {
     const { map, fire } = fakeMap();
     const changed = vi.fn();
     const made: OffscreenCanvas[] = [];
-    const geography = createPreviewGeography(map, () => 'classic', changed, (w, h) => { const s = surface(w, h); made.push(s); return s; });
+    const geography = createPreviewGeography(map, () => 'classic', changed, undefined, (w, h) => { const s = surface(w, h); made.push(s); return s; });
     const target = recorder();
     expect(geography.drawBase(target.context, 80, 40)).toBe(false);
     fire('idle');
@@ -55,7 +55,7 @@ describe('preview geography', () => {
   it('draws nothing while the map moves and rebuilds after it settles', () => {
     const { map, fire } = fakeMap();
     const changed = vi.fn();
-    const geography = createPreviewGeography(map, () => 'classic', changed, surface);
+    const geography = createPreviewGeography(map, () => 'classic', changed, undefined, surface);
     fire('idle');
     fire('movestart');
     expect(geography.drawBase(recorder().context, 80, 40)).toBe(false);
@@ -70,11 +70,26 @@ describe('preview geography', () => {
 
   it('is skipped without the basemap water layer, and unhooks on destroy', () => {
     const { map, fire, handlers } = fakeMap([]);
-    const geography = createPreviewGeography(map, () => 'classic', () => {}, surface);
+    const geography = createPreviewGeography(map, () => 'classic', () => {}, undefined, surface);
     fire('idle');
     expect(geography.drawBase(recorder().context, 80, 40)).toBe(false);
     geography.destroy();
     expect(handlers.size).toBe(0);
+  });
+
+  it('fills each water feature on its own and waits while no preview is shown', () => {
+    const { map, fire } = fakeMap();
+    const query = (map as unknown as { queryRenderedFeatures: (o: { layers: string[] }) => unknown[] }).queryRenderedFeatures;
+    (map as unknown as { queryRenderedFeatures: unknown }).queryRenderedFeatures = (o: { layers: string[] }) => o.layers.includes('water') ? [...query(o), ...query(o)] : query(o);
+    let shown = false;
+    const made: OffscreenCanvas[] = [];
+    const geography = createPreviewGeography(map, () => 'classic', () => {}, () => shown, (w, h) => { const s = surface(w, h); made.push(s); return s; });
+    fire('idle');
+    expect(made).toHaveLength(0);
+    shown = true;
+    fire('idle');
+    expect((made[0] as unknown as { calls: string[] }).calls.filter(c => c.startsWith('fill('))).toHaveLength(2);
+    geography.destroy();
   });
 
   it('crops the centre of the view at the target aspect', () => {

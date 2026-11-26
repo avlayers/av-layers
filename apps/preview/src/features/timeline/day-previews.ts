@@ -18,6 +18,8 @@ interface DayPreviews {
   /** Draws `index` into `canvas`; -1 clears it. */
   paint(canvas: HTMLCanvasElement, index: number): PreviewDraw;
   prefer(indices: readonly number[]): void;
+  /** True once after a paint pass drew into a canvas that had no box yet; the next pass resets it. */
+  drewHidden(): boolean;
   /** Cancels pending work and drops canvas backing stores. */
   destroy(canvases: readonly HTMLCanvasElement[]): void;
 }
@@ -26,7 +28,7 @@ const MAX_DPR = 2;
 const FALLBACK_BOX = { width: 64, height: 36 };
 
 export function createDayPreviews(source: DayPreviewSource, frameClock: Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame' | 'devicePixelRatio'> | null): DayPreviews {
-  let request: number | null = null, queued: (() => void) | null = null;
+  let request: number | null = null, queued: (() => void) | null = null, hidden = false, retried = false;
   const raf = frameClock && typeof frameClock.requestAnimationFrame === 'function' ? frameClock : null;
   return {
     schedule(paint) {
@@ -50,11 +52,20 @@ export function createDayPreviews(source: DayPreviewSource, frameClock: Pick<Win
       if (canvas.height !== height) canvas.height = height;
       context.clearRect(0, 0, canvas.width, canvas.height);
       if (index < 0 || width <= 0 || height <= 0) return 'unavailable';
-      return source.draw(index, context, width, height);
+      const state = source.draw(index, context, width, height);
+      if (css === FALLBACK_BOX && state !== 'unavailable') hidden = true;
+      return state;
     },
     // Not de-duplicated here: the same indices can name other frames after a build change, and the source
     // compares the frames it is given.
     prefer(indices) { source.prefer(indices); },
+    drewHidden() {
+      // One extra pass at most, so a canvas that never gets a box cannot keep the loop alive.
+      const again = hidden && !retried;
+      retried = again;
+      hidden = false;
+      return again;
+    },
     destroy(canvases) {
       if (request !== null) raf?.cancelAnimationFrame(request);
       request = null; queued = null;

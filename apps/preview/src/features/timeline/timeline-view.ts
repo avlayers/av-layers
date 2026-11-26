@@ -326,8 +326,10 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     paintedWidth = width;
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
-    track.setAttribute('aria-valuemax', String(Math.max(0, win.frames.length - 1)));
-    track.setAttribute('aria-valuenow', String(Math.max(0, win.selectedIndex)));
+    // The rail's keys stay inside the selected day, so its range is that day's frames.
+    const day = win.selectedGroup()?.indices ?? [];
+    track.setAttribute('aria-valuemax', String(Math.max(0, day.length - 1)));
+    track.setAttribute('aria-valuenow', String(Math.max(0, day.indexOf(win.selectedIndex))));
   }
 
   function rebuildDays(): void {

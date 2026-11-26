@@ -346,7 +346,12 @@ export class RasterOverview {
 
   private ordered(jobs: Job[]): Job[] {
     const frames = this.context!.frames, index = frames.indexOf(this.selected ?? '');
-    const rank = (job: Job) => job.frame === this.selected ? 0 : this.preferred.has(job.frame) ? 1 : 2;
+    // Selected first, then its immediate neighbours (the next scrub or arrow step), then day-preview frames, then the rest.
+    const rank = (job: Job) => {
+      if (job.frame === this.selected) return 0;
+      if (index >= 0 && Math.abs(frames.indexOf(job.frame) - index) === 1) return 1;
+      return this.preferred.has(job.frame) ? 2 : 3;
+    };
     return jobs.sort((a, b) => {
       const deltaA = frames.indexOf(a.frame) - index, deltaB = frames.indexOf(b.frame) - index;
       return rank(a) - rank(b) || Math.abs(deltaA) - Math.abs(deltaB)

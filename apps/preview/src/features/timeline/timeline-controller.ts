@@ -44,6 +44,8 @@ const RAIL_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'E
  * 15:00 returns to 14:00 on the next day that has it. Rail input, a zone change and an outside selection
  * reset it to the selected frame's own clock.
  */
+const RAIL_TOUCH_PX = 4;
+
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
   let destroyed = false, sceneRequest: number | null = null, suppressClickUntil = 0, lastPointerEvent: Event | null = null;
@@ -54,6 +56,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const previews = options.preview ? createDayPreviews(options.preview, doc.defaultView) : null;
   /** Day the enlarged preview shows (pressed, dragged, hovered or focused); null when closed. */
   let loupeDay: string | null = null, loupeHover: ReturnType<typeof setTimeout> | null = null;
+  /** A touch on the rail seeks only once it travels or lifts as a tap, so a finger reaching for a day doesn't move the hour. */
+  let railTouch = false;
   const view = createTimelineView(host, win, options.variant ?? DEFAULT_DOCK_VIEW, {
     prepareDay(group) {
       if (!options.onPrepare) return;
@@ -66,7 +70,11 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       suppressClickUntil = 0;
       pickDay(group, false);
     },
-    dayKey(event, group) { if (event.key === 'Escape') setLoupe(null); else dayKey(event, group); },
+    dayKey(event, group) {
+      if (event.key !== 'Escape') { dayKey(event, group); return; }
+      // Escape closes an open preview and nothing else, so the point card stays.
+      if (loupeDay !== null) { event.preventDefault(); setLoupe(null); }
+    },
     hoverDay(group) {
       if (loupeHover !== null) clearTimeout(loupeHover);
       loupeHover = null;
@@ -117,7 +125,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   function setLoupe(day: string | null): void {
     if (!previews || day === loupeDay) return;
     loupeDay = day;
-    if (day === null) view.setDayLoupe(null);
+    if (day === null) { view.setDayLoupe(null); view.loupeCanvas.width = 0; view.loupeCanvas.height = 0; }
     previews.schedule(paintPreviews);
   }
 
@@ -132,10 +140,16 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (group.day === loupeDay) loupeIndex = index;
       view.setThumb(group.day, previews.paint(canvas, index));
     }
-    previews.prefer(targets);
-    if (loupeDay === null) return;
-    const state = previews.paint(view.loupeCanvas, loupeIndex);
-    view.setDayLoupe(state === 'unavailable' ? null : loupeIndex);
+    // A rail scrub changes the targets every frame; the selected frame's neighbours matter more until it ends.
+    if (gesture.pointer === null || gesture.kind !== 'rail') previews.prefer(targets);
+    if (loupeDay !== null) {
+      // Shown before it is painted, so the canvas is sized to its real box.
+      view.setDayLoupe(loupeIndex);
+      const state = previews.paint(view.loupeCanvas, loupeIndex);
+      if (state === 'unavailable') view.setDayLoupe(null);
+    }
+    // A card that just switched from a plain date to an image was sized while hidden: paint once more at its box.
+    if (previews.drewHidden()) previews.schedule(paintPreviews);
   }
 
   function currentScale(width: number): DayScale {
@@ -251,7 +265,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     const pointer = event as PointerEvent;
     const version = beginGesture(pointer, 'rail', track);
     if (version === null) return;
-    seek(pointer.clientX);
+    railTouch = pointer.pointerType === 'touch';
+    if (!railTouch) seek(pointer.clientX);
     if (destroyed || win.off() || gesture.pointer === null || version !== gesture.version) return;
     const width = track.getBoundingClientRect().width;
     if (width > 0) gesture.scale = win.liveScale(width);
@@ -264,9 +279,9 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (beginGesture(pointer, 'days', daysRow) === null) return;
     comparisonMinute = targetMinute();
     gesture.days = view.dayTargets();
-    // The enlarged preview opens on press, for the day under the finger.
+    // A mouse or pen press opens the enlarged preview at once; on touch it waits for the drag, so a tap doesn't flash it.
     const pressed = gesture.days ? dayAtX(gesture.days, pointer.clientX) : undefined;
-    if (pressed) setLoupe(pressed.day);
+    if (pressed && pointer.pointerType !== 'touch') setLoupe(pressed.day);
   });
 
   // Pointer events are heard on the rail and day row and again on the document, so a press released
@@ -277,6 +292,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!once(event)) return;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
     if (!pointerTravelled(gesture, pointer.clientX, pointer.clientY)) return;
+    if (gesture.kind === 'rail' && railTouch && !gesture.moved && Math.abs(pointer.clientX - gesture.originX) < RAIL_TOUCH_PX) return;
     if (gesture.kind === 'days') {
       if (!gesture.days) return;
       if (!gesture.moved && typeof daysRow.setPointerCapture === 'function' && pointer.pointerId !== undefined) daysRow.setPointerCapture(pointer.pointerId);
@@ -291,7 +307,8 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
     if (!once(event)) return;
     if (gesture.pointer === null || (pointer.pointerId ?? 1) !== gesture.pointer) return;
     const version = gesture.version, kind = gesture.kind, dragged = gesture.moved;
-    if (releaseSeeks(gesture, event.type, pointer.clientX)) {
+    if (kind === 'rail' && railTouch && !dragged && event.type === 'pointerup') seek(pointer.clientX, false);
+    else if (releaseSeeks(gesture, event.type, pointer.clientX)) {
       if (kind === 'rail') seek(pointer.clientX, false);
       else if (dragged) seekDay(pointer.clientX, false);
     }

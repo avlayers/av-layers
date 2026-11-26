@@ -792,7 +792,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas: "readout key" "rail rail" "days days";
-  gap: 6px 8px;
+  /* A wider row gap keeps a gloved press on a day button off the hour rail above it. */
+  gap: 10px 8px;
   flex: 0 1 820px;
   width: min(820px, 100%);
   padding: 8px;

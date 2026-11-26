@@ -1054,7 +1054,7 @@ it('copies the current view of a ready frame, centre-cropped to the target, and 
   } finally { f.overview.destroy(); }
 });
 
-it('prepares preferred frames right after the selected one', async () => {
+it('prepares the selected frame neighbour, then preferred frames, before the rest', async () => {
   const f = fixture(true), b = build(30), frames = b.manifest.frames;
   try {
     f.view(LOCAL, 4);
@@ -1065,6 +1065,8 @@ it('prepares preferred frames right after the selected one', async () => {
     for (let index = 0; index < perFrame; index++) f.finish(index);
     await vi.waitFor(() => expect(f.requests.some(request => request.url.includes(frames[24].id))).toBe(true));
     const firstOther = f.requests.find(request => !request.url.includes(frames[0].id));
-    expect(firstOther?.url).toContain(frames[24].id);
+    expect(firstOther?.url).toContain(frames[1].id);
+    const at = (frame: string) => f.requests.findIndex(request => request.url.includes(frame));
+    expect(at(frames[24].id)).toBeLessThan(at(frames[2].id) < 0 ? Infinity : at(frames[2].id));
   } finally { f.overview.destroy(); }
 });

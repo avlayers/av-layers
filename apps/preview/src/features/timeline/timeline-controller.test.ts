@@ -255,7 +255,7 @@ it('labels hours from a fixed offset and regroups without changing the selected 
   timeline.destroy();
 });
 
-it('selects a day at the current hour, snaps the track, and steps across midnight', () => {
+it('selects a day at the current hour, snaps the track, and keeps rail keys inside the day', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, 'a');
   const root = host.children[0]!;
@@ -663,7 +663,8 @@ it('does not re-seek a repeated release coordinate after opening a folded night'
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);
-  const selected = Number(track.getAttribute('aria-valuenow'));
+  // aria-valuenow counts within the selected local day, which starts at h5 in Etc/GMT+5.
+  const selected = Number(track.getAttribute('aria-valuenow')) + 5;
   expect(selected).not.toBe(21);
   expect(named(host.children[0]!, 'ct-moon')).toHaveLength(1);
   pointer(track, 'pointerup', 10);
@@ -818,7 +819,8 @@ it('ignores subpixel movement on release after opening a folded night', () => {
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);
-  const selected = Number(track.getAttribute('aria-valuenow'));
+  // aria-valuenow counts within the selected local day, which starts at h5 in Etc/GMT+5.
+  const selected = Number(track.getAttribute('aria-valuenow')) + 5;
   pointer(track, 'pointermove', 10.5);
   pointer(track, 'pointerup', 10.5);
   expect(onSelect.mock.calls).toEqual([[selected, 'push']]);
@@ -1348,5 +1350,39 @@ it('shows the start day in the enlarged preview when a drag slides back onto it'
   pointer(row, 'pointerdown', 80);
   pointer(row, 'pointermove', 20);
   expect(byClass(root, 'ct-day-loupe-title').textContent).toMatch(/^Fri 13 Nov/);
+  timeline.destroy();
+});
+
+function touch(element: Element, type: string, clientX: number): void {
+  const event = new Event(type);
+  Object.defineProperties(event, { clientX: { value: clientX }, button: { value: 0 }, pointerId: { value: 7 }, pointerType: { value: 'touch' } });
+  element.dispatchEvent(event);
+}
+
+it('moves the hour on a touch only once the finger slides or lifts', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd3-14');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetWidth = 480;
+  touch(track, 'pointerdown', 470);
+  touch(track, 'pointermove', 472);
+  expect(onSelect).not.toHaveBeenCalled();
+  touch(track, 'pointerup', 472);
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'push');
+  timeline.destroy();
+});
+
+it('opens the enlarged preview on touch only once the drag starts, and Escape closes just the preview', () => {
+  const { root, row, buttons, timeline } = previewSetup();
+  const loupe = byClass(root, 'ct-day-loupe');
+  touch(row, 'pointerdown', 80);
+  expect(loupe.getAttribute('hidden')).toBe('');
+  touch(row, 'pointermove', 140);
+  expect(loupe.getAttribute('hidden')).toBeNull();
+  touch(row, 'pointerup', 140);
+  expect(key(buttons[0]!, 'Escape').defaultPrevented).toBe(false);
+  pointer(row, 'pointerdown', 80);
+  expect(key(buttons[1]!, 'Escape').defaultPrevented).toBe(true);
+  expect(loupe.getAttribute('hidden')).toBe('');
   timeline.destroy();
 });

@@ -98,7 +98,7 @@ export function createPreviewApp(): PreviewApp {
     live.channels = [new BasemapChannel(map, ctx.intent().theme), overlay, live.sky, wind.overlay];
     ops.syncChannels();
 
-    const geography = createPreviewGeography(map, () => ctx.intent().theme, () => live.timeline?.refreshPreviews?.());
+    const geography = createPreviewGeography(map, () => ctx.intent().theme, () => live.timeline?.refreshPreviews?.(), () => ctx.intent().liftVisible);
     ctx.lifecycle.signal.addEventListener('abort', () => geography.destroy(), { once: true });
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
       timeZone: ctx.forecast().timeZone,
@@ -131,7 +131,8 @@ export function createPreviewApp(): PreviewApp {
         }
       }
     });
-    map.on('move', () => live.timeline?.refreshPreviews?.());
+    // Previews follow the view once it settles; repainting every card on each move frame costs more than it shows.
+    map.on('moveend', () => live.timeline?.refreshPreviews?.());
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,

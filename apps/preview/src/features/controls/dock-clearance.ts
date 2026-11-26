@@ -6,8 +6,12 @@
 export function publishDockClearance(app: HTMLElement, signal: AbortSignal): void {
   const dock = app.querySelector<HTMLElement>('#map-controls');
   if (!dock || typeof ResizeObserver !== 'function') return;
+  let published = -1;
   const publish = () => {
     const clearance = Math.max(0, Math.ceil(app.getBoundingClientRect().bottom - dock.getBoundingClientRect().top));
+    // Writing the property restyles the whole app, so only a changed value is written.
+    if (clearance === published) return;
+    published = clearance;
     app.style.setProperty('--dock-clearance', `${clearance}px`);
   };
   const observer = new ResizeObserver(publish);

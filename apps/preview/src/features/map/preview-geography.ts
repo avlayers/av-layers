@@ -24,14 +24,15 @@ const BORDER_LAYERS = ['admin_country', 'admin_disputed', 'admin_sub'];
 const SCAFFOLD_MAX_PX = 360;
 const MAX_POINTS = 60_000;
 
-export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, changed: () => void, createSurface = defaultSurface): PreviewGeography {
+/** `active` says whether any preview is shown; the build waits until one is. */
+export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, changed: () => void, active: () => boolean = () => true, createSurface = defaultSurface): PreviewGeography {
   let base: Surface | null = null, lines: Surface | null = null, builtTheme: MapTheme | null = null;
   let moving = false, stale = true;
   const onMoveStart = () => { moving = true; };
   const onMoveEnd = () => { moving = false; stale = true; };
   const onData = (event: { sourceId?: string; dataType?: string }) => { if (event.dataType === 'source' && event.sourceId === 'openmaptiles') stale = true; };
   const onIdle = () => {
-    if (!stale || moving) return;
+    if (!stale || moving || !active()) return;
     stale = false;
     build();
     changed();
@@ -51,11 +52,14 @@ export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, 
     const scale = Math.min(1, SCAFFOLD_MAX_PX / Math.max(viewW, viewH));
     const w = Math.max(1, Math.round(viewW * scale)), h = Math.max(1, Math.round(viewH * scale));
     const t = themeOption(builtTheme).basemap;
-    let budget = MAX_POINTS;
+    const waterFeatures = query(water), borderFeatures = borders.length ? query(borders) : [];
+    // Dense coastlines are skipped before any projection work, not after it.
+    let points = 0;
+    for (const feature of waterFeatures) for (const ring of polygonRings(feature)) points += ring.length;
+    for (const feature of borderFeatures) for (const line of lineStrings(feature)) points += line.length;
+    if (points > MAX_POINTS) return;
     const trace = (target: Target, rings: number[][][]) => {
       for (const ring of rings) {
-        if (budget <= 0) return;
-        budget -= ring.length;
         ring.forEach(([lng, lat], i) => {
           const p = map.project([lng, lat]);
           if (i === 0) target.moveTo(p.x * scale, p.y * scale); else target.lineTo(p.x * scale, p.y * scale);
@@ -67,13 +71,16 @@ export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, 
     baseContext.fillStyle = landTone(t.relief) ?? t.ocean;
     baseContext.fillRect(0, 0, w, h);
     baseContext.fillStyle = t.ocean;
-    baseContext.beginPath();
-    for (const feature of query(water)) trace(baseContext, polygonRings(feature));
-    baseContext.fill('evenodd');
+    // Each feature fills on its own: tile-clipped neighbours overlap, and one even-odd path would cancel them out.
+    for (const feature of waterFeatures) {
+      baseContext.beginPath();
+      trace(baseContext, polygonRings(feature));
+      baseContext.fill('evenodd');
+    }
     const lineSurface = borders.length ? createSurface(w, h) : null, lineContext = lineSurface?.getContext('2d') as Target | null;
     if (lineSurface && lineContext) {
       lineContext.lineJoin = 'round';
-      for (const feature of query(borders)) {
+      for (const feature of borderFeatures) {
         const country = feature.layer.id !== 'admin_sub';
         lineContext.strokeStyle = country ? t.borderMajor : t.borderMinor;
         lineContext.lineWidth = country ? 1.1 : 0.7;
@@ -83,7 +90,6 @@ export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, 
         lineContext.stroke();
       }
     }
-    if (budget <= 0) return;
     base = baseSurface;
     lines = lineSurface;
   }
@@ -98,7 +104,8 @@ export function createPreviewGeography(map: ScaffoldMap, theme: () => MapTheme, 
 
   function ready(): boolean {
     if (moving) return false;
-    if (builtTheme !== null && builtTheme !== theme()) { stale = false; build(); }
+    // A theme change rebuilds on the next idle rather than inside a paint.
+    if (builtTheme !== null && builtTheme !== theme()) { stale = true; base = lines = null; builtTheme = null; return false; }
     return base !== null;
   }
 
