@@ -37,11 +37,20 @@ const upstreamSchema = z.object({ protocol: z.literal('split-grib2'), provider: 
 export function splitSource(model: ModelDefinition, requirements?: AuxiliaryRequirements) {
   const verticalCoordinate = model.capabilities.verticalCoordinate;
   const upstream = upstreamSchema.parse(model.upstream);
-  const templatePath = (template: string) => template.replace(/^https:\/\/[^/]+/, '');
+  // Templates hold {placeholders} only after the host, so URL parsing reads the real host and the path stays literal.
+  const templateParts = (template: string) => {
+    const authority = /^https:\/\/([^/]+)(\/.*)$/.exec(template);
+    const url = authority ? new URL(`https://${authority[1]}/`) : undefined;
+    return url && !url.username && !url.password && url.port === '' ? { host: url.hostname, path: authority![2]! } : undefined;
+  };
+  const primary = templateParts(upstream.urlTemplate);
+  const mirrorHosts = new Set<string>();
   for (const mirror of upstream.mirrorUrlTemplates ?? []) {
-    if (!upstream.urlTemplate.startsWith('https://') || templatePath(mirror) !== templatePath(upstream.urlTemplate) || mirror === upstream.urlTemplate) {
+    const parts = templateParts(mirror);
+    if (!primary || !parts || parts.path !== primary.path || parts.host === primary.host || mirrorHosts.has(parts.host)) {
       throw new Error('Split GRIB mirror templates must be other https hosts with the primary template path');
     }
+    mirrorHosts.add(parts.host);
   }
   if (upstream.nativeGrid && upstream.fetchConcurrency !== undefined && upstream.fetchConcurrency > 8) throw new Error('Native-grid Split GRIB fetch concurrency is at most 8');
   const grid = z.discriminatedUnion('kind', [regularLatLonGridSchema, rotatedLatLonGridSchema]).parse(model.grid);

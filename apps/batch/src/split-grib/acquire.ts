@@ -10,7 +10,7 @@ import { createNodeJ2kDecoderPool, type J2kDecoderPool } from '@azohra/meteo.gri
 import { DEFAULT_REQUEST_TIMEOUT_MS, gridVectorToEarth, prepareGridGeometry, sourceIntervalHours } from '@av/contracts';
 import type { IsobaricFrame, ModelLevelFrame, NormalizedFrame } from '@av/forecast';
 import { readLocalFile } from '../local-file.js';
-import { discoverSplitGribRun } from './discover.js';
+import { discoverSplitGribRun, SPLIT_GRIB_USER_AGENT } from './discover.js';
 import {
   formatSplitGribRunStamp,
   splitGribFieldUrl,
@@ -26,10 +26,10 @@ const DEFAULT_CONCURRENCY = 8;
 const MAX_CONCURRENCY = 32;
 const MAX_TRANSFER_ATTEMPTS = 3;
 const RETRYABLE_HTTP_STATUS = [408, 429, 500, 502, 503, 504];
-/** Consecutive failures after which a session stops trying a mirror and reads only the primary host. */
+/** A session stops reading from a mirror once it has failed this many objects and more than a fifth of its tries. */
 const MIRROR_FAILURE_LIMIT = 3;
-/** Identifies systematic reads to upstream operators, as ECCC's usage policy asks. */
-const USER_AGENT = 'av-layers-forecast (+https://github.com/avlayers/av-layers)';
+/** A mirror read gets less time than the primary so a stalled mirror costs little before the fallback. */
+const MIRROR_TIMEOUT_MS = 10_000;
 
 interface SplitGribObjectReceipt {
   readonly field: string;
@@ -49,9 +49,9 @@ interface SplitGribTransportStats {
   cacheHits: number;
   downloadedBytes: number;
   retries: number;
-  /** Summed wall time of object transfers (overlapping transfers each count), excluding decode. */
+  /** Summed wall time of object transfers, including failed mirror tries and retry backoff; overlapping transfers each count. */
   downloadMs: number;
-  /** Summed wall time of object decodes, excluding transfer. */
+  /** Summed wall time of object decodes, including any wait for a JPEG 2000 decoder worker. */
   decodeMs: number;
   mirrorDownloads: number;
   mirrorFallbacks: number;
@@ -63,7 +63,9 @@ interface SplitGribObjectLocation {
   readonly mirrors: readonly { readonly url: string; readonly mirror: MirrorHealth }[];
 }
 
-interface MirrorHealth { consecutiveFailures: number }
+interface MirrorHealth { tries: number; failures: number }
+
+const mirrorUsable = ({ tries, failures }: MirrorHealth): boolean => failures < MIRROR_FAILURE_LIMIT || failures * 5 < tries;
 
 interface SplitGribAcquisitionOptions {
   readonly cycle?: string;
@@ -176,9 +178,9 @@ async function loadSplitGribField(
   }
 
   const fetchFn = options.fetchImpl ?? fetch;
-  const transfer = async (target: string): Promise<Uint8Array> => {
-    const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
-    const response = await fetchFn(target, { headers: { 'User-Agent': USER_AGENT }, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
+  const transfer = async (target: string, timeoutMs: number): Promise<Uint8Array> => {
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const response = await fetchFn(target, { headers: { 'User-Agent': SPLIT_GRIB_USER_AGENT }, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
       const message = `HTTP ${response.status} for ${target}`;
@@ -187,40 +189,57 @@ async function loadSplitGribField(
     }
     return await readObjectBody(response);
   };
-  const transferStarted = performance.now();
-  const buffer = await pRetry(async attempt => {
-    if (attempt > 1) stats.retries += 1;
-    // A mirror carries the same objects; any mirror failure falls through to the primary host in the same attempt.
-    for (const { url: mirrorUrl, mirror } of location.mirrors) {
-      if (mirror.consecutiveFailures >= MIRROR_FAILURE_LIMIT) continue;
-      try {
-        const bytes = await transfer(mirrorUrl);
-        mirror.consecutiveFailures = 0;
-        stats.mirrorDownloads += 1;
-        return bytes;
-      } catch {
-        options.signal?.throwIfAborted();
-        mirror.consecutiveFailures += 1;
-        stats.mirrorFallbacks += 1;
-      }
+  const keep = async (buffer: Uint8Array, decoded: DecodedSplitGribField) => {
+    stats.downloads += 1;
+    stats.downloadedBytes += buffer.byteLength;
+    await mkdir(dirname(cachePath), { recursive: true });
+    const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(tmpPath, buffer, { flag: 'wx', signal: options.signal });
+      options.signal?.throwIfAborted();
+      await rename(tmpPath, cachePath);
+    } finally { await rm(tmpPath, { force: true }).catch(() => {}); }
+    return { decoded, compressedBytes: buffer.byteLength, sha256: sha256Hex(buffer), cacheHit: false };
+  };
+
+  // A mirror serves the same path. It gets one try per object, decode included, so an error page or a truncated
+  // object falls back to the primary instead of failing the frame; the primary keeps its own retries.
+  for (const { url: mirrorUrl, mirror } of location.mirrors) {
+    if (!mirrorUsable(mirror)) continue;
+    mirror.tries += 1;
+    const started = performance.now();
+    let bytes: Uint8Array;
+    try { bytes = await transfer(mirrorUrl, MIRROR_TIMEOUT_MS); } catch {
+      options.signal?.throwIfAborted();
+      mirror.failures += 1;
+      stats.mirrorFallbacks += 1;
+      continue;
+    } finally { stats.downloadMs += performance.now() - started; }
+    let decoded: DecodedSplitGribField;
+    try { decoded = await timedDecode(bytes); } catch {
+      options.signal?.throwIfAborted();
+      mirror.failures += 1;
+      stats.mirrorFallbacks += 1;
+      continue;
     }
-    try { return await transfer(url); } catch (error) { throw retriable(error); }
-  }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
-    shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
-  stats.downloadMs += performance.now() - transferStarted;
+    options.signal?.throwIfAborted();
+    stats.mirrorDownloads += 1;
+    return await keep(bytes, decoded);
+  }
+
+  const transferStarted = performance.now();
+  let buffer: Uint8Array;
+  try {
+    buffer = await pRetry(async attempt => {
+      if (attempt > 1) stats.retries += 1;
+      try { return await transfer(url, DEFAULT_REQUEST_TIMEOUT_MS); } catch (error) { throw retriable(error); }
+    }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
+      shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
+  } finally { stats.downloadMs += performance.now() - transferStarted; }
   options.signal?.throwIfAborted();
-  stats.downloads += 1;
-  stats.downloadedBytes += buffer.byteLength;
   const decoded = await timedDecode(buffer);
   options.signal?.throwIfAborted();
-  await mkdir(dirname(cachePath), { recursive: true });
-  const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(tmpPath, buffer, { flag: 'wx', signal: options.signal });
-    options.signal?.throwIfAborted();
-    await rename(tmpPath, cachePath);
-  } finally { await rm(tmpPath, { force: true }).catch(() => {}); }
-  return { decoded, compressedBytes: buffer.byteLength, sha256: sha256Hex(buffer), cacheHit: false };
+  return await keep(buffer, decoded);
 }
 
 type WindowField = Pick<DecodedSplitGribField, 'values' | 'missing' | 'product'> & Partial<Pick<DecodedSplitGribField, 'representation'>>;
@@ -357,7 +376,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     mirrorFallbacks: 0
   };
   // A test or fixture base URL replaces every host, so mirrors apply only to the configured upstream.
-  const mirrors = baseUrl ? [] : (source.upstream.mirrorUrlTemplates ?? []).map(template => ({ template, health: { consecutiveFailures: 0 } }));
+  const mirrors = baseUrl ? [] : (source.upstream.mirrorUrlTemplates ?? []).map(template => ({ template, health: { tries: 0, failures: 0 } }));
 
   let staticGeometryPromise: Promise<SplitGribStaticGeometryCache> | null = null;
   let nativeMappingPromise: Promise<{ indices: Uint32Array; receipts: SplitGribObjectReceipt[]; sha256: string }> | null = null;

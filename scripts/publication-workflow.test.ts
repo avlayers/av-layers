@@ -753,11 +753,11 @@ it('runs a worker without constructing publication storage or resolving another 
 it('logs shard phase timings from the completed receipt', async () => {
   const log = vi.spyOn(console, 'log').mockImplementation(() => {});
   fake.readLocal.mockImplementation(async (path: string) => {
-    return Buffer.from(JSON.stringify(path === 'output/shards/2/receipt.json' ? { metrics: { phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 }, acquisition: { downloads: 4, downloadMs: 12.6, source: 'hpfx' } } } : manifest));
+    return Buffer.from(JSON.stringify(path === 'output/shards/2/receipt.json' ? { metrics: { phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 }, acquisition: { downloads: 4, downloadMs: 12.6, source: 'hpfx', transport: { bytes: 7, hosts: ['a'] } } } } : manifest));
   });
   await runForecastShard(2);
   const entry = JSON.parse(log.mock.calls.map(([line]) => String(line)).find(line => line.includes('"forecast-stage"'))!);
-  expect(entry).toMatchObject({ phase: 'shard', shard: 2, outcome: 'complete', phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 }, acquisition: { downloads: 4, downloadMs: 13 } });
+  expect(entry).toMatchObject({ phase: 'shard', shard: 2, outcome: 'complete', phasesMs: { acquireMs: 10, deriveMs: 20, packMs: 3, renderMs: 40 }, acquisition: { downloads: 4, downloadMs: 13, 'transport.bytes': 7 } });
   expect(entry.acquisition).not.toHaveProperty('source');
 });
 it('cancels the shard and removes its signal handlers', async () => {

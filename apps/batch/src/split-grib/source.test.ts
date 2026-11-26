@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getProduct } from '@av/contracts/models';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   coverageIndices,
@@ -1219,18 +1220,81 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
       const tmp850 = requests.filter(request => request.url.includes('_TMP_ISBL_0850_') && request.url.includes('PT001H'));
       expect(tmp850.map(request => new URL(request.url).host)).toEqual(['hpfx.collab.science.gc.ca', 'dd.weather.gc.ca']);
       expect(session.stats).toMatchObject({ mirrorFallbacks: 1, mirrorDownloads: objects.length - 1, retries: 0 });
-      expect(session.stats.downloadMs).toBeGreaterThanOrEqual(0);
-      expect(session.stats.decodeMs).toBeGreaterThanOrEqual(0);
+      expect(session.stats.downloadMs).toBeGreaterThan(0);
+      expect(session.stats.decodeMs).toBeGreaterThan(0);
 
+      // Down mirror: it keeps getting tries until it has failed 3 objects and more than a fifth of its tries.
       mirrorUp = false;
       requests.length = 0;
+      const triesBefore = session.stats.mirrorDownloads + session.stats.mirrorFallbacks;
       await session.acquire(2, createNormalizedFrameTarget(2, 2, false, true));
-      const mirrorTries = requests.filter(request => request.url.startsWith('https://hpfx.'));
-      expect(mirrorTries).toHaveLength(3);
-      expect(requests.length).toBe(mirrorTries.length + requests.filter(request => request.url.startsWith('https://dd.')).length);
+      const hosts = requests.map(request => new URL(request.url).host);
+      const mirrorTries = hosts.filter(host => host.startsWith('hpfx.')).length;
+      let failures = 1, tries = triesBefore, expected = 0;
+      while (failures < 3 || failures * 5 < tries) { failures += 1; tries += 1; expected += 1; }
+      expect(mirrorTries).toBe(expected);
+      expect(hosts.lastIndexOf('hpfx.collab.science.gc.ca')).toBeLessThan(hosts.length - 1);
+      expect(hosts.slice(hosts.lastIndexOf('hpfx.collab.science.gc.ca') + 1).every(host => host === 'dd.weather.gc.ca')).toBe(true);
     } finally {
       await session.close();
     }
+  });
+
+  it('falls back to the primary when a mirror answers 200 with a body that does not decode', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    const mirrored = splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 1,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', 'https://hpfx.collab.science.gc.ca')] } });
+    const hosts: string[] = [];
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      hosts.push(new URL(url).host);
+      if (url.startsWith('https://hpfx.')) return new Response('<html>maintenance</html>', { status: 200 });
+      return hrdpsResponse(url, cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-mirror-page-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(mirrored, { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      const frame = await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      expect([...frame.temp2mK]).toEqual([293, 293]);
+      expect(session.stats.mirrorDownloads).toBe(0);
+      expect(session.stats.mirrorFallbacks).toBe(3);
+      expect(hosts.slice(0, 6)).toEqual(['hpfx.collab.science.gc.ca', 'dd.weather.gc.ca', 'hpfx.collab.science.gc.ca', 'dd.weather.gc.ca', 'hpfx.collab.science.gc.ca', 'dd.weather.gc.ca']);
+      expect(hosts.slice(6).every(host => host === 'dd.weather.gc.ca')).toBe(true);
+      // The cached object is the primary's valid copy.
+      expect((await readdir(join(cacheDir, 'objects'))).length).toBeGreaterThan(0);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('stops using a mirror that fails every other object', async () => {
+    const cycle = '2026-10-08T00:00:00Z';
+    const mirrored = splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 1,
+      mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', 'https://hpfx.collab.science.gc.ca')] } });
+    let mirrorCalls = 0;
+    const fetchImpl: typeof fetch = async input => {
+      const url = String(input);
+      if (url.startsWith('https://hpfx.') && mirrorCalls++ % 2 === 1) return new Response('busy', { status: 503 });
+      return hrdpsResponse(url.replace('https://hpfx.collab.science.gc.ca', 'https://dd.weather.gc.ca'), cycle);
+    };
+    const cacheDir = await mkdtemp(join(tmpdir(), 'av-hrdps-mirror-flaky-'));
+    tempDirs.push(cacheDir);
+    const session = await createSplitGribAcquisitionSession(mirrored, { cycle, activeIndices: Uint32Array.of(0, 1), cacheDir, fetchImpl });
+    try {
+      await session.acquire(1, createNormalizedFrameTarget(2, 2, false, true));
+      await session.acquire(2, createNormalizedFrameTarget(2, 2, false, true));
+      expect(session.stats).toMatchObject({ mirrorDownloads: 3, mirrorFallbacks: 3 });
+      expect(mirrorCalls).toBe(6);
+    } finally {
+      await session.close();
+    }
+  });
+
+  it('parses the configured HRDPS mirror and fetch concurrency from models.json', () => {
+    const source = splitSource(getProduct('hrdps')!);
+    expect(source.upstream.fetchConcurrency).toBe(12);
+    expect(source.upstream.mirrorUrlTemplates).toEqual([source.upstream.urlTemplate.replace('https://dd.weather.gc.ca/', 'https://hpfx.collab.science.gc.ca/')]);
   });
 
   it('uses the configured fetch concurrency and rejects mirrors that change the object path', async () => {
@@ -1257,5 +1321,9 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
     expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream,
       mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://', 'http://')] } })).toThrow();
     expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream, fetchConcurrency: 33 } })).toThrow();
+    for (const host of ['https://DD.weather.gc.ca', 'https://dd.weather.gc.ca:443', 'https://user:pw@hpfx.collab.science.gc.ca', 'https://hpfx.collab.science.gc.ca:8443']) {
+      expect(() => splitSource({ ...hrdpsProduct, upstream: { ...hrdpsProduct.upstream,
+        mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', host)] } }), host).toThrow('primary template path');
+    }
   });
 });

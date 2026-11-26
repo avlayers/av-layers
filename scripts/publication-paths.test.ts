@@ -7,7 +7,8 @@ import { PRODUCER_SOURCE_PATHS } from '../apps/batch/src/identity.js';
 import { FORECAST_WORKFLOW_PATHS, PUBLICATION_PATHS, PUBLISHER_SCRIPTS } from './publication-workflow.js';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)['"](\.{1,2}\/[^'"]+)['"]/g;
+/** Static and dynamic imports, plus files located with `new URL('./x', import.meta.url)` (workers, data). */
+const IMPORT = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\bnew URL\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g;
 const SOURCE = /\.(?:[cm]?[jt]s)$/;
 
 function resolveImport(from: string, specifier: string): string {
@@ -46,11 +47,11 @@ it('lists exactly the scripts that forecast workflows run and import', () => {
     closure.add(path);
     pending.push(...imports(path).filter(target => target.startsWith('scripts/')));
   }
-  expect([...PUBLISHER_SCRIPTS]).toEqual([...closure].sort());
+  expect([...PUBLISHER_SCRIPTS].sort()).toEqual([...closure].sort());
 });
 
 it('ignores bench, smoke, test and Markdown changes but not producer, client or forecast workflow changes', () => {
-  const relevant = ['scripts/publication-workflow.ts', 'scripts/setup-pmtiles.mjs', 'apps/batch/src/render.ts', 'apps/batch/pmtiles.json',
+  const relevant = ['apps/api/wrangler.json', '.npmrc', 'scripts/publication-workflow.ts', 'scripts/setup-pmtiles.mjs', 'apps/batch/src/render.ts', 'apps/batch/pmtiles.json',
     'packages/contracts/config/models.json', 'packages/client/src/client-api.ts', 'package.json', 'pnpm-lock.yaml',
     '.github/workflows/forecast.yml', '.github/workflows/forecast-model.yml', '.github/actions/setup/action.yml'];
   const ignored = ['scripts/preview-layer-bench.ts', 'scripts/wind-feature-smoke.ts', 'scripts/publication-workflow.test.ts', 'apps/batch/src/render.test.ts',

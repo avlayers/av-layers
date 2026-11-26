@@ -47,6 +47,10 @@ export const FORECAST_WORKFLOW_PATHS = ['.github/workflows/forecast.yml', '.gith
  */
 export const PUBLICATION_PATHS = [
   ...PRODUCER_SOURCE_PATHS.filter(path => path !== 'scripts'), ...PUBLISHER_SCRIPTS, 'packages/client', ...FORECAST_WORKFLOW_PATHS,
+  // operations.ts reads the R2 bucket names from the API's Wrangler config.
+  'apps/api/wrangler.json',
+  // pnpm install reads it in the setup action.
+  '.npmrc',
   ':(glob,exclude)**/*.test.ts', ':(glob,exclude)**/*.md'
 ];
 
@@ -346,9 +350,12 @@ export async function runForecastShard(shard: number, store?: ObjectStorage): Pr
 /** Acquire, derive, pack and render wall time from the shard receipt, so the job log shows where the shard spent its time. */
 /** Phase timings and numeric source-transfer counters from the shard receipt, so every shard log shows where its time went. */
 async function shardMetrics(shard: number): Promise<{ phasesMs?: Record<string, number>; acquisition?: Record<string, number> }> {
-  const numbers = (value: unknown, name: string) => Object.fromEntries(Object.entries(record(value, name))
+  const finite = (entries: [string, unknown][]) => entries
     .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]))
-    .map(([key, value]) => [key, Number.isInteger(value) ? value : Math.round(value)]));
+    .map(([key, value]): [string, number] => [key, Number.isInteger(value) ? value : Math.round(value)]);
+  // Top-level counters plus one nested level (indexed GRIB keeps its transfer counters under `transport`).
+  const numbers = (value: unknown, name: string) => Object.fromEntries(Object.entries(record(value, name)).flatMap(([key, item]) =>
+    item && typeof item === 'object' && !Array.isArray(item) ? finite(Object.entries(item).map(([sub, inner]): [string, unknown] => [`${key}.${sub}`, inner])) : finite([[key, item]])));
   try {
     const receipt = record(parseBoundedJson(await readLocalFile(join('output', 'shards', String(shard), 'receipt.json'), MAX_PROVENANCE_BYTES), MAX_PROVENANCE_JSON_TOKENS, MAX_FORECAST_RECEIPT_ENTRIES), 'Shard receipt');
     const metrics = record(receipt.metrics, 'Shard metrics');

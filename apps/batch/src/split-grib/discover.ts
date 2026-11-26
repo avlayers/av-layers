@@ -4,6 +4,9 @@ import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 import { splitGribFieldUrl, validateSplitGribCycle } from './fields.js';
 import pRetry, { AbortError } from 'p-retry';
 
+/** Identifies systematic reads to upstream operators, as ECCC's usage policy asks. */
+export const SPLIT_GRIB_USER_AGENT = 'av-layers-forecast (+https://github.com/avlayers/av-layers)';
+
 const PROBE_CONCURRENCY = 4;
 const PROBE_ATTEMPTS = 3;
 
@@ -80,7 +83,7 @@ async function probeSentinel(url: string, fetchFn: typeof fetch, signal: AbortSi
   try {
     await pRetry(async () => {
       let response: Response;
-      try { response = await fetchFn(url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS)]) }); }
+      try { response = await fetchFn(url, { headers: { Range: 'bytes=0-0', 'User-Agent': SPLIT_GRIB_USER_AGENT }, signal: AbortSignal.any([signal, AbortSignal.timeout(DEFAULT_PROBE_TIMEOUT_MS)]) }); }
       catch (error) { signal.throwIfAborted(); throw new ProbeFailure(probeFailure(error)); }
       try {
         if (response.ok) return;
