@@ -1390,6 +1390,7 @@ it('opens the enlarged preview on touch only once the drag starts, and Escape cl
 });
 
 it('keeps every other day on its nearest valid frame while the rail scrubs the selected day', () => {
+  vi.useFakeTimers();
   const { root, timeline, prefer, draw } = previewSetup();
   timeline.update(comparison, 'd2-03');
   timeline.refreshPreviews?.();
@@ -1407,10 +1408,13 @@ it('keeps every other day on its nearest valid frame while the rail scrubs the s
   expect(drawn.has(2) && drawn.has(4)).toBe(true);
   expect(drawn.has(3)).toBe(false);
   expect(prefer).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(200);
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 4]);
   pointer(track, 'pointerup', 472);
   expect(prefer).toHaveBeenLastCalledWith([0, 2, 4]);
   expect(badges()).toEqual(['14:00', '', '']);
   timeline.destroy();
+  vi.useRealTimers();
 });
 
 it('reports a committed move to another day, but not an hour change within the day', () => {

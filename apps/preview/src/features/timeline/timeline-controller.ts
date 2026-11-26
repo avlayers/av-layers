@@ -47,6 +47,7 @@ const RAIL_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'E
  * reset it to the selected frame's own clock.
  */
 const RAIL_TOUCH_PX = 4;
+const PREFER_REST_MS = 150;
 
 export function createCompactTimeline(host: HTMLElement, options: CompactTimelineOptions): CompactTimeline {
   const doc = host.ownerDocument;
@@ -57,7 +58,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
   const gesture = createGesture();
   const previews = options.preview ? createDayPreviews(options.preview, doc.defaultView) : null;
   /** Day the enlarged preview shows (pressed, dragged, hovered or focused); null when closed. */
-  let loupeDay: string | null = null;
+  let loupeDay: string | null = null, preferTimer: ReturnType<typeof setTimeout> | null = null;
   /** A touch on the rail seeks only once it travels or lifts as a tap, so a finger reaching for a day doesn't move the hour. */
   let railTouch = false;
   /** The last selection the app committed (from here or outside), for telling when a pick changes day. */
@@ -139,8 +140,12 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       view.setThumb(group.day, state, index, aim);
     }
     view.setRowThumbs(anyThumb);
-    // A rail scrub changes the targets every frame; the selected frame's neighbours matter more until it ends.
+    // A rail scrub changes the targets every frame: they are asked for once the finger rests, so cards fill in
+    // mid-scrub without re-sorting the overview queue on every frame.
+    if (preferTimer !== null) clearTimeout(preferTimer);
+    preferTimer = null;
     if (gesture.pointer === null || gesture.kind !== 'rail') previews.prefer(targets);
+    else preferTimer = setTimeout(() => { preferTimer = null; if (!destroyed) previews?.prefer(targets); }, PREFER_REST_MS);
     if (loupeDay !== null) {
       // Shown before it is painted, so the canvas is sized to its real box.
       view.setDayLoupe(loupeIndex);
@@ -419,6 +424,7 @@ export function createCompactTimeline(host: HTMLElement, options: CompactTimelin
       if (destroyed) return;
       destroyed = true;
       invalidateGesture();
+      if (preferTimer !== null) clearTimeout(preferTimer);
       for (const [type, listener] of [['pointermove', movePointer], ['pointerup', releasePointer], ['pointercancel', releasePointer]] as const) doc.removeEventListener(type, listener);
       previews?.destroy([view.loupeCanvas, ...view.cards().map(card => card.canvas)]);
       win.clearSolar();
