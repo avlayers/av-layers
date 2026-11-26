@@ -18,7 +18,6 @@ export interface PointSessionOptions {
   readonly getMapOffset: () => number;
   readonly getDisplayedFrame: () => string | null;
   readonly ensureLive: () => boolean;
-  readonly pauseTimeline: () => void;
   readonly selectFrameById: (id: string) => void;
   readonly onViewModeChange?: (mode: PointViewMode) => void;
   readonly onRequestFullHorizon?: () => void;
@@ -103,7 +102,6 @@ export function createPointSession(options: PointSessionOptions): PointSession {
       onVisibleDaysChange: options.onVisibleDaysChange,
       onFrame(id) {
         if (options.getBuild() !== context.build || !options.ensureLive() || !series.selectFrame(context, id)) return;
-        options.pauseTimeline();
         options.selectFrameById(id);
         updateSelection();
         options.publish.changed();

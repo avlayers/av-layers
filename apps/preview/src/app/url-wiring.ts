@@ -47,7 +47,7 @@ export function createUrlWiring(ctx: PreviewContext, ops: PreviewOps): Pick<Prev
         const current = ctx.build();
         if (current) {
           const committed = committedFrame(current, urlState.validTime, Date.now());
-          if (committed.id !== ctx.selectedFrame()) { live.timeline?.pause(); live.point?.feature.followMapFrame(committed.id); }
+          if (committed.id !== ctx.selectedFrame()) live.point?.feature.followMapFrame(committed.id);
           if (committed.id && committed.validTime) ctx.forecastSession.commitFrame(committed.id, committed.validTime);
           ops.updateTimeUi(); ops.updateOverlay();
         }

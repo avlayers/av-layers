@@ -6,7 +6,7 @@ import { preparedAxisReadiness } from '../stores/app-store';
 import { themeOption } from '../themes/registry';
 import type { PreviewContext } from './context';
 import { effect, untracked } from '@preact/signals';
-import { overlayNotices } from './overlay-status';
+import { overlayNotices, shownTimeNote } from './overlay-status';
 
 /** The operations the wiring modules call on each other, resolved at call time. */
 export interface PreviewOps {
@@ -189,18 +189,27 @@ export function createDisplayOps(ctx: PreviewContext, ops: PreviewOps): Omit<Pre
 
 /**
  * Effects for the views that derive purely from store signals (root chrome, frame status line, tile
- * notice, run age cleared with the build), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
+ * notice, run age cleared with the build, the readout's "Showing 13:00 · loading" note), so every change repaints them without a caller remembering to. Disposed when `signal` aborts.
  */
 export function installDerivedViews(ctx: PreviewContext, root: HTMLElement, signal: AbortSignal): void {
   const { writer, view } = ctx.store;
   const disposers = [
     effect(() => { root.dataset.chrome = themeOption(view.intent.value.theme).darkChrome ? 'dark' : 'light'; }),
     effect(() => {
-      const { build, pendingModel, resolving, expired, playing, timeZone } = view.forecast.value;
-      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, playing, timeZone });
+      const { build, pendingModel, resolving, expired, timeZone } = view.forecast.value;
+      const notices = overlayNotices(view.overlay.value, { build, pendingModel, resolving, expired, timeZone });
       untracked(() => writer.notices(notices));
     }),
-    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '', newRun: '' })); })
+    effect(() => { if (!view.forecast.value.build) untracked(() => writer.notices({ runAge: '', newRun: '' })); }),
+    effect(() => {
+      const note = shownTimeNote(view.overlay.value, view.forecast.value.timeZone);
+      untracked(() => ctx.live.timeline?.setShowing?.(note));
+    }),
+    // Day previews follow overview readiness, the requested layer, lift visibility and the theme.
+    effect(() => {
+      void view.overlay.value; void view.intent.value.liftVisible; void view.intent.value.theme;
+      untracked(() => ctx.live.timeline?.refreshPreviews?.());
+    })
   ];
   signal.addEventListener('abort', () => { for (const dispose of disposers) dispose(); }, { once: true });
 }

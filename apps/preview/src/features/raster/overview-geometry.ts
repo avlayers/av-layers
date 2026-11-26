@@ -32,9 +32,19 @@ export function previewCrop(view: View, zoom: number): RasterCrop | null {
 
 /** Whether `crop` still covers `view`, allowing for whole-world wraps. */
 export function contains(crop: RasterCrop, view: View): boolean {
+  return viewInCrop(crop, view) !== null;
+}
+
+/**
+ * The view's pixel rectangle inside `crop` (crop-relative, at the crop's zoom), or null when the crop
+ * does not cover it. Whole-world wraps shift the view onto the crop's copy of the world.
+ */
+export function viewInCrop(crop: RasterCrop, view: View): { x: number; y: number; width: number; height: number } | null {
   const current = planRasterCrop(view, crop.zoom, { marginFractionPerEdge: 0, gutterPixelsPerEdge: 0 });
-  if (!current) return false;
+  if (!current) return null;
   const shift = Math.round((crop.left + crop.right - current.left - current.right) / (2 * crop.worldSize)) * crop.worldSize;
-  return current.top >= crop.top && current.bottom <= crop.bottom
-    && (crop.right - crop.left >= crop.worldSize || (current.left + shift >= crop.left && current.right + shift <= crop.right));
+  const whole = crop.right - crop.left >= crop.worldSize;
+  if (current.top < crop.top || current.bottom > crop.bottom || (!whole && (current.left + shift < crop.left || current.right + shift > crop.right))) return null;
+  const x = whole ? Math.max(0, Math.min(crop.width - current.width, current.left + shift - crop.left)) : current.left + shift - crop.left;
+  return { x, y: current.top - crop.top, width: Math.min(current.width, crop.width), height: current.height };
 }

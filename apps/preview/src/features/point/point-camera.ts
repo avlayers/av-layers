@@ -70,7 +70,7 @@ export function computePointRevealTarget(input: PointRevealGeometry): PointRevea
     const estimatedSheetHeight = Math.min(416, Math.round(Math.min(viewport.height * 0.54, viewport.height - 132)));
     const sheetTop = hasRenderedChart
       ? cardRect!.top
-      : Math.max(usableTop + 60, viewport.height - 66 - estimatedSheetHeight);
+      : Math.max(usableTop + 60, viewport.height - bottomClearance - estimatedSheetHeight);
     const usableBottom = Math.max(usableTop + 44, sheetTop - 12);
     const targetX = Math.round(viewport.width / 2);
     const targetY = Math.round((usableTop + usableBottom) / 2);
@@ -167,6 +167,8 @@ export function easePointIntoClearView(map: PannablePointMap, root: ParentNode, 
     : null;
   const rawTopbar = measureElementBox(root.querySelector?.('#topbar'));
   const topbarBottomPx = rawTopbar ? Math.max(0, rawTopbar.bottom - originTop) : undefined;
+  const rawDock = measureElementBox(root.querySelector?.('#map-dock'));
+  const bottomClearancePx = rawDock ? Math.max(0, height - (rawDock.top - originTop)) : undefined;
 
   const projected = map.project([point.lon, point.lat]);
   const target = computePointRevealTarget({
@@ -174,6 +176,7 @@ export function easePointIntoClearView(map: PannablePointMap, root: ParentNode, 
     viewport: { width, height },
     cardRect,
     topbarBottomPx,
+    bottomClearancePx,
   });
   if (!target) return false;
 

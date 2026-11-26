@@ -43,7 +43,6 @@ describe('bottom-dock-model', () => {
     expect(isDockViewId('classic')).toBe(false);
     expect(isDockViewId('unknown')).toBe(false);
     expect(isDockViewId(null)).toBe(false);
-    expect(dockViewOption('capsule').showSteppers).toBe(true);
     expect(dockViewOption('capsule').showLoupe).toBe(true);
     expect(DOCK_VIEW_OPTIONS.map(opt => opt.id)).toEqual(['capsule']);
   });
@@ -103,7 +102,7 @@ describe('BottomDock pluggable capsule view', () => {
     const html = serializeVNode(<BottomDock {...baseProps} dockView="capsule" />);
     expect(html).toContain('data-dock-view="capsule"');
     expect(html).toContain('capsule-spectrum-lip');
-    expect(html).toContain('capsule-ref-flip');
+    expect(html).toContain('capsule-ref-seg');
     expect(html).toContain('50%');
     expect(html).toContain('id="compact-timeline"');
     expect(html).toContain('timebar-status sr-only');

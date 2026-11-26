@@ -146,12 +146,6 @@ export function createCommands(ctx: PreviewContext, ops: PreviewOps): PreviewCom
       const center = map.getCenter(), feature = live.point.feature;
       void feature.open(normalizePoint(center.lat, center.lng)).then(() => { if (feature.current) focusPointOr(); }).catch(() => {});
     },
-    setPlaying(playing) {
-      writer.forecast({ playing });
-      for (const channel of live.channels) channel.setPlayback?.(playing);
-      live.wind?.session.playbackChanged();
-      ops.updatePreparation();
-    },
     locate() { live.locationController?.locate(); },
     closePoint() { live.point?.close(); },
     refreshPointDiagnostics() { live.point?.feature.refreshDiagnostics(); }

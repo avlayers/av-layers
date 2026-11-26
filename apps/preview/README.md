@@ -52,6 +52,21 @@ links fall back to the nearest kept theme.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.
+Day buttons pick the day and keep the hour you were comparing (the nearest frame
+when that day lacks it, noted as "Nearest to HH:MM"). The hour rail beneath the
+readout scrubs within the selected day; arrow keys step its frames. On touch it
+moves once the finger slides or lifts, so a press aimed at a day leaves the hour
+alone. Pressing a day and sliding sideways shows the day under the finger at the
+comparison hour and makes one history entry on release; sliding back to the
+starting day restores the starting frame.
+While the selected hour loads the readout notes the hour still on screen.
+Each day button shows a small preview of its target frame: the active lift
+layer's overview for the current view, with coastlines and borders from the
+basemap once the map settles. Sliding across the days shows the preview under
+the finger enlarged above the timeline. A day without a frame near the compared
+hour labels its card with the hour it shows. Moving to another day closes an
+open Windgram. Map credits sit behind the ⓘ button. Previews need the lift layer to be visible
+and show plain dates otherwise. There is no playback.
 After the camera rests, every map frame of the active layer and the wind field
 stay decoded for that view. A short pan and a time change reuse them. Fine tiles
 replace a complete overview.
@@ -77,20 +92,20 @@ scalar chart covers builds that publish no native profiles.
 - [src/app/create-preview-app.ts](src/app/create-preview-app.ts): composition root. Builds the [context](src/app/context.ts) (store, services, live parts) and the wiring modules, then creates the map channels on `start`. Wiring modules call each other through the shared `PreviewOps` table in [display-ops.ts](src/app/display-ops.ts); views that derive purely from store signals (root chrome, frame status, tile notice) are `effect`s installed by `installDerivedViews`.
 - [display-ops.ts](src/app/display-ops.ts), [forecast-wiring.ts](src/app/forecast-wiring.ts), [url-wiring.ts](src/app/url-wiring.ts), [command-handlers.ts](src/app/command-handlers.ts), [map-wiring.ts](src/app/map-wiring.ts), [page-lifecycle.ts](src/app/page-lifecycle.ts): channel and notice sync, forecast session events, URL write and history restore, UI commands, camera events, and back/forward-cache suspension and disposal.
 - [src/app/wind-wiring.ts](src/app/wind-wiring.ts), [point-wiring.ts](src/app/point-wiring.ts), [shortcuts.ts](src/app/shortcuts.ts), [overlay-status.ts](src/app/overlay-status.ts): wind, the point card, keyboard shortcuts and the raster status line.
-- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. [display-ops.ts](src/app/display-ops.ts) forwards theme, opacity, visibility, units and teardown to every channel in one loop; [command-handlers.ts](src/app/command-handlers.ts) forwards playback.
+- [src/channels/channel.ts](src/channels/channel.ts): `MapChannel`, the display contract the basemap, raster overlay, sky composite and wind overlay implement. [display-ops.ts](src/app/display-ops.ts) forwards theme, opacity, visibility, units and teardown to every channel in one loop.
 - [src/themes/](src/themes/README.md): one data record per map theme plus the registry.
 - [src/stores/app-store.ts](src/stores/app-store.ts): the Signals state boundary; views read it, controllers publish through narrow writer calls.
 - [src/features/forecast/forecast-model.ts](src/features/forecast/forecast-model.ts): model/layer selection policy.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts): MapLibre lifetime, basemap, coverage seam and viewport bounds.
 - [src/features/raster/raster-overlay.ts](src/features/raster/raster-overlay.ts): the lift raster facade. It composes frame slots and budgets ([raster-slots.ts](src/features/raster/raster-slots.ts)), the overview-to-detail handoff ([raster-staging.ts](src/features/raster/raster-staging.ts)), prefetch planning ([raster-prefetch.ts](src/features/raster/raster-prefetch.ts)) and the low-zoom overview ([raster-overview.ts](src/features/raster/raster-overview.ts)). [ADR 0004](../../docs/decisions/0004-raster-stays-on-maplibre.md) says why it stays on MapLibre sources.
 - [src/layers/registry.ts](src/layers/registry.ts), [channels.ts](src/layers/channels.ts): one record per layer id (lift pairing, legend text, remap ramp and mask) and per dock channel (copy, shortcut, glyph, visibility field).
-- [src/features/sky/sky-composite.ts](src/features/sky/sky-composite.ts): clouds, pressure and rain for the build and hour the lift raster shows ([display-ops.ts](src/app/display-ops.ts) `syncSky` advances it on each raster reveal, and follows the selection while lift is hidden). A channel without that hour's data stays empty (during playback it keeps the previous hour of the same build until the next arrives) and its layer button shows `loading` or `unavailable`. Cloud contours trace total cloud at the shared `SKY_COVER_TIERS` (65 % broken, 85 % overcast; [cloud-layer.ts](src/features/sky/cloud-layer.ts)), the same tiers as the legends and the Windgram sky strip; themes restyle them. [lon-window.ts](src/features/sky/lon-window.ts) keeps view windows whole across the dateline.
+- [src/features/sky/sky-composite.ts](src/features/sky/sky-composite.ts): clouds, pressure and rain for the build and hour the lift raster shows ([display-ops.ts](src/app/display-ops.ts) `syncSky` advances it on each raster reveal, and follows the selection while lift is hidden). A channel without that hour's data stays empty and its layer button shows `loading` or `unavailable`. Cloud contours trace total cloud at the shared `SKY_COVER_TIERS` (65 % broken, 85 % overcast; [cloud-layer.ts](src/features/sky/cloud-layer.ts)), the same tiers as the legends and the Windgram sky strip; themes restyle them. [lon-window.ts](src/features/sky/lon-window.ts) keeps view windows whole across the dateline.
 - [src/features/sky/rain-layer.ts](src/features/sky/rain-layer.ts): rain channel, composing the field source (tiles and decoded fields charged to the shared preparation budget), cuff and contour layers; [rain-animator.ts](src/features/sky/rain-animator.ts) draws the falling rain and [contours.ts](src/features/sky/contours.ts) is the one contour routine for isobars, cloud and rain edges.
 - [src/features/wind/wind-session.ts](src/features/wind/wind-session.ts): wind session and controls.
 - [src/features/wind/wind-deck.ts](src/features/wind/wind-deck.ts): deck.gl particles (`WindParticleLayer`), map-plane barbs and labels.
 - [src/features/wind/wind-barbs-atlas.ts](src/features/wind/wind-barbs-atlas.ts): 0–280 kt hemisphere atlas plus dynamic icons.
 - [src/features/map/map-controller.ts](src/features/map/map-controller.ts) `MapCamera.timeZone()`: the map clock is the map centre's civil IANA zone (`tz-lookup`, loaded after startup; the nautical longitude zone offshore), or the browser zone until the camera follows a place. The timeline, status line and horizon notice take each instant's own offset in that zone, so DST days group correctly.
-- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): routes timeline input; the view, folded-night [day scale](src/features/timeline/day-scale.ts), gesture, frame window and playback each have their own module beside it.
+- [src/features/timeline/timeline-controller.ts](src/features/timeline/timeline-controller.ts): routes timeline input; the view, folded-night [day scale](src/features/timeline/day-scale.ts), gesture and frame window each have their own module beside it.
 - [src/features/point/point-session.ts](src/features/point/point-session.ts): progressive point series and the lazy Windgram.
 - [src/features/location/location-controller.ts](src/features/location/location-controller.ts): geolocation and marker lifetime.
 - [src/features/navigation/url-state.ts](src/features/navigation/url-state.ts): shared map URL parsing and serialization.

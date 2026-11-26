@@ -7,13 +7,15 @@ import { MAX_TILE_BYTES, RASTER_TILE_SIZE } from '@av/contracts/format';
 import type { RasterCrop } from './raster-crop';
 import { OverviewDisplay, type OverviewImage as Image } from './overview-display';
 import { PreviewAttempts } from './preview-attempts';
-import { canonicalZoom, contains, previewCrop, viewBounds as bounds } from './overview-geometry';
+import { canonicalZoom, contains, previewCrop, viewBounds as bounds, viewInCrop } from './overview-geometry';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 import { remapTileToBitmap, shouldRemapTile } from './tile-remap';
 
 export { FOCUS_DWELL_MS } from '../map/viewport-policy';
 
 type Quality = 'overview' | 'detail';
+/** Outcome of `drawPreview`: drawn, still preparing, or not drawable for this build, layer, frame or view. */
+export type PreviewDraw = 'ready' | 'pending' | 'unavailable';
 interface Tile {
   state: 'waiting' | 'fetching' | 'compressed' | 'decoding' | 'drawn' | 'cancelled';
   handle?: RasterTileHandle;
@@ -77,6 +79,8 @@ export class RasterOverview {
   private disposed = false;
   private limited = false;
   private deferred: { build: PinnedBuild; layer: LayerId; frame: string } | null = null;
+  /** Frames other callers want next (the day previews); prepared right after the selected one. */
+  private preferred: ReadonlySet<string> = new Set();
   private readonly unsubscribeBudget: (() => void) | null;
 
   constructor(private readonly map: Map, private readonly protocol: RasterTileSourceProtocol, private readonly onReady: () => void, private readonly options: RasterOverviewOptions = {}) {
@@ -166,6 +170,38 @@ export class RasterOverview {
     if (!active) return;
     for (const job of active.jobs) if (job.frame === frame) for (const tile of job.tiles) tile.handle?.promote();
     this.pump();
+  }
+
+  /**
+   * Draws `frame`'s overview into `target` (`width` × `height` device pixels): the current map view,
+   * centre-cropped to the target's aspect so every caller crops the same way. The overview keeps its
+   * bitmaps; this only copies pixels.
+   */
+  drawPreview(build: PinnedBuild, layer: LayerId, frame: string, target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, width: number, height: number): PreviewDraw {
+    const context = this.context;
+    if (!this.supported || this.disposed || build.expiresAtMs <= Date.now() || !(width > 0) || !(height > 0)) return 'unavailable';
+    if (!context || context.build !== build || context.layer !== layer) return context || this.deferred ? 'pending' : 'unavailable';
+    if (!context.frames.includes(frame)) return 'unavailable';
+    const image = this.previews.get(frame);
+    const region = viewInCrop(context.preview, bounds(this.map));
+    // A frame whose overview failed shows a plain date rather than waiting forever.
+    if (!image && this.attempts.failed(frame)) return 'unavailable';
+    if (!image || image === this.failedImage || !region) return 'pending';
+    const scaleX = image.bitmap.width / context.preview.width, scaleY = image.bitmap.height / context.preview.height;
+    const aspect = width / height;
+    let sw = region.width, sh = region.height;
+    if (sw / sh > aspect) sw = sh * aspect; else sh = sw / aspect;
+    const sx = region.x + (region.width - sw) / 2, sy = region.y + (region.height - sh) / 2;
+    target.drawImage(image.bitmap, sx * scaleX, sy * scaleY, sw * scaleX, sh * scaleY, 0, 0, width, height);
+    return 'ready';
+  }
+
+  /** Prepares these frames right after the selected one; an empty list restores plain nearest-first order. */
+  preferFrames(frames: readonly string[]): void {
+    const next = new Set(frames);
+    if (next.size === this.preferred.size && [...next].every(frame => this.preferred.has(frame))) return;
+    this.preferred = next;
+    if (this.context) this.pump();
   }
 
   coversView(): boolean { return this.covers(); }
@@ -312,9 +348,15 @@ export class RasterOverview {
 
   private ordered(jobs: Job[]): Job[] {
     const frames = this.context!.frames, index = frames.indexOf(this.selected ?? '');
+    // Selected first, then its immediate neighbours (the next scrub or arrow step), then day-preview frames, then the rest.
+    const rank = (job: Job) => {
+      if (job.frame === this.selected) return 0;
+      if (index >= 0 && Math.abs(frames.indexOf(job.frame) - index) === 1) return 1;
+      return this.preferred.has(job.frame) ? 2 : 3;
+    };
     return jobs.sort((a, b) => {
       const deltaA = frames.indexOf(a.frame) - index, deltaB = frames.indexOf(b.frame) - index;
-      return Math.abs(deltaA) - Math.abs(deltaB)
+      return rank(a) - rank(b) || Math.abs(deltaA) - Math.abs(deltaB)
         || Number(Math.sign(deltaB) === this.direction) - Number(Math.sign(deltaA) === this.direction);
     });
   }

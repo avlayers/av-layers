@@ -30,7 +30,7 @@ function harness() {
     body: () => ({ replaceChildren: vi.fn(), tabIndex: 0 }) as unknown as HTMLElement,
     getBuild: () => build, getSelectedFrame: () => 'f024', getUnits: () => 'metric', getHorizon: () => 'day',
     getMapOffset: () => 0, getDisplayedFrame: () => 'f024', ensureLive: () => true,
-    pauseTimeline: vi.fn(), selectFrameById: vi.fn(),
+    selectFrameById: vi.fn(),
     publish: {
       open: vi.fn(), close: vi.fn(), status: vi.fn(), busy: vi.fn(), horizon: vi.fn(), wind: vi.fn(), changed: vi.fn()
     }
@@ -82,7 +82,6 @@ describe('point session selection beyond the map horizon', () => {
       getMapOffset: () => 0,
       getDisplayedFrame: () => 'f024',
       ensureLive: () => true,
-      pauseTimeline: vi.fn(),
       selectFrameById: vi.fn(),
       publish: {
         open: vi.fn(),

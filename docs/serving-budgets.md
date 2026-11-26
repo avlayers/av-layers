@@ -71,8 +71,6 @@ combined work across all grids selected by a request.
   Overview retention stops when one fine source and that reservation cannot fit.
   A complete overview remains visible if detailed tiles fail. Time changes with an
   admitted overview window defer cold detail for 100 ms; prepared detail switches immediately.
-  Playback keeps that overview on screen and fades the previous bitmap across the
-  700 ms step, then resumes fine tiles 100 ms after playback stops.
   The overview queue replaces speculative high-resolution byte prefetch and prepares
   the selected layer before additional fine sources. A pan keeps a covering overview.
   A camera rest outside the padded view waits 400 ms before replacing it.

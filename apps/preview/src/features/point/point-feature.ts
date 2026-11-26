@@ -26,7 +26,6 @@ interface PointFeatureOptions {
   readonly getDisplayedFrame: () => string | null;
   readonly getWind: () => PointWind | null;
   readonly ensureLive: () => boolean;
-  readonly pauseTimeline: () => void;
   readonly selectFrameById: (id: string) => void;
   readonly onViewModeChange?: (mode: PointViewMode) => void;
   readonly onRequestFullHorizon?: () => void;
@@ -83,7 +82,6 @@ export function createPointFeature(options: PointFeatureOptions): PointFeature {
         getMapOffset: options.getMapOffset,
         getDisplayedFrame: options.getDisplayedFrame,
         ensureLive: options.ensureLive,
-        pauseTimeline: options.pauseTimeline,
         selectFrameById: options.selectFrameById,
         onViewModeChange: options.onViewModeChange,
         onRequestFullHorizon: options.onRequestFullHorizon,

@@ -4,7 +4,7 @@ import type { LayerId } from '@av/contracts/layers';
 import { renderedFrames } from '@av/contracts/publication';
 import { removeProtocol } from 'maplibre-gl';
 import { canRetainRasterOverview, MAX_RASTER_SOURCES } from './raster-budget';
-import { FOCUS_DWELL_MS, RasterOverview } from './raster-overview';
+import { FOCUS_DWELL_MS, RasterOverview, type PreviewDraw } from './raster-overview';
 import type { ChannelView, MapChannel } from '../../channels/channel';
 import { DEFAULT_THEME, type MapTheme } from '../../themes/registry';
 import { coveredTileKeys, DetailTracker } from './detail-readiness';
@@ -17,7 +17,7 @@ import { matches, RasterBudgetError, releaseAll, SlotPool, type RasterSelection,
 
 export type { OverlayState } from './overlay-state';
 type Selection = RasterSelection;
-export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme }
+export interface RasterOverlayOptions { budget?: PreparationBudget; protectedBytes?: () => number; canExpandNative?: () => boolean; beforeReveal?: (selection: RasterSelection) => void; onSelectedPending?: (pending: boolean, selection: RasterSelection | null) => void; requestLimits?: { maxActive: number; maxPrefetchActive: number }; theme?: MapTheme; /** An overview frame finished, failed or was dropped, so day previews may draw differently. */ onPreviewsChanged?: () => void }
 
 /**
  * Owns the displayed raster and a bounded prepared window; dispose with the map.
@@ -47,7 +47,6 @@ export class RasterOverlay implements MapChannel {
   private lastState: OverlayState | null = null;
   private retryEmpty = false;
   private moving = false;
-  private playing = false;
   private disposed = false;
   private expiryTimer: ReturnType<typeof setTimeout> | null = null;
   private selectedPending = false;
@@ -78,8 +77,8 @@ export class RasterOverlay implements MapChannel {
     });
     this.prefetch = new BytePrefetcher({
       map, protocol: () => this.protocol, disposed: () => this.disposed, direction: () => this.direction,
-      target: () => !this.disposed && !this.playing && !this.moving && this.active && matches(this.active, this.requested) ? this.active : null,
-      current: slot => !this.disposed && !this.playing && this.active === slot && matches(slot, this.requested),
+      target: () => !this.disposed && !this.moving && this.active && matches(this.active, this.requested) ? this.active : null,
+      current: slot => !this.disposed && this.active === slot && matches(slot, this.requested),
       prepared: () => this.slots.filter(v => this.pool.ready(v)), preferred: () => this.predicted()[0],
       requiredKeys: () => this.detail.required, refreshRequired: () => this.refreshRequired(), emit: () => this.emit()
     });
@@ -216,6 +215,14 @@ export class RasterOverlay implements MapChannel {
     this.prepareNext(); this.emit();
   }
 
+  /** Copies `frame`'s overview of the current view into `target`; see `RasterOverview.drawPreview`. */
+  drawPreview(build: PinnedBuild, layer: LayerId, frame: string, target: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, width: number, height: number): PreviewDraw {
+    return this.disposed ? 'unavailable' : this.overview?.drawPreview(build, layer, frame, target, width, height) ?? 'pending';
+  }
+
+  /** Overview frames to prepare right after the selected one. */
+  preferPreviewFrames(frames: readonly string[]): void { this.overview?.preferFrames(frames); }
+
   isPrepared(build: PinnedBuild, layer: LayerId, frame: string): boolean {
     const slot = this.pool.find({ build, layer, frame });
     return !this.disposed && !!slot && this.pool.ready(slot);
@@ -343,14 +350,6 @@ export class RasterOverlay implements MapChannel {
     }
   }
 
-  setPlayback(playing: boolean): void {
-    if (this.playing === playing) return;
-    this.playing = playing;
-    (this.overview as { setPlayback?(playing: boolean): void } | null)?.setPlayback?.(playing);
-    if (playing) { this.cancelRefinement(); this.prefetch.cancel(); return; }
-    if (this.requested && !this.moving && this.overview?.state.total) this.armDetail(this.requested);
-  }
-
   setWindActive(active: boolean, numericResident = active): void {
     if (this.windActive === active && this.windResident === numericResident) return;
     this.windActive = active; this.windResident = numericResident;
@@ -448,10 +447,9 @@ export class RasterOverlay implements MapChannel {
   private armDetail(sel: Selection): void {
     this.cancelRefinement();
     if (this.overview?.quality?.(sel.build, sel.layer, sel.frame) === 'detail') return;
-    if (this.playing && this.overview?.supported) return;
     this.refineTimer = setTimeout(() => {
       this.refineTimer = null;
-      if (matches(sel, this.requested) && !this.moving && !this.playing && sel.build.expiresAtMs > Date.now() && this.overview?.quality?.(sel.build, sel.layer, sel.frame) !== 'detail') {
+      if (matches(sel, this.requested) && !this.moving && sel.build.expiresAtMs > Date.now() && this.overview?.quality?.(sel.build, sel.layer, sel.frame) !== 'detail') {
         try { this.loadDetail(sel); } catch {}
       }
     }, 100);
@@ -461,8 +459,7 @@ export class RasterOverlay implements MapChannel {
     if (this.protocol) return;
     this.protocol = createSourceRasterTileProtocol(this.baseUrl, { maxSources: MAX_RASTER_SOURCES, fetchImpl: this.fetchImpl, request: this.request, budget: this.options.budget, ...(this.options.requestLimits ?? { maxActive: 24, maxPrefetchActive: 20 }) });
     registerRasterProtocol(() => this.protocol, this.protocol.scheme, () => this.theme);
-    this.overview = new RasterOverview(this.map, this.protocol, () => { this.advance(); this.emit(); }, { ...this.options, theme: this.theme });
-    if (this.playing) (this.overview as { setPlayback?(playing: boolean): void }).setPlayback?.(true);
+    this.overview = new RasterOverview(this.map, this.protocol, () => { this.advance(); this.emit(); this.options.onPreviewsChanged?.(); }, { ...this.options, theme: this.theme });
   }
 
   private addSlot(sel: Selection, interactive: boolean): void {
@@ -558,7 +555,6 @@ export class RasterOverlay implements MapChannel {
   }
   private predicted(slot: Selection | null = this.active): Selection[] { return predictSelections(slot, this.preferred, this.direction); }
   private prepareNext(): void {
-    if (this.playing) return;
     if (this.disposed || this.paint.pendingPaint || this.paint.pendingOverview || this.moving || this.map.isMoving?.() || !this.active || !matches(this.active, this.requested) || this.active.build.expiresAtMs <= Date.now()) return;
     if (this.overview?.supported && this.overview.state.ready + this.overview.state.failed < this.overview.state.total) return;
     const candidates = this.predicted(), limit = Math.min(this.slotLimit(this.active), ...candidates.map(v => this.slotLimit(v)));

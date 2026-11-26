@@ -3,23 +3,39 @@ import { dockViewOption, type DockViewId } from '../controls/bottom-dock-model';
 import { coarseSpanFractions, DAY_MINUTES, dayHatchFractions, localTimeFromMs, minuteToX, type DayGroup, type DayScale } from './day-scale';
 import { monotonicStops, ribbonGradient } from './solar-day';
 import type { FrameWindow } from './timeline-frame-window';
+import type { DayTarget } from './timeline-gesture';
+import type { PreviewDraw } from '../raster/raster-overview';
 import './compact-timeline.css';
 
-/** DOM for the compact timeline: builds the day row, track and controls, and paints a frame window onto them. */
+/**
+ * DOM for the timeline: a date/time readout, the intraday hour rail and one button per local day, in that
+ * order (also the focus order). The dock's CSS grid places the three; this module paints a frame window onto them.
+ */
 interface TimelineView {
   readonly root: HTMLElement;
   readonly track: HTMLElement;
-  readonly play: HTMLButtonElement;
-  readonly stepPrev: HTMLButtonElement;
-  readonly stepNext: HTMLButtonElement;
+  readonly daysRow: HTMLElement;
   render(paint: ViewPaint): void;
   rebuildDays(): void;
   trackWidth(): number;
   /** True once `render` has run. */
   painted(): boolean;
-  setPull(px: number, armed: boolean): void;
-  isPulled(): boolean;
-  setBounce(direction: -1 | 1, parity: boolean): void;
+  /** Available day buttons' horizontal spans, or null while they wrap onto more than one row. */
+  dayTargets(): DayTarget[] | null;
+  /** Visible note that the map still shows another hour; empty clears it. */
+  setShowing(text: string): void;
+  /** Each day button's preview canvas. */
+  cards(): { group: DayGroup; canvas: HTMLCanvasElement }[];
+  /** Shows the preview state on a day button: an image, a neutral placeholder, or a plain date. */
+  /** Card state for frame `index`; the card names its own time when it is 30+ minutes from `aimMinute`. */
+  setThumb(day: string, state: PreviewDraw, index?: number, aimMinute?: number | null): void;
+  /** Whether any card shows an image; then every card keeps the image's height so the row never jumps. */
+  setRowThumbs(on: boolean): void;
+  readonly loupeCanvas: HTMLCanvasElement;
+  readonly dayLoupe: HTMLElement;
+  /** Opens the enlarged day preview titled for frame `index`, or closes it with null. */
+  setDayLoupe(index: number | null): void;
+  focusDay(day: string): void;
   setVariant(next: DockViewId): boolean;
   setReadiness(ready: number, total: number, loading: boolean): void;
   setHighlightedDays(days: readonly string[] | null): void;
@@ -31,13 +47,14 @@ interface ViewPaint {
   width: number;
   /** Unsnapped playhead minute while a pointer scrubs; null otherwise. */
   scrubMinute: number | null;
-  edgePull: -1 | 0 | 1;
-  playing: boolean;
+  /** Clock time day picks aim for; the readout notes it when the selected frame differs. */
+  comparisonMinute: number | null;
 }
 
 interface DayHandlers {
   prepareDay(group: DayGroup): void;
   pickDay(group: DayGroup): void;
+  dayKey(event: KeyboardEvent, group: DayGroup): void;
   /** Track or day row changed width since the last paint. */
   resized(): void;
 }
@@ -47,11 +64,21 @@ const TICKS = ['00', '03', '06', '09', '12', '15', '18', '21', '24'] as const;
 const SNAP_GHOST_MIN_PX = 3.5;
 const LOUPE_HALF_PX = 44;
 const WEEKDAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short' };
+const LONG_DAY: Intl.DateTimeFormatOptions = { timeZone: 'UTC', weekday: 'short', day: 'numeric', month: 'short' };
 const MOON_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="#f6f1e4" d="M9.6 1.6a6.2 6.2 0 1 0 4.6 10.6A6.8 6.8 0 1 1 9.6 1.6z"/></svg>';
 
 function dayButtonLabel(day: string): string {
   const weekday = new Date(`${day}T00:00:00Z`).toLocaleDateString('en-US', WEEKDAY);
   return `${weekday} ${Number(day.slice(8))}`;
+}
+
+/** `Thu 26 Nov` for a local day key, read as a calendar date. */
+function readoutDate(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toLocaleDateString('en-GB', LONG_DAY).replace(',', '');
+}
+
+function clockLabel(minute: number): string {
+  return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
 
 function percent(value: number): string {
@@ -86,15 +113,14 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   const daysRow = el('div', 'ct-days');
   daysRow.setAttribute('role', 'group');
   daysRow.setAttribute('aria-label', 'Forecast days');
-  const controls = el('div', 'ct-controls');
-  const play = btn('ct-play', 'Play forecast');
-  const playGlyph = el('span', 'ct-play-glyph');
-  play.setAttribute('aria-pressed', 'false');
-  playGlyph.setAttribute('aria-hidden', 'true');
-  play.append(playGlyph);
+  const readout = el('div', 'ct-readout');
+  const dateLabel = el('span', 'ct-date');
   const timeLabel = el('time', 'ct-time');
   const localLabel = el('span', 'ct-time-local', '--:--'), utcLabel = el('span', 'ct-time-utc');
   timeLabel.append(localLabel, utcLabel);
+  const note = el('span', 'ct-note');
+  note.setAttribute('hidden', '');
+  readout.append(dateLabel, timeLabel, note);
   const track = el('div', 'ct-track');
   track.setAttribute('role', 'slider');
   track.setAttribute('aria-orientation', 'horizontal');
@@ -121,21 +147,21 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
   track.tabIndex = -1;
   track.append(ribbon, hatches, marks, moons, ticks, snapGhost, playhead, progress, loupe);
 
-  const steppers = el('div', 'ct-steppers');
-  steppers.setAttribute('role', 'group');
-  steppers.setAttribute('aria-label', 'Step forecast hour');
-  const stepPrev = btn('ct-step ct-step-prev', 'Previous forecast time', '‹');
-  const stepNext = btn('ct-step ct-step-next', 'Next forecast time', '›');
-  steppers.append(stepPrev, stepNext);
-  if (!dockViewOption(variant).showSteppers) steppers.setAttribute('hidden', '');
-
-  controls.append(play, timeLabel, track, steppers);
-  root.append(daysRow, controls);
+  const dayLoupe = el('div', 'ct-day-loupe');
+  const dayLoupeTitle = el('span', 'ct-day-loupe-title');
+  const loupeCanvas = el('canvas', 'ct-day-loupe-canvas');
+  dayLoupe.append(loupeCanvas, dayLoupeTitle);
+  dayLoupe.setAttribute('aria-hidden', 'true');
+  dayLoupe.setAttribute('hidden', '');
+  root.append(readout, track, daysRow, dayLoupe);
   host.append(root);
 
   let dayButtons: HTMLButtonElement[] = [];
+  const canvases = new WeakMap<HTMLButtonElement, HTMLCanvasElement>();
+  const thumbTimes = new WeakMap<HTMLButtonElement, HTMLElement>();
   let highlightedDays = new Set<string>(), highlightedKey = '';
-  let paintedWidth = -1, decorationKey = '', destroyed = false;
+  let paintedWidth = -1, decorationKey = '', destroyed = false, showing = '';
+  let lastNote: { local: { hour: number; minute: number } | null; comparisonMinute: number | null } = { local: null, comparisonMinute: null };
 
   function trackWidth(): number {
     const width = track.getBoundingClientRect().width;
@@ -224,26 +250,31 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     loupe.setAttribute('hidden', '');
   }
 
-  function paintLoupe(headFraction: number, width: number, baseText: string, edgePull: -1 | 0 | 1): void {
+  function paintLoupe(headFraction: number, width: number, text: string): void {
     const minFrac = width > LOUPE_HALF_PX * 2 ? LOUPE_HALF_PX / width : 0.5;
-    const clampedLoupe = Math.min(1 - minFrac, Math.max(minFrac, headFraction));
-    const neighbor = edgePull !== 0 ? win.adjacentGroup(edgePull) : undefined;
-    loupeText.textContent = neighbor
-      ? edgePull > 0
-        ? `${baseText} → ${dayButtonLabel(neighbor.day)}`
-        : `${dayButtonLabel(neighbor.day)} ← ${baseText}`
-      : baseText;
-    loupe.style.left = percent(clampedLoupe);
+    loupeText.textContent = text;
+    loupe.style.left = percent(Math.min(1 - minFrac, Math.max(minFrac, headFraction)));
     loupe.removeAttribute('hidden');
   }
 
-  function paintTime({ scale, width, scrubMinute, edgePull }: ViewPaint): void {
+  /** The readout note: what the map still shows while loading, else the comparison time a day pick snapped from. */
+  function paintNote(local: { hour: number; minute: number } | null, comparisonMinute: number | null): void {
+    lastNote = { local, comparisonMinute };
+    const snapped = comparisonMinute !== null && !!local && local.hour * 60 + local.minute !== comparisonMinute;
+    const text = showing || (snapped ? `Nearest to ${clockLabel(comparisonMinute)}` : '');
+    note.textContent = text;
+    note.classList.toggle('is-showing', Boolean(showing));
+    if (text) note.removeAttribute('hidden'); else note.setAttribute('hidden', '');
+  }
+
+  function paintTime({ scale, width, scrubMinute, comparisonMinute }: ViewPaint): void {
     const frame = win.selectedIndex >= 0 ? win.frames[win.selectedIndex] : undefined;
     const ms = frame ? Date.parse(frame.validTime) : Number.NaN;
     if (!frame || !Number.isFinite(ms)) {
-      localLabel.textContent = '--:--'; utcLabel.textContent = '';
+      localLabel.textContent = '--:--'; utcLabel.textContent = ''; dateLabel.textContent = '';
       timeLabel.removeAttribute('dateTime');
       track.setAttribute('aria-valuetext', 'No forecast time');
+      paintNote(null, null);
       hideMarkers();
       return;
     }
@@ -252,9 +283,11 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     const split = clock.indexOf(' (');
     const localClock = split < 0 ? clock : clock.slice(0, split);
     localLabel.textContent = localClock;
+    dateLabel.textContent = local ? readoutDate(local.day) : '';
     utcLabel.textContent = split < 0 ? '' : clock.slice(split);
     timeLabel.setAttribute('dateTime', frame.validTime);
     track.setAttribute('aria-valuetext', formatZoneTime(ms, win.timeZone, 'stamp'));
+    paintNote(local, comparisonMinute);
     if (!local) { hideMarkers(); return; }
     const frameFraction = placeMinute(scale, local.hour * 60 + local.minute);
     const headFraction = scrubMinute !== null ? placeMinute(scale, scrubMinute) : frameFraction;
@@ -266,7 +299,7 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     } else {
       snapGhost.setAttribute('hidden', '');
     }
-    if (scrubMinute !== null && dockViewOption(variant).showLoupe) paintLoupe(headFraction, width, `${dayButtonLabel(local.day)} · ${localClock}`, edgePull);
+    if (scrubMinute !== null && dockViewOption(variant).showLoupe) paintLoupe(headFraction, width, `${dayButtonLabel(local.day)} · ${localClock}`);
     else loupe.setAttribute('hidden', '');
   }
 
@@ -285,20 +318,8 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     });
   }
 
-  function reveal(button: HTMLButtonElement): void {
-    if (daysRow.clientWidth <= 0 || button.offsetWidth <= 0) return;
-    const right = button.offsetLeft + button.offsetWidth;
-    if (button.offsetLeft < daysRow.scrollLeft) daysRow.scrollLeft = button.offsetLeft;
-    else if (right > daysRow.scrollLeft + daysRow.clientWidth) daysRow.scrollLeft = right - daysRow.clientWidth;
-  }
-
-  function revealSelected(): void {
-    const selected = dayButtons.find(button => button.classList.contains('is-selected'));
-    if (selected) reveal(selected);
-  }
-
   function render(paint: ViewPaint): void {
-    const { scale, width, playing } = paint;
+    const { scale, width } = paint;
     root.classList.toggle('is-scrubbing', paint.scrubMinute !== null);
     const off = win.off();
     paintDayButtons(off);
@@ -307,22 +328,26 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
     paintedWidth = width;
     track.tabIndex = off ? -1 : 0;
     track.setAttribute('aria-disabled', String(off));
-    track.setAttribute('aria-valuemax', String(Math.max(0, win.frames.length - 1)));
-    track.setAttribute('aria-valuenow', String(Math.max(0, win.selectedIndex)));
-    play.disabled = off;
-    play.classList.toggle('is-playing', playing);
-    play.setAttribute('aria-pressed', String(playing));
-    play.setAttribute('aria-label', playing ? 'Pause forecast playback' : 'Play forecast');
-    stepPrev.disabled = off || win.selectedIndex <= 0;
-    stepNext.disabled = off || win.selectedIndex < 0 || win.selectedIndex >= win.frames.length - 1;
-    revealSelected();
+    // The rail's keys stay inside the selected day, so its range is that day's frames.
+    const day = win.selectedGroup()?.indices ?? [];
+    track.setAttribute('aria-valuemax', String(Math.max(0, day.length - 1)));
+    track.setAttribute('aria-valuenow', String(Math.max(0, day.indexOf(win.selectedIndex))));
   }
 
   function rebuildDays(): void {
     const focusedDay = dayButtons.includes(doc.activeElement as HTMLButtonElement) ? (doc.activeElement as HTMLButtonElement).dataset.day : undefined;
     dayButtons = win.days.map(group => {
       const label = dayButtonLabel(group.day);
-      const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`, label);
+      const button = btn('ct-day', group.indices.length ? label : `${label}, unavailable`);
+      const thumb = el('span', 'ct-day-thumb');
+      thumb.setAttribute('aria-hidden', 'true');
+      const canvas = el('canvas', 'ct-day-canvas');
+      canvases.set(button, canvas);
+      const thumbTime = el('span', 'ct-day-thumb-time');
+      thumbTime.setAttribute('hidden', '');
+      thumbTimes.set(button, thumbTime);
+      thumb.append(canvas, thumbTime);
+      button.append(thumb, el('span', 'ct-day-label', label));
       button.dataset.day = group.day;
       const usable = () => !button.disabled && !win.off() && group.indices.length > 0;
       const prepareDay = () => { if (usable()) handlers.prepareDay(group); };
@@ -330,39 +355,78 @@ export function createTimelineView(host: HTMLElement, win: FrameWindow, initialV
       button.addEventListener('focus', prepareDay);
       button.addEventListener('pointerdown', prepareDay);
       button.addEventListener('click', () => { if (usable()) handlers.pickDay(group); });
+      button.addEventListener('keydown', event => { if (usable()) handlers.dayKey(event as KeyboardEvent, group); });
       return button;
     });
     daysRow.replaceChildren(...dayButtons);
+    // One day needs no picker: the readout already names it.
+    if (dayButtons.length > 1) daysRow.removeAttribute('hidden'); else daysRow.setAttribute('hidden', '');
     if (focusedDay) dayButtons.find(button => button.dataset.day === focusedDay)?.focus({ preventScroll: true });
   }
 
-  const resizeObserver = typeof ResizeObserver === 'function' && daysRow.nodeType === 1 ? new ResizeObserver(() => {
+  const resizeObserver = typeof ResizeObserver === 'function' && track.nodeType === 1 ? new ResizeObserver(() => {
     if (destroyed) return;
-    revealSelected();
     if (Math.abs(trackWidth() - paintedWidth) >= 0.5) handlers.resized();
   }) : null;
-  resizeObserver?.observe(daysRow);
   resizeObserver?.observe(track);
 
   return {
-    root, track, play, stepPrev, stepNext, render, rebuildDays, trackWidth,
+    root, track, daysRow, render, rebuildDays, trackWidth,
     painted: () => paintedWidth >= 0,
-    setPull(px, armed) {
-      const transform = px ? `translateX(${px}px)` : '';
-      track.style.transform = transform;
-      root.classList.toggle('is-track-pulled', Boolean(transform));
-      root.classList.toggle('is-edge-armed', armed);
+    dayTargets() {
+      const spans = dayButtons.flatMap((button, index) => {
+        const group = win.days[index], rect = button.getBoundingClientRect();
+        return group?.indices.length && !button.disabled && rect.width > 0 ? [{ left: rect.left, right: rect.left + rect.width, top: rect.top ?? 0, group }] : [];
+      });
+      if (!spans.length || spans.some(span => span.top !== spans[0]!.top)) return null;
+      return spans.map(({ left, right, group }) => ({ left, right, group }));
     },
-    isPulled: () => Boolean(track.style.transform),
-    setBounce(direction, parity) {
-      root.dataset.bounce = direction > 0 ? (parity ? 'next-a' : 'next-b') : (parity ? 'prev-a' : 'prev-b');
+    loupeCanvas, dayLoupe,
+    cards() {
+      return dayButtons.flatMap((button, index) => {
+        const group = win.days[index], canvas = canvases.get(button);
+        return group && canvas ? [{ group, canvas }] : [];
+      });
+    },
+    setThumb(day, state, index = -1, aimMinute = null) {
+      const button = dayButtons.find(candidate => candidate.dataset.day === day);
+      if (!button) return;
+      if (button.classList.contains('has-thumb') !== (state !== 'unavailable')) button.classList.toggle('has-thumb', state !== 'unavailable');
+      if (button.classList.contains('is-pending') !== (state === 'pending')) button.classList.toggle('is-pending', state === 'pending');
+      const badge = thumbTimes.get(button), frame = index >= 0 ? win.frames[index] : undefined;
+      const local = frame ? localTimeFromMs(Date.parse(frame.validTime), win.timeZone) : null;
+      const minute = local ? local.hour * 60 + local.minute : null;
+      // A day without a frame near the compared hour says which hour its image shows.
+      const differs = state !== 'unavailable' && minute !== null && aimMinute !== null && Math.abs(minute - aimMinute) >= 30;
+      if (badge) {
+        // Written only on change: each write invalidates style before the next card's box is read.
+        const text = differs ? clockLabel(minute) : '';
+        if (badge.textContent !== text) badge.textContent = text;
+        if ((badge.getAttribute('hidden') === null) !== differs) { if (differs) badge.removeAttribute('hidden'); else badge.setAttribute('hidden', ''); }
+      }
+    },
+    setRowThumbs(on) {
+      daysRow.classList.toggle('has-thumbs', on);
+    },
+    setDayLoupe(index) {
+      const frame = index === null ? undefined : win.frames[index];
+      const ms = frame ? Date.parse(frame.validTime) : Number.NaN, local = localTimeFromMs(ms, win.timeZone);
+      if (!local) { dayLoupe.setAttribute('hidden', ''); return; }
+      dayLoupeTitle.textContent = `${readoutDate(local.day)} · ${clockLabel(local.hour * 60 + local.minute)}`;
+      dayLoupe.removeAttribute('hidden');
+    },
+    setShowing(text) {
+      if (text === showing) return;
+      showing = text;
+      paintNote(lastNote.local, lastNote.comparisonMinute);
+    },
+    focusDay(day) {
+      dayButtons.find(button => button.dataset.day === day)?.focus({ preventScroll: true });
     },
     setVariant(next) {
       if (next === variant) return false;
       variant = next;
       root.dataset.variant = next;
-      if (dockViewOption(next).showSteppers) steppers.removeAttribute('hidden');
-      else steppers.setAttribute('hidden', '');
       return true;
     },
     setReadiness(ready, total, loading) {

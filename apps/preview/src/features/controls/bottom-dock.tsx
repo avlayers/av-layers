@@ -210,8 +210,6 @@ function CapsuleLegendChrome(props: ResolvedDockProps) {
   const { model } = props;
   const opacityPct = `${Math.round(props.opacity * 100)}%`;
   const rangeText = model ? legendRangeSummary(model.stops) : '';
-  const refBadge = props.referenceHidden ? props.unitLabel : props.reference.toUpperCase();
-  const nextRef: AltitudeReference = props.reference === 'agl' ? 'msl' : 'agl';
   const gradient = model ? spectrumGradientCss(model.stops) : 'transparent';
 
   return (
@@ -222,28 +220,32 @@ function CapsuleLegendChrome(props: ResolvedDockProps) {
         aria-hidden="true"
       />
       <div class="capsule-inline-controls">
-        {!props.referenceHidden ? (
-          <button
-            type="button"
-            class="capsule-ref-flip"
-            disabled={props.disabled}
-            aria-label={`Lift reference ${props.reference.toUpperCase()}, activate for ${nextRef.toUpperCase()}`}
-            title={`Switch to ${nextRef.toUpperCase()}`}
-            onPointerEnter={() => props.onPrepareLayer(liftLayerFor(nextRef))}
-            onFocus={() => props.onPrepareLayer(liftLayerFor(nextRef))}
-            onPointerDown={() => props.onPrepareLayer(liftLayerFor(nextRef))}
-            onClick={() => props.onReference(nextRef)}
-          >{refBadge}</button>
-        ) : null}
         <details id="legend-key" class="ribbon-key capsule-key">
-          <summary id="legend-key-toggle" class="capsule-key-trigger" aria-label="Layer scale, opacity, and key">
-            {props.referenceHidden ? <span class="capsule-chip-lead">{refBadge}</span> : null}
-            {rangeText ? <span class="capsule-chip-range">{rangeText}</span> : null}
-            <span class="capsule-chip-opacity">{opacityPct}</span>
-            <span class="capsule-chip-caret" aria-hidden="true">▾</span>
+          <summary id="legend-key-toggle" class="capsule-key-trigger" title="Layer key and opacity" aria-label={`Layer key${rangeText ? ` ${rangeText}` : ''}, opacity ${opacityPct}`}>
+            {/* The layer's own colour ramp is the icon; the label lives in aria-label and the tooltip. */}
+            <span class="capsule-key-swatch" style={{ background: gradient }} aria-hidden="true" />
           </summary>
           <LayerKeyBody {...props} />
         </details>
+        {!props.referenceHidden ? (
+          // Both references stay visible with the active one filled, so it reads as a two-way switch.
+          <div class="capsule-ref-seg" role="group" aria-label="Lift reference">
+            {(['agl', 'msl'] as const).map(reference => (
+              <button
+                key={reference}
+                type="button"
+                class={props.reference === reference ? 'capsule-ref-option is-selected' : 'capsule-ref-option'}
+                aria-pressed={props.reference === reference}
+                disabled={props.disabled}
+                title={reference === 'agl' ? 'Lift above ground level' : 'Lift above mean sea level'}
+                onPointerEnter={() => props.onPrepareLayer(liftLayerFor(reference))}
+                onFocus={() => props.onPrepareLayer(liftLayerFor(reference))}
+                onPointerDown={() => props.onPrepareLayer(liftLayerFor(reference))}
+                onClick={() => { if (props.reference !== reference) props.onReference(reference); }}
+              >{reference.toUpperCase()}</button>
+            ))}
+          </div>
+        ) : null}
       </div>
     </aside>
   );

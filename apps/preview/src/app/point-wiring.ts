@@ -30,7 +30,7 @@ interface PointWiringOptions {
   readonly displayedFrame: () => string | null;
   readonly wind: () => PointWind | null;
   readonly ensureLive: () => boolean;
-  readonly timeline: () => { pause(): void; setHighlightedDays?(days: readonly string[] | null): void } | null;
+  readonly timeline: () => { setHighlightedDays?(days: readonly string[] | null): void } | null;
   readonly selectFrameById: (id: string) => void;
   readonly setViewMode: (mode: PointViewMode) => void;
   readonly setHorizon: (horizon: PointHorizon) => void;
@@ -93,7 +93,6 @@ export function createPointWiring(options: PointWiringOptions): PointWiring {
     getDisplayedFrame: options.displayedFrame,
     getWind: options.wind,
     ensureLive: options.ensureLive,
-    pauseTimeline: () => options.timeline()?.pause(),
     selectFrameById: options.selectFrameById,
     onViewModeChange: options.setViewMode,
     onRequestFullHorizon: () => { if (view.intent.value.pointHorizon !== 'forecast') options.setHorizon('forecast'); },

@@ -31,6 +31,17 @@ describe('point-camera', () => {
     expect(target!.centerOffset[1]).toBeLessThan(-160);
   });
 
+  it('lifts the estimated mobile sheet above a taller measured dock', () => {
+    const at = (bottomClearancePx: number) => computePointRevealTarget({
+      pointPx: { x: 195, y: 700 },
+      viewport: { width: 390, height: 844 },
+      cardRect: { left: 8, top: 748, right: 382, bottom: 776 },
+      topbarBottomPx: 84,
+      bottomClearancePx,
+    })!.targetY;
+    expect(at(160)).toBeLessThan(at(68));
+  });
+
   it('keeps the desktop camera stationary when the point is already in clear view', () => {
     const offset = computePointRevealPan({
       pointPx: { x: 920, y: 360 },

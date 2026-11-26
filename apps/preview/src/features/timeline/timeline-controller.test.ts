@@ -40,9 +40,13 @@ class Element extends EventTarget {
   style: Record<string, string> = {};
   offsetLeft = 0;
   offsetWidth = 36;
-  getBoundingClientRect(): { left: number; width: number } {
-    return { left: this.offsetLeft - (this.parentNode?.scrollLeft ?? 0), width: this.offsetWidth };
+  offsetHeight = 20;
+  width = 0;
+  height = 0;
+  getBoundingClientRect(): { left: number; width: number; top: number; height: number } {
+    return { left: this.offsetLeft - (this.parentNode?.scrollLeft ?? 0), width: this.offsetWidth, top: 0, height: this.offsetHeight };
   }
+  getContext(): object | null { return this.tag === 'canvas' ? { clearRect() {}, tag: this } : null; }
   constructor(readonly tag: string) { super(); }
   get ownerDocument(): Document { return doc; }
   append(...nodes: Element[]): void {
@@ -244,18 +248,14 @@ it('labels hours from a fixed offset and regroups without changing the selected 
   const root = host.children[0]!;
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13']);
   expect(byClass(root, 'ct-time').textContent).toBe('13:00 (18:00 UTC)');
-  click(byClass(root, 'ct-play'));
   timeline.setTimeZone('UTC');
   expect(onSelect).not.toHaveBeenCalled();
   expect(named(root, 'ct-day').map(day => day.textContent)).toEqual(['Fri 13', 'Sat 14']);
   expect(byClass(root, 'ct-time').textContent).toBe('18:00 (18:00 UTC)');
-  expect(byClass(root, 'ct-play').getAttribute('aria-pressed')).toBe('true');
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
   timeline.destroy();
 });
 
-it('selects a day at the current hour, snaps the track, and steps across midnight', () => {
+it('selects a day at the current hour, snaps the track, and keeps rail keys inside the day', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, 'a');
   const root = host.children[0]!;
@@ -275,14 +275,15 @@ it('selects a day at the current hour, snaps the track, and steps across midnigh
   pointer(track, 'pointerup', 90);
   expect(onSelect).toHaveBeenLastCalledWith(1, 'push');
 
+  // Rail keys stay inside the selected day (Fri 13: frames 0 and 1).
   const right = key(track, 'ArrowRight');
   expect(right.defaultPrevented).toBe(true);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(doc.activeElement).toBe(track);
+  expect(onSelect).toHaveBeenCalledTimes(3);
   key(track, 'Home');
   expect(onSelect).toHaveBeenLastCalledWith(0, 'replace');
+  expect(doc.activeElement).toBe(track);
   key(track, 'End');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
   timeline.destroy();
 });
 
@@ -319,106 +320,6 @@ it('hatches a gap day and the hours outside a partial day', () => {
   pointer(track, 'pointerdown', 15 * 10);
   expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
   pointer(track, 'pointerup', 15 * 10);
-  timeline.destroy();
-});
-
-it('plays through available frames across midnight and stops at the last', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  click(play);
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  expect(onSelect).not.toHaveBeenCalled();
-
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(named(root, 'ct-day')[1]!.classList.contains('is-selected')).toBe(true);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).toHaveBeenCalledTimes(2);
-
-  click(play);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'replace');
-  expect(play.getAttribute('aria-pressed')).toBe('true');
-  timeline.destroy();
-});
-
-it('stops playback when the document hides and cleans up on destroy', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  click(play);
-  doc.visibilityState = 'hidden';
-  doc.dispatchEvent(new Event('visibilitychange'));
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).not.toHaveBeenCalled();
-
-  doc.visibilityState = 'visible';
-  click(play);
-  vi.advanceTimersByTime(700);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  timeline.destroy();
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).toHaveBeenCalledTimes(1);
-  expect(host.children).toHaveLength(0);
-  doc.dispatchEvent(new Event('visibilitychange'));
-});
-
-it('disables controls and does not start playback when disabled', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a', true);
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  expect(play.disabled).toBe(true);
-  expect(named(root, 'ct-day').every(day => day.disabled)).toBe(true);
-  expect(byClass(root, 'ct-track').getAttribute('aria-disabled')).toBe('true');
-  click(play);
-  pointer(byClass(root, 'ct-track'), 'pointerdown', 10);
-  vi.advanceTimersByTime(1400);
-  expect(onSelect).not.toHaveBeenCalled();
-
-  timeline.update(frames, 'b', false);
-  expect(play.disabled).toBe(false);
-  expect(byClass(root, 'ct-track').tabIndex).toBe(0);
-  timeline.destroy();
-});
-
-it('pauses playback when the user scrubs, picks a day, or uses arrow keys', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  const root = host.children[0]!;
-  const play = byClass(root, 'ct-play');
-  const track = byClass(root, 'ct-track');
-  track.offsetWidth = 100;
-  click(play);
-  pointer(track, 'pointerdown', 10);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  const calls = onSelect.mock.calls.length;
-  vi.advanceTimersByTime(2100);
-  expect(onSelect.mock.calls.length).toBe(calls);
-
-  click(play);
-  key(root, 'ArrowRight');
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-
-  click(play);
-  click(named(root, 'ct-day')[1]!);
-  expect(play.getAttribute('aria-pressed')).toBe('false');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
   timeline.destroy();
 });
 
@@ -584,18 +485,6 @@ it('keeps a polar day on the linear hour scale', () => {
   timeline.destroy();
 });
 
-it('pause stops playback without selecting another frame', () => {
-  vi.useFakeTimers();
-  const { host, onSelect, timeline } = setup();
-  timeline.update(frames, 'a');
-  click(byClass(host.children[0]!, 'ct-play'));
-  timeline.pause();
-  expect(byClass(host.children[0]!, 'ct-play').getAttribute('aria-pressed')).toBe('false');
-  vi.advanceTimersByTime(2100);
-  expect(onSelect).not.toHaveBeenCalled();
-  timeline.destroy();
-});
-
 it('records a scrub that starts with no selection', () => {
   const { host, onSelect, timeline } = setup();
   timeline.update(frames, null);
@@ -607,7 +496,7 @@ it('records a scrub that starts with no selection', () => {
   timeline.destroy();
 });
 
-function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onIntent?: (index: number) => void) {
+function setupAnimationTimeline(onIntent?: (index: number) => void) {
   doc = new Document();
   const callbacks = new Map<number, FrameRequestCallback>();
   let nextId = 0;
@@ -618,7 +507,7 @@ function setupAnimationTimeline(onPlayback?: (playing: boolean) => void, onInten
   Object.defineProperty(doc, 'defaultView', { value: view });
   const host = doc.createElement('div');
   const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, ...(onPlayback ? { onPlayback } : {}), ...(onIntent ? { onIntent } : {}) });
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, ...(onIntent ? { onIntent } : {}) });
   const hours = [0, 6, 12, 18].map(hour => ({ id: `h${hour}`, validTime: `2026-11-14T${String(hour).padStart(2, '0')}:00:00Z` }));
   timeline.update(hours, 'h0');
   const track = byClass(host.children[0]!, 'ct-track');
@@ -774,7 +663,8 @@ it('does not re-seek a repeated release coordinate after opening a folded night'
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);
-  const selected = Number(track.getAttribute('aria-valuenow'));
+  // aria-valuenow counts within the selected local day, which starts at h5 in Etc/GMT+5.
+  const selected = Number(track.getAttribute('aria-valuenow')) + 5;
   expect(selected).not.toBe(21);
   expect(named(host.children[0]!, 'ct-moon')).toHaveLength(1);
   pointer(track, 'pointerup', 10);
@@ -797,7 +687,7 @@ it('ignores a second pointer and commits the first pointer position', () => {
   timeline.destroy();
 });
 
-it('lets day and playback controls supersede pending drag work', () => {
+it('lets a day pick and a key supersede pending drag work', () => {
   vi.useFakeTimers();
   const { host, track, timeline, onSelect, callbacks, flush } = setupAnimationTimeline();
   pointer(track, 'pointerdown', 0);
@@ -811,11 +701,11 @@ it('lets day and playback controls supersede pending drag work', () => {
   onSelect.mockClear();
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointermove', 60);
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(onSelect.mock.calls).toEqual([[1, 'replace'], [0, 'replace']]);
+  key(track, 'Home');
+  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
   pointer(track, 'pointerup', 60);
   flush();
-  expect(onSelect).toHaveBeenCalledTimes(2);
+  expect(onSelect).toHaveBeenCalledTimes(1);
   timeline.destroy();
 });
 
@@ -881,7 +771,8 @@ it('does not seek a pointercancel coordinate and permits reentrant RAF schedulin
   expect(callbacks.size).toBe(1);
   flush();
   pointer(track, 'pointercancel', 180);
-  expect(onSelect.mock.calls).toEqual([[1, 'none'], [2, 'none'], [2, 'push']]);
+  // A cancelled gesture keeps its last frame and replaces the history entry.
+  expect(onSelect.mock.calls).toEqual([[1, 'none'], [2, 'none'], [2, 'replace']]);
   timeline.destroy();
 });
 
@@ -928,7 +819,8 @@ it('ignores subpixel movement on release after opening a folded night', () => {
   timeline.update(hourly, 'h21');
   track.offsetWidth = 480;
   pointer(track, 'pointerdown', 10);
-  const selected = Number(track.getAttribute('aria-valuenow'));
+  // aria-valuenow counts within the selected local day, which starts at h5 in Etc/GMT+5.
+  const selected = Number(track.getAttribute('aria-valuenow')) + 5;
   pointer(track, 'pointermove', 10.5);
   pointer(track, 'pointerup', 10.5);
   expect(onSelect.mock.calls).toEqual([[selected, 'push']]);
@@ -936,51 +828,9 @@ it('ignores subpixel movement on release after opening a folded night', () => {
   timeline.destroy();
 });
 
-it('does not start playback when an immediate selection destroys the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, track, timeline, onSelect, flush } = setupAnimationTimeline(onPlayback);
-  pointer(track, 'pointerdown', 0);
-  pointer(track, 'pointermove', 60);
-  onSelect.mockImplementationOnce(() => timeline.destroy());
-  const play = byClass(host.children[0]!, 'ct-play');
-  click(play);
-  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-  flush();
-});
-
-it('does not start playback when a selection synchronously disables the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, track, timeline, onSelect, hours, flush } = setupAnimationTimeline(onPlayback);
-  pointer(track, 'pointerdown', 0);
-  pointer(track, 'pointermove', 60);
-  onSelect.mockImplementationOnce(() => timeline.update(hours, 'h6', true));
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-  flush();
-  expect(onSelect.mock.calls).toEqual([[1, 'replace']]);
-  timeline.destroy();
-});
-
-it('does not start playback when selecting the first frame destroys the timeline', () => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn();
-  const { host, timeline, onSelect, hours } = setupAnimationTimeline(onPlayback);
-  timeline.update(hours, 'h18');
-  onSelect.mockImplementationOnce(() => timeline.destroy());
-  click(byClass(host.children[0]!, 'ct-play'));
-  expect(onSelect.mock.calls).toEqual([[0, 'replace']]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(onPlayback).not.toHaveBeenCalled();
-});
-
 it('announces each changed drag intent before coalesced scene delivery', () => {
   const onIntent = vi.fn();
-  const { track, timeline, onSelect, flush } = setupAnimationTimeline(undefined, onIntent);
+  const { track, timeline, onSelect, flush } = setupAnimationTimeline(onIntent);
   pointer(track, 'pointerdown', 60);
   pointer(track, 'pointermove', 60);
   pointer(track, 'pointermove', 120);
@@ -998,7 +848,7 @@ it('announces each changed drag intent before coalesced scene delivery', () => {
 it('cancels an obsolete Auto-like result before the next drag scene is delivered', async () => {
   let generation = 0;
   const onIntent = vi.fn(() => { generation++; });
-  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline(undefined, onIntent);
+  const { track, timeline, onSelect, hours, flush } = setupAnimationTimeline(onIntent);
   const requested = generation;
   let resolve!: () => void;
   const result = new Promise<void>(done => { resolve = done; }).then(() => {
@@ -1022,7 +872,7 @@ it.each(['destroy', 'disable', 'cancel'])('stops the gesture when onIntent synch
     else if (action === 'disable') timeline.update(hours, 'h0', true);
     else timeline.cancelGesture();
   });
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline, hours } = setup;
   pointer(setup.track, 'pointerdown', 60);
   pointer(setup.track, 'pointerup', 120);
@@ -1035,7 +885,7 @@ it.each(['destroy', 'disable', 'cancel'])('stops the gesture when onIntent synch
 
 it('does not commit release when onIntent invalidates the gesture', () => {
   const onIntent = vi.fn(() => timeline.cancelGesture());
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline } = setup;
   pointer(setup.track, 'pointerdown', 0);
   pointer(setup.track, 'pointerup', 120);
@@ -1051,7 +901,7 @@ it('does not let a reentrant release invalidate a newly started gesture', () => 
     timeline.cancelGesture();
     pointer(track, 'pointerdown', 180);
   });
-  const setup = setupAnimationTimeline(undefined, onIntent);
+  const setup = setupAnimationTimeline(onIntent);
   const { timeline, track } = setup;
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointerup', 120);
@@ -1060,28 +910,6 @@ it('does not let a reentrant release invalidate a newly started gesture', () => 
   pointer(track, 'pointerup', 180);
   setup.flush();
   expect(setup.onSelect.mock.calls).toEqual([[3, 'push']]);
-  timeline.destroy();
-});
-
-it.each(['destroy', 'disable'])('does not start a gesture when playback stop synchronously calls %s', action => {
-  vi.useFakeTimers();
-  const onPlayback = vi.fn((playing: boolean) => {
-    if (!playing) {
-      if (action === 'destroy') timeline.destroy();
-      else timeline.update(hours, 'h0', true);
-    }
-  });
-  const setup = setupAnimationTimeline(onPlayback);
-  const { timeline, hours } = setup;
-  click(byClass(setup.host.children[0]!, 'ct-play'));
-  pointer(setup.track, 'pointerdown', 60);
-  expect(setup.callbacks.size).toBe(0);
-  pointer(setup.track, 'pointerup', 120);
-  setup.flush();
-  expect(onPlayback.mock.calls).toEqual([[true], [false]]);
-  expect(vi.getTimerCount()).toBe(0);
-  expect(setup.callbacks.size).toBe(0);
-  expect(setup.onSelect).not.toHaveBeenCalled();
   timeline.destroy();
 });
 
@@ -1159,15 +987,14 @@ it('returns cancellation state based on the acknowledged scene without completin
   expect(timeline.cancelGesture()).toBeNull();
 });
 
-it.each(['day', 'key', 'play'])('does not select again on release when %s supersedes drag', control => {
+it.each(['day', 'key'])('does not select again on release when %s supersedes drag', control => {
   vi.useFakeTimers();
   const { host, track, timeline, onSelect, flush } = setupAnimationTimeline();
   pointer(track, 'pointerdown', 0);
   pointer(track, 'pointermove', 60);
   flush();
   if (control === 'day') click(named(host.children[0]!, 'ct-day')[0]!);
-  else if (control === 'key') key(track, 'End');
-  else click(byClass(host.children[0]!, 'ct-play'));
+  else key(track, 'End');
   const calls = onSelect.mock.calls.length;
   pointer(track, 'pointerup', 60);
   flush();
@@ -1261,130 +1088,16 @@ it('tracks pointer arbitrarily across sparse 3-hour intervals while dragging and
   timeline.destroy();
 });
 
-it('steps single frames via right-thumb steppers, pre-warms neighbors, and switches pluggable variants', () => {
-  const onPrepare = vi.fn();
-  doc = new Document();
-  const host = doc.createElement('div');
-  const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
+it('shows overview readiness on the track', () => {
+  const { host, timeline } = setup();
   const root = host.children[0]!;
-  const prev = byClass(root, 'ct-step-prev');
-  const next = byClass(root, 'ct-step-next');
-  const steppers = byClass(root, 'ct-steppers');
   const progress = byClass(root, 'ct-progress');
-  const progressBar = byClass(root, 'ct-progress-bar');
-
   timeline.update(frames, 'a');
-  expect(prev.disabled).toBe(true);
-  expect(next.disabled).toBe(false);
-
-  next.dispatchEvent(new Event('pointerenter'));
-  expect(onPrepare).toHaveBeenCalledWith(1);
-  click(next);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-  expect(prev.disabled).toBe(false);
-
-  click(next);
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'replace');
-  expect(next.disabled).toBe(true);
-
-  click(prev);
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
-
   timeline.setReadiness?.(10, 40, true);
   expect(progress.getAttribute('hidden')).toBeNull();
-  expect(progressBar.style.transform).toBe('scaleX(0.25)');
+  expect(byClass(root, 'ct-progress-bar').style.transform).toBe('scaleX(0.25)');
   timeline.setReadiness?.(40, 40, false);
   expect(progress.getAttribute('hidden')).toBe('');
-
-  expect(steppers.getAttribute('hidden')).toBeNull();
-  expect(root.dataset.variant).toBe('capsule');
-  timeline.setVariant?.('capsule');
-  expect(steppers.getAttribute('hidden')).toBeNull();
-  timeline.destroy();
-});
-
-it('previews elastic edge pull, bounces across gap days at 20px overscroll, and guards outer-edge release', () => {
-  const onPrepare = vi.fn();
-  doc = new Document();
-  const host = doc.createElement('div');
-  const onSelect = vi.fn();
-  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onPrepare });
-  const root = host.children[0]!;
-  const track = byClass(root, 'ct-track');
-  const playhead = byClass(root, 'ct-playhead');
-  const loupe = byClass(root, 'ct-loupe');
-  track.offsetLeft = 0;
-  track.offsetWidth = 240;
-
-  // Fri 13 (12:00, 18:00), Sat 14 unavailable gap, Sun 15 (09:00, 15:00), Mon 16 (06:00).
-  const multiDay: TimelineFrame[] = [
-    { id: 'f12', validTime: '2026-11-13T12:00:00Z' },
-    { id: 'f18', validTime: '2026-11-13T18:00:00Z' },
-    { id: 's09', validTime: '2026-11-15T09:00:00Z' },
-    { id: 's15', validTime: '2026-11-15T15:00:00Z' },
-    { id: 'm06', validTime: '2026-11-16T06:00:00Z' }
-  ];
-  timeline.update(multiDay, 'f18');
-
-  // Scrub inside right edge (x = 240): stays on Fri 13 without pulling or bouncing.
-  pointer(track, 'pointerdown', 180);
-  pointer(track, 'pointermove', 240);
-  expect(root.classList.contains('is-edge-armed')).toBe(false);
-  expect(track.style.transform ?? '').toBe('');
-  expect(loupe.textContent).toBe('Fri 13 · 18:00');
-  expect(onPrepare).not.toHaveBeenCalled();
-
-  // Pull 10px past right edge (x = 250): rubber-bands track, pre-warms Sun 15 first frame, previews arrow in loupe.
-  pointer(track, 'pointermove', 250);
-  expect(root.classList.contains('is-track-pulled')).toBe(true);
-  expect(root.classList.contains('is-edge-armed')).toBe(true);
-  expect(track.style.transform).toMatch(/^translateX\(/);
-  expect(loupe.textContent).toBe('Fri 13 · 18:00 → Sun 15');
-  expect(onPrepare).toHaveBeenCalledExactlyOnceWith(2);
-
-  // Pull 22px past right edge (x = 262): bounces across unavailable Sat 14 to Sun 15 09:00 (index 2).
-  pointer(track, 'pointermove', 262);
-  expect(root.dataset.bounce).toBe('next-a');
-  expect(root.classList.contains('is-track-pulled')).toBe(false);
-  expect(root.classList.contains('is-edge-armed')).toBe(false);
-  expect(track.style.transform).toBe('');
-  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
-  expect(playhead.style.left).toBe('37.5%');
-  expect(loupe.textContent).toBe('Sun 15 · 09:00');
-
-  // Slight outer wiggle at x = 270 does not runaway-bounce or snap to end of Sun 15.
-  pointer(track, 'pointermove', 270);
-  expect(onSelect).toHaveBeenCalledTimes(1);
-  expect(playhead.style.left).toBe('37.5%');
-
-  // Pulling another 32px outward (x = 296 >= 262 + 32) steps one more day to Mon 16 06:00 (index 4).
-  pointer(track, 'pointermove', 296);
-  expect(root.dataset.bounce).toBe('next-b');
-  expect(onSelect).toHaveBeenLastCalledWith(4, 'none');
-  expect(playhead.style.left).toBe('25%');
-
-  // Releasing while still outside the right edge commits Mon 16 06:00 cleanly without re-seeking x = 298.
-  pointer(track, 'pointerup', 298);
-  expect(onSelect).toHaveBeenLastCalledWith(4, 'push');
-  expect(playhead.style.left).toBe('25%');
-
-  // Left-edge pull & bounce backward from Sun 15 to Fri 13 latest frame (18:00, index 1), then re-enter to scrub Fri 13.
-  timeline.update(multiDay, 's09');
-  pointer(track, 'pointerdown', 60);
-  pointer(track, 'pointermove', -10);
-  expect(loupe.textContent).toBe('Fri 13 ← Sun 15 · 09:00');
-  pointer(track, 'pointermove', -22);
-  expect(root.dataset.bounce).toBe('prev-a');
-  expect(onSelect).toHaveBeenLastCalledWith(1, 'none');
-  expect(playhead.style.left).toBe('75%');
-
-  // Slide back inside track (x = 120 >= 10px inside left edge) to continue scrubbing Fri 13 smoothly in one gesture!
-  pointer(track, 'pointermove', 120);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'none');
-  expect(playhead.style.left).toBe('50%');
-  pointer(track, 'pointerup', 120);
-  expect(onSelect).toHaveBeenLastCalledWith(0, 'push');
   timeline.destroy();
 });
 
@@ -1411,5 +1124,325 @@ it('highlights multi-day window pills cleanly and clears them when closed', () =
   // Cleared when point card closes.
   timeline.setHighlightedDays?.(null);
   expect(days.map(d => d.classList.contains('is-in-window'))).toEqual([false, false, false, false]);
+  timeline.destroy();
+});
+
+// Day-preview redesign contracts (T1). Each starts as `it.fails` and flips when its behaviour lands.
+const comparison: TimelineFrame[] = [
+  { id: 'd1-14', validTime: '2026-11-13T14:00:00Z' },
+  { id: 'd2-03', validTime: '2026-11-14T03:00:00Z' },
+  { id: 'd2-15', validTime: '2026-11-14T15:00:00Z' },
+  { id: 'd3-14', validTime: '2026-11-15T14:00:00Z' },
+  { id: 'd3-15', validTime: '2026-11-15T15:00:00Z' }
+];
+
+it('keeps the comparison hour across a sparse day', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const days = named(host.children[0]!, 'ct-day');
+  click(days[1]!);
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.update(comparison, 'd2-15');
+  click(days[2]!);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it('keeps the second repeated DST hour when its own day is picked again', () => {
+  const fallBack: TimelineFrame[] = [
+    { id: 'first-01', validTime: '2026-11-01T05:00:00Z' },
+    { id: 'second-01', validTime: '2026-11-01T06:00:00Z' }
+  ];
+  const { host, onSelect, timeline } = setup('America/New_York');
+  timeline.update(fallBack, 'second-01');
+  click(named(host.children[0]!, 'ct-day')[0]!);
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('moves a focused day to the next day at the same hour, not the next frame', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const days = named(host.children[0]!, 'ct-day');
+  days[0]!.focus();
+  key(days[0]!, 'ArrowRight');
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'push');
+  timeline.destroy();
+});
+
+it('keeps an hour drag inside the selected day', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd2-15');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetLeft = 0; track.offsetWidth = 240;
+  pointer(track, 'pointerdown', 200);
+  for (const x of [230, 250, 270, 300, 340]) pointer(track, 'pointermove', x);
+  pointer(track, 'pointerup', 340);
+  expect(onSelect.mock.calls.every(([index]) => index === 1 || index === 2)).toBe(true);
+  timeline.destroy();
+});
+
+function dayRow(host: Element) {
+  const root = host.children[0]!;
+  const row = byClass(root, 'ct-days');
+  const buttons = named(root, 'ct-day');
+  buttons.forEach((button, index) => { button.offsetLeft = index * 60; button.offsetWidth = 56; });
+  return { root, row, buttons };
+}
+
+it('drags across days at the comparison hour, then commits once and swallows the click', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  pointer(row, 'pointermove', 24);
+  expect(onSelect).not.toHaveBeenCalled();
+  pointer(row, 'pointermove', 80);
+  expect(onSelect).toHaveBeenLastCalledWith(2, 'none');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  pointer(row, 'pointermove', 140);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'none');
+  pointer(row, 'pointermove', 900);
+  pointer(row, 'pointerup', 900);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  expect(onSelect.mock.calls.filter(([, history]) => history !== 'none')).toHaveLength(1);
+  click(buttons[2]!);
+  expect(onSelect).toHaveBeenCalledTimes(3);
+  expect(byClass(root, 'ct-note').getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('returns to the starting frame when a day drag comes back, with no new history entry', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd2-03');
+  const { row } = dayRow(host);
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'none');
+  pointer(row, 'pointermove', 80);
+  pointer(row, 'pointerup', 80);
+  expect(onSelect).toHaveBeenLastCalledWith(1, 'replace');
+  timeline.destroy();
+});
+
+it('leaves a day press under 6px to the click and drops a day drag on a zone change', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 70);
+  pointer(row, 'pointermove', 74);
+  pointer(row, 'pointerup', 74);
+  click(buttons[1]!);
+  expect(onSelect.mock.calls).toEqual([[2, 'push']]);
+  timeline.update(comparison, 'd2-15');
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
+  timeline.setTimeZone('Asia/Tokyo');
+  // The frame the drag put on screen is committed, so the URL follows the map.
+  expect(onSelect.mock.calls.slice(-2)).toEqual([[3, 'none'], [3, 'replace']]);
+  pointer(row, 'pointerup', 140);
+  expect(onSelect.mock.calls.at(-1)).toEqual([3, 'replace']);
+  timeline.destroy();
+});
+
+it('resets the comparison hour when the rail or an outside selection moves the time', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, buttons } = dayRow(host);
+  click(buttons[1]!);
+  timeline.update(comparison, 'd2-15');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  timeline.update(comparison, 'd2-03');
+  expect(byClass(root, 'ct-note').getAttribute('hidden')).toBe('');
+  click(buttons[2]!);
+  expect(onSelect).toHaveBeenLastCalledWith(3, 'push');
+  timeline.destroy();
+});
+
+it('puts the on-screen hour ahead of the comparison note while it loads', () => {
+  const { host, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { root, buttons } = dayRow(host);
+  click(buttons[1]!);
+  timeline.update(comparison, 'd2-15');
+  timeline.setShowing?.('Showing Fri 14:00 · loading');
+  expect(byClass(root, 'ct-note').textContent).toBe('Showing Fri 14:00 · loading');
+  timeline.setShowing?.('');
+  expect(byClass(root, 'ct-note').textContent).toBe('Nearest to 14:00');
+  timeline.destroy();
+});
+
+function previewSetup(state: (index: number) => 'ready' | 'pending' | 'unavailable' = () => 'ready') {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn();
+  const draw = vi.fn((index: number, _target: unknown, _width: number, _height: number) => state(index));
+  const prefer = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, timeZone: 'UTC', preview: { draw: draw as never, prefer } });
+  timeline.update(comparison, 'd1-14');
+  const { root, row, buttons } = dayRow(host);
+  timeline.refreshPreviews?.();
+  return { host, root, row, buttons, timeline, onSelect, draw, prefer };
+}
+
+it('draws each day card at its comparison-hour frame and asks for those frames first', () => {
+  const { buttons, timeline, draw, prefer } = previewSetup(index => index === 3 ? 'pending' : 'ready');
+  expect(draw.mock.calls.map(([index]) => index)).toEqual(expect.arrayContaining([0, 2, 3]));
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 3]);
+  expect(buttons.map(button => button.classList.contains('has-thumb'))).toEqual([true, true, true]);
+  expect(buttons[2]!.classList.contains('is-pending')).toBe(true);
+  timeline.destroy();
+});
+
+it('keeps plain date buttons when the source has no preview', () => {
+  const { buttons, timeline, root } = previewSetup(() => 'unavailable');
+  expect(buttons.some(button => button.classList.contains('has-thumb'))).toBe(false);
+  const { row } = dayRow({ children: [root] } as unknown as Element);
+  pointer(row, 'pointerdown', 70);
+  expect(byClass(root, 'ct-day-loupe').getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('shows the enlarged preview only once a press slides, follows it across days, and closes on release', () => {
+  const { root, row, timeline, draw } = previewSetup();
+  const loupe = byClass(root, 'ct-day-loupe'), title = byClass(root, 'ct-day-loupe-title');
+  pointer(row, 'pointerdown', 80);
+  expect(loupe.getAttribute('hidden')).toBe('');
+  pointer(row, 'pointermove', 88);
+  expect(title.textContent).toBe('Sat 14 Nov · 15:00');
+  draw.mockClear();
+  pointer(row, 'pointermove', 140);
+  expect(title.textContent).toBe('Sun 15 Nov · 14:00');
+  expect(draw.mock.calls.some(([index, , width]) => index === 3 && width === 36)).toBe(true);
+  pointer(row, 'pointerup', 140);
+  expect(loupe.getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('ends a day press released off the timeline, so the rail works again', () => {
+  const { row, timeline, onSelect } = previewSetup();
+  pointer(row, 'pointerdown', 80);
+  expect(timeline.cancelGesture()).not.toBeNull();
+  pointer(row, 'pointerdown', 80);
+  pointer(doc as unknown as Element, 'pointerup', 80);
+  expect(timeline.cancelGesture()).toBeNull();
+  expect(onSelect).not.toHaveBeenCalled();
+  timeline.destroy();
+});
+
+it('drops only the click that trails a day drag, not a later keyboard pick', () => {
+  const now = vi.spyOn(Date, 'now').mockReturnValue(1_000);
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd1-14');
+  const { row, buttons } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  pointer(row, 'pointermove', 80);
+  pointer(row, 'pointerup', 80);
+  const calls = onSelect.mock.calls.length;
+  now.mockReturnValue(5_000);
+  click(buttons[2]!);
+  expect(onSelect.mock.calls.length).toBe(calls + 1);
+  now.mockRestore();
+  timeline.destroy();
+});
+
+it('shows the start day in the enlarged preview when a drag slides back onto it', () => {
+  const { root, row, timeline } = previewSetup();
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 20);
+  expect(byClass(root, 'ct-day-loupe-title').textContent).toMatch(/^Fri 13 Nov/);
+  timeline.destroy();
+});
+
+function touch(element: Element, type: string, clientX: number): void {
+  const event = new Event(type);
+  Object.defineProperties(event, { clientX: { value: clientX }, button: { value: 0 }, pointerId: { value: 7 }, pointerType: { value: 'touch' } });
+  element.dispatchEvent(event);
+}
+
+it('moves the hour on a touch only once the finger slides or lifts', () => {
+  const { host, onSelect, timeline } = setup('UTC');
+  timeline.update(comparison, 'd3-14');
+  const track = byClass(host.children[0]!, 'ct-track');
+  track.offsetWidth = 480;
+  touch(track, 'pointerdown', 470);
+  touch(track, 'pointermove', 472);
+  expect(onSelect).not.toHaveBeenCalled();
+  touch(track, 'pointerup', 472);
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'push');
+  timeline.destroy();
+});
+
+it('opens the enlarged preview on touch only once the drag starts, and Escape closes just the preview', () => {
+  const { root, row, buttons, timeline } = previewSetup();
+  const loupe = byClass(root, 'ct-day-loupe');
+  touch(row, 'pointerdown', 80);
+  expect(loupe.getAttribute('hidden')).toBe('');
+  touch(row, 'pointermove', 140);
+  expect(loupe.getAttribute('hidden')).toBeNull();
+  touch(row, 'pointerup', 140);
+  expect(key(buttons[0]!, 'Escape').defaultPrevented).toBe(false);
+  pointer(row, 'pointerdown', 80);
+  pointer(row, 'pointermove', 140);
+  expect(key(buttons[1]!, 'Escape').defaultPrevented).toBe(true);
+  expect(loupe.getAttribute('hidden')).toBe('');
+  timeline.destroy();
+});
+
+it('keeps every other day on its nearest valid frame while the rail scrubs the selected day', () => {
+  vi.useFakeTimers();
+  const { root, timeline, prefer, draw } = previewSetup();
+  timeline.update(comparison, 'd2-03');
+  timeline.refreshPreviews?.();
+  const track = byClass(root, 'ct-track');
+  track.offsetWidth = 480;
+  const badges = () => named(root, 'ct-day-thumb-time').map(badge => badge.getAttribute('hidden') === null ? badge.textContent : '');
+  expect(prefer).toHaveBeenLastCalledWith([0, 1, 3]);
+  expect(badges()).toEqual(['14:00', '', '14:00']);
+  prefer.mockClear();
+  draw.mockClear();
+  pointer(track, 'pointerdown', 470);
+  pointer(track, 'pointermove', 472);
+  // Cards follow the scrubbed hour, each to a frame of its own day; preparation waits for the release.
+  const drawn = new Set(draw.mock.calls.map(([index]) => index));
+  expect(drawn.has(2) && drawn.has(4)).toBe(true);
+  expect(drawn.has(3)).toBe(false);
+  expect(prefer).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(200);
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 4]);
+  pointer(track, 'pointerup', 472);
+  expect(prefer).toHaveBeenLastCalledWith([0, 2, 4]);
+  expect(badges()).toEqual(['14:00', '', '']);
+  timeline.destroy();
+  vi.useRealTimers();
+});
+
+it('reports a committed move to another day, but not an hour change within the day', () => {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn(), onDayChange = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onDayChange, timeZone: 'UTC' });
+  timeline.update(comparison, 'd3-14');
+  const { buttons } = dayRow(host);
+  key(byClass(host.children[0]!, 'ct-track'), 'ArrowRight');
+  expect(onSelect).toHaveBeenLastCalledWith(4, 'replace');
+  expect(onDayChange).not.toHaveBeenCalled();
+  timeline.update(comparison, 'd3-15');
+  click(buttons[0]!);
+  expect(onDayChange).toHaveBeenCalledTimes(1);
+  timeline.destroy();
+});
+
+it('compares days by date, so an outside update during a press leaves a same-day pick quiet', () => {
+  doc = new Document();
+  const host = doc.createElement('div');
+  const onSelect = vi.fn(), onDayChange = vi.fn();
+  const timeline = createCompactTimeline(host as unknown as HTMLElement, { onSelect, onDayChange, timeZone: 'UTC' });
+  timeline.update(comparison, 'd1-14');
+  const { row } = dayRow(host);
+  pointer(row, 'pointerdown', 20);
+  timeline.update(comparison.slice(1), 'd3-14');
+  key(byClass(host.children[0]!, 'ct-track'), 'ArrowRight');
+  expect(onDayChange).not.toHaveBeenCalled();
   timeline.destroy();
 });

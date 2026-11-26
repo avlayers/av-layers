@@ -32,7 +32,6 @@ export interface PreviewCommands {
   setPointHorizon(horizon: PointHorizon): void;
   setPointViewMode?(mode: PointViewMode): void;
   selectFrame(index: number, history: 'none' | 'push' | 'replace'): void;
-  setPlaying(playing: boolean): void;
   locate(): void;
   closePoint(): void;
   refreshPointDiagnostics(): void;

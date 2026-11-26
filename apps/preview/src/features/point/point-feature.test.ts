@@ -52,7 +52,6 @@ async function harness(initialFrames?: PinnedBuild['manifest']['frames']) {
     getDisplayedFrame: () => selectedFrame,
     getWind: () => wind,
     ensureLive: () => true,
-    pauseTimeline: vi.fn(),
     selectFrameById: vi.fn(),
     publish
   });

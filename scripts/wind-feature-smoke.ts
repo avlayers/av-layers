@@ -405,7 +405,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
             ['rail', '.wind-controls-rail'],
             ['trigger', '#toggle-wind'],
             ['dock', '#map-dock'],
-            ['timeline', '.compact-timeline', '#timebar'],
+            // The timeline host is `display: contents`; its hour rail stands in for its box.
+            ['timeline', '.ct-track'],
             ['track', '.ct-track'],
             ['firstDay', '.ct-day'],
             ['key', '#legend'],
@@ -416,8 +417,8 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
             rail: null, trigger: null, dock: null, timeline: null, track: null,
             firstDay: null, key: null, keyTrigger: null, attribution: null
           } as Record<(typeof targets)[number][0], Rect | null>;
-          for (const [name, selector, fallback] of targets) {
-            const el = document.querySelector(selector) ?? (fallback === undefined ? null : document.querySelector(fallback));
+          for (const [name, selector] of targets) {
+            const el = document.querySelector(selector);
             if (!el) continue;
             const style = getComputedStyle(el);
             if (style.display === 'none' || style.visibility === 'hidden') continue;
@@ -461,7 +462,11 @@ export async function runWindFeatureSmoke(options: WindFeatureSmokeOptions): Pro
         assert(layout.bodyWidth <= layout.innerWidth + 1, `${width}px body has horizontal overflow`);
         assert(layout.appTop === 0, `${width}px app starts at ${layout.appTop}px`);
         assert(layout.rail !== null && layout.trigger !== null, `${width}px wind rail or #toggle-wind is missing`);
-        assert(layout.dock !== null && Math.abs(layout.dock.height - 54) <= 2, `${width}px slim capsule dock height is ${layout.dock?.height}`);
+        // The dock holds the readout, the full-width hour rail and (with more than one day) the day buttons.
+        const dockCap = width >= 721 ? 140 : width < 360 ? 210 : 175;
+        assert(layout.dock !== null && layout.dock.height <= dockCap, `${width}px capsule dock height is ${layout.dock?.height}, cap ${dockCap}`);
+        assert(layout.track !== null && layout.track.top >= layout.dock.top - 0.5 && layout.track.bottom <= layout.dock.bottom + 0.5, `${width}px hour rail is outside the dock`);
+        assert(layout.track.height >= 32, `${width}px hour rail is ${layout.track.height}px tall`);
         assert(layout.timeline !== null, `${width}px timeline is missing`);
         const sized = layout.windBackings.filter(backing => backing.width > 100 && backing.height > 100);
         const parked = layout.windBackings.filter(backing => backing.width === 1 && backing.height === 1);

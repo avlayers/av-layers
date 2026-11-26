@@ -1,9 +1,11 @@
 import { AUTO_MODEL_ID, timeZoneOffsetMinutesAt } from '@av/client';
 import { renderedFrames } from '@av/contracts/publication';
+import { publishDockClearance } from '../features/controls/dock-clearance';
 import { createLocationController } from '../features/location/location-controller';
 import { BasemapChannel } from '../features/map/basemap';
 import { CoverageSeam } from '../features/map/coverage-seam';
 import { createMap, createMapCamera } from '../features/map/map-controller';
+import { createPreviewGeography } from '../features/map/preview-geography';
 import { RasterOverlay } from '../features/raster/raster-overlay';
 import { SkyComposite } from '../features/sky/sky-composite';
 import { createCompactTimeline } from '../features/timeline/timeline-controller';
@@ -84,7 +86,9 @@ export function createPreviewApp(): PreviewApp {
       budget: preparationBudget, requestLimits: services.requestLimits, theme: ctx.intent().theme,
       protectedBytes: wind.protectedBytes,
       beforeReveal: selection => { wind.session.beforeRasterReveal(selection); ops.syncSky(selection); },
-      onSelectedPending: pending => { state.rasterPending = pending; ops.syncSelectedAdmission(); }
+      onSelectedPending: pending => { state.rasterPending = pending; ops.syncSelectedAdmission(); },
+      // Day previews repaint as each overview frame lands, not only when the overlay's own state changes.
+      onPreviewsChanged: () => live.timeline?.refreshPreviews?.()
     });
     const cur = ctx.intent();
     live.sky = new SkyComposite(map, services.api, apiBaseUrl, {
@@ -96,6 +100,8 @@ export function createPreviewApp(): PreviewApp {
     live.channels = [new BasemapChannel(map, ctx.intent().theme), overlay, live.sky, wind.overlay];
     ops.syncChannels();
 
+    const geography = createPreviewGeography(map, () => ctx.intent().theme, () => live.timeline?.refreshPreviews?.(), () => ctx.intent().liftVisible);
+    ctx.lifecycle.signal.addEventListener('abort', () => geography.destroy(), { once: true });
     live.timeline = createCompactTimeline(root.querySelector<HTMLElement>('#compact-timeline')!, {
       timeZone: ctx.forecast().timeZone,
       variant: ctx.intent().dockView,
@@ -106,8 +112,31 @@ export function createPreviewApp(): PreviewApp {
         ops.prepareFrameIndex(index);
       },
       onPrepare: index => ops.prepareFrameIndex(index),
-      onPlayback: playing => commands.setPlaying(playing)
+      // The Windgram belongs to the day it opened on; a new day closes it.
+      onDayChange: () => { if (live.point?.isOpen()) live.point.close(); },
+      // Day previews: the active lift raster's overview of this view, on the pinned build. Hidden lift shows plain dates.
+      preview: {
+        draw(index, target, width, height) {
+          const current = ctx.build(), requested = view.overlay.value.requested;
+          if (!current || !requested || requested.build !== current || !ctx.intent().liftVisible) return 'unavailable';
+          const frame = renderedFrames(current.manifest)[index];
+          if (!frame) return 'unavailable';
+          geography.drawBase(target, width, height);
+          const drawn = overlay.drawPreview(current, requested.layer, frame.id, target, width, height);
+          if (drawn === 'ready') geography.drawLines(target, width, height);
+          return drawn;
+        },
+        prefer(indices) {
+          const current = ctx.build();
+          if (!current) return;
+          if (!ctx.intent().liftVisible) { overlay.preferPreviewFrames([]); return; }
+          const frames = renderedFrames(current.manifest);
+          overlay.preferPreviewFrames(indices.flatMap(index => frames[index]?.id ?? []));
+        }
+      }
     });
+    // Previews follow the view once it settles; repainting every card on each move frame costs more than it shows.
+    map.on('moveend', () => live.timeline?.refreshPreviews?.());
 
     const point = live.point = createPointWiring({
       root, map, store, series: services.pointSeries, build: ctx.build, selectedFrame: ctx.selectedFrame,
@@ -147,6 +176,7 @@ export function createPreviewApp(): PreviewApp {
     });
 
     const signal = ctx.lifecycle.signal;
+    publishDockClearance(root, signal);
     installShortcuts({
       root, signal, store, commands,
       point: { isOpen: point.isOpen, close: point.close, dismiss: target => point.feature.dismiss(target, map.getContainer()) },
@@ -154,14 +184,13 @@ export function createPreviewApp(): PreviewApp {
         const current = ctx.build();
         if (!current || !ctx.forecastSession.ensureLive()) return false;
         const frames = renderedFrames(current.manifest), index = frames.findIndex(frame => frame.id === ctx.selectedFrame());
-        live.timeline?.pause();
         ops.selectIndex(Math.max(0, Math.min(frames.length - 1, index + step)), 'replace');
         return true;
       }
     });
     const timeInput = root.querySelector<HTMLInputElement>('#time');
     if (timeInput) {
-      timeInput.addEventListener('input', () => { live.timeline?.pause(); ops.selectIndex(Number(timeInput.value), 'none'); }, { signal });
+      timeInput.addEventListener('input', () => ops.selectIndex(Number(timeInput.value), 'none'), { signal });
       timeInput.addEventListener('change', () => { ops.writeUrl('replace'); if (ctx.intent().model === AUTO_MODEL_ID) void ctx.forecastSession.loadAuto(); }, { signal });
     }
 

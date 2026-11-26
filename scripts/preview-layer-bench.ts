@@ -255,6 +255,15 @@ try {
         } },
         { name: 'observe-timeline', enforce: 'pre', transform(code, id) {
           if (!id.endsWith('/features/timeline/timeline-controller.ts')) return;
+          const nextRender = 'function render(width = view.trackWidth()): void {';
+          if (code.includes(nextRender)) {
+            const render = nextRender;
+            const anchor = '  function currentScale(width: number): DayScale {';
+            if (code.split(render).length !== 2 || code.split(anchor).length !== 2) throw new Error('Timeline observer anchor is missing or ambiguous');
+            const helpers = "import { localTimeFromMs as __benchLocalTime, minuteToX as __benchMinuteToX } from './day-scale';\n";
+            return helpers + code.replace(render, `${render} window.__benchTimelineSelected?.(win.selectedIndex);`).replace(anchor, `  window.__benchTimelinePosition = (index: number) => { const frame = win.frames[index]; if (!frame) return null; const local = __benchLocalTime(Date.parse(frame.validTime), win.timeZone); const rect = track.getBoundingClientRect(); if (!local || !rect.width) return null; return { day: local.day, x: rect.left + __benchMinuteToX(currentScale(rect.width), local.hour * 60 + local.minute), y: rect.top + rect.height / 2 }; };\n${anchor}`);
+          }
+          // Baseline checkouts still carry the playback-era controller.
           const render = code.includes('function render(width = trackWidth()): void {') ? 'function render(width = trackWidth()): void {' : 'function render(): void {';
           const anchor = '  const stopPlayback = () => {';
           if (code.split(render).length !== 2 || code.split(anchor).length !== 2 || !code.includes('function currentScale(width: number)')) throw new Error('Timeline observer anchor is missing or ambiguous');

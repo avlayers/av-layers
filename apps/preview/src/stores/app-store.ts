@@ -51,7 +51,6 @@ interface ForecastView {
   /** IANA zone of the map clock: the map centre's civil zone, or the browser's before the camera follows a place. */
   readonly timeZone: string;
   readonly mapCenter: { readonly lat: number; readonly lng: number } | null;
-  readonly playing: boolean;
 }
 
 interface WindView {

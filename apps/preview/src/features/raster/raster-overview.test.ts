@@ -1031,3 +1031,42 @@ it('does not let a background coarse job with one compressed and one stalled til
     expect(f.overview.quality(b, 'usable-lift-agl', third.id)).toBe('overview');
   } finally { f.overview.destroy(); }
 });
+
+it('copies the current view of a ready frame, centre-cropped to the target, and reports pending or unavailable otherwise', async () => {
+  const f = fixture(), b = build(3), frames = b.manifest.frames;
+  const target = { drawImage: vi.fn() };
+  const draw = (frame: string, width = 60, height = 36, layer: 'usable-lift-agl' | 'usable-lift-msl' = 'usable-lift-agl') =>
+    f.overview.drawPreview(b, layer, frame, target as unknown as CanvasRenderingContext2D, width, height);
+  try {
+    expect(draw(frames[0].id)).toBe('unavailable');
+    f.view(LOCAL, 4);
+    f.overview.select(b, 'usable-lift-agl', frames[0].id);
+    expect(draw(frames[2].id)).toBe('pending');
+    expect(draw(frames[0].id, 60, 36, 'usable-lift-msl')).toBe('pending');
+    expect(draw('not-a-frame')).toBe('unavailable');
+    await vi.waitFor(() => expect(f.overview.state.ready).toBe(3));
+    expect(draw(frames[2].id)).toBe('ready');
+    const [image, , , sw, sh, dx, dy, dw, dh] = target.drawImage.mock.calls[0]!;
+    expect((image as Bitmap).kind).toBe('overview');
+    expect([dx, dy, dw, dh]).toEqual([0, 0, 60, 36]);
+    expect((sw as number) / (sh as number)).toBeCloseTo(60 / 36, 5);
+    expect(bitmaps.filter(bitmap => bitmap.kind === 'overview').every(bitmap => bitmap.close.mock.calls.length === 0)).toBe(true);
+  } finally { f.overview.destroy(); }
+});
+
+it('prepares the selected frame neighbour, then preferred frames, before the rest', async () => {
+  const f = fixture(true), b = build(30), frames = b.manifest.frames;
+  try {
+    f.view(LOCAL, 4);
+    f.overview.preferFrames([frames[24].id]);
+    f.overview.select(b, 'usable-lift-agl', frames[0].id);
+    await vi.waitFor(() => expect(f.requests.length).toBeGreaterThan(0));
+    const perFrame = f.requests.filter(request => request.url.includes(frames[0].id)).length;
+    for (let index = 0; index < perFrame; index++) f.finish(index);
+    await vi.waitFor(() => expect(f.requests.some(request => request.url.includes(frames[24].id))).toBe(true));
+    const firstOther = f.requests.find(request => !request.url.includes(frames[0].id));
+    expect(firstOther?.url).toContain(frames[1].id);
+    const at = (frame: string) => f.requests.findIndex(request => request.url.includes(frame));
+    expect(at(frames[24].id)).toBeLessThan(at(frames[2].id) < 0 ? Infinity : at(frames[2].id));
+  } finally { f.overview.destroy(); }
+});

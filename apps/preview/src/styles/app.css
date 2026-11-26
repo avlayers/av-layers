@@ -775,7 +775,7 @@ button, #opacity-label { font: 13px/1 ui-sans-serif, system-ui, sans-serif; }
 .ref.is-selected { background: #16324f; color: #fff; }
 button:disabled { opacity: 0.45; cursor: default; }
 
-/* Pluggable Bottom Dock & 54px Slim Capsule */
+/* Bottom dock: readout + Key/reference, hour rail, day buttons. Height follows content; --dock-clearance publishes it. */
 #map-controls {
   position: absolute;
   z-index: 2;
@@ -789,11 +789,15 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 #map-dock {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "readout key" "rail rail" "days days";
+  /* A wider row gap keeps a gloved press on a day button off the hour rail above it. */
+  gap: 10px 8px;
   flex: 0 1 820px;
   width: min(820px, 100%);
-  height: 54px;
-  align-items: stretch;
+  padding: 8px;
+  align-items: center;
   border-radius: 13px;
   border: 1px solid #d5dfe8;
   background: #fffffff2;
@@ -840,7 +844,8 @@ button:disabled { opacity: 0.45; cursor: default; }
   left: 0;
   bottom: calc(100% + 8px);
   width: min(296px, calc(100vw - 24px));
-  max-height: min(62dvh, 420px);
+  /* Never taller than the room above the dock, so it can't run off the top of a short screen. */
+  max-height: min(62dvh, 420px, calc(100dvh - var(--dock-clearance, 0px) - 16px));
   overflow: auto;
   padding: 10px 11px;
   background: #fffffff7;
@@ -874,55 +879,37 @@ button:disabled { opacity: 0.45; cursor: default; }
 }
 .capsule-spectrum-lip.is-muted { opacity: 0.25; }
 
-/* Desktop (>= 721px): compact left inline chip module beside timeline */
 @media (min-width: 721px) {
-  .capsule-legend:not([hidden]) {
-    display: flex;
-    align-items: center;
-    padding: 4px 7px 3px 9px;
-    border-right: 1px solid #e2e8f0;
+  #map-dock {
+    grid-template-columns: 228px minmax(0, 1fr);
+    grid-template-areas: "readout rail" "key days";
+    column-gap: 14px;
   }
 }
-
-/* Mobile (<= 720px): overlay compact chip in top-left of 54px pill so zero extra row height is added */
+.capsule-legend:not([hidden]) { grid-area: key; display: flex; align-items: center; }
 @media (max-width: 720px) {
-  .capsule-legend:not([hidden]) {
-    position: absolute;
-    z-index: 4;
-    top: 5px;
-    left: 7px;
-    height: 18px;
-    display: flex;
-    align-items: center;
-  }
-  #map-dock[data-has-legend="true"] {
-    --ct-days-lead: 86px;
-  }
-  .capsule-chip-range {
-    display: none;
-  }
+  .capsule-legend:not([hidden]) { justify-self: end; }
 }
 
 .capsule-inline-controls {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
 }
-.capsule-ref-flip,
 .ribbon-key.capsule-key > summary.capsule-key-trigger {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 18px;
-  min-height: 18px;
+  gap: 5px;
+  height: 28px;
+  min-height: 28px;
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 9px;
   border: 1px solid #d5e0ea;
-  border-radius: 9px;
+  border-radius: 8px;
   background: #eff4f9;
   color: #16324f;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -930,31 +917,55 @@ button:disabled { opacity: 0.45; cursor: default; }
   user-select: none;
   touch-action: manipulation;
 }
-.capsule-ref-flip::before,
+/* 44 px touch targets around the 28 px pills; the 6 px gap keeps neighbours from overlapping. */
+.capsule-ref-option::before,
 .capsule-key-trigger::before {
   content: '';
   position: absolute;
-  top: -12px;
-  bottom: -4px;
-  left: -2px;
-  right: -2px;
+  top: -9px;
+  bottom: -9px;
+  left: -3px;
+  right: -3px;
 }
-.capsule-ref-flip:hover:not(:disabled),
+.ribbon-key.capsule-key > summary.capsule-key-trigger { padding: 0 7px; }
+/* The layer's colour ramp, drawn as a small legend bar, is the Key button's icon. */
+.capsule-key-swatch { display: inline-block; width: 22px; height: 12px; border-radius: 3px; box-shadow: inset 0 0 0 1px #0000002a; }
+/* AGL | MSL: both visible, the active one filled. */
+.capsule-ref-seg {
+  display: inline-flex;
+  height: 28px;
+  padding: 2px;
+  border: 1px solid #d5e0ea;
+  border-radius: 8px;
+  background: #eff4f9;
+}
+.capsule-ref-option {
+  position: relative;
+  min-width: 36px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #526170;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+/* 44 px tall touch targets; the two halves split the pill between them. */
+.capsule-ref-option::before { top: -11px; bottom: -11px; left: 0; right: 0; }
+.capsule-ref-option.is-selected { background: #16324f; color: #fff; box-shadow: 0 1px 2px #0b1b2833; cursor: default; }
+.capsule-ref-option:hover:not(:disabled):not(.is-selected) { background: #dfe9f4; color: #16324f; }
+.capsule-ref-option:disabled { opacity: 0.5; cursor: default; }
+/* Each half's touch area is widened to 44 px without changing the pill. */
+.capsule-ref-option::after { content: ''; position: absolute; top: -11px; bottom: -11px; left: -4px; right: -4px; }
+@media (max-width: 400px) { .capsule-ref-option { min-width: 32px; padding: 0 6px; } }
 .ribbon-key.capsule-key > summary.capsule-key-trigger:hover,
 .ribbon-key.capsule-key[open] > summary.capsule-key-trigger {
   background: #dfe9f4;
   border-color: #b8cadb;
-}
-.capsule-chip-range {
-  color: #475569;
-  font-weight: 600;
-}
-.capsule-chip-opacity {
-  color: #1e293b;
-}
-.capsule-chip-caret {
-  font-size: 8.5px;
-  opacity: 0.72;
 }
 .capsule-popover-controls {
   display: flex;
@@ -1018,15 +1029,7 @@ button:disabled { opacity: 0.45; cursor: default; }
 .dock-view-pill.is-selected { background: #16324f; color: #fff; }
 .legend-shortcuts { font-size: 10.5px; color: #526170; }
 
-#timebar {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 100%;
-  border-radius: 13px;
-  padding: 0;
-}
-#compact-timeline, .compact-timeline { height: 100%; }
+#timebar, #compact-timeline { display: contents; }
 
 /* Toasts stack instead of overlapping when more than one shows. */
 #toasts { position: absolute; z-index: 3; top: 88px; left: 12px; width: min(420px, calc(100% - 24px)); display: flex; flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: none; }
@@ -1069,15 +1072,13 @@ button:disabled { opacity: 0.45; cursor: default; }
 #app[data-chrome="dark"] .hover-card-title,
 #app[data-chrome="dark"] .model-button,
 #app[data-chrome="dark"] #display-units button,
-#app[data-chrome="dark"] .dock-view-pill,
-#app[data-chrome="dark"] .capsule-chip-opacity { color: #dce6f2; }
+#app[data-chrome="dark"] .dock-view-pill { color: #dce6f2; }
 #app[data-chrome="dark"] .theme-selected-eyebrow,
 #app[data-chrome="dark"] .theme-selected-caret,
 #app[data-chrome="dark"] .theme-menu-heading,
 #app[data-chrome="dark"] .dock-group-tag,
 #app[data-chrome="dark"] .model-choice-sub,
 #app[data-chrome="dark"] .model-disclaimer,
-#app[data-chrome="dark"] .capsule-chip-range,
 #app[data-chrome="dark"] .capsule-opacity-title,
 #app[data-chrome="dark"] .dock-view-label,
 #app[data-chrome="dark"] .legend-shortcuts,
@@ -1106,13 +1107,15 @@ button:disabled { opacity: 0.45; cursor: default; }
   border-color: #283649;
   color: #dce6f2;
 }
-#app[data-chrome="dark"] .capsule-ref-flip,
+#app[data-chrome="dark"] .capsule-ref-seg,
 #app[data-chrome="dark"] .ribbon-key.capsule-key > summary.capsule-key-trigger {
   background: #182636;
   border-color: #2c3d52;
   color: #f8fafc;
 }
-#app[data-chrome="dark"] .capsule-ref-flip:hover:not(:disabled),
+#app[data-chrome="dark"] .capsule-ref-option { color: #94a3b8; }
+#app[data-chrome="dark"] .capsule-ref-option.is-selected { background: #e2e8f0; color: #0f1b2a; }
+#app[data-chrome="dark"] .capsule-ref-option:hover:not(:disabled):not(.is-selected) { background: #223449; color: #f8fafc; }
 #app[data-chrome="dark"] .ribbon-key.capsule-key > summary.capsule-key-trigger:hover,
 #app[data-chrome="dark"] .ribbon-key.capsule-key[open] > summary.capsule-key-trigger {
   background: #223449;
@@ -1316,6 +1319,7 @@ th, td { padding: 3px 4px; border-bottom: 1px solid #e6ebf0; text-align: left; w
 th { color: #6b7785; font-weight: 650; }
 a { color: #1c6b8a; }
 .maplibregl-ctrl-bottom-left { bottom: 0; }
+.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: var(--dock-clearance, 0px); }
 
 @media (max-width: 760px) {
   #point-card {
@@ -1323,7 +1327,7 @@ a { color: #1c6b8a; }
     top: auto;
     left: max(8px, env(safe-area-inset-left));
     right: max(8px, env(safe-area-inset-right));
-    bottom: calc(66px + env(safe-area-inset-bottom));
+    bottom: calc(var(--dock-clearance, 200px) + 4px);
     width: auto;
     max-height: min(56dvh, calc(100dvh - 128px));
   }
@@ -1354,3 +1358,19 @@ a { color: #1c6b8a; }
   #theme-selected { padding: 0 6px; gap: 4px; }
   #theme-menu { width: min(244px, calc(100vw - 24px)); }
 }
+
+/*
+ * Short, wide screens (a phone in landscape): the wind rail on the right runs down to the dock, so the dock
+ * stops short of it and the attribution button drops to the free corner under the rail.
+ */
+@media (max-height: 560px) and (min-width: 600px) {
+  #map-controls { right: calc(max(8px, env(safe-area-inset-right)) + 60px); }
+  .maplibregl-ctrl-bottom-right { bottom: env(safe-area-inset-bottom, 0px); }
+  /* Opened credits sit over the dock rather than behind it. */
+  .maplibregl-ctrl-bottom-right:has(.maplibregl-compact-show) { z-index: 3; }
+  /* Readout and controls beside the rail and days, as on desktop: two rows instead of three. */
+  #map-dock { grid-template-columns: 228px minmax(0, 1fr); grid-template-areas: "readout rail" "key days"; column-gap: 14px; }
+  .capsule-legend:not([hidden]) { justify-self: start; }
+}
+/* The ⓘ would sit on the open point card; it returns when the card closes. */
+#app:has(#point-card:not([hidden])) .maplibregl-ctrl-bottom-right { visibility: hidden; }
