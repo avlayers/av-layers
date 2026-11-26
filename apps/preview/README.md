@@ -52,6 +52,17 @@ links fall back to the nearest kept theme.
 The offline fixture keeps the neutral background.
 
 The timeline shows the selected time, displayed time and image quality separately.
+Day buttons pick the day and keep the hour you were comparing (the nearest frame
+when that day lacks it, noted as "Nearest to HH:MM"). The hour rail beneath the
+readout scrubs within the selected day; arrow keys step its frames. Pressing a
+day and sliding sideways moves between days frame by frame and makes one history
+entry on release; sliding back to the starting day restores the starting frame.
+While the selected hour loads the readout notes the hour still on screen.
+Each day button shows a small preview of its target frame: the active lift
+layer's overview for the current view, with coastlines and borders from the
+basemap once the map settles. Press, drag, hover or focus a day to see that
+preview enlarged above the timeline. Previews need the lift layer to be visible
+and show plain dates otherwise. There is no playback.
 After the camera rests, every map frame of the active layer and the wind field
 stay decoded for that view. A short pan and a time change reuse them. Fine tiles
 replace a complete overview.
