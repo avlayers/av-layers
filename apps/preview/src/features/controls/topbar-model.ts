@@ -30,7 +30,7 @@ const MODEL_REGION_SUBTITLES: Readonly<Record<ConfiguredModelId, string>> = {
   rrfs: 'North America',
   'av-wrf': 'Caucasus',
   'wrf-va-1km': 'Northern Virginia',
-  hrdps: 'Canada'
+  hrdps: 'Canada and northern US'
 };
 
 export function modelRegionSubtitle(modelId: string | null | undefined): string | undefined {

@@ -181,7 +181,7 @@ export async function resolveAutoBuild(api: Pick<ApiClient, 'catalog' | 'latest'
         const cell = surface && centerMatch ? locateSampleCell(surface.grid, point.lat, point.lon) : null;
         if (!centerMatch || !surface || cell === null) {
           if (hasViewport && (viewportMatch || fallbackMatch)) {
-            recordFallback(build, frame, viewportMatch ? 0 : 1, spacing);
+            recordFallback(build, frame, viewportMatch ? 1 : 2, spacing);
           }
           continue;
         }
@@ -190,8 +190,9 @@ export async function resolveAutoBuild(api: Pick<ApiClient, 'catalog' | 'latest'
         const status = sample.frames[0]?.layers[layer]?.status;
         if (build.expiresAtMs <= clock()) continue;
         if (status === 'valid' || status === 'no-usable-lift') return { build, frame };
+        // A regional grid that holds the center outranks grids that only overlap the view; the global default never does.
         if (status === 'outside-domain' && hasViewport && (viewportMatch || fallbackMatch)) {
-          recordFallback(build, frame, viewportMatch ? 0 : 1, spacing);
+          recordFallback(build, frame, model === DEFAULT_MODEL ? (viewportMatch ? 1 : 2) : 0, spacing);
         }
       } catch { signal.throwIfAborted(); }
     }

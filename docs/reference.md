@@ -103,8 +103,8 @@ Forecast trigger budget: 84 shard jobs; default workers 3.
 - Resolution tier: `medium`.
 - Grid: `rotated-latlon`; 2540 columns × 1290 rows; spherical Earth radius 6371229 m; periodic longitude: false.
 - Terrain subdivision factor: `2`; fine grid: 5079 columns × 2579 rows.
-- Bounds [west, south, east, north]: `[-141,41.6,-52,65]`.
-- Coverage: `hrdps-continental-land-v1`. Canadian land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid.
+- Bounds [west, south, east, north]: `[-151,27,-52,65]`.
+- Coverage: `hrdps-continental-land-v1`. Land and 50 km coastal buffer within the operational ECCC HRDPS 2.5 km Continental rotated lat-lon grid south of 65°N, including adjacent US coverage; Greenland excluded.
 - Native tile zoom: 0–10.
 - Execution: 32 target shards; at most 32 simultaneous shard jobs; worker ceiling 3; UTC cron schedules `["5 4,10,16,22 * * *"]`.
 - Candidate forecast lead hours: `[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,30,33,36,39,42,45,48]`; interval: 1 hours; frame policy: `all-hours`.

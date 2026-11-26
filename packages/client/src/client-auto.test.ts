@@ -225,3 +225,26 @@ it('selects GFS on a globe view over unmasked coordinates and falls back to came
   expect(clampedSelection?.build.manifest.model).toBe(fine.manifest.model);
   expect(clampedSelection?.frame.id).toBe('f001');
 });
+
+it.each([
+  ['a regional grid holding the center over a finer grid that only overlaps the view', 'av-wrf'],
+  ['a regional grid overlapping the view over the global default holding the center', 'offset-1km']
+] as const)('ranks offshore fallbacks: %s', async (_, expected) => {
+  vi.spyOn(Date, 'now').mockReturnValue(Date.parse(autoTime(0)));
+  const offset = autoBuild('offset-1km', [44.6, 38, 50, 43], [1, 18, 36]);
+  const holder = expected === 'av-wrf' ? regionA : global;
+  const builds = new Map([holder, offset].map(build => [build.manifest.model, build]));
+  const fetchImpl = vi.fn<typeof fetch>(async input => {
+    const url = new URL(String(input)), model = url.pathname.split('/')[3];
+    if (url.pathname.endsWith('/catalog')) return Response.json({ models: [autoCatalogRow(holder.manifest, expected === 'av-wrf' ? 3000 : 27_800), autoCatalogRow(offset.manifest, 1000)] });
+    const build = builds.get(model)!;
+    if (url.pathname.endsWith('/latest')) return Response.json(fixtureLatest(build.manifest));
+    const payload = fixturePointSample(build, String(input));
+    for (const frame of payload.frames) for (const layer of Object.values(frame.layers)) { layer.status = 'outside-domain'; layer.value = null; }
+    return Response.json(payload);
+  });
+  const selection = await resolveAutoBuild(new ApiClient({ baseUrl: 'https://api.test', fetchImpl }), {
+    ...REGION_A_POINT, bounds: REGION_A_BOUNDS, layers: ['usable-lift-agl'], validTimeMs: Date.parse(autoTime(18)), signal: new AbortController().signal
+  });
+  expect(selection?.build.manifest.model).toBe(expected);
+});

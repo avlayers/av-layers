@@ -7,9 +7,7 @@
     "archiveBytes": 799734,
     "license": "public-domain",
     "excludedA3": [
-      "GRL",
-      "USA",
-      "SPM"
+      "GRL"
     ],
     "excludedContinents": [],
     "isoExceptions": [
@@ -95,33 +93,33 @@
   },
   "output": {
     "bytes": 409575,
-    "sha256": "010c0455e0c225fa3cb7dfa4c2c0cd82e74cf7228c21ac517655e50c326d1cf3",
+    "sha256": "9565ef1ad58245f9ab8c29687b7f777ffc416dd7b4badb4b7dfbb1a5ac10b492",
     "counts": {
-      "activeCells": 1386879
+      "activeCells": 2115911
     }
   },
   "halo": {
     "bytes": 409575,
-    "sha256": "6c73e5fceca8b5b70851a39bf8da18faf5eae169d212e096d661a91987a6cfc3",
+    "sha256": "ffb872734c344ee3286ea50908d26a568514005f4c47d31280fcaa9ddbfd714a",
     "counts": {
-      "haloOnlyCells": 14361
+      "haloOnlyCells": 11680
     }
   },
   "tiles": {
     "bytes": 174763,
-    "sha256": "f3beaed2c400f009e5dcb791f4698b0ff18e23a93ea2bce9df14fdd237d4b42d",
+    "sha256": "9e45f3846e7db39aed2e204b2c33644cddd4a1d1e5372d527f47828834a57c89",
     "countsByZoom": {
       "0": 1,
       "1": 1,
       "2": 2,
-      "3": 3,
-      "4": 9,
-      "5": 31,
-      "6": 103,
-      "7": 348,
-      "8": 1296,
-      "9": 4885,
-      "10": 19040
+      "3": 5,
+      "4": 13,
+      "5": 41,
+      "6": 131,
+      "7": 450,
+      "8": 1687,
+      "9": 6427,
+      "10": 25147
     }
   },
   "tests": {
@@ -199,12 +197,76 @@
         "withinFootprint": true
       },
       {
-        "name": "exclude_usa_seattle",
+        "name": "seattle",
         "lat": 47.6062,
         "lon": -122.3321,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "boise",
+        "lat": 43.615,
+        "lon": -116.2023,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "chicago",
+        "lat": 41.8781,
+        "lon": -87.6298,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "new_york",
+        "lat": 40.7128,
+        "lon": -74.006,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "washington_dc",
+        "lat": 38.9072,
+        "lon": -77.0369,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "juneau",
+        "lat": 58.3019,
+        "lon": -134.4197,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "fairbanks",
+        "lat": 64.8378,
+        "lon": -147.7164,
+        "expectedOutput": true,
+        "observedOutput": true,
+        "withinFootprint": true
+      },
+      {
+        "name": "outside_grid_denver",
+        "lat": 39.7392,
+        "lon": -104.9903,
         "expectedOutput": false,
         "observedOutput": false,
-        "withinFootprint": true
+        "withinFootprint": false
+      },
+      {
+        "name": "outside_grid_anchorage",
+        "lat": 61.2181,
+        "lon": -149.9003,
+        "expectedOutput": false,
+        "observedOutput": false,
+        "withinFootprint": false
       },
       {
         "name": "exclude_greenland",
@@ -236,7 +298,7 @@
     "command": "uv run --python 3.12 --with shapely==2.1.2 --with pyproj==3.7.2 --with pyshp==2.3.1 python scripts/masks/build_masks.py --config packages/contracts/config/models.json --model hrdps --output packages/contracts/coverage/hrdps-continental-land-v1",
     "toolingSha256": "640a762ef6afae89b572cf36969ee16b9a9f905a830306f65487dcc9c60ea282",
     "rasterizerSha256": "1718730b25dca09e20c58cd925273db25eb85b4e786ec49dc946eb39c4517195",
-    "geometrySha256": "19861d4207889c1efb05e169c0e115228171d1258377aa7245c258c4276fa3d3",
+    "geometrySha256": "c17143a8e894061f23b5025aff68756352ca347eafabcc7b587e8c818802990e",
     "tilesSha256": "49b028ecd3c84aa40ef2b83271128ba2309f7643e42dceb61c8353ab69f42736",
     "GEOS": "3.13.1",
     "PROJ": "9.5.1"

@@ -7,9 +7,7 @@
     "archiveBytes": 799734,
     "license": "public-domain",
     "excludedA3": [
-      "GRL",
-      "USA",
-      "SPM"
+      "GRL"
     ],
     "excludedContinents": [],
     "isoExceptions": [
@@ -98,20 +96,20 @@
   "seaBufferMeters": 50000,
   "files": {
     "sparse": {
-      "bytes": 1623804,
-      "sha256": "4fe85735d479870af78c119053071e19bf8e344428507dc65d40baea8225f2b9"
+      "bytes": 2430780,
+      "sha256": "dc55178033e7e464e12cd78cfb9acefa61dbb790fada554f96965e3715cc1504"
     },
     "tiles": {
       "bytes": 174763,
-      "sha256": "4afde101c8af438957431180502d85c9a57e49ff2227e87e6b50ccfa99d7270d"
+      "sha256": "ef0e9208e966cf0a629ac5f5518dd878655bd9de20c1d3e871f88b5bda0f972b"
     }
   },
   "generator": {
     "path": "scripts/masks/build_fine_masks.py",
     "sha256": "1718730b25dca09e20c58cd925273db25eb85b4e786ec49dc946eb39c4517195",
     "policySha256": "640a762ef6afae89b572cf36969ee16b9a9f905a830306f65487dcc9c60ea282",
-    "python": "3.12.11",
-    "geometrySha256": "19861d4207889c1efb05e169c0e115228171d1258377aa7245c258c4276fa3d3",
+    "python": "3.12.3",
+    "geometrySha256": "c17143a8e894061f23b5025aff68756352ca347eafabcc7b587e8c818802990e",
     "tilesSha256": "49b028ecd3c84aa40ef2b83271128ba2309f7643e42dceb61c8353ab69f42736",
     "geos": "3.13.1",
     "proj": "9.5.1",
