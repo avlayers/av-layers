@@ -26,6 +26,10 @@ const DEFAULT_CONCURRENCY = 8;
 const MAX_CONCURRENCY = 32;
 const MAX_TRANSFER_ATTEMPTS = 3;
 const RETRYABLE_HTTP_STATUS = [408, 429, 500, 502, 503, 504];
+/** Consecutive failures after which a session stops trying a mirror and reads only the primary host. */
+const MIRROR_FAILURE_LIMIT = 3;
+/** Identifies systematic reads to upstream operators, as ECCC's usage policy asks. */
+const USER_AGENT = 'av-layers-forecast (+https://github.com/avlayers/av-layers)';
 
 interface SplitGribObjectReceipt {
   readonly field: string;
@@ -45,7 +49,21 @@ interface SplitGribTransportStats {
   cacheHits: number;
   downloadedBytes: number;
   retries: number;
+  /** Summed wall time of object transfers (overlapping transfers each count), excluding decode. */
+  downloadMs: number;
+  /** Summed wall time of object decodes, excluding transfer. */
+  decodeMs: number;
+  mirrorDownloads: number;
+  mirrorFallbacks: number;
 }
+
+/** A field object's canonical URL (receipts and cache key) and the hosts to read it from, fastest first. */
+interface SplitGribObjectLocation {
+  readonly url: string;
+  readonly mirrors: readonly { readonly url: string; readonly mirror: MirrorHealth }[];
+}
+
+interface MirrorHealth { consecutiveFailures: number }
 
 interface SplitGribAcquisitionOptions {
   readonly cycle?: string;
@@ -124,13 +142,18 @@ async function readObjectBody(response: Response): Promise<Uint8Array> {
 }
 
 async function loadSplitGribField(
-  url: string,
+  location: SplitGribObjectLocation,
   cacheDir: string,
   stats: SplitGribTransportStats,
   options: { readonly fetchImpl?: typeof fetch; readonly signal?: AbortSignal; readonly readOnlyCache?: boolean; readonly offline?: boolean },
   decode: (bytes: Uint8Array) => Promise<DecodedSplitGribField> | DecodedSplitGribField
 ): Promise<{ readonly decoded: DecodedSplitGribField; readonly compressedBytes: number; readonly sha256: string; readonly cacheHit: boolean }> {
   options.signal?.throwIfAborted();
+  const { url } = location;
+  const timedDecode = async (bytes: Uint8Array): Promise<DecodedSplitGribField> => {
+    const started = performance.now();
+    try { return await decode(bytes); } finally { stats.decodeMs += performance.now() - started; }
+  };
   const keyHash = createHash('sha256').update(url).digest('hex');
   const fileName = url.split('/').at(-1) ?? `${keyHash}.grib2`;
   const cachePath = join(cacheDir, 'objects', `${keyHash.slice(0, 16)}-${fileName}`);
@@ -139,7 +162,7 @@ async function loadSplitGribField(
   try {
     cached = await readLocalFile(cachePath, MAX_SPLIT_OBJECT_BYTES);
     options.signal?.throwIfAborted();
-    const decoded = await decode(cached);
+    const decoded = await timedDecode(cached);
     options.signal?.throwIfAborted();
     stats.cacheHits += 1;
     return { decoded, compressedBytes: cached.byteLength, sha256: sha256Hex(cached), cacheHit: true };
@@ -153,25 +176,42 @@ async function loadSplitGribField(
   }
 
   const fetchFn = options.fetchImpl ?? fetch;
+  const transfer = async (target: string): Promise<Uint8Array> => {
+    const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
+    const response = await fetchFn(target, { headers: { 'User-Agent': USER_AGENT }, signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      const message = `HTTP ${response.status} for ${target}`;
+      if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
+      throw new Error(message);
+    }
+    return await readObjectBody(response);
+  };
+  const transferStarted = performance.now();
   const buffer = await pRetry(async attempt => {
     if (attempt > 1) stats.retries += 1;
-    const timeout = AbortSignal.timeout(DEFAULT_REQUEST_TIMEOUT_MS);
-    try {
-      const response = await fetchFn(url, { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout });
-      if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
-        const message = `HTTP ${response.status} for ${url}`;
-        if (!RETRYABLE_HTTP_STATUS.includes(response.status)) throw new InvalidSplitGribResponse(message);
-        throw new Error(message);
+    // A mirror carries the same objects; any mirror failure falls through to the primary host in the same attempt.
+    for (const { url: mirrorUrl, mirror } of location.mirrors) {
+      if (mirror.consecutiveFailures >= MIRROR_FAILURE_LIMIT) continue;
+      try {
+        const bytes = await transfer(mirrorUrl);
+        mirror.consecutiveFailures = 0;
+        stats.mirrorDownloads += 1;
+        return bytes;
+      } catch {
+        options.signal?.throwIfAborted();
+        mirror.consecutiveFailures += 1;
+        stats.mirrorFallbacks += 1;
       }
-      return await readObjectBody(response);
-    } catch (error) { throw retriable(error); }
+    }
+    try { return await transfer(url); } catch (error) { throw retriable(error); }
   }, { retries: MAX_TRANSFER_ATTEMPTS - 1, minTimeout: 125, randomize: true, signal: options.signal,
     shouldRetry: ({ error }) => !(error instanceof InvalidSplitGribResponse) });
+  stats.downloadMs += performance.now() - transferStarted;
   options.signal?.throwIfAborted();
   stats.downloads += 1;
   stats.downloadedBytes += buffer.byteLength;
-  const decoded = await decode(buffer);
+  const decoded = await timedDecode(buffer);
   options.signal?.throwIfAborted();
   await mkdir(dirname(cachePath), { recursive: true });
   const tmpPath = `${cachePath}.${randomUUID()}.tmp`;
@@ -291,7 +331,7 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   options.signal?.throwIfAborted();
   const baseUrl = options.baseUrl;
   const maxConcurrency = source.upstream.nativeGrid ? DEFAULT_CONCURRENCY : MAX_CONCURRENCY;
-  const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
+  const concurrency = options.concurrency ?? source.upstream.fetchConcurrency ?? DEFAULT_CONCURRENCY;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > maxConcurrency) throw new Error(`Split GRIB concurrency must be an integer from 1 to ${maxConcurrency}`);
   const activeIndices = copySourceIndices(options.activeIndices, source.grid.width * source.grid.height);
   const cycle = validateSplitGribCycle(source,
@@ -310,8 +350,14 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     downloads: 0,
     cacheHits: 0,
     downloadedBytes: 0,
-    retries: 0
+    retries: 0,
+    downloadMs: 0,
+    decodeMs: 0,
+    mirrorDownloads: 0,
+    mirrorFallbacks: 0
   };
+  // A test or fixture base URL replaces every host, so mirrors apply only to the configured upstream.
+  const mirrors = baseUrl ? [] : (source.upstream.mirrorUrlTemplates ?? []).map(template => ({ template, health: { consecutiveFailures: 0 } }));
 
   let staticGeometryPromise: Promise<SplitGribStaticGeometryCache> | null = null;
   let nativeMappingPromise: Promise<{ indices: Uint32Array; receipts: SplitGribObjectReceipt[]; sha256: string }> | null = null;
@@ -375,12 +421,14 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
   ): Promise<{ readonly decoded: DecodedSplitGribField; readonly receipt: SplitGribObjectReceipt }> => {
     const selected = indices ?? (source.upstream.nativeGrid ? (await getNativeMapping()).indices : activeIndices);
     const url = splitGribFieldUrl(source, field, cycle, { hour, level, baseUrl });
+    const location: SplitGribObjectLocation = { url, mirrors: mirrors.map(({ template, health }) => ({
+      url: splitGribFieldUrl(source, field, cycle, { hour, level, urlTemplate: template }), mirror: health })) };
     const spec = source.specs[field]!;
     const normalization = spec.normalization;
     const native = source.upstream.nativeGrid;
     const coordinateLimit = native ? (field === native.latitude.field ? 90 : field === native.longitude.field ? 180 : null) : null;
     const { decoded, compressedBytes, sha256, cacheHit } = await loadSplitGribField(
-      url,
+      location,
       options.cacheDir,
       stats,
       { fetchImpl: options.fetchImpl, signal, readOnlyCache: options.readOnlyCache, offline: options.offline },

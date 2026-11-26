@@ -31,6 +31,13 @@ decoder. Reference tests cover libaec and ecCodes data.
 HRDPS reads ECCC MSC Datamart split GRIB2 objects on the Continental 2.5 km
 rotated lat-lon grid (template 3.1) using sampled JPEG 2000 (DRT 5.40) decoding
 and rotates grid-relative winds to Earth-relative east/north components.
+Object reads try the configured `mirrorUrlTemplates` first (ECCC's HPFX
+server, same path as Datamart) and fall back to `urlTemplate` per object; a
+session stops trying a mirror after three consecutive failures. Receipts and the
+cache key keep the primary URL, and run discovery probes only the primary.
+`fetchConcurrency` sets object reads in flight per frame (16 for HRDPS); JPEG
+2000 decodes stay capped by the four-worker decoder pool. Shard logs report
+`downloadMs`, `decodeMs`, bytes, retries and mirror counts beside `phasesMs`.
 
 [native-grid.ts](native-grid.ts) maps active output cells to the nearest native
 cell on the sphere. A session reads `CLAT` and `CLON` once, validates the configured
