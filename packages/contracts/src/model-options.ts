@@ -61,8 +61,8 @@ export const MODEL_OPTIONS = [
     "label": "HRDPS",
     "nominalDxMeters": 2502,
     "bounds": [
-      -141,
-      41.6,
+      -151,
+      27,
       -52,
       65
     ]
