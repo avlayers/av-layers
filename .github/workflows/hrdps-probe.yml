@@ -1,0 +1,35 @@
+# TEMPORARY diagnostic workflow, removed before merge.
+name: HRDPS probe
+on:
+  pull_request:
+    paths: ['.github/workflows/hrdps-probe.yml', 'scripts/hrdps-probe.ts']
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [configured, datamart-8, hpfx-primary-12, hpfx-primary-24]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Raw transfer timings
+        run: |
+          nproc; free -g
+          for host in dd.weather.gc.ca hpfx.collab.science.gc.ca; do
+            for f in TMP_IsbL-0850 HGT_IsbL-0500 UGRD_AGL-10m; do
+              u="https://$host/20261126/WXO-DD/model_hrdps/continental/2.5km/18/012/20261126T18Z_MSC_HRDPS_${f}_RLatLon0.0225_PT012H.grib2"
+              curl -s -o /dev/null -w "$host $f %{http_code} %{size_download}B %{time_connect}s connect %{time_starttransfer}s ttfb %{time_total}s total\n" --max-time 120 "$u" || echo "$host $f curl failed"
+            done
+          done
+      - name: Acquire one frame
+        env:
+          VARIANT: ${{ matrix.variant }}
+          CYCLE: '2026-11-26T18:00:00Z'
+          HOUR: '12'
+        run: timeout 50m node --import tsx scripts/hrdps-probe.ts
