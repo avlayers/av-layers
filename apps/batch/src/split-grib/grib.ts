@@ -463,6 +463,18 @@ export function decodeSplitGribField(source: SplitSource,
   return decodePreparedSplitGribField(prepared, gribBytes, activeIndices, target, options?.sentinel);
 }
 
+/** Largest point count still decoded as a JPEG 2000 region; larger requests decode the whole image. */
+export const MAX_REGION_DECODE_POINTS = 4096;
+
+/**
+ * JPEG 2000 decoders for sampleFieldValuesAsync. Region decode only pays off for a handful of points: past a few
+ * thousand it is slower than a whole-image decode, and on a shard's millions of cells about 200x slower, so larger
+ * requests decode the image and gather.
+ */
+export function j2kSamplingOptions(pool: Pick<J2kDecoderPool, 'decode' | 'decodeSampled'>, points: number) {
+  return points <= MAX_REGION_DECODE_POINTS ? { decodeJ2k: pool.decode, decodeJ2kSampled: pool.decodeSampled } : { decodeJ2k: pool.decode };
+}
+
 export async function decodeSplitGribFieldAsync(source: SplitSource,
   gribBytes: Uint8Array,
   activeIndices: Uint32Array,
@@ -488,8 +500,7 @@ export async function decodeSplitGribFieldAsync(source: SplitSource,
   const pool = typeof options.j2kPool === 'function' ? await options.j2kPool() : options.j2kPool;
   const sampled = await sampleFieldValuesAsync(prepared.field, activeIndices, {
     missingValue: NaN,
-    decodeJ2k: pool.decode,
-    decodeJ2kSampled: pool.decodeSampled
+    ...j2kSamplingOptions(pool, activeIndices.length)
   });
   return finishSplitGribDecode(prepared, gribBytes, activeIndices, target, options.sentinel, slot => ({
     value: sampled.values[slot]!,

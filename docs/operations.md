@@ -56,7 +56,9 @@ Generated workflow triggers select models by the cron expression that fired,
 including delayed starts. Manual runs finish each model before starting the next;
 scheduled runs start selected models concurrently. Without `cycle`, each model
 discovers its latest complete upstream run. A GFS or RRFS `cycle` waits up to
-8 minutes for every forecast hour's inventory. Already-published
+25 minutes for every forecast hour's inventory; an ICON-EU or HRDPS `cycle` waits
+up to 40 minutes for its first- and last-hour sentinel objects (DWD posts ICON-EU
+`MH` well after the model fields). Already-published
 cycles are skipped unless `-f allow-same-cycle=true` is passed. External cycle
 events require a registered event-driven model, an environment, and an explicit
 UTC cycle. Pass
@@ -64,7 +66,7 @@ UTC cycle. Pass
 successful run.
 
 Each selected model runs `forecast-terrain` (160m job timeout), `forecast-plan`
-(15m timeout), parallel `forecast-shard` jobs (180m timeout), and
+(55m timeout), parallel `forecast-shard` jobs (180m timeout), and
 `forecast` (`build-publish`, 180m timeout) to assemble, validate, publish to R2,
 clean up expired builds, and verify live API serving. A new plan has three hours
 from creation, including runner queues. Existing plans keep their original

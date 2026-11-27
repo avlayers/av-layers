@@ -15,7 +15,11 @@ export function createSplitGribProvider(model: ModelDefinition, requirements?: A
     async resolveCycle(options) {
       options.signal?.throwIfAborted();
       const { validateSplitGribCycle } = await import('./fields.js');
-      if (options.cycle !== undefined) return validateSplitGribCycle(source, options.cycle);
+      if (options.cycle !== undefined) {
+        const cycle = validateSplitGribCycle(source, options.cycle);
+        const { admitSplitGribRun } = await import('./discover.js');
+        return validateSplitGribCycle(source, (await admitSplitGribRun(source, cycle, options)).cycle);
+      }
       const { discoverSplitGribRun } = await import('./discover.js');
       return validateSplitGribCycle(source, (await discoverSplitGribRun(source, options)).cycle);
     },

@@ -1,6 +1,7 @@
 import { sampleFieldValuesAsync } from '@azohra/meteo.grib';
 import { createNodeJ2kDecoderPool } from '@azohra/meteo.grib/j2k-node';
 import { IndexedGribError } from './errors.ts';
+import { j2kSamplingOptions } from '../split-grib/grib.ts';
 import type { InspectedIndexedGribField } from './admission.ts';
 
 export function compactIndexedGribSamples<T extends Float32Array | Float64Array = Float64Array>(values: ArrayLike<number>, mask: ArrayLike<number> | undefined, count: number, destination?: T, targetMissing?: Uint8Array) {
@@ -46,7 +47,7 @@ export class IndexedGribFieldSampler {
       if (this.closed) throw new IndexedGribError('decode', 'Field sampler is closed');
       const sampled = await sampleFieldValuesAsync(inspected.field, indices, {
         missingValue: Number.NaN,
-        ...(pool ? { decodeJ2k: pool.decode, decodeJ2kSampled: pool.decodeSampled } : {}),
+        ...(pool ? j2kSamplingOptions(pool, indices.length) : {}),
       });
       decodedAt = performance.now();
       if (this.closed) throw new IndexedGribError('decode', 'Field sampler is closed');

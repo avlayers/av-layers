@@ -2,7 +2,7 @@ import { SPLIT_PRODUCT } from '../../../../tests/model-fixtures.js';
 import { splitSource } from './source.js';
 const profile = splitSource(SPLIT_PRODUCT);
 import { describe, expect, it, vi } from 'vitest';
-import { candidateSplitGribCycles, discoverSplitGribRun, splitGribRunSentinelUrls } from './discover.js';
+import { admitSplitGribRun, candidateSplitGribCycles, discoverSplitGribRun, splitGribRunSentinelUrls } from './discover.js';
 import { splitGribFieldUrl } from './fields.js';
 import { DEFAULT_PROBE_TIMEOUT_MS } from '@av/contracts';
 
@@ -142,5 +142,47 @@ describe('ICON-EU run admission', () => {
     await expect(pending).rejects.toThrow('cancel discovery');
     expect(fetchImpl).toHaveBeenCalledTimes(4);
     expect(fetchImpl.mock.calls.every(([input]) => String(input).includes(latestRun))).toBe(true);
+  });
+});
+
+describe('pinned Split GRIB admission', () => {
+  const firstHour = profile.model.forecast.hours[0]!;
+  it('probes auxiliary fields at the first frame as well as the last', () => {
+    const urls = splitGribRunSentinelUrls(profile, cycles[0]);
+    expect(new Set(urls).size).toBe(urls.length);
+    for (const field of ['PS', 'T_2M']) {
+      expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0], { hour: firstHour }));
+      expect(urls).toContain(splitGribFieldUrl(profile, field, cycles[0], { hour: lastHour }));
+    }
+  });
+  it('waits for a field posted after the trigger fired', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const late = splitGribFieldUrl(profile, 'T_2M', cycles[0], { hour: firstHour });
+      let posted = false;
+      const fetchImpl = vi.fn<typeof fetch>(async input => new Response(null, { status: String(input) === late && !posted ? 404 : 206 }));
+      const pending = admitSplitGribRun(profile, cycles[0]!, { fetchImpl });
+      await vi.waitFor(() => { expect(fetchImpl.mock.calls.some(([url]) => String(url) === late)).toBe(true); });
+      posted = true;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(pending).resolves.toMatchObject({ cycle: cycles[0] });
+    } finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+  });
+  it('gives up on a pinned cycle that stays incomplete', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const missing = splitGribFieldUrl(profile, 'PS', cycles[0], { hour: lastHour });
+      const fetchImpl = vi.fn<typeof fetch>(async input => new Response(null, { status: String(input) === missing ? 404 : 206 }));
+      const pending = admitSplitGribRun(profile, cycles[0]!, { fetchImpl }).catch(error => error);
+      await vi.advanceTimersByTimeAsync(41 * 60_000);
+      expect(String(await pending)).toMatch(/incomplete after 40 min/);
+      expect(fetchImpl.mock.calls.filter(([url]) => String(url) === missing)).toHaveLength(41);
+    } finally { vi.useRealTimers(); vi.restoreAllMocks(); }
+  });
+  it('stops waiting when cancelled', async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
+    await expect(admitSplitGribRun(profile, cycles[0]!, { fetchImpl, signal: AbortSignal.abort(new Error('Cancelled')) })).rejects.toThrow('Cancelled');
   });
 });

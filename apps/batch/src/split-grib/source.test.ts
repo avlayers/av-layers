@@ -29,7 +29,7 @@ import { loadCoverage } from '../coverage.js';
 import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
-import { decodeSplitGribField, decodeSplitGribFieldAsync } from './grib.js';
+import { decodeSplitGribField, decodeSplitGribFieldAsync, j2kSamplingOptions, MAX_REGION_DECODE_POINTS } from './grib.js';
 import { splitGribFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
 
@@ -403,7 +403,7 @@ it('recovers ICON precipitation intervals, retains raw companions and masks decr
       hour, constantValue: hour === 1 ? 2 : hour === 2 ? 5 : 4
     })));
   };
-  expect(requests(splitGribRunSentinelUrls(configured, cycle), 'TOT_PREC')).toHaveLength(1);
+  expect(requests(splitGribRunSentinelUrls(configured, cycle), 'TOT_PREC')).toHaveLength(2);
   const session = await createSplitGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
   const slot = createNormalizedFrameTarget(1, 2, true, true);
   try {
@@ -434,7 +434,8 @@ describe('DWD ICON-EU native adapter', () => {
     expect(splitGribFieldUrl(profile, 'T', cycle, { hour: 6, level: 74, baseUrl: 'http://mirror.test/dwd/' }))
       .toBe('http://mirror.test/dwd/T/lvt1/150/lv1/74/r/2026-10-08T00%3A00/s/PT006H00M.grib2');
     const sentinels = splitGribRunSentinelUrls(profile, cycle);
-    expect(sentinels).toHaveLength(14);
+    // Surface and auxiliary fields are probed at the first frame and the last.
+    expect(sentinels).toHaveLength(19);
   });
 
   it.each([
@@ -1326,4 +1327,11 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
         mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', host)] } }), host).toThrow('primary template path');
     }
   });
+});
+
+it('region-decodes JPEG 2000 only for a few points and decodes shard-sized sets whole', () => {
+  const pool = { size: 1, close: async () => {}, decode: vi.fn(), decodeSampled: vi.fn() };
+  expect(j2kSamplingOptions(pool, MAX_REGION_DECODE_POINTS)).toEqual({ decodeJ2k: pool.decode, decodeJ2kSampled: pool.decodeSampled });
+  expect(j2kSamplingOptions(pool, MAX_REGION_DECODE_POINTS + 1)).toEqual({ decodeJ2k: pool.decode });
+  expect(j2kSamplingOptions(pool, 2_000_000)).not.toHaveProperty('decodeJ2kSampled');
 });

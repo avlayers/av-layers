@@ -11,7 +11,7 @@ export const BUILD_BUDGETS = {
   // at 4 GiB RRFS plans 3 + 3 workers within an estimated 3.8 GiB.
   workingSetBytes: 4 * 1024 ** 3,
   // Observed process high-water mark. The ubuntu-24.04 public-repo runner has 16 GiB;
-  // HRDPS continental shards peaked at 3.5-4.6 GiB with a 2 GiB admitted working set.
+  // HRDPS continental shards peaked at 3.5-4.6 GiB with a 2 GiB admitted working set, 5.9 GiB after PR 169's wider coverage.
   peakRssBytes: 8 * 1024 ** 3
 } as const;
 
