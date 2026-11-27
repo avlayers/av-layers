@@ -90,9 +90,11 @@ const ADMISSION_WAIT_MINUTES = 25;
 export async function admitIndexedGribRun(source: IndexedSource, cycle: string, options: DiscoverIndexedGribRunOptions = {}): Promise<DiscoveredIndexedGribRun> {
   const transport = new IndexedGribTransport(options);
   let refresh = false;
+  // Retries are bounded by the clock as well as the count, so slow inventory reads cannot outlast the plan job.
+  const deadline = Date.now() + ADMISSION_WAIT_MINUTES * 60_000;
   return pRetry(() => checkRun(source, cycle, transport, refresh), {
     retries: ADMISSION_WAIT_MINUTES, factor: 1, minTimeout: 60_000, maxTimeout: 60_000, randomize: false, ...(options.signal ? { signal: options.signal } : {}),
-    shouldRetry: ({ error }) => unavailableRun(error),
+    shouldRetry: ({ error }) => unavailableRun(error) && Date.now() + 60_000 <= deadline,
     onFailedAttempt: ({ error }) => {
       refresh = error instanceof IndexedGribError && error.code === 'record-missing';
       console.error(JSON.stringify({ phase: 'cycle-admission', cycle, state: 'waiting', error: error.message }));

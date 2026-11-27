@@ -42,8 +42,9 @@ export function splitGribRunSentinelUrls(source: SplitSource,
   const firstHour = source.model.forecast.hours[0]!;
   const lowestLevel = source.levels[0]!;
   const highestLevel = source.levels.at(-1)!;
-  // Surface and auxiliary fields at the first frame as well as the last: DWD posts some post-processed fields
-  // (ICON-EU MH) for the whole run well after the model fields, so the last hour alone can admit too early.
+  // Surface and auxiliary fields at the first frame as well as the last, so a run whose early hours are missing
+  // (posted out of order, or a post-processed field such as ICON-EU MH still absent) is not admitted. Middle hours
+  // are not probed; the trigger checks them, and acquisition still reads every object.
   const surfaceAt = (hour: number) => [
     ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux]
       .map(field => splitGribFieldUrl(source, field, cycle, { hour, baseUrl: options.baseUrl })),
@@ -189,13 +190,17 @@ export async function admitSplitGribRun(source: SplitSource, cycleIso: string,
 ): Promise<SplitGribDiscoveryResult> {
   const cycle = validateSplitGribCycle(source, cycleIso);
   const fetchFn = options.fetchImpl ?? fetch;
-  const signal = options.signal ?? new AbortController().signal;
+  const waitMs = ADMISSION_WAIT_MINUTES * 60_000;
+  const deadline = Date.now() + waitMs;
+  // A hanging upstream cannot stretch the wait past the job: probes stop a few minutes after the deadline.
+  const bound = AbortSignal.timeout(waitMs + 5 * 60_000);
+  const signal = options.signal ? AbortSignal.any([options.signal, bound]) : bound;
   const sentinelUrls = splitGribRunSentinelUrls(source, cycle, { baseUrl: options.baseUrl });
-  for (let attempt = 0; ; attempt++) {
+  for (;;) {
     const failed = await probeSplitGribCycle(sentinelUrls, fetchFn, signal);
     if (!failed.length) return { schemaVersion: 1, model: source.model.modelId, cycle, forecastHours: source.model.forecast.hours, sentinelUrls };
-    const error = `${failed.length} sentinel(s) unavailable: ${failed.slice(0, 2).join(', ')}`;
-    if (attempt >= ADMISSION_WAIT_MINUTES) throw new Error(`Pinned ${source.upstream.provider} Split GRIB cycle ${cycle} is incomplete after ${ADMISSION_WAIT_MINUTES} min: ${error}`);
+    const error = `sentinel unavailable: ${failed.slice(0, 2).join(', ')}`;
+    if (Date.now() + ADMISSION_POLL_MS > deadline) throw new Error(`Pinned ${source.upstream.provider} Split GRIB cycle ${cycle} is incomplete after ${ADMISSION_WAIT_MINUTES} min: ${error}`);
     console.error(JSON.stringify({ phase: 'cycle-admission', cycle, state: 'waiting', error }));
     await pause(ADMISSION_POLL_MS, signal);
   }
