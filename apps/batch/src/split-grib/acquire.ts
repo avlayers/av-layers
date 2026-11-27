@@ -17,7 +17,7 @@ import {
   validateSplitGribCycle,
   verifySplitGribFieldMetadata
 } from './fields.js';
-import { decodeSplitGribFieldAsync, type DecodedSplitGribField } from './grib.js';
+import { decodeSplitGribFieldAsync, MAX_REGION_DECODE_POINTS, type DecodedSplitGribField } from './grib.js';
 import { createAuxiliaryTargets, type NormalizedFrameTarget } from '../provider.js';
 import type { AuxSurfaceId, AuxLevelId, AuxField } from '@av/forecast/inputs';
 import { MAX_NATIVE_MAPPING_DISTANCE_M, prepareNativeMapping } from './native-grid.js';
@@ -393,9 +393,12 @@ export async function createSplitGribAcquisitionSession(source: SplitSource, opt
     }
   };
   signal.addEventListener('abort', () => { void closeJ2kPool(); }, { once: true });
+  // Whole-image decodes (any session past the region-decode limit) run fastest in OpenJPEG's WASM build;
+  // a few-point session keeps the pure-TypeScript codec, the only one that decodes a region.
+  const j2kCodec = activeIndices.length > MAX_REGION_DECODE_POINTS ? 'wasm' as const : 'j2k' as const;
   const getJ2kPool = (): Promise<J2kDecoderPool> => {
     signal.throwIfAborted();
-    return j2kPoolPromise ??= createNodeJ2kDecoderPool({ size: Math.min(concurrency, 4) }).then(async pool => {
+    return j2kPoolPromise ??= createNodeJ2kDecoderPool({ size: Math.min(concurrency, 4), codec: j2kCodec }).then(async pool => {
       if (signal.aborted) {
         await pool.close();
         signal.throwIfAborted();

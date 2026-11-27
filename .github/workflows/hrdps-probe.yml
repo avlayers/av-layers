@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [configured, datamart-8, hpfx-primary-12, hpfx-primary-24]
+        variant: [configured, datamart-8]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -44,4 +44,5 @@ jobs:
           VARIANT: ${{ matrix.variant }}
           CYCLE: '2026-11-26T18:00:00Z'
           HOUR: '12'
+          COMPARE: ${{ matrix.variant == 'configured' && '1' || '0' }}
         run: timeout 50m node --import tsx scripts/hrdps-probe.ts
