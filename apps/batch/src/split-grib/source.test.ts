@@ -29,7 +29,7 @@ import { loadCoverage } from '../coverage.js';
 import { assertForecastInputs } from '../capacity.js';
 import { createNormalizedFrameTarget } from '../provider.js';
 import { createSplitGribAcquisitionSession, recoverSplitGribFlux } from './acquire.js';
-import { decodeSplitGribField, decodeSplitGribFieldAsync } from './grib.js';
+import { decodeSplitGribField, decodeSplitGribFieldAsync, j2kSamplingOptions, MAX_REGION_DECODE_POINTS } from './grib.js';
 import { splitGribFieldUrl, verifySplitGribFieldMetadata } from './fields.js';
 import { splitGribRunSentinelUrls } from './discover.js';
 
@@ -1327,4 +1327,11 @@ describe('ECCC HRDPS rotated-latlon isobaric adapter', () => {
         mirrorUrlTemplates: [hrdpsProduct.upstream.urlTemplate.replace('https://dd.weather.gc.ca', host)] } }), host).toThrow('primary template path');
     }
   });
+});
+
+it('region-decodes JPEG 2000 only for a few points and decodes shard-sized sets whole', () => {
+  const pool = { size: 1, close: async () => {}, decode: vi.fn(), decodeSampled: vi.fn() };
+  expect(j2kSamplingOptions(pool, MAX_REGION_DECODE_POINTS)).toEqual({ decodeJ2k: pool.decode, decodeJ2kSampled: pool.decodeSampled });
+  expect(j2kSamplingOptions(pool, MAX_REGION_DECODE_POINTS + 1)).toEqual({ decodeJ2k: pool.decode });
+  expect(j2kSamplingOptions(pool, 2_000_000)).not.toHaveProperty('decodeJ2kSampled');
 });
