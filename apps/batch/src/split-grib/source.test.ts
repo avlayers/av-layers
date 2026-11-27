@@ -403,7 +403,7 @@ it('recovers ICON precipitation intervals, retains raw companions and masks decr
       hour, constantValue: hour === 1 ? 2 : hour === 2 ? 5 : 4
     })));
   };
-  expect(requests(splitGribRunSentinelUrls(configured, cycle), 'TOT_PREC')).toHaveLength(1);
+  expect(requests(splitGribRunSentinelUrls(configured, cycle), 'TOT_PREC')).toHaveLength(2);
   const session = await createSplitGribAcquisitionSession(configured, { cycle, activeIndices: Uint32Array.of(0), cacheDir, fetchImpl });
   const slot = createNormalizedFrameTarget(1, 2, true, true);
   try {
@@ -434,7 +434,8 @@ describe('DWD ICON-EU native adapter', () => {
     expect(splitGribFieldUrl(profile, 'T', cycle, { hour: 6, level: 74, baseUrl: 'http://mirror.test/dwd/' }))
       .toBe('http://mirror.test/dwd/T/lvt1/150/lv1/74/r/2026-10-08T00%3A00/s/PT006H00M.grib2');
     const sentinels = splitGribRunSentinelUrls(profile, cycle);
-    expect(sentinels).toHaveLength(14);
+    // Surface and auxiliary fields are probed at the first frame and the last.
+    expect(sentinels).toHaveLength(19);
   });
 
   it.each([

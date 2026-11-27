@@ -307,9 +307,9 @@ describe('inventory admission and transport accounting', () => {
     try {
       const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 404 }));
       const pending = admitIndexedGribRun(profile, '2026-10-30T00:00:00Z', { fetchImpl }).catch(error => error);
-      await vi.advanceTimersByTimeAsync(9 * 60_000);
+      await vi.advanceTimersByTimeAsync(26 * 60_000);
       expect(await pending).toMatchObject({ code: 'transport' });
-      expect(fetchImpl).toHaveBeenCalledTimes(9);
+      expect(fetchImpl).toHaveBeenCalledTimes(26);
     } finally { vi.useRealTimers(); }
   });
 

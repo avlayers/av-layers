@@ -77,7 +77,8 @@ jobs:
     needs: terrain
     if: ${{ github.ref == 'refs/heads/main' && !inputs['resume-run-id'] }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Admission can wait up to 40 min for late upstream objects before planning.
+    timeout-minutes: 55
     environment: ${{ inputs.environment }}
     outputs:
       ready: ${{ steps.plan.outputs.ready }}

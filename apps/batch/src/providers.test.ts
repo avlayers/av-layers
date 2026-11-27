@@ -8,7 +8,7 @@ const state = vi.hoisted(() => ({ loaded: [] as string[], proof: vi.fn().mockRes
 vi.mock('./indexed-grib/acquire.js', () => { state.loaded.push('indexed-acquisition'); return { createIndexedGribAcquisitionSession: vi.fn().mockRejectedValue(new Error('Acquisition invoked')) }; });
 vi.mock('./split-grib/acquire.js', () => { state.loaded.push('split-acquisition'); return { createSplitGribAcquisitionSession: vi.fn().mockRejectedValue(new Error('Acquisition invoked')) }; });
 vi.mock('./indexed-grib/discover.js', () => { state.loaded.push('indexed-discovery'); return { discoverIndexedGribRun: vi.fn().mockResolvedValue({ cycle: '2026-10-30T00:00:00Z' }), admitIndexedGribRun: state.admit }; });
-vi.mock('./split-grib/discover.js', () => { state.loaded.push('split-discovery'); return { discoverSplitGribRun: vi.fn().mockResolvedValue({ cycle: '2026-10-30T00:00:00Z' }) }; });
+vi.mock('./split-grib/discover.js', () => { state.loaded.push('split-discovery'); return { discoverSplitGribRun: vi.fn().mockResolvedValue({ cycle: '2026-10-30T00:00:00Z' }), admitSplitGribRun: state.admit }; });
 vi.mock('./input-proof.js', () => ({ proveForecastInputs: state.proof }));
 beforeEach(() => { state.loaded.length = 0; state.proof.mockClear(); state.admit.mockClear(); });
 
@@ -21,9 +21,9 @@ it.each([
   expect(Date.parse(await provider.resolveCycle({ cycle, cacheDir: '/unused' }))).toBe(Date.parse(cycle));
   await expect(provider.resolveCycle({ cycle: '', cacheDir: '/unused' })).rejects.toThrow(/cycle/i);
   await expect(provider.resolveCycle({ cacheDir: '/unused', signal: AbortSignal.abort(new Error('Cancelled')) })).rejects.toThrow('Cancelled');
-  // Indexed GRIB admits a pinned cycle with the discovery inventory check.
-  expect(state.loaded).toEqual(protocol === 'indexed' ? ['indexed-discovery'] : []);
-  expect(state.admit).toHaveBeenCalledTimes(protocol === 'indexed' ? 1 : 0);
+  // Both protocols admit a pinned cycle with their discovery check (inventories or sentinels).
+  expect(state.loaded).toEqual([`${protocol}-discovery`]);
+  expect(state.admit).toHaveBeenCalledTimes(1);
   expect(Date.parse(await provider.resolveCycle({ cacheDir: '/unused' }))).toBe(Date.parse(cycle));
   expect(state.loaded).toEqual([`${protocol}-discovery`]);
   await expect(provider.open({ cycle, activeIndices: Uint32Array.of(0), cacheDir: '/unused' })).rejects.toThrow('Acquisition invoked');

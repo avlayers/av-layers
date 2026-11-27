@@ -9,6 +9,8 @@ export const SPLIT_GRIB_USER_AGENT = 'av-layers-forecast (+https://github.com/av
 
 const PROBE_CONCURRENCY = 4;
 const PROBE_ATTEMPTS = 3;
+const ADMISSION_WAIT_MINUTES = 40;
+const ADMISSION_POLL_MS = 60_000;
 
 
 interface SplitGribDiscoveryResult {
@@ -37,15 +39,19 @@ export function splitGribRunSentinelUrls(source: SplitSource,
 ): string[] {
   const cycle = validateSplitGribCycle(source, cycleIso);
   const lastHour = options.lastForecastHour ?? source.model.forecast.hours.at(-1)!;
+  const firstHour = source.model.forecast.hours[0]!;
   const lowestLevel = source.levels[0]!;
   const highestLevel = source.levels.at(-1)!;
-  const surfaceTail = [
+  // Surface and auxiliary fields at the first frame as well as the last: DWD posts some post-processed fields
+  // (ICON-EU MH) for the whole run well after the model fields, so the last hour alone can admit too early.
+  const surfaceAt = (hour: number) => [
     ...[source.fields.surfacePressure, source.fields.temperature2m, source.fields.specificHumidity2m, source.fields.sensibleHeatFlux, source.fields.latentHeatFlux]
-      .map(field => splitGribFieldUrl(source, field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
-    ...(source.model.layers.includes('precip-rate') ? [splitGribFieldUrl(source, source.fields.precipitation!, cycle, { hour: lastHour, baseUrl: options.baseUrl })] : []),
-    ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, baseUrl: options.baseUrl })),
-    ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, spec.field, cycle, { hour: lastHour, level, baseUrl: options.baseUrl })))
+      .map(field => splitGribFieldUrl(source, field, cycle, { hour, baseUrl: options.baseUrl })),
+    ...(source.model.layers.includes('precip-rate') ? [splitGribFieldUrl(source, source.fields.precipitation!, cycle, { hour, baseUrl: options.baseUrl })] : []),
+    ...Object.values(source.upstream.auxSurface ?? {}).map(spec => splitGribFieldUrl(source, spec.field, cycle, { hour, baseUrl: options.baseUrl })),
+    ...Object.values(source.upstream.auxLevels ?? {}).flatMap(spec => [lowestLevel, highestLevel].map(level => splitGribFieldUrl(source, spec.field, cycle, { hour, level, baseUrl: options.baseUrl })))
   ];
+  const surfaceTail = [...new Set([...surfaceAt(lastHour), ...(firstHour === lastHour ? [] : surfaceAt(firstHour))])];
   const coordinateSentinels = source.upstream.nativeGrid
     ? [source.upstream.nativeGrid.latitude.field, source.upstream.nativeGrid.longitude.field]
         .map(field => splitGribFieldUrl(source, field, cycle, { baseUrl: options.baseUrl }))
@@ -147,4 +153,50 @@ export async function discoverSplitGribRun(source: SplitSource,
 
     throw new Error(`No complete ${source.upstream.provider} Split GRIB main run found across candidate cycles${deadline.signal.aborted ? '; discovery deadline exceeded' : ''}: ${failures.join('; ')}`);
   } finally { clearTimeout(timer); }
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) { reject(signal.reason); return; }
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Probes every sentinel of one cycle and returns the failures, empty when the cycle is complete. */
+async function probeSplitGribCycle(sentinelUrls: readonly string[], fetchFn: typeof fetch, signal: AbortSignal): Promise<string[]> {
+  for (let offset = 0; offset < sentinelUrls.length; offset += PROBE_CONCURRENCY) {
+    signal.throwIfAborted();
+    const urls = sentinelUrls.slice(offset, offset + PROBE_CONCURRENCY);
+    const probes = await Promise.allSettled(urls.map(url => probeSentinel(url, fetchFn, signal)));
+    signal.throwIfAborted();
+    const failed = probes.flatMap((probe, index) => {
+      const reason = probe.status === 'rejected' ? probeFailure(probe.reason) : probe.value;
+      return reason ? [`${urls[index]}: ${reason}`] : [];
+    });
+    if (failed.length) return failed;
+  }
+  return [];
+}
+
+/**
+ * Admits a pinned cycle with the discovery sentinels, waiting up to 40 min for late objects: a trigger can fire
+ * before the provider has posted every field. The build deadline starts after admission.
+ */
+export async function admitSplitGribRun(source: SplitSource, cycleIso: string,
+  options: { readonly baseUrl?: string; readonly fetchImpl?: typeof fetch; readonly signal?: AbortSignal } = {}
+): Promise<SplitGribDiscoveryResult> {
+  const cycle = validateSplitGribCycle(source, cycleIso);
+  const fetchFn = options.fetchImpl ?? fetch;
+  const signal = options.signal ?? new AbortController().signal;
+  const sentinelUrls = splitGribRunSentinelUrls(source, cycle, { baseUrl: options.baseUrl });
+  for (let attempt = 0; ; attempt++) {
+    const failed = await probeSplitGribCycle(sentinelUrls, fetchFn, signal);
+    if (!failed.length) return { schemaVersion: 1, model: source.model.modelId, cycle, forecastHours: source.model.forecast.hours, sentinelUrls };
+    const error = `${failed.length} sentinel(s) unavailable: ${failed.slice(0, 2).join(', ')}`;
+    if (attempt >= ADMISSION_WAIT_MINUTES) throw new Error(`Pinned ${source.upstream.provider} Split GRIB cycle ${cycle} is incomplete after ${ADMISSION_WAIT_MINUTES} min: ${error}`);
+    console.error(JSON.stringify({ phase: 'cycle-admission', cycle, state: 'waiting', error }));
+    await pause(ADMISSION_POLL_MS, signal);
+  }
 }

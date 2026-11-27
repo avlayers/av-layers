@@ -83,12 +83,15 @@ export async function discoverPrivateIndexedGribRun(source: IndexedSource, optio
   return { run, sourcePin: r2.pin };
 }
 
-/** Waits up to 8 min for a pinned cycle: NOAA's AWS sync can land earlier hours after the last one. */
+const ADMISSION_WAIT_MINUTES = 25;
+
+/** Waits up to 25 min for a pinned cycle: NOAA's AWS sync can land earlier hours after the last one, and a
+ * trigger can fire a few minutes before the run is complete. The build deadline starts after admission. */
 export async function admitIndexedGribRun(source: IndexedSource, cycle: string, options: DiscoverIndexedGribRunOptions = {}): Promise<DiscoveredIndexedGribRun> {
   const transport = new IndexedGribTransport(options);
   let refresh = false;
   return pRetry(() => checkRun(source, cycle, transport, refresh), {
-    retries: 8, factor: 1, minTimeout: 60_000, maxTimeout: 60_000, randomize: false, ...(options.signal ? { signal: options.signal } : {}),
+    retries: ADMISSION_WAIT_MINUTES, factor: 1, minTimeout: 60_000, maxTimeout: 60_000, randomize: false, ...(options.signal ? { signal: options.signal } : {}),
     shouldRetry: ({ error }) => unavailableRun(error),
     onFailedAttempt: ({ error }) => {
       refresh = error instanceof IndexedGribError && error.code === 'record-missing';
