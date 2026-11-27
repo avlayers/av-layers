@@ -2,7 +2,7 @@
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getProduct } from '@av/contracts';
+import { getProduct } from '@av/contracts/models';
 import { splitSource } from '../apps/batch/src/split-grib/source.js';
 import { createSplitGribAcquisitionSession } from '../apps/batch/src/split-grib/acquire.js';
 
